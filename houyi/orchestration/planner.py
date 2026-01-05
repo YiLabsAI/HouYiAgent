@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 from houyi.core.agent import AgentSpec
 from houyi.orchestration.plan import ExecutionPlan, IRNode, NodeType
 from houyi.orchestration.state import SessionState
@@ -33,10 +31,10 @@ class DAGPlanner:
         """
         plan_id = f"plan_{id(task)}"
         nodes = []
-        
+
         # Analyze if task needs skills
         needs_skills = len(agent.skills) > 0
-        
+
         if needs_skills:
             # Create nodes for skill-based execution
             # 1. LLM node to decide which skill to use
@@ -49,7 +47,7 @@ class DAGPlanner:
                 metadata={"purpose": "decide_skill"},
             )
             nodes.append(llm_node)
-            
+
             # 2. TOOL nodes for each skill (one will be selected)
             for skill in agent.skills:
                 tool_node = IRNode(
@@ -62,7 +60,7 @@ class DAGPlanner:
                     metadata={"skill_name": skill.name},
                 )
                 nodes.append(tool_node)
-            
+
             # 3. LLM node to synthesize final answer
             final_node = IRNode(
                 node_id="llm_synthesize",
@@ -76,7 +74,7 @@ class DAGPlanner:
                 metadata={"purpose": "synthesize"},
             )
             nodes.append(final_node)
-            
+
             entry_node = "llm_decide"
         else:
             # Simple LLM-only execution

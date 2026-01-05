@@ -5,7 +5,7 @@ Designed to be extensible for 13+ evaluators (AWS re:Invent 2025 style)."""
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any, Optional
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -16,7 +16,7 @@ class EvaluationResult(BaseModel):
     evaluator: str = Field("", description="Name of the evaluator")
     input: str = Field(..., description="Test input")
     output: str = Field(..., description="Actual output")
-    expected_output: Optional[str] = Field(default=None, description="Expected output")
+    expected_output: str | None = Field(default=None, description="Expected output")
     score: float = Field(..., description="Evaluation score (0-1)")
     passed: bool = Field(..., description="Whether the test passed")
     metrics: dict[str, Any] = Field(default_factory=dict, description="Additional metrics")
@@ -47,17 +47,17 @@ class EvaluationSummary(BaseModel):
   Avg Score: {self.avg_score:.2f}
   Avg Cost: ${self.avg_cost:.4f}
   Avg Latency: {self.avg_latency:.0f}ms"""
-    
-    def save_report(self, path: str, format: str = "html", title: Optional[str] = None) -> None:
+
+    def save_report(self, path: str, format: str = "html", title: str | None = None) -> None:
         """Save evaluation report to file.
-        
+
         Args:
             path: Output file path
             format: Report format (html, json, markdown)
             title: Report title (for HTML/Markdown)
         """
         from houyi.evaluation.report import ReportGenerator
-        
+
         if format == "html":
             ReportGenerator.generate_html(self, path, title)
         elif format == "json":
@@ -70,7 +70,7 @@ class EvaluationSummary(BaseModel):
 
 class Evaluator(ABC):
     """Base class for all evaluators (Strategy Pattern).
-    
+
     Extensible design to support 13+ evaluators:
     - Accuracy, Cost, Latency, SkillUsage (current)
     - Quality, Coherence, Relevance, Completeness (future)
@@ -83,17 +83,17 @@ class Evaluator(ABC):
         self,
         input: str,
         output: str,
-        expected: Optional[str] = None,
-        metadata: Optional[dict] = None,
+        expected: str | None = None,
+        metadata: dict | None = None,
     ) -> EvaluationResult:
         """Evaluate a single test case.
-        
+
         Args:
             input: Test input
             output: Actual output
             expected: Expected output (optional)
             metadata: Additional metadata (execution time, cost, etc.)
-            
+
         Returns:
             EvaluationResult
         """

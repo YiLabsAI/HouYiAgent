@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import re
 from difflib import SequenceMatcher
-from typing import Any, Optional
 
 from houyi.evaluation.base import EvaluationResult, Evaluator
 
@@ -26,8 +25,8 @@ class AccuracyEvaluator(Evaluator):
         self,
         input: str,
         output: str,
-        expected: Optional[str] = None,
-        metadata: Optional[dict] = None,
+        expected: str | None = None,
+        metadata: dict | None = None,
     ) -> EvaluationResult:
         """Evaluate using string similarity."""
         if not expected:
@@ -62,7 +61,7 @@ class CostEvaluator(Evaluator):
 
     def __init__(self, max_cost: float = 0.1):
         """Initialize with cost threshold.
-        
+
         Args:
             max_cost: Maximum acceptable cost in USD
         """
@@ -76,8 +75,8 @@ class CostEvaluator(Evaluator):
         self,
         input: str,
         output: str,
-        expected: Optional[str] = None,
-        metadata: Optional[dict] = None,
+        expected: str | None = None,
+        metadata: dict | None = None,
     ) -> EvaluationResult:
         """Evaluate cost."""
         metadata = metadata or {}
@@ -102,7 +101,7 @@ class LatencyEvaluator(Evaluator):
 
     def __init__(self, max_latency_ms: float = 5000.0):
         """Initialize with latency threshold.
-        
+
         Args:
             max_latency_ms: Maximum acceptable latency in milliseconds
         """
@@ -116,8 +115,8 @@ class LatencyEvaluator(Evaluator):
         self,
         input: str,
         output: str,
-        expected: Optional[str] = None,
-        metadata: Optional[dict] = None,
+        expected: str | None = None,
+        metadata: dict | None = None,
     ) -> EvaluationResult:
         """Evaluate latency."""
         metadata = metadata or {}
@@ -148,8 +147,8 @@ class SkillUsageEvaluator(Evaluator):
         self,
         input: str,
         output: str,
-        expected: Optional[str] = None,
-        metadata: Optional[dict] = None,
+        expected: str | None = None,
+        metadata: dict | None = None,
     ) -> EvaluationResult:
         """Evaluate skill usage correctness."""
         # Check if expected skills were used
@@ -208,14 +207,14 @@ class CompletenessEvaluator(Evaluator):
         self,
         input: str,
         output: str,
-        expected: Optional[str] = None,
-        metadata: Optional[dict] = None,
+        expected: str | None = None,
+        metadata: dict | None = None,
     ) -> EvaluationResult:
         """Evaluate output completeness."""
         # Extract key aspects from input (simple heuristic)
         # Look for questions, requirements, or key phrases
         aspects = self._extract_aspects(input)
-        
+
         if not aspects:
             # No clear aspects to check
             return EvaluationResult(
@@ -227,12 +226,12 @@ class CompletenessEvaluator(Evaluator):
                 passed=True,
                 feedback="No specific aspects to evaluate",
             )
-        
+
         # Check how many aspects are addressed in output
         addressed = sum(1 for aspect in aspects if aspect.lower() in output.lower())
         score = addressed / len(aspects)
         passed = score >= 0.7
-        
+
         return EvaluationResult(
             evaluator=self.name,
             input=input,
@@ -247,25 +246,25 @@ class CompletenessEvaluator(Evaluator):
             },
             feedback=f"Addressed {addressed}/{len(aspects)} aspects",
         )
-    
+
     def _extract_aspects(self, text: str) -> list[str]:
         """Extract key aspects from text."""
         # Simple heuristic: split by common separators
         aspects = []
-        
+
         # Look for questions
         questions = re.findall(r'[^.!?]*\?', text)
         aspects.extend([q.strip() for q in questions if q.strip()])
-        
+
         # Look for numbered/bulleted lists
         lists = re.findall(r'(?:^|\n)\s*[\d\-\*]\.\s*([^\n]+)', text)
         aspects.extend([item.strip() for item in lists if item.strip()])
-        
+
         # If no aspects found, split by sentences
         if not aspects:
             sentences = re.split(r'[.!?]+', text)
             aspects = [s.strip() for s in sentences if len(s.strip()) > 10][:5]
-        
+
         return aspects
 
 
@@ -280,14 +279,14 @@ class RelevanceEvaluator(Evaluator):
         self,
         input: str,
         output: str,
-        expected: Optional[str] = None,
-        metadata: Optional[dict] = None,
+        expected: str | None = None,
+        metadata: dict | None = None,
     ) -> EvaluationResult:
         """Evaluate output relevance."""
         # Extract key terms from input
         input_terms = self._extract_key_terms(input)
         output_terms = self._extract_key_terms(output)
-        
+
         if not input_terms:
             return EvaluationResult(
                 evaluator=self.name,
@@ -298,12 +297,12 @@ class RelevanceEvaluator(Evaluator):
                 passed=True,
                 feedback="No key terms to evaluate",
             )
-        
+
         # Calculate term overlap
         overlap = len(set(input_terms) & set(output_terms))
         score = overlap / len(input_terms)
         passed = score >= 0.5
-        
+
         return EvaluationResult(
             evaluator=self.name,
             input=input,
@@ -318,7 +317,7 @@ class RelevanceEvaluator(Evaluator):
             },
             feedback=f"Relevance score: {score:.2%}",
         )
-    
+
     def _extract_key_terms(self, text: str) -> list[str]:
         """Extract key terms from text."""
         # Remove common stop words and extract meaningful terms
@@ -338,8 +337,8 @@ class ToxicityEvaluator(Evaluator):
         self,
         input: str,
         output: str,
-        expected: Optional[str] = None,
-        metadata: Optional[dict] = None,
+        expected: str | None = None,
+        metadata: dict | None = None,
     ) -> EvaluationResult:
         """Evaluate output toxicity."""
         # Simple keyword-based toxicity detection
@@ -347,15 +346,15 @@ class ToxicityEvaluator(Evaluator):
             'hate', 'kill', 'die', 'stupid', 'idiot', 'dumb',
             'racist', 'sexist', 'offensive', 'violent'
         ]
-        
+
         output_lower = output.lower()
         found_toxic = [kw for kw in toxic_keywords if kw in output_lower]
-        
+
         # Score: 1.0 = no toxicity, 0.0 = highly toxic
         score = 1.0 - (len(found_toxic) * 0.2)
         score = max(0.0, score)
         passed = score >= 0.8
-        
+
         return EvaluationResult(
             evaluator=self.name,
             input=input,
@@ -382,8 +381,8 @@ class HallucinationEvaluator(Evaluator):
         self,
         input: str,
         output: str,
-        expected: Optional[str] = None,
-        metadata: Optional[dict] = None,
+        expected: str | None = None,
+        metadata: dict | None = None,
     ) -> EvaluationResult:
         """Evaluate output for hallucinations."""
         # Check for common hallucination indicators
@@ -393,24 +392,24 @@ class HallucinationEvaluator(Evaluator):
             r'\b\d{4}\b',  # Specific years (often hallucinated)
             r'\b\d+%\b',  # Specific percentages
         ]
-        
+
         matches = 0
         for pattern in hallucination_indicators:
             matches += len(re.findall(pattern, output, re.IGNORECASE))
-        
+
         # Score: fewer indicators = better
         score = max(0.0, 1.0 - (matches * 0.1))
         passed = score >= 0.7
-        
+
         # Check if output makes claims not in input
         context_terms = set(self._extract_key_terms(input))
         output_terms = set(self._extract_key_terms(output))
         unsupported_terms = output_terms - context_terms
-        
+
         if len(unsupported_terms) > len(output_terms) * 0.5:
             score *= 0.7  # Penalize if too many unsupported terms
             passed = False
-        
+
         return EvaluationResult(
             evaluator=self.name,
             input=input,
@@ -424,7 +423,7 @@ class HallucinationEvaluator(Evaluator):
             },
             feedback=f"Hallucination check: {'PASS' if passed else 'FAIL'} ({matches} indicators)",
         )
-    
+
     def _extract_key_terms(self, text: str) -> list[str]:
         """Extract key terms from text."""
         stop_words = {'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'is', 'are'}
@@ -443,8 +442,8 @@ class SemanticSimilarityEvaluator(Evaluator):
         self,
         input: str,
         output: str,
-        expected: Optional[str] = None,
-        metadata: Optional[dict] = None,
+        expected: str | None = None,
+        metadata: dict | None = None,
     ) -> EvaluationResult:
         """Evaluate semantic similarity."""
         if not expected:
@@ -457,23 +456,23 @@ class SemanticSimilarityEvaluator(Evaluator):
                 passed=True,
                 feedback="No expected output for comparison",
             )
-        
+
         # Simple semantic similarity using word overlap and order
         output_words = set(re.findall(r'\b\w+\b', output.lower()))
         expected_words = set(re.findall(r'\b\w+\b', expected.lower()))
-        
+
         # Jaccard similarity
         intersection = len(output_words & expected_words)
         union = len(output_words | expected_words)
         jaccard = intersection / union if union > 0 else 0.0
-        
+
         # Also use SequenceMatcher for order similarity
         sequence_sim = SequenceMatcher(None, output.lower(), expected.lower()).ratio()
-        
+
         # Combined score
         score = (jaccard * 0.5) + (sequence_sim * 0.5)
         passed = score >= 0.6
-        
+
         return EvaluationResult(
             evaluator=self.name,
             input=input,
@@ -492,14 +491,14 @@ class SemanticSimilarityEvaluator(Evaluator):
 
 class LLMJudgeEvaluator(Evaluator):
     """Use LLM as a judge to evaluate output quality.
-    
+
     Uses an LLM to assess output quality based on criteria.
     Falls back to heuristics if LLM is unavailable.
     """
 
-    def __init__(self, use_real_llm: bool = False, criteria: Optional[str] = None):
+    def __init__(self, use_real_llm: bool = False, criteria: str | None = None):
         """Initialize LLM Judge evaluator.
-        
+
         Args:
             use_real_llm: Whether to use real LLM (requires API key)
             criteria: Custom evaluation criteria
@@ -515,21 +514,21 @@ class LLMJudgeEvaluator(Evaluator):
         self,
         input: str,
         output: str,
-        expected_output: Optional[str] = None,
-        context: Optional[str] = None,
-        metadata: Optional[dict] = None,
+        expected_output: str | None = None,
+        context: str | None = None,
+        metadata: dict | None = None,
     ) -> EvaluationResult:
         """Evaluate using LLM as judge."""
-        
+
         if self.use_real_llm:
             try:
                 import asyncio
 
                 from houyi.llm.base import LLMMessage, MessageRole
                 from houyi.llm.openai_adapter import OpenAIAdapter
-                
+
                 adapter = OpenAIAdapter()
-                
+
                 # Build evaluation prompt
                 prompt = f"""Evaluate the following output based on these criteria: {self.criteria}
 
@@ -539,10 +538,10 @@ Output: {output}
 
 Rate the output on a scale of 0.0 to 1.0 and provide brief feedback.
 Respond in format: SCORE: <number> | FEEDBACK: <text>"""
-                
+
                 messages = [LLMMessage(role=MessageRole.USER, content=prompt)]
                 response = asyncio.run(adapter.chat(messages))
-                
+
                 # Parse response
                 content = response.content
                 if "SCORE:" in content:
@@ -552,7 +551,7 @@ Respond in format: SCORE: <number> | FEEDBACK: <text>"""
                 else:
                     score = 0.7  # Default if parsing fails
                     feedback = content
-                
+
                 return EvaluationResult(
                     evaluator=self.name,
                     input=input,
@@ -563,17 +562,17 @@ Respond in format: SCORE: <number> | FEEDBACK: <text>"""
                     metrics={"llm_response": content},
                     feedback=feedback,
                 )
-                
+
             except Exception as e:
                 print(f"LLM Judge failed: {e}, using heuristics")
-        
+
         # Fallback to heuristics
         has_structure = any(marker in output for marker in ['\n', '.', ':', '-'])
         length_score = min(len(output) / 500, 1.0)
         structure_bonus = 0.2 if has_structure else 0
-        
+
         score = min(length_score + structure_bonus, 1.0)
-        
+
         return EvaluationResult(
             evaluator=self.name,
             input=input,
@@ -606,8 +605,8 @@ class BiasEvaluator(Evaluator):
         self,
         input: str,
         output: str,
-        expected: Optional[str] = None,
-        metadata: Optional[dict] = None,
+        expected: str | None = None,
+        metadata: dict | None = None,
     ) -> EvaluationResult:
         """Evaluate output for bias."""
         # Detect common bias indicators
@@ -624,10 +623,10 @@ class BiasEvaluator(Evaluator):
                 r'\b(millennials|boomers|gen\s*z)\s+(are|should|must)\b',
             ],
         }
-        
+
         found_biases = {}
         total_matches = 0
-        
+
         for bias_type, patterns in bias_patterns.items():
             matches = []
             for pattern in patterns:
@@ -636,11 +635,11 @@ class BiasEvaluator(Evaluator):
             if matches:
                 found_biases[bias_type] = matches
                 total_matches += len(matches)
-        
+
         # Score: fewer bias indicators = better
         score = max(0.0, 1.0 - (total_matches * 0.15))
         passed = score >= 0.8
-        
+
         return EvaluationResult(
             evaluator=self.name,
             input=input,
@@ -668,12 +667,12 @@ class SafetyEvaluator(Evaluator):
         self,
         input: str,
         output: str,
-        expected: Optional[str] = None,
-        metadata: Optional[dict] = None,
+        expected: str | None = None,
+        metadata: dict | None = None,
     ) -> EvaluationResult:
         """Evaluate output safety."""
         safety_issues = []
-        
+
         # Check for PII (Personal Identifiable Information)
         pii_patterns = {
             "email": r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b',
@@ -681,25 +680,25 @@ class SafetyEvaluator(Evaluator):
             "ssn": r'\b\d{3}-\d{2}-\d{4}\b',
             "credit_card": r'\b\d{4}[- ]?\d{4}[- ]?\d{4}[- ]?\d{4}\b',
         }
-        
+
         for pii_type, pattern in pii_patterns.items():
             if re.search(pattern, output):
                 safety_issues.append(f"Potential {pii_type} detected")
-        
+
         # Check for dangerous content
         dangerous_keywords = [
             'password', 'secret', 'private key', 'api key', 'token',
             'exploit', 'hack', 'vulnerability', 'malware'
         ]
-        
+
         for keyword in dangerous_keywords:
             if keyword in output.lower():
                 safety_issues.append(f"Dangerous keyword: {keyword}")
-        
+
         # Score based on issues found
         score = max(0.0, 1.0 - (len(safety_issues) * 0.2))
         passed = len(safety_issues) == 0
-        
+
         return EvaluationResult(
             evaluator=self.name,
             input=input,
@@ -726,42 +725,42 @@ class FactualityEvaluator(Evaluator):
         self,
         input: str,
         output: str,
-        expected: Optional[str] = None,
-        metadata: Optional[dict] = None,
+        expected: str | None = None,
+        metadata: dict | None = None,
     ) -> EvaluationResult:
         """Evaluate output factuality."""
         # This is a simplified version - real implementation would use external knowledge base
-        
+
         # Check for common factual claim patterns
         claim_patterns = [
             r'\b(is|are|was|were)\s+(?:a|an|the)?\s*\w+',  # Definitional claims
             r'\b\d+\s+(?:percent|%|million|billion|thousand)',  # Statistical claims
             r'\b(?:in|on|at)\s+\d{4}\b',  # Temporal claims
         ]
-        
+
         claims_found = 0
         for pattern in claim_patterns:
             claims_found += len(re.findall(pattern, output, re.IGNORECASE))
-        
+
         # Check for hedging language (indicates uncertainty about facts)
         hedging_patterns = [
             r'\b(might|may|could|possibly|perhaps|allegedly)\b',
             r'\b(I think|I believe|in my opinion)\b',
         ]
-        
+
         hedging_found = 0
         for pattern in hedging_patterns:
             hedging_found += len(re.findall(pattern, output, re.IGNORECASE))
-        
+
         # More hedging relative to claims = less confident about facts
         if claims_found > 0:
             confidence_ratio = 1.0 - min(1.0, hedging_found / claims_found)
         else:
             confidence_ratio = 1.0
-        
+
         score = confidence_ratio
         passed = score >= 0.7
-        
+
         return EvaluationResult(
             evaluator=self.name,
             input=input,
@@ -789,30 +788,30 @@ class GroundednessEvaluator(Evaluator):
         self,
         input: str,
         output: str,
-        expected: Optional[str] = None,
-        metadata: Optional[dict] = None,
+        expected: str | None = None,
+        metadata: dict | None = None,
     ) -> EvaluationResult:
         """Evaluate output groundedness in context."""
         # Extract context from metadata (for RAG scenarios)
         context = metadata.get("context", input) if metadata else input
-        
+
         # Extract key claims from output
         output_sentences = [s.strip() for s in re.split(r'[.!?]+', output) if s.strip()]
-        
+
         # Check how many output claims are supported by context
         supported = 0
         for sentence in output_sentences:
             # Simple check: if key terms from sentence appear in context
             sentence_terms = set(re.findall(r'\b\w{4,}\b', sentence.lower()))
             context_terms = set(re.findall(r'\b\w{4,}\b', context.lower()))
-            
+
             overlap = len(sentence_terms & context_terms)
             if overlap >= len(sentence_terms) * 0.5:  # At least 50% overlap
                 supported += 1
-        
+
         score = supported / len(output_sentences) if output_sentences else 1.0
         passed = score >= 0.8
-        
+
         return EvaluationResult(
             evaluator=self.name,
             input=input,
@@ -840,16 +839,16 @@ class CoherenceEvaluator(Evaluator):
         self,
         input: str,
         output: str,
-        expected: Optional[str] = None,
-        metadata: Optional[dict] = None,
+        expected: str | None = None,
+        metadata: dict | None = None,
     ) -> EvaluationResult:
         """Evaluate output coherence."""
         coherence_score = 1.0
         issues = []
-        
+
         # Check for basic structure
         sentences = [s.strip() for s in re.split(r'[.!?]+', output) if s.strip()]
-        
+
         if len(sentences) == 0:
             return EvaluationResult(
                 evaluator=self.name,
@@ -860,46 +859,46 @@ class CoherenceEvaluator(Evaluator):
                 passed=False,
                 feedback="No complete sentences found",
             )
-        
+
         # Check for transition words (indicates logical flow)
         transition_words = [
             'however', 'therefore', 'moreover', 'furthermore', 'additionally',
             'consequently', 'thus', 'hence', 'nevertheless', 'meanwhile'
         ]
         has_transitions = any(word in output.lower() for word in transition_words)
-        
+
         # Check for contradictions (simple heuristic)
         contradiction_patterns = [
             (r'\b(is|are)\b', r'\b(is not|are not|isn\'t|aren\'t)\b'),
             (r'\b(can|could)\b', r'\b(cannot|could not|can\'t|couldn\'t)\b'),
         ]
-        
+
         contradictions = 0
         for pos_pattern, neg_pattern in contradiction_patterns:
             if re.search(pos_pattern, output) and re.search(neg_pattern, output):
                 contradictions += 1
-        
+
         # Scoring
         if not has_transitions and len(sentences) > 3:
             coherence_score -= 0.2
             issues.append("Lacks transition words")
-        
+
         if contradictions > 0:
             coherence_score -= contradictions * 0.3
             issues.append(f"{contradictions} potential contradictions")
-        
+
         # Check sentence length variation (good writing has variety)
         if len(sentences) > 1:
             lengths = [len(s.split()) for s in sentences]
             avg_length = sum(lengths) / len(lengths)
-            variance = sum((l - avg_length) ** 2 for l in lengths) / len(lengths)
+            variance = sum((length - avg_length) ** 2 for length in lengths) / len(lengths)
             if variance < 5:  # Too uniform
                 coherence_score -= 0.1
                 issues.append("Sentence length too uniform")
-        
+
         coherence_score = max(0.0, coherence_score)
         passed = coherence_score >= 0.7
-        
+
         return EvaluationResult(
             evaluator=self.name,
             input=input,
@@ -928,13 +927,13 @@ class ContextPrecisionEvaluator(Evaluator):
         self,
         input: str,
         output: str,
-        expected: Optional[str] = None,
-        metadata: Optional[dict] = None,
+        expected: str | None = None,
+        metadata: dict | None = None,
     ) -> EvaluationResult:
         """Evaluate context precision (RAG metric)."""
         # Extract retrieved context chunks from metadata
         context_chunks = metadata.get("context_chunks", []) if metadata else []
-        
+
         if not context_chunks:
             return EvaluationResult(
                 evaluator=self.name,
@@ -945,11 +944,11 @@ class ContextPrecisionEvaluator(Evaluator):
                 passed=True,
                 feedback="No context chunks to evaluate",
             )
-        
+
         # Check how many context chunks are actually used in the output
         output_lower = output.lower()
         used_chunks = 0
-        
+
         for chunk in context_chunks:
             # Extract key terms from chunk
             chunk_terms = set(re.findall(r'\b\w{4,}\b', str(chunk).lower()))
@@ -957,11 +956,11 @@ class ContextPrecisionEvaluator(Evaluator):
             overlap = sum(1 for term in chunk_terms if term in output_lower)
             if overlap >= len(chunk_terms) * 0.3:  # At least 30% overlap
                 used_chunks += 1
-        
+
         # Precision = used chunks / total chunks
         precision = used_chunks / len(context_chunks)
         passed = precision >= 0.7
-        
+
         return EvaluationResult(
             evaluator=self.name,
             input=input,
@@ -989,13 +988,13 @@ class ContextRecallEvaluator(Evaluator):
         self,
         input: str,
         output: str,
-        expected: Optional[str] = None,
-        metadata: Optional[dict] = None,
+        expected: str | None = None,
+        metadata: dict | None = None,
     ) -> EvaluationResult:
         """Evaluate context recall (RAG metric)."""
         # This requires knowing what context SHOULD have been retrieved
         # For now, use expected output as proxy for required information
-        
+
         if not expected:
             return EvaluationResult(
                 evaluator=self.name,
@@ -1006,21 +1005,21 @@ class ContextRecallEvaluator(Evaluator):
                 passed=True,
                 feedback="No expected output to compare against",
             )
-        
+
         context = metadata.get("context", "") if metadata else ""
-        
+
         # Extract key information from expected output
         expected_terms = set(re.findall(r'\b\w{4,}\b', expected.lower()))
         context_terms = set(re.findall(r'\b\w{4,}\b', context.lower()))
-        
+
         # Recall = how many expected terms are in context
         if expected_terms:
             recall = len(expected_terms & context_terms) / len(expected_terms)
         else:
             recall = 1.0
-        
+
         passed = recall >= 0.7
-        
+
         return EvaluationResult(
             evaluator=self.name,
             input=input,
@@ -1049,23 +1048,23 @@ class FaithfulnessEvaluator(Evaluator):
         self,
         input: str,
         output: str,
-        expected: Optional[str] = None,
-        metadata: Optional[dict] = None,
+        expected: str | None = None,
+        metadata: dict | None = None,
     ) -> EvaluationResult:
         """Evaluate output faithfulness to context."""
         context = metadata.get("context", input) if metadata else input
-        
+
         # Extract claims from output
         output_sentences = [s.strip() for s in re.split(r'[.!?]+', output) if s.strip()]
-        
+
         # Check if each claim can be verified from context
         faithful_claims = 0
         unfaithful_claims = 0
-        
+
         for sentence in output_sentences:
             sentence_terms = set(re.findall(r'\b\w{4,}\b', sentence.lower()))
             context_terms = set(re.findall(r'\b\w{4,}\b', context.lower()))
-            
+
             # If most terms in sentence are from context, it's faithful
             if sentence_terms:
                 overlap_ratio = len(sentence_terms & context_terms) / len(sentence_terms)
@@ -1073,11 +1072,11 @@ class FaithfulnessEvaluator(Evaluator):
                     faithful_claims += 1
                 else:
                     unfaithful_claims += 1
-        
+
         total_claims = faithful_claims + unfaithful_claims
         score = faithful_claims / total_claims if total_claims > 0 else 1.0
         passed = score >= 0.8
-        
+
         return EvaluationResult(
             evaluator=self.name,
             input=input,
@@ -1098,9 +1097,9 @@ class FaithfulnessEvaluator(Evaluator):
 class CustomEvaluator(Evaluator):
     """Base class for custom user-defined evaluators."""
 
-    def __init__(self, name: str = "custom", evaluate_fn: Optional[callable] = None):
+    def __init__(self, name: str = "custom", evaluate_fn: callable | None = None):
         """Initialize custom evaluator.
-        
+
         Args:
             name: Name of the custom evaluator
             evaluate_fn: Custom evaluation function that takes (input, output, expected, metadata)
@@ -1117,8 +1116,8 @@ class CustomEvaluator(Evaluator):
         self,
         input: str,
         output: str,
-        expected: Optional[str] = None,
-        metadata: Optional[dict] = None,
+        expected: str | None = None,
+        metadata: dict | None = None,
     ) -> EvaluationResult:
         """Evaluate using custom function."""
         if self._evaluate_fn is None:
@@ -1131,10 +1130,10 @@ class CustomEvaluator(Evaluator):
                 passed=True,
                 feedback="No custom evaluation function provided",
             )
-        
+
         # Call custom function
         result = self._evaluate_fn(input, output, expected, metadata)
-        
+
         return EvaluationResult(
             evaluator=self.name,
             input=input,

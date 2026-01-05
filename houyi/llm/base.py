@@ -3,15 +3,16 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import AsyncIterator
 from enum import Enum
-from typing import Any, AsyncIterator
+from typing import Any
 
 from pydantic import BaseModel, Field
 
 
 class MessageRole(str, Enum):
     """Message role in conversation."""
-    
+
     SYSTEM = "system"
     USER = "user"
     ASSISTANT = "assistant"
@@ -20,7 +21,7 @@ class MessageRole(str, Enum):
 
 class LLMMessage(BaseModel):
     """Message in LLM conversation."""
-    
+
     role: MessageRole = Field(..., description="Message role")
     content: str = Field(..., description="Message content")
     name: str | None = Field(default=None, description="Optional name (for tool messages)")
@@ -29,20 +30,20 @@ class LLMMessage(BaseModel):
 
 class LLMResponse(BaseModel):
     """Response from LLM."""
-    
+
     content: str = Field(..., description="Response content")
     tool_calls: list[dict] = Field(default_factory=list, description="Tool calls if any")
     finish_reason: str = Field(..., description="Finish reason (stop, tool_calls, length, etc.)")
     usage: dict[str, int] = Field(default_factory=dict, description="Token usage")
     model: str = Field(..., description="Model used")
     metadata: dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
-    
+
     @classmethod
     def from_openai(cls, response: Any) -> LLMResponse:
         """Create from OpenAI response."""
         choice = response.choices[0]
         message = choice.message
-        
+
         return cls(
             content=message.content or "",
             tool_calls=[tc.model_dump() for tc in (message.tool_calls or [])],
@@ -54,13 +55,13 @@ class LLMResponse(BaseModel):
             },
             model=response.model,
         )
-    
+
     @classmethod
     def from_anthropic(cls, response: Any) -> LLMResponse:
         """Create from Anthropic response."""
         content = ""
         tool_calls = []
-        
+
         for block in response.content:
             if block.type == "text":
                 content += block.text
@@ -73,7 +74,7 @@ class LLMResponse(BaseModel):
                         "arguments": block.input,
                     }
                 })
-        
+
         return cls(
             content=content,
             tool_calls=tool_calls,
@@ -89,10 +90,10 @@ class LLMResponse(BaseModel):
 
 class LLMAdapter(ABC):
     """Base class for LLM adapters.
-    
+
     Adapters provide a unified interface for different LLM providers.
     """
-    
+
     @abstractmethod
     async def chat(
         self,
@@ -103,19 +104,19 @@ class LLMAdapter(ABC):
         **kwargs: Any,
     ) -> LLMResponse:
         """Chat completion.
-        
+
         Args:
             messages: Conversation messages
             tools: Available tools (OpenAI function calling format)
             temperature: Sampling temperature
             max_tokens: Maximum tokens to generate
             **kwargs: Additional provider-specific parameters
-            
+
         Returns:
             LLM response
         """
         pass
-    
+
     @abstractmethod
     async def stream_chat(
         self,
@@ -126,28 +127,28 @@ class LLMAdapter(ABC):
         **kwargs: Any,
     ) -> AsyncIterator[str]:
         """Streaming chat completion.
-        
+
         Args:
             messages: Conversation messages
             tools: Available tools
             temperature: Sampling temperature
             max_tokens: Maximum tokens to generate
             **kwargs: Additional provider-specific parameters
-            
+
         Yields:
             Response chunks
         """
         pass
-    
+
     def _normalize_messages(
         self,
         messages: list[LLMMessage | dict]
     ) -> list[dict]:
         """Normalize messages to dict format.
-        
+
         Args:
             messages: Messages as LLMMessage or dict
-            
+
         Returns:
             Normalized message dicts
         """

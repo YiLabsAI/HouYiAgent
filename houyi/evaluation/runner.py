@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Any, Union
+from typing import Any
 
 from houyi.evaluation.base import EvaluationSummary, Evaluator
+from houyi.evaluation.dataset import Dataset
 from houyi.evaluation.evaluators import (
     # Phase 1
     AccuracyEvaluator,
@@ -31,11 +32,11 @@ from houyi.evaluation.evaluators import (
 )
 
 
-def _get_evaluator(name_or_instance: Union[str, Evaluator]) -> Evaluator:
+def _get_evaluator(name_or_instance: str | Evaluator) -> Evaluator:
     """Get evaluator instance from name or return instance directly."""
     if isinstance(name_or_instance, Evaluator):
         return name_or_instance
-    
+
     # Map evaluator names to classes (19 evaluators total)
     evaluators = {
         # Phase 1: Core (4)
@@ -61,31 +62,31 @@ def _get_evaluator(name_or_instance: Union[str, Evaluator]) -> Evaluator:
         "faithfulness": FaithfulnessEvaluator,
         "custom": CustomEvaluator,
     }
-    
+
     evaluator_class = evaluators.get(name_or_instance.lower())
     if not evaluator_class:
         raise ValueError(f"Unknown evaluator: {name_or_instance}. Available: {', '.join(evaluators.keys())}")
-    
+
     return evaluator_class()
 
 
 def evaluate(
     agent: Any,
-    test_cases: Union[list[dict], "Dataset"] = None,
-    evaluators: Union[list[str], list[Evaluator]] = None,
-    dataset: Optional["Dataset"] = None,
+    test_cases: list[dict] | Dataset = None,
+    evaluators: list[str] | list[Evaluator] = None,
+    dataset: Dataset | None = None,
 ) -> EvaluationSummary:
     """Evaluate agent performance on test cases.
-    
+
     Args:
         agent: Agent to evaluate
         test_cases: List of test cases (dicts) or Dataset instance (deprecated, use dataset param)
         evaluators: List of evaluator names or Evaluator instances
         dataset: Dataset instance (preferred over test_cases)
-        
+
     Returns:
         EvaluationSummary
-        
+
     Example:
         >>> from houyi.evaluation import evaluate, Dataset
         >>> dataset = Dataset.from_file("tests/dataset.json")
@@ -120,11 +121,11 @@ def evaluate(
         # Execute agent and collect metrics
         import time
         start_time = time.time()
-        
+
         try:
             output = agent.run(input_text)
             duration_ms = (time.time() - start_time) * 1000
-            
+
             # Extract metadata from agent execution
             metadata = {
                 "cost": getattr(agent, '_last_cost', 0.0),

@@ -196,20 +196,20 @@ class LocalExecutor:
         """Execute LLM node."""
         # Get LLM configuration from node metadata
         use_real_llm = node.metadata.get("use_real_llm", False)
-        
+
         if use_real_llm:
             try:
                 from houyi.llm.base import LLMMessage, MessageRole
                 from houyi.llm.openai_adapter import OpenAIAdapter
-                
+
                 adapter = OpenAIAdapter()
                 task = inputs.get('task', inputs.get('prompt', ''))
                 messages = [LLMMessage(role=MessageRole.USER, content=task)]
-                
+
                 # Synchronous call (runtime executor is sync)
                 import asyncio
                 response = asyncio.run(adapter.chat(messages))
-                
+
                 return {
                     "type": "llm_response",
                     "content": response.content,
@@ -220,7 +220,7 @@ class LocalExecutor:
                     "type": "llm_response",
                     "content": f"Mock LLM response (error): {inputs.get('task', 'unknown')}",
                 }
-        
+
         # Mock implementation
         return {
             "type": "llm_response",
@@ -235,7 +235,7 @@ class LocalExecutor:
         """Execute tool node."""
         # Get skill from node metadata
         skill = node.metadata.get("skill")
-        
+
         if skill and hasattr(skill, 'executor') and skill.executor:
             try:
                 # Execute skill
@@ -247,7 +247,7 @@ class LocalExecutor:
             except Exception as e:
                 print(f"Tool execution failed: {e}")
                 raise
-        
+
         # Mock implementation
         return {
             "type": "tool_result",
@@ -262,11 +262,11 @@ class LocalExecutor:
         """Execute verification node."""
         # Get assertion from node metadata
         assertion = node.metadata.get("assertion")
-        
+
         if assertion:
             try:
                 from houyi.core.assertion import AssertionSpec
-                
+
                 if isinstance(assertion, AssertionSpec):
                     passed = assertion.evaluate(inputs)
                     return {
@@ -281,7 +281,7 @@ class LocalExecutor:
                     "passed": False,
                     "error": str(e),
                 }
-        
+
         # Default: pass if no assertion
         return {
             "type": "verification",
@@ -296,7 +296,7 @@ class LocalExecutor:
         """Execute logic node (conditional branching, loops, etc)."""
         # Logic nodes perform control flow operations
         logic_type = node.metadata.get("logic_type", "passthrough")
-        
+
         if logic_type == "conditional":
             condition = node.metadata.get("condition")
             if condition and callable(condition):
@@ -306,7 +306,7 @@ class LocalExecutor:
                     "result": result,
                     "branch": "true" if result else "false",
                 }
-        
+
         # Default: passthrough
         return {
             "type": "logic",
@@ -321,7 +321,7 @@ class LocalExecutor:
         """Execute routing node (select execution branch based on input)."""
         # Routing nodes select which branch to execute
         router = node.metadata.get("router")
-        
+
         if router and callable(router):
             selected = router(inputs)
             return {
@@ -329,7 +329,7 @@ class LocalExecutor:
                 "selected_branch": selected,
                 "inputs": inputs,
             }
-        
+
         # Default routing
         return {
             "type": "route",

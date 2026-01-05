@@ -44,24 +44,24 @@ class IRNode(BaseModel):
     )
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    
+
     def is_ready(self, completed_nodes: set[str]) -> bool:
         """Check if node is ready to execute.
-        
+
         Args:
             completed_nodes: Set of completed node IDs
-            
+
         Returns:
             True if all dependencies are satisfied
         """
         return all(dep in completed_nodes for dep in self.dependencies)
-    
+
     def get_input_values(self, context: dict[str, Any]) -> dict[str, Any]:
         """Resolve input values from context.
-        
+
         Args:
             context: Execution context with variable values
-            
+
         Returns:
             Resolved input values
         """

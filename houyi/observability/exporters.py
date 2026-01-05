@@ -3,16 +3,15 @@
 from __future__ import annotations
 
 import json
-import time
 import urllib.error
 import urllib.request
 from abc import ABC, abstractmethod
-from typing import Any, Optional
+from typing import Any
 
 
 class ExporterConfig:
     """Configuration for an exporter."""
-    
+
     def __init__(self, type: str, **kwargs: Any):
         self.type = type
         self.config = kwargs
@@ -20,32 +19,36 @@ class ExporterConfig:
 
 class Exporter(ABC):
     """Base class for exporters."""
-    
+
     @abstractmethod
     def export(self, span_data: dict[str, Any]) -> None:
         """Export span data.
-        
+
         Args:
             span_data: Span data to export
         """
         pass
-    
+
     def flush(self) -> None:
-        """Flush any buffered data."""
-        pass
+        """Flush any buffered data.
+
+        Default implementation does nothing.
+        Subclasses can override if they need to flush buffered data.
+        """
+        return  # Default: no-op
 
 
 class ConsoleExporter(Exporter):
     """Export traces to console."""
-    
+
     def __init__(self, verbose: bool = False):
         """Initialize console exporter.
-        
+
         Args:
             verbose: Whether to print full span details
         """
         self.verbose = verbose
-    
+
     def export(self, span_data: dict[str, Any]) -> None:
         """Export span to console."""
         if self.verbose:
@@ -60,44 +63,44 @@ class ConsoleExporter(Exporter):
             status = span_data['status']
             status_icon = "✅" if status == "ok" else "❌"
             print(f"{status_icon} {span_data['name']} ({duration_ms:.2f}ms)")
-    
+
     def _print_span(self, span: dict, indent: int = 0) -> None:
         """Print span recursively."""
         prefix = "  " * indent
         duration_ms = span['duration'] * 1000
-        
+
         print(f"{prefix}📍 {span['name']} ({duration_ms:.2f}ms)")
-        
+
         if span['attributes']:
             print(f"{prefix}   Attributes:")
             for key, value in span['attributes'].items():
                 print(f"{prefix}     - {key}: {value}")
-        
+
         if span['events']:
             print(f"{prefix}   Events:")
             for event in span['events']:
                 print(f"{prefix}     - {event['name']}")
-        
+
         for child in span['children']:
             self._print_span(child, indent + 1)
 
 
 class JSONExporter(Exporter):
     """Export traces to JSON file."""
-    
+
     def __init__(self, filepath: str = "traces.json"):
         """Initialize JSON exporter.
-        
+
         Args:
             filepath: Path to JSON file
         """
         self.filepath = filepath
         self.traces: list[dict] = []
-    
+
     def export(self, span_data: dict[str, Any]) -> None:
         """Export span to JSON file."""
         self.traces.append(span_data)
-    
+
     def flush(self) -> None:
         """Write all traces to file."""
         if self.traces:
@@ -108,20 +111,20 @@ class JSONExporter(Exporter):
 
 class JaegerExporter(Exporter):
     """Export traces to Jaeger using OTLP/HTTP protocol.
-    
+
     Supports Jaeger v1.35+ with OTLP receiver.
     Default endpoint: http://localhost:4318/v1/traces
     """
-    
+
     def __init__(
-        self, 
+        self,
         endpoint: str = "http://localhost:4318",
         service_name: str = "houyi-agent",
         timeout: int = 5,
         batch_size: int = 10
     ):
         """Initialize Jaeger exporter.
-        
+
         Args:
             endpoint: Jaeger OTLP endpoint
             service_name: Service name
@@ -134,20 +137,20 @@ class JaegerExporter(Exporter):
         self.batch_size = batch_size
         self.span_batch: list[dict] = []
         print(f"✅ JaegerExporter initialized - {self.endpoint}")
-    
+
     def export(self, span_data: dict[str, Any]) -> None:
         """Export span to Jaeger."""
         otlp_span = self._convert_to_otlp(span_data)
         self.span_batch.append(otlp_span)
-        
+
         if len(self.span_batch) >= self.batch_size:
             self.flush()
-    
+
     def _convert_to_otlp(self, span: dict[str, Any]) -> dict:
         """Convert HouYi span to OTLP format."""
         start_time_ns = int(span['start_time'] * 1e9)
         end_time_ns = int(span['end_time'] * 1e9)
-        
+
         return {
             "traceId": span['trace_id'],
             "spanId": span['span_id'],
@@ -162,12 +165,12 @@ class JaegerExporter(Exporter):
             ],
             "status": {"code": 1 if span['status'] == 'ok' else 2}
         }
-    
+
     def flush(self) -> None:
         """Send batched spans to Jaeger."""
         if not self.span_batch:
             return
-        
+
         payload = {
             "resourceSpans": [{
                 "resource": {
@@ -180,7 +183,7 @@ class JaegerExporter(Exporter):
                 }]
             }]
         }
-        
+
         try:
             data = json.dumps(payload).encode('utf-8')
             req = urllib.request.Request(
@@ -188,7 +191,7 @@ class JaegerExporter(Exporter):
                 data=data,
                 headers={'Content-Type': 'application/json'}
             )
-            
+
             with urllib.request.urlopen(req, timeout=self.timeout) as response:
                 if response.status == 200:
                     print(f"✅ Exported {len(self.span_batch)} spans to Jaeger")
@@ -204,10 +207,10 @@ class JaegerExporter(Exporter):
 
 class DatadogExporter(Exporter):
     """Export traces to Datadog APM.
-    
+
     Uses Datadog Agent API (default: http://localhost:8126/v0.4/traces)
     """
-    
+
     def __init__(
         self,
         agent_url: str = "http://localhost:8126",
@@ -217,7 +220,7 @@ class DatadogExporter(Exporter):
         batch_size: int = 10
     ):
         """Initialize Datadog exporter.
-        
+
         Args:
             agent_url: Datadog Agent URL
             service_name: Service name
@@ -232,24 +235,24 @@ class DatadogExporter(Exporter):
         self.batch_size = batch_size
         self.trace_batch: list[list[dict]] = []
         print(f"✅ DatadogExporter initialized - {self.agent_url}")
-    
+
     def export(self, span_data: dict[str, Any]) -> None:
         """Export span to Datadog."""
         dd_trace = self._convert_to_datadog(span_data)
         self.trace_batch.append(dd_trace)
-        
+
         if len(self.trace_batch) >= self.batch_size:
             self.flush()
-    
+
     def _convert_to_datadog(self, span: dict[str, Any]) -> list[dict]:
         """Convert HouYi span to Datadog format."""
         trace_id = int(span['trace_id'][:16], 16)
         span_id = int(span['span_id'][:16], 16)
         parent_id = int(span.get('parent_id', '0')[:16] or '0', 16)
-        
+
         start_ns = int(span['start_time'] * 1e9)
         duration_ns = int(span['duration'] * 1e9)
-        
+
         dd_span = {
             "trace_id": trace_id,
             "span_id": span_id,
@@ -266,19 +269,19 @@ class DatadogExporter(Exporter):
                 **{k: str(v) for k, v in span.get('attributes', {}).items()}
             }
         }
-        
+
         # Flatten children into trace
         trace = [dd_span]
         for child in span.get('children', []):
             trace.extend(self._convert_to_datadog(child))
-        
+
         return trace
-    
+
     def flush(self) -> None:
         """Send batched traces to Datadog."""
         if not self.trace_batch:
             return
-        
+
         try:
             data = json.dumps(self.trace_batch).encode('utf-8')
             req = urllib.request.Request(
@@ -290,7 +293,7 @@ class DatadogExporter(Exporter):
                     'Datadog-Meta-Lang': 'python'
                 }
             )
-            
+
             with urllib.request.urlopen(req, timeout=self.timeout) as response:
                 if response.status == 200:
                     print(f"✅ Exported {len(self.trace_batch)} traces to Datadog")
@@ -306,10 +309,10 @@ class DatadogExporter(Exporter):
 
 def create_exporter(config: dict | ExporterConfig) -> Exporter:
     """Create exporter from configuration.
-    
+
     Args:
         config: Exporter configuration
-        
+
     Returns:
         Exporter instance
     """
@@ -319,7 +322,7 @@ def create_exporter(config: dict | ExporterConfig) -> Exporter:
     else:
         exporter_type = config.get("type", "console")
         kwargs = {k: v for k, v in config.items() if k != "type"}
-    
+
     if exporter_type == "console":
         return ConsoleExporter(**kwargs)
     elif exporter_type == "json":

@@ -6,7 +6,7 @@ import urllib.error
 import urllib.request
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Field, create_model
@@ -24,8 +24,8 @@ class SkillSpec(BaseModel):
     description: str = Field(..., description="Human-readable description for LLM")
     input_schema: type[BaseModel] = Field(..., description="Pydantic model for input validation")
     output_schema: type[BaseModel] = Field(..., description="Pydantic model for output validation")
-    executor: Optional[Callable[..., Any]] = Field(default=None, description="Function to execute the skill")
-    skill_md_path: Optional[str] = Field(default=None, description="Path to skill.md file (AgentSkills.io)")
+    executor: Callable[..., Any] | None = Field(default=None, description="Function to execute the skill")
+    skill_md_path: str | None = Field(default=None, description="Path to skill.md file (AgentSkills.io)")
     constraints: dict[str, Any] = Field(
         default_factory=dict,
         description="SLA constraints (timeout, cost, etc.)",
@@ -90,25 +90,25 @@ class SkillSpec(BaseModel):
             # Download content
             with urllib.request.urlopen(url, timeout=10) as response:
                 content = response.read().decode('utf-8')
-            
+
             # Parse content
             parsed = cls._parse_skill_md(content)
-            
+
             # Optionally cache to local file
             cache_path = None
             if cache:
                 # Create cache directory
                 cache_dir = Path.home() / ".houyi" / "skill_cache"
                 cache_dir.mkdir(parents=True, exist_ok=True)
-                
+
                 # Generate cache filename from URL
                 parsed_url = urlparse(url)
                 filename = Path(parsed_url.path).name or "skill.md"
                 cache_path = str(cache_dir / filename)
-                
+
                 # Save to cache
                 Path(cache_path).write_text(content)
-            
+
             return cls(
                 name=parsed["name"],
                 description=parsed["description"],
@@ -119,12 +119,12 @@ class SkillSpec(BaseModel):
                 constraints=parsed.get("constraints", {}),
             )
         except urllib.error.URLError as e:
-            raise urllib.error.URLError(f"Failed to load skill from {url}: {e}")
+            raise urllib.error.URLError(f"Failed to load skill from {url}: {e}") from e
         except Exception as e:
-            raise ValueError(f"Failed to parse skill from {url}: {e}")
+            raise ValueError(f"Failed to parse skill from {url}: {e}") from e
 
     @classmethod
-    def from_registry(cls, skill_name: str, version: Optional[str] = None, cache: bool = True) -> "SkillSpec":
+    def from_registry(cls, skill_name: str, version: str | None = None, cache: bool = True) -> "SkillSpec":
         """Load skill from AgentSkills.io registry.
 
         Args:
@@ -141,12 +141,12 @@ class SkillSpec(BaseModel):
         """
         # Construct URL to AgentSkills.io registry
         base_url = "https://raw.githubusercontent.com/agentskills/skills/main"
-        
+
         if version:
             url = f"{base_url}/{skill_name}/{version}/skill.md"
         else:
             url = f"{base_url}/{skill_name}/skill.md"
-        
+
         return cls.from_url(url, cache=cache)
 
     @staticmethod
@@ -203,8 +203,8 @@ class SkillSpec(BaseModel):
     def export_skill_md(
         self,
         path: str,
-        metadata: Optional[dict[str, Any]] = None,
-        examples: Optional[list[dict[str, Any]]] = None,
+        metadata: dict[str, Any] | None = None,
+        examples: list[dict[str, Any]] | None = None,
     ) -> None:
         """Export skill to skill.md file (AgentSkills.io standard).
 
@@ -222,23 +222,23 @@ class SkillSpec(BaseModel):
         """
         # Build skill.md content
         content = f"# {self.name}\n\n"
-        
+
         # Description
         content += "## Description\n"
         content += f"{self.description}\n\n"
-        
+
         # Input Schema
         content += "## Input Schema\n"
         content += "```json\n"
         content += json.dumps(self.input_schema.model_json_schema(), indent=2)
         content += "\n```\n\n"
-        
+
         # Output Schema
         content += "## Output Schema\n"
         content += "```json\n"
         content += json.dumps(self.output_schema.model_json_schema(), indent=2)
         content += "\n```\n\n"
-        
+
         # Examples
         if examples:
             content += "## Examples\n\n"
@@ -252,21 +252,21 @@ class SkillSpec(BaseModel):
                 content += "```json\n"
                 content += json.dumps(example.get("output", {}), indent=2)
                 content += "\n```\n\n"
-        
+
         # Implementation metadata
         if metadata:
             content += "## Implementation\n"
             for key, value in metadata.items():
                 content += f"- {key.replace('_', ' ').title()}: {value}\n"
             content += "\n"
-        
+
         # Constraints
         if self.constraints:
             content += "## Constraints\n"
             for key, value in self.constraints.items():
                 content += f"- {key.replace('_', ' ').title()}: {value}\n"
             content += "\n"
-        
+
         # Write to file
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         Path(path).write_text(content)

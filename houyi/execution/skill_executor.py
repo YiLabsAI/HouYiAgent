@@ -12,7 +12,7 @@ from houyi.core.skill import SkillSpec
 
 class SkillExecutionError(Exception):
     """Error during skill execution."""
-    
+
     def __init__(self, skill_name: str, message: str, original_error: Exception | None = None):
         self.skill_name = skill_name
         self.message = message
@@ -22,7 +22,7 @@ class SkillExecutionError(Exception):
 
 class SkillExecutor:
     """Executor for skills with validation and error handling.
-    
+
     Handles:
     - Input validation
     - Skill execution (sync or async)
@@ -30,35 +30,35 @@ class SkillExecutor:
     - Error handling and retries
     - Timeout control
     """
-    
+
     def __init__(
         self,
         max_retries: int = 3,
         timeout: float = 30.0,
     ):
         """Initialize skill executor.
-        
+
         Args:
             max_retries: Maximum number of retries on failure
             timeout: Execution timeout in seconds
         """
         self.max_retries = max_retries
         self.timeout = timeout
-    
+
     async def execute(
         self,
         skill: SkillSpec,
         input_data: dict[str, Any],
     ) -> Any:
         """Execute a skill with validation and error handling.
-        
+
         Args:
             skill: Skill specification
             input_data: Input data (will be validated against input_schema)
-            
+
         Returns:
             Skill execution result (validated against output_schema)
-            
+
         Raises:
             SkillExecutionError: If execution fails after retries
         """
@@ -67,7 +67,7 @@ class SkillExecutor:
                 skill.name,
                 "Skill has no executor function bound"
             )
-        
+
         # Validate input
         try:
             validated_input = skill.input_schema(**input_data)
@@ -76,8 +76,8 @@ class SkillExecutor:
                 skill.name,
                 f"Input validation failed: {e}",
                 e
-            )
-        
+            ) from e
+
         # Execute with retries
         last_error = None
         for attempt in range(self.max_retries):
@@ -87,7 +87,7 @@ class SkillExecutor:
                     skill.executor,
                     validated_input
                 )
-                
+
                 # Validate output
                 try:
                     validated_output = skill.output_schema(**result)
@@ -97,8 +97,8 @@ class SkillExecutor:
                         skill.name,
                         f"Output validation failed: {e}",
                         e
-                    )
-                
+                    ) from e
+
             except SkillExecutionError:
                 # Re-raise validation errors immediately
                 raise
@@ -108,28 +108,28 @@ class SkillExecutor:
                     # Wait before retry (exponential backoff)
                     await asyncio.sleep(2 ** attempt)
                     continue
-        
+
         # All retries failed
         raise SkillExecutionError(
             skill.name,
             f"Execution failed after {self.max_retries} retries",
             last_error
         )
-    
+
     async def _execute_with_timeout(
         self,
         executor: callable,
         input_data: Any,
     ) -> dict[str, Any]:
         """Execute skill function with timeout.
-        
+
         Args:
             executor: Skill executor function
             input_data: Validated input data
-            
+
         Returns:
             Execution result
-            
+
         Raises:
             asyncio.TimeoutError: If execution exceeds timeout
         """
@@ -147,7 +147,7 @@ class SkillExecutor:
                 loop.run_in_executor(None, executor, input_data),
                 timeout=self.timeout
             )
-        
+
         # Ensure result is a dict
         if hasattr(result, 'model_dump'):
             # Pydantic model

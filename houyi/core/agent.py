@@ -28,15 +28,15 @@ class AgentSpec(BaseModel):
         """Generate system prompt from role and skills."""
         if self.system_prompt:
             return self.system_prompt
-        
+
         prompt = f"You are a {self.role}.\n\n"
-        
+
         if self.skills:
             skill_descriptions = "\n".join(
                 f"- {skill.name}: {skill.description}" for skill in self.skills
             )
             prompt += f"Available skills:\n{skill_descriptions}"
-        
+
         return prompt
 
     def get_tool_schemas(self) -> list[dict[str, Any]]:

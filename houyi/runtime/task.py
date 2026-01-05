@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING
 
 from houyi.core.task import TaskSpec
 from houyi.orchestration.state import TaskState, TaskStatus
@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 
 class Task:
     """Task definition (not executable independently).
-    
+
     Task defines what needs to be done. It must be executed by an Agent or Team.
     This follows Google ADK design pattern.
     """
@@ -21,15 +21,15 @@ class Task:
     def __init__(
         self,
         description: str,
-        agent: Optional["Agent"] = None,
-        expected_output: Optional[str] = None,
-        context: Optional[list[int]] = None,
+        agent: Agent | None = None,
+        expected_output: str | None = None,
+        context: list[int] | None = None,
     ):
         self.description = description
         self.agent = agent
         self.expected_output = expected_output
         self.context = context
-        
+
         # Create TaskSpec
         self.spec = TaskSpec(
             description=description,
@@ -37,7 +37,7 @@ class Task:
             agent=agent,
             context=context,
         )
-        
+
         self.state = TaskState(
             task_id=f"task_{id(self)}",
             status=TaskStatus.PENDING,

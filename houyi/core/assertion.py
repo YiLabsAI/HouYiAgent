@@ -59,16 +59,16 @@ class AssertionSpec(BaseModel):
                 # Add context variables
                 **context
             }
-            
+
             # Validate expression doesn't contain dangerous operations
             dangerous_keywords = ['import', 'exec', 'eval', '__', 'open', 'file']
             if any(keyword in self.condition for keyword in dangerous_keywords):
                 raise ValueError(f"Dangerous operation in assertion: {self.condition}")
-            
+
             # Evaluate in safe namespace
             result = eval(self.condition, safe_namespace, {})
             return bool(result)
-            
+
         except Exception as e:
             print(f"Assertion evaluation failed: {e}")
             return False
