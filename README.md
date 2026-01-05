@@ -7,11 +7,10 @@
     <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT"></a>
     <a href="https://github.com/YiLabsAI/HouYiAgent/releases"><img src="https://img.shields.io/github/v/release/YiLabsAI/HouYiAgent?label=version" alt="Version"></a>
     <a href="https://github.com/YiLabsAI/HouYiAgent/actions"><img src="https://img.shields.io/github/actions/workflow/status/YiLabsAI/HouYiAgent/tests.yml?branch=main&label=tests" alt="Tests"></a>
-    <a href="https://codecov.io/gh/YiLabsAI/HouYiAgent"><img src="https://img.shields.io/badge/coverage-80%25-brightgreen" alt="Coverage: 80%"></a>
+    <a href="https://codecov.io/gh/YiLabsAI/HouYiAgent"><img src="https://codecov.io/gh/YiLabsAI/HouYiAgent/branch/main/graph/badge.svg" alt="Coverage"></a>
     <br>
     <a href="https://pypi.org/project/houyi/"><img src="https://img.shields.io/pypi/pyversions/houyi" alt="Python Versions"></a>
     <a href="https://pypi.org/project/houyi/"><img src="https://img.shields.io/pypi/dm/houyi" alt="PyPI Downloads"></a>
-    <a href="https://github.com/YiLabsAI/HouYiAgent/stargazers"><img src="https://img.shields.io/github/stars/YiLabsAI/HouYiAgent?style=social" alt="GitHub Stars"></a>
     <a href="https://twitter.com/YiLabsAI"><img src="https://img.shields.io/twitter/follow/YiLabsAI?style=social" alt="Twitter Follow"></a>
   </p>
 </div>
