@@ -183,6 +183,7 @@ class TestOpenAIAdapter:
 
     def test_normalize_messages(self) -> None:
         """Test message normalization."""
+        pytest.importorskip("openai")
         adapter = OpenAIAdapter(api_key="test-key")
 
         # Test with LLMMessage objects
