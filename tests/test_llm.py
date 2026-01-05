@@ -107,6 +107,7 @@ class TestLLMResponse:
         assert response.model == "claude-3-opus"
 
 
+@pytest.mark.skipif(not OPENAI_AVAILABLE, reason="OpenAI package not installed")
 class TestOpenAIAdapter:
     """Test OpenAIAdapter."""
 
@@ -202,6 +203,7 @@ class TestOpenAIAdapter:
         assert len(normalized_dict) == 1
 
 
+@pytest.mark.skipif(not ANTHROPIC_AVAILABLE, reason="Anthropic package not installed")
 class TestAnthropicAdapter:
     """Test AnthropicAdapter."""
 
