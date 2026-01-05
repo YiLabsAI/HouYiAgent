@@ -3,7 +3,6 @@
 from houyi import Agent, tool
 from houyi.core.skill import SkillSpec
 
-
 print("=" * 70)
 print("Phase 3.1: Skill.md Support Examples")
 print("=" * 70)
@@ -108,7 +107,7 @@ text_analyzer.export_skill_md(
         }
     ]
 )
-print(f"Exported skill to: skills/text_analyzer.md")
+print("Exported skill to: skills/text_analyzer.md")
 print()
 
 # Example 5: Create Agent with loaded skills

@@ -6,32 +6,30 @@ Tests cover:
 - Phase 3: 9 advanced evaluators (Bias, Safety, Factuality, Groundedness, Coherence, ContextPrecision, ContextRecall, Faithfulness, CustomEvaluator)
 """
 
-import pytest
 from houyi.evaluation.evaluators import (
     # Phase 1
     AccuracyEvaluator,
-    CostEvaluator,
-    LatencyEvaluator,
-    SkillUsageEvaluator,
-    # Phase 2
-    CompletenessEvaluator,
-    RelevanceEvaluator,
-    ToxicityEvaluator,
-    HallucinationEvaluator,
-    SemanticSimilarityEvaluator,
-    LLMJudgeEvaluator,
     # Phase 3
     BiasEvaluator,
-    SafetyEvaluator,
-    FactualityEvaluator,
-    GroundednessEvaluator,
     CoherenceEvaluator,
+    # Phase 2
+    CompletenessEvaluator,
     ContextPrecisionEvaluator,
     ContextRecallEvaluator,
-    FaithfulnessEvaluator,
+    CostEvaluator,
     CustomEvaluator,
+    FactualityEvaluator,
+    FaithfulnessEvaluator,
+    GroundednessEvaluator,
+    HallucinationEvaluator,
+    LatencyEvaluator,
+    LLMJudgeEvaluator,
+    RelevanceEvaluator,
+    SafetyEvaluator,
+    SemanticSimilarityEvaluator,
+    SkillUsageEvaluator,
+    ToxicityEvaluator,
 )
-
 
 # ============================================================================
 # Phase 1: Core Evaluators
@@ -638,7 +636,7 @@ class TestCustomEvaluator:
             }
 
         evaluator = CustomEvaluator(name="length_checker", evaluate_fn=check_length)
-        
+
         # Test long output
         result = evaluator.evaluate(
             input="test",

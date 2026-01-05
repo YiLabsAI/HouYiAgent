@@ -1,7 +1,7 @@
 """Example demonstrating Dataset and Report generation."""
 
 from houyi import Agent, tool
-from houyi.evaluation import Dataset, evaluate, ReportGenerator
+from houyi.evaluation import Dataset, ReportGenerator, evaluate
 
 print("=" * 70)
 print("Phase 3.3: Dataset & Report Generation Example")
@@ -18,12 +18,12 @@ def answer_question(question: str) -> str:
         "machine learning": "Machine learning is a subset of artificial intelligence that enables systems to learn from data.",
         "houyi": "HouYi is a lightweight multi-agent framework with 19 built-in evaluators and AgentSkills.io support.",
     }
-    
+
     question_lower = question.lower()
     for key, response in responses.items():
         if key in question_lower:
             return response
-    
+
     return "I don't have information about that topic."
 
 agent = Agent(role="Q&A Assistant", skills=[answer_question])
@@ -48,7 +48,7 @@ results = evaluate(
     evaluators=["accuracy", "completeness", "coherence", "relevance"]
 )
 
-print(f"Evaluation completed!")
+print("Evaluation completed!")
 print(f"Total cases: {results.total_cases}")
 print(f"Passed: {results.passed_cases} ({results.pass_rate:.1%})")
 print(f"Avg score: {results.avg_score:.2f}")
@@ -121,7 +121,7 @@ custom_dataset = Dataset(
 )
 
 custom_dataset.to_file("datasets/custom_dataset.json")
-print(f"✅ Custom dataset saved to: datasets/custom_dataset.json")
+print("✅ Custom dataset saved to: datasets/custom_dataset.json")
 print()
 
 # Summary

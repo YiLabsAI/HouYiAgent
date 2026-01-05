@@ -10,7 +10,8 @@ This example demonstrates all available evaluators:
 - Advanced: llm_judge, custom
 """
 
-from houyi import Agent, tool, evaluate
+from houyi import Agent, evaluate, tool
+
 
 # Define a skill
 @tool

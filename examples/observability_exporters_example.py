@@ -2,7 +2,7 @@
 
 from houyi import Agent, tool
 from houyi.observability import ObservabilityConfig
-from houyi.observability.exporters import JaegerExporter, DatadogExporter, ConsoleExporter
+from houyi.observability.exporters import ConsoleExporter, DatadogExporter, JaegerExporter
 
 print("=" * 70)
 print("Phase 3.4: Jaeger & Datadog Exporters Example")

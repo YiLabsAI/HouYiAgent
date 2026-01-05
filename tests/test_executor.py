@@ -55,7 +55,7 @@ class TestLocalExecutor:
         # Print error if failed
         if result.status == TaskStatus.FAILED:
             print(f"Execution failed with error: {result.error}")
-        
+
         assert result.status == TaskStatus.SUCCEEDED
         assert result.trace_id.startswith("trace_")
         assert result.metrics.total_duration_ms > 0

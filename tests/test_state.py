@@ -1,6 +1,5 @@
 """Tests for orchestration/state.py."""
 
-import pytest
 from houyi.orchestration.state import SessionState, TaskState, TaskStatus, VerificationResult
 
 
@@ -13,7 +12,7 @@ class TestSessionState:
             session_id="test_session",
             agent_id="test_agent"
         )
-        
+
         assert state.session_id == "test_session"
         assert state.agent_id == "test_agent"
         assert state.current_plan_id is None
@@ -26,7 +25,7 @@ class TestSessionState:
             agent_id="test_agent",
             current_plan_id="plan_123"
         )
-        
+
         assert state.current_plan_id == "plan_123"
 
     def test_session_state_with_memory(self):
@@ -37,7 +36,7 @@ class TestSessionState:
             agent_id="test_agent",
             memory_stack=memory
         )
-        
+
         assert len(state.memory_stack) == 2
         assert state.memory_stack[0]["key"] == "value"
 
@@ -49,7 +48,7 @@ class TestSessionState:
             agent_id="test_agent",
             metadata=metadata
         )
-        
+
         assert state.metadata["version"] == "1.0"
         assert state.metadata["env"] == "test"
 
@@ -64,7 +63,7 @@ class TestTaskState:
             status=TaskStatus.PENDING,
             input_data={"query": "test"}
         )
-        
+
         assert state.task_id == "task_123"
         assert state.status == TaskStatus.PENDING
         assert state.input_data["query"] == "test"
@@ -77,7 +76,7 @@ class TestTaskState:
             input_data={"query": "test"},
             output_data={"result": "success"}
         )
-        
+
         assert state.output_data["result"] == "success"
 
 
@@ -103,7 +102,7 @@ class TestVerificationResult:
             passed=True,
             message="Assertion passed"
         )
-        
+
         assert result.assertion_name == "test_assertion"
         assert result.passed is True
         assert result.message == "Assertion passed"
@@ -115,7 +114,7 @@ class TestVerificationResult:
             passed=False,
             message="Assertion failed"
         )
-        
+
         assert result.passed is False
         assert result.message == "Assertion failed"
 
@@ -127,6 +126,6 @@ class TestVerificationResult:
             passed=False,
             context=context
         )
-        
+
         assert result.context["expected"] == 10
         assert result.context["actual"] == 5

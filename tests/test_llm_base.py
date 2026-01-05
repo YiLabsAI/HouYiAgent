@@ -1,12 +1,8 @@
 """Tests for llm/base.py"""
 
 import pytest
-from houyi.llm.base import (
-    LLMMessage,
-    MessageRole,
-    LLMResponse,
-    LLMAdapter
-)
+
+from houyi.llm.base import LLMAdapter, LLMMessage, LLMResponse, MessageRole
 
 
 def test_message_role_enum():
@@ -23,7 +19,7 @@ def test_llm_message_creation():
         role=MessageRole.USER,
         content="Hello, world!"
     )
-    
+
     assert msg.role == MessageRole.USER
     assert msg.content == "Hello, world!"
     assert msg.name is None
@@ -37,7 +33,7 @@ def test_llm_message_with_name():
         content="Response",
         name="assistant_1"
     )
-    
+
     assert msg.name == "assistant_1"
 
 
@@ -48,7 +44,7 @@ def test_llm_message_with_tool_calls():
         content="",
         tool_calls=[{"id": "call_1", "type": "function", "function": {"name": "search", "arguments": '{"query": "test"}'}}]
     )
-    
+
     assert msg.tool_calls is not None
     assert len(msg.tool_calls) == 1
     assert msg.tool_calls[0]["function"]["name"] == "search"
@@ -62,7 +58,7 @@ def test_llm_response_creation():
         usage={"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
         finish_reason="stop"
     )
-    
+
     assert response.content == "Test response"
     assert response.model == "gpt-4"
     assert response.usage["total_tokens"] == 30
@@ -76,7 +72,7 @@ def test_llm_response_default_values():
         model="gpt-3.5-turbo",
         finish_reason="stop"
     )
-    
+
     assert response.usage == {}
     assert response.tool_calls == []
     assert response.metadata == {}
@@ -95,7 +91,7 @@ def test_llm_message_serialization():
         role=MessageRole.USER,
         content="Test message"
     )
-    
+
     # Pydantic models can be converted to dict
     msg_dict = msg.model_dump()
     assert msg_dict["role"] == "user"
@@ -110,7 +106,7 @@ def test_llm_response_serialization():
         finish_reason="stop",
         usage={"total_tokens": 100}
     )
-    
+
     response_dict = response.model_dump()
     assert response_dict["content"] == "Response"
     assert response_dict["model"] == "gpt-4"
@@ -122,7 +118,7 @@ def test_message_role_string_values():
     """Test MessageRole string values."""
     roles = [MessageRole.SYSTEM, MessageRole.USER, MessageRole.ASSISTANT, MessageRole.TOOL]
     role_strings = ["system", "user", "assistant", "tool"]
-    
+
     for role, role_str in zip(roles, role_strings):
         assert role.value == role_str
 
@@ -141,7 +137,7 @@ def test_llm_response_with_tool_calls():
             }
         ]
     )
-    
+
     assert len(response.tool_calls) == 1
     assert response.tool_calls[0]["function"]["name"] == "search"
     assert response.finish_reason == "tool_calls"

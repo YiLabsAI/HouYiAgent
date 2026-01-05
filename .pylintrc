@@ -11,6 +11,9 @@ load-plugins=
 # Allow loading of arbitrary C extensions
 unsafe-load-any-extension=no
 
+# Ignore test files and examples
+ignore-paths=^tests/.*$,^examples/.*$
+
 [MESSAGES CONTROL]
 # Disable specific warnings
 disable=

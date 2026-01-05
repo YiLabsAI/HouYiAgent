@@ -1,6 +1,7 @@
 """Quickstart example for HouYi framework."""
 
-from houyi import Agent, Task, Team, tool, evaluate
+from houyi import Agent, Task, Team, evaluate, tool
+
 
 # 1. Define skills using @tool decorator
 @tool
@@ -20,7 +21,7 @@ researcher = Agent(
 )
 
 analyst = Agent(
-    role="Analyst", 
+    role="Analyst",
     skills=[analyze]
 )
 

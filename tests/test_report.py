@@ -1,8 +1,6 @@
 """Tests for report generation."""
 
 import json
-import pytest
-from pathlib import Path
 
 from houyi.evaluation.base import EvaluationResult, EvaluationSummary
 from houyi.evaluation.report import ReportGenerator
@@ -31,7 +29,7 @@ class TestReportGenerator:
                 score=0.0
             )
         ]
-        
+
         summary = EvaluationSummary(
             total_cases=2,
             passed_cases=1,
@@ -42,10 +40,10 @@ class TestReportGenerator:
             avg_latency=100.0,
             results=results
         )
-        
+
         output_file = tmp_path / "report.html"
         ReportGenerator.generate_html(summary, str(output_file))
-        
+
         assert output_file.exists()
         content = output_file.read_text()
         assert "Evaluation Report" in content
@@ -63,7 +61,7 @@ class TestReportGenerator:
                 score=1.0
             )
         ]
-        
+
         summary = EvaluationSummary(
             total_cases=1,
             passed_cases=1,
@@ -74,10 +72,10 @@ class TestReportGenerator:
             avg_latency=50.0,
             results=results
         )
-        
+
         output_file = tmp_path / "custom_report.html"
         ReportGenerator.generate_html(summary, str(output_file), title="Custom Report")
-        
+
         assert output_file.exists()
         content = output_file.read_text()
         assert "Custom Report" in content
@@ -93,7 +91,7 @@ class TestReportGenerator:
                 score=1.0
             )
         ]
-        
+
         summary = EvaluationSummary(
             total_cases=1,
             passed_cases=1,
@@ -104,14 +102,14 @@ class TestReportGenerator:
             avg_latency=100.0,
             results=results
         )
-        
+
         output_file = tmp_path / "report.json"
         ReportGenerator.generate_json(summary, str(output_file))
-        
+
         assert output_file.exists()
         with open(output_file) as f:
             data = json.load(f)
-        
+
         assert data["summary"]["total_cases"] == 1
         assert data["summary"]["passed_cases"] == 1
         assert data["summary"]["pass_rate"] == 1.0
@@ -136,7 +134,7 @@ class TestReportGenerator:
                 duration_ms=50.0
             )
         ]
-        
+
         summary = EvaluationSummary(
             total_cases=2,
             passed_cases=2,
@@ -147,10 +145,10 @@ class TestReportGenerator:
             avg_latency=50.0,
             results=results
         )
-        
+
         output_file = tmp_path / "report.md"
         ReportGenerator.generate_markdown(summary, str(output_file))
-        
+
         assert output_file.exists()
         content = output_file.read_text()
         assert "# Evaluation Report" in content
@@ -170,7 +168,7 @@ class TestReportGenerator:
                 score=1.0
             )
         ]
-        
+
         summary = EvaluationSummary(
             total_cases=1,
             passed_cases=1,
@@ -181,10 +179,10 @@ class TestReportGenerator:
             avg_latency=50.0,
             results=results
         )
-        
+
         output_file = tmp_path / "custom.md"
         ReportGenerator.generate_markdown(summary, str(output_file), title="My Custom Report")
-        
+
         assert output_file.exists()
         content = output_file.read_text()
         assert "# My Custom Report" in content
@@ -214,7 +212,7 @@ class TestReportGenerator:
                 score=0.0
             )
         ]
-        
+
         summary = EvaluationSummary(
             total_cases=3,
             passed_cases=2,
@@ -225,10 +223,10 @@ class TestReportGenerator:
             avg_latency=100.0,
             results=results
         )
-        
+
         output_file = tmp_path / "multi_eval.html"
         ReportGenerator.generate_html(summary, str(output_file))
-        
+
         assert output_file.exists()
         content = output_file.read_text()
         assert "accuracy" in content
@@ -249,7 +247,7 @@ class TestReportGenerator:
                 metrics={"custom": "value"}
             )
         ]
-        
+
         summary = EvaluationSummary(
             total_cases=1,
             passed_cases=1,
@@ -260,13 +258,13 @@ class TestReportGenerator:
             avg_latency=50.0,
             results=results
         )
-        
+
         output_file = tmp_path / "detailed.json"
         ReportGenerator.generate_json(summary, str(output_file))
-        
+
         with open(output_file) as f:
             data = json.load(f)
-        
+
         result = data["results"][0]
         assert result["evaluator"] == "test"
         assert result["input"] == "test input"

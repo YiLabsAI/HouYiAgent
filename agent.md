@@ -44,7 +44,41 @@ pip install -r requirements.txt
 
 # Install in development mode with dev dependencies
 pip install -e ".[dev]"
+```
 
+### Using Makefile (Recommended)
+
+The project includes a Makefile for common development tasks:
+
+```bash
+# Setup
+make install-dev      # Install all development dependencies
+make setup-hooks      # Setup pre-commit hooks
+
+# Code Quality (use these before committing!)
+make quick-check      # Fast checks (ruff + quick tests) - use frequently
+make check            # Full checks (ruff + pylint + tests + coverage) - before commit
+make format           # Auto-format code
+make lint             # Run all linters
+make lint-fix         # Run linters with auto-fix
+
+# Testing
+make test             # Run all tests
+make test-cov         # Run tests with coverage report
+make test-fast        # Run tests (fail fast)
+
+# Cleanup
+make clean            # Remove cache and build files
+
+# Help
+make help             # Show all available commands
+```
+
+### Manual Commands
+
+If you prefer to run commands manually:
+
+```bash
 # Lint / format
 ruff check houyi/
 ruff check houyi/ --fix
@@ -64,6 +98,54 @@ pytest tests/test_core.py -v
 # Run example
 python examples/quickstart.py
 ```
+
+## Pre-commit Workflow
+
+### Recommended Development Flow
+
+**Before committing code, always run:**
+
+```bash
+# Option 1: Quick check during development (fast)
+make quick-check
+
+# Option 2: Full check before commit (comprehensive)
+make check
+```
+
+### Automated Pre-commit Hooks (Recommended)
+
+Install pre-commit hooks to automatically check code before every commit:
+
+```bash
+# One-time setup
+make setup-hooks
+
+# Or manually
+pip install pre-commit
+pre-commit install
+```
+
+Once installed, hooks will automatically run on `git commit`:
+- ✅ Ruff formatting and linting
+- ✅ Trailing whitespace removal
+- ✅ File encoding checks
+- ✅ YAML/JSON validation
+- ✅ Large file detection
+
+**Skip hooks (emergency only)**:
+```bash
+git commit --no-verify -m "emergency fix"
+```
+
+### Manual Pre-commit Checklist
+
+If not using automated hooks, run these before committing:
+
+1. **Format code**: `make format`
+2. **Run linters**: `make lint`
+3. **Run tests**: `make test-fast`
+4. **Check coverage**: `make test-cov` (ensure ≥75%)
 
 ## Coding Standards
 

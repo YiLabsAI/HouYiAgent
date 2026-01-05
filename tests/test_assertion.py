@@ -1,6 +1,5 @@
 """Tests for AssertionSpec."""
 
-import pytest
 
 from houyi.core.assertion import AssertionSpec
 
@@ -12,24 +11,24 @@ class TestAssertionEvaluate:
         """Test evaluate with callable condition returning True."""
         def check_positive(context):
             return context.get("value", 0) > 0
-        
+
         assertion = AssertionSpec(
             name="positive_check",
             condition=check_positive
         )
-        
+
         assert assertion.evaluate({"value": 10}) is True
 
     def test_evaluate_with_callable_false(self):
         """Test evaluate with callable condition returning False."""
         def check_positive(context):
             return context.get("value", 0) > 0
-        
+
         assertion = AssertionSpec(
             name="positive_check",
             condition=check_positive
         )
-        
+
         assert assertion.evaluate({"value": -5}) is False
 
     def test_evaluate_with_string_expression_true(self):
@@ -38,7 +37,7 @@ class TestAssertionEvaluate:
             name="cost_check",
             condition="cost < 1.0"
         )
-        
+
         assert assertion.evaluate({"cost": 0.5}) is True
 
     def test_evaluate_with_string_expression_false(self):
@@ -47,7 +46,7 @@ class TestAssertionEvaluate:
             name="cost_check",
             condition="cost < 1.0"
         )
-        
+
         assert assertion.evaluate({"cost": 1.5}) is False
 
     def test_evaluate_with_safe_functions(self):
@@ -56,7 +55,7 @@ class TestAssertionEvaluate:
             name="length_check",
             condition="len(text) > 10"
         )
-        
+
         assert assertion.evaluate({"text": "short"}) is False
         assert assertion.evaluate({"text": "this is a long text"}) is True
 
@@ -66,7 +65,7 @@ class TestAssertionEvaluate:
             name="int_check",
             condition="int(value) > 5"
         )
-        
+
         assert assertion.evaluate({"value": "10"}) is True
         assert assertion.evaluate({"value": "3"}) is False
 
@@ -76,7 +75,7 @@ class TestAssertionEvaluate:
             name="float_check",
             condition="float(value) > 5.5"
         )
-        
+
         assert assertion.evaluate({"value": "10.5"}) is True
         assert assertion.evaluate({"value": "3.5"}) is False
 
@@ -86,7 +85,7 @@ class TestAssertionEvaluate:
             name="range_check",
             condition="min(values) > 0 and max(values) < 100"
         )
-        
+
         assert assertion.evaluate({"values": [1, 50, 99]}) is True
         assert assertion.evaluate({"values": [0, 50, 99]}) is False
 
@@ -96,7 +95,7 @@ class TestAssertionEvaluate:
             name="abs_check",
             condition="abs(value) < 10"
         )
-        
+
         assert assertion.evaluate({"value": -5}) is True
         assert assertion.evaluate({"value": 15}) is False
 
@@ -106,7 +105,7 @@ class TestAssertionEvaluate:
             name="dangerous",
             condition="import os"
         )
-        
+
         result = assertion.evaluate({})
         assert result is False
 
@@ -116,7 +115,7 @@ class TestAssertionEvaluate:
             name="dangerous",
             condition="exec('print(1)')"
         )
-        
+
         result = assertion.evaluate({})
         assert result is False
 
@@ -126,7 +125,7 @@ class TestAssertionEvaluate:
             name="dangerous",
             condition="eval('1+1')"
         )
-        
+
         result = assertion.evaluate({})
         assert result is False
 
@@ -136,7 +135,7 @@ class TestAssertionEvaluate:
             name="dangerous",
             condition="__import__('os')"
         )
-        
+
         result = assertion.evaluate({})
         assert result is False
 
@@ -146,7 +145,7 @@ class TestAssertionEvaluate:
             name="error",
             condition="undefined_var > 0"
         )
-        
+
         result = assertion.evaluate({})
         assert result is False
 
@@ -156,7 +155,7 @@ class TestAssertionEvaluate:
             name="error",
             condition="x >"
         )
-        
+
         result = assertion.evaluate({"x": 5})
         assert result is False
 
@@ -170,7 +169,7 @@ class TestAssertionProperties:
             name="test_assertion",
             condition="x > 0"
         )
-        
+
         assert assertion.name == "test_assertion"
 
     def test_assertion_condition_string(self):
@@ -179,19 +178,19 @@ class TestAssertionProperties:
             name="test",
             condition="x > 0"
         )
-        
+
         assert assertion.condition == "x > 0"
 
     def test_assertion_condition_callable(self):
         """Test assertion condition as callable."""
         def check(context):
             return True
-        
+
         assertion = AssertionSpec(
             name="test",
             condition=check
         )
-        
+
         assert callable(assertion.condition)
 
     def test_assertion_on_failure_default(self):
@@ -200,7 +199,7 @@ class TestAssertionProperties:
             name="test",
             condition="x > 0"
         )
-        
+
         assert assertion.on_failure == "abort"
 
     def test_assertion_on_failure_retry(self):
@@ -210,7 +209,7 @@ class TestAssertionProperties:
             condition="x > 0",
             on_failure="retry"
         )
-        
+
         assert assertion.on_failure == "retry"
 
     def test_assertion_on_failure_human(self):
@@ -220,7 +219,7 @@ class TestAssertionProperties:
             condition="x > 0",
             on_failure="human"
         )
-        
+
         assert assertion.on_failure == "human"
 
     def test_assertion_with_metadata(self):
@@ -230,7 +229,7 @@ class TestAssertionProperties:
             condition="x > 0",
             metadata={"priority": "high", "category": "validation"}
         )
-        
+
         assert assertion.metadata["priority"] == "high"
         assert assertion.metadata["category"] == "validation"
 
@@ -240,5 +239,5 @@ class TestAssertionProperties:
             name="test",
             condition="x > 0"
         )
-        
+
         assert assertion.metadata == {}

@@ -1,8 +1,9 @@
 """Tests for execution/local_executor.py"""
 
+
 import pytest
-import asyncio
-from houyi.execution.local_executor import LocalExecutor, ExecutionResult
+
+from houyi.execution.local_executor import ExecutionResult, LocalExecutor
 from houyi.orchestration.plan import ExecutionPlan, IRNode, NodeType
 from houyi.orchestration.state import SessionState
 
@@ -11,7 +12,7 @@ from houyi.orchestration.state import SessionState
 async def test_local_executor_basic():
     """Test basic LocalExecutor execution."""
     executor = LocalExecutor()
-    
+
     # Create a simple plan with one LLM node (doesn't require skill_ref)
     node = IRNode(
         node_id="node1",
@@ -20,7 +21,7 @@ async def test_local_executor_basic():
         outputs={"result": "$output"},
         metadata={"model": "test"}
     )
-    
+
     plan = ExecutionPlan(
         plan_id="test_plan_1",
         nodes=[node],
@@ -30,9 +31,9 @@ async def test_local_executor_basic():
         session_id="test_session",
         agent_id="test_agent"
     )
-    
+
     result = await executor.execute(plan, state)
-    
+
     assert isinstance(result, ExecutionResult)
     assert result.success is True
     assert result.metadata["nodes_executed"] == 1
@@ -42,7 +43,7 @@ async def test_local_executor_basic():
 async def test_local_executor_dag():
     """Test DAG execution with dependencies."""
     executor = LocalExecutor()
-    
+
     # Create a DAG: node1 -> node2 -> node3
     node1 = IRNode(
         node_id="node1",
@@ -51,7 +52,7 @@ async def test_local_executor_dag():
         outputs={"result": "$step1"},
         metadata={}
     )
-    
+
     node2 = IRNode(
         node_id="node2",
         node_type=NodeType.LLM,
@@ -60,7 +61,7 @@ async def test_local_executor_dag():
         metadata={},
         dependencies=["node1"]
     )
-    
+
     node3 = IRNode(
         node_id="node3",
         node_type=NodeType.LLM,
@@ -69,7 +70,7 @@ async def test_local_executor_dag():
         metadata={},
         dependencies=["node2"]
     )
-    
+
     plan = ExecutionPlan(
         plan_id="test_plan_dag",
         nodes=[node1, node2, node3],
@@ -79,9 +80,9 @@ async def test_local_executor_dag():
         session_id="test_session",
         agent_id="test_agent"
     )
-    
+
     result = await executor.execute(plan, state)
-    
+
     assert result.success is True
     assert result.metadata["nodes_executed"] == 3
 
@@ -90,7 +91,7 @@ async def test_local_executor_dag():
 async def test_local_executor_parallel():
     """Test parallel execution of independent nodes."""
     executor = LocalExecutor()
-    
+
     # Create parallel nodes (no dependencies)
     node1 = IRNode(
         node_id="node1",
@@ -99,7 +100,7 @@ async def test_local_executor_parallel():
         outputs={"result": "$out1"},
         metadata={}
     )
-    
+
     node2 = IRNode(
         node_id="node2",
         node_type=NodeType.LLM,
@@ -107,7 +108,7 @@ async def test_local_executor_parallel():
         outputs={"result": "$out2"},
         metadata={}
     )
-    
+
     node3 = IRNode(
         node_id="node3",
         node_type=NodeType.LLM,
@@ -115,7 +116,7 @@ async def test_local_executor_parallel():
         outputs={"result": "$out3"},
         metadata={}
     )
-    
+
     plan = ExecutionPlan(
         plan_id="test_plan_parallel",
         nodes=[node1, node2, node3],
@@ -125,9 +126,9 @@ async def test_local_executor_parallel():
         session_id="test_session",
         agent_id="test_agent"
     )
-    
+
     result = await executor.execute(plan, state)
-    
+
     assert result.success is True
     assert result.metadata["nodes_executed"] == 3
 
@@ -136,7 +137,7 @@ async def test_local_executor_parallel():
 async def test_local_executor_circular_dependency():
     """Test detection of circular dependencies."""
     executor = LocalExecutor()
-    
+
     # Create circular dependency: node1 -> node2 -> node1
     node1 = IRNode(
         node_id="node1",
@@ -146,7 +147,7 @@ async def test_local_executor_circular_dependency():
         metadata={},
         dependencies=["node2"]
     )
-    
+
     node2 = IRNode(
         node_id="node2",
         node_type=NodeType.LLM,
@@ -155,7 +156,7 @@ async def test_local_executor_circular_dependency():
         metadata={},
         dependencies=["node1"]
     )
-    
+
     plan = ExecutionPlan(
         plan_id="test_plan_circular",
         nodes=[node1, node2],
@@ -165,7 +166,7 @@ async def test_local_executor_circular_dependency():
         session_id="test_session",
         agent_id="test_agent"
     )
-    
+
     with pytest.raises(RuntimeError, match="Circular dependency"):
         await executor.execute(plan, state)
 
@@ -174,7 +175,7 @@ async def test_local_executor_circular_dependency():
 async def test_local_executor_context_propagation():
     """Test context propagation between nodes."""
     executor = LocalExecutor()
-    
+
     node1 = IRNode(
         node_id="node1",
         node_type=NodeType.LLM,
@@ -182,7 +183,7 @@ async def test_local_executor_context_propagation():
         outputs={"result": "$intermediate"},
         metadata={}
     )
-    
+
     node2 = IRNode(
         node_id="node2",
         node_type=NodeType.LLM,
@@ -191,7 +192,7 @@ async def test_local_executor_context_propagation():
         metadata={},
         dependencies=["node1"]
     )
-    
+
     plan = ExecutionPlan(
         plan_id="test_plan_context",
         nodes=[node1, node2],
@@ -201,9 +202,9 @@ async def test_local_executor_context_propagation():
         session_id="test_session",
         agent_id="test_agent"
     )
-    
+
     result = await executor.execute(plan, state)
-    
+
     assert result.success is True
     assert "intermediate" in result.metadata["context"]
 
@@ -212,7 +213,7 @@ async def test_local_executor_context_propagation():
 async def test_local_executor_empty_plan():
     """Test execution with empty plan."""
     executor = LocalExecutor()
-    
+
     plan = ExecutionPlan(
         plan_id="test_plan_empty",
         nodes=[],
@@ -222,9 +223,9 @@ async def test_local_executor_empty_plan():
         session_id="test_session",
         agent_id="test_agent"
     )
-    
+
     result = await executor.execute(plan, state)
-    
+
     assert result.success is True
     assert result.metadata["nodes_executed"] == 0
 
@@ -235,14 +236,14 @@ def test_execution_result():
         session_id="test_session",
         agent_id="test_agent"
     )
-    
+
     result = ExecutionResult(
         success=True,
         output="test output",
         final_state=state,
         metadata={"key": "value"}
     )
-    
+
     assert result.success is True
     assert result.output == "test output"
     assert result.final_state == state
@@ -255,13 +256,13 @@ def test_execution_result_default_metadata():
         session_id="test_session",
         agent_id="test_agent"
     )
-    
+
     result = ExecutionResult(
         success=False,
         output=None,
         final_state=state
     )
-    
+
     assert result.success is False
     assert result.output is None
     assert result.metadata == {}

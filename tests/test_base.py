@@ -1,16 +1,17 @@
 """Tests for evaluation/base.py"""
 
 import pytest
-from houyi.evaluation.base import Evaluator, EvaluationResult, EvaluationSummary
+
+from houyi.evaluation.base import EvaluationResult, EvaluationSummary, Evaluator
 
 
 class MockEvaluator(Evaluator):
     """Mock evaluator for testing."""
-    
+
     @property
     def name(self) -> str:
         return "mock_evaluator"
-    
+
     def evaluate(self, input: str, output: str, expected: str = None, **kwargs) -> EvaluationResult:
         """Mock evaluation."""
         passed = output == expected if expected else True
@@ -34,7 +35,7 @@ def test_evaluation_result_creation():
         passed=True,
         score=0.95
     )
-    
+
     assert result.evaluator == "test_eval"
     assert result.passed is True
     assert result.score == 0.95
@@ -50,7 +51,7 @@ def test_evaluation_result_failed():
         passed=False,
         score=0.3
     )
-    
+
     assert result.passed is False
     assert result.score == 0.3
 
@@ -66,7 +67,7 @@ def test_evaluation_summary_creation():
         avg_cost=0.01,
         avg_latency=100.0
     )
-    
+
     assert summary.total_cases == 10
     assert summary.passed_cases == 8
     assert summary.pass_rate == 0.8
@@ -81,15 +82,15 @@ def test_evaluator_abstract():
 def test_mock_evaluator():
     """Test MockEvaluator."""
     evaluator = MockEvaluator()
-    
+
     assert evaluator.name == "mock_evaluator"
-    
+
     result = evaluator.evaluate(
         input="test input",
         output="expected output",
         expected="expected output"
     )
-    
+
     assert result.passed is True
     assert result.score == 1.0
 
@@ -97,13 +98,13 @@ def test_mock_evaluator():
 def test_mock_evaluator_failed():
     """Test MockEvaluator with failed case."""
     evaluator = MockEvaluator()
-    
+
     result = evaluator.evaluate(
         input="test input",
         output="wrong output",
         expected="expected output"
     )
-    
+
     assert result.passed is False
     assert result.score == 0.0
 
@@ -118,7 +119,7 @@ def test_evaluation_result_with_metadata():
         score=1.0,
         metrics={"latency": 0.5, "tokens": 100}
     )
-    
+
     assert result.metrics["latency"] == 0.5
     assert result.metrics["tokens"] == 100
 
@@ -138,6 +139,6 @@ def test_evaluation_summary_with_metrics():
             "semantic": {"passed": 90, "failed": 10}
         }
     )
-    
+
     assert summary.metrics["exact_match"]["passed"] == 80
     assert summary.metrics["semantic"]["passed"] == 90

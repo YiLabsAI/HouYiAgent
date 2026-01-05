@@ -1,6 +1,5 @@
 """Tests for IRNode class."""
 
-import pytest
 
 from houyi.orchestration.plan import IRNode, NodeType
 
@@ -16,7 +15,7 @@ class TestIRNodeCreation:
             inputs={"task": "test"},
             outputs={"result": "$output"}
         )
-        
+
         assert node.node_id == "llm1"
         assert node.node_type == NodeType.LLM
         assert node.inputs["task"] == "test"
@@ -29,7 +28,7 @@ class TestIRNodeCreation:
             inputs={"input": "data"},
             outputs={"output": "$result"}
         )
-        
+
         assert node.node_type == NodeType.TOOL
 
     def test_ir_node_verify_type(self):
@@ -40,7 +39,7 @@ class TestIRNodeCreation:
             inputs={"result": "data"},
             outputs={"verified": "$status"}
         )
-        
+
         assert node.node_type == NodeType.VERIFY
 
     def test_ir_node_with_dependencies(self):
@@ -52,7 +51,7 @@ class TestIRNodeCreation:
             outputs={"result": "$output"},
             dependencies=["dep1", "dep2"]
         )
-        
+
         assert len(node.dependencies) == 2
         assert "dep1" in node.dependencies
 
@@ -64,13 +63,13 @@ class TestIRNodeCreation:
             inputs={"task": "test"},
             outputs={"result": "$output"}
         )
-        
+
         assert len(node.dependencies) == 0
 
     def test_ir_node_with_metadata(self):
         """Test IRNode with metadata."""
         metadata = {"model": "gpt-4", "temperature": 0.7}
-        
+
         node = IRNode(
             node_id="node1",
             node_type=NodeType.LLM,
@@ -78,7 +77,7 @@ class TestIRNodeCreation:
             outputs={"result": "$output"},
             metadata=metadata
         )
-        
+
         assert node.metadata["model"] == "gpt-4"
         assert node.metadata["temperature"] == 0.7
 
@@ -94,7 +93,7 @@ class TestIRNodeReadiness:
             inputs={"task": "test"},
             outputs={"result": "$output"}
         )
-        
+
         assert node.is_ready(set())
         assert node.is_ready({"any", "deps"})
 
@@ -107,7 +106,7 @@ class TestIRNodeReadiness:
             outputs={"result": "$output"},
             dependencies=["dep1", "dep2"]
         )
-        
+
         assert node.is_ready({"dep1", "dep2"})
         assert node.is_ready({"dep1", "dep2", "extra"})
 
@@ -120,7 +119,7 @@ class TestIRNodeReadiness:
             outputs={"result": "$output"},
             dependencies=["dep1", "dep2"]
         )
-        
+
         assert not node.is_ready(set())
         assert not node.is_ready({"dep1"})
         assert not node.is_ready({"dep2"})
@@ -135,7 +134,7 @@ class TestIRNodeReadiness:
             outputs={"result": "$output"},
             dependencies=["dep1", "dep2", "dep3"]
         )
-        
+
         assert not node.is_ready({"dep1", "dep2"})
 
 
@@ -150,9 +149,9 @@ class TestIRNodeInputResolution:
             inputs={"task": "static_value", "param": "another"},
             outputs={"result": "$output"}
         )
-        
+
         inputs = node.get_input_values({})
-        
+
         assert inputs["task"] == "static_value"
         assert inputs["param"] == "another"
 
@@ -164,10 +163,10 @@ class TestIRNodeInputResolution:
             inputs={"task": "$node0.result"},
             outputs={"result": "$output"}
         )
-        
+
         context = {"node0.result": "resolved_value"}
         inputs = node.get_input_values(context)
-        
+
         assert inputs["task"] == "resolved_value"
 
     def test_get_input_values_mixed(self):
@@ -182,13 +181,13 @@ class TestIRNodeInputResolution:
             },
             outputs={"result": "$output"}
         )
-        
+
         context = {
             "node0.result": "resolved1",
             "node1.data": "resolved2"
         }
         inputs = node.get_input_values(context)
-        
+
         assert inputs["task"] == "resolved1"
         assert inputs["static"] == "value"
         assert inputs["another"] == "resolved2"
@@ -201,9 +200,9 @@ class TestIRNodeInputResolution:
             inputs={"task": "$missing.value"},
             outputs={"result": "$output"}
         )
-        
+
         inputs = node.get_input_values({})
-        
+
         # Should return the reference as-is if not in context
         assert inputs["task"] == "$missing.value"
 
@@ -215,9 +214,9 @@ class TestIRNodeInputResolution:
             inputs={},
             outputs={"result": "$output"}
         )
-        
+
         inputs = node.get_input_values({})
-        
+
         assert inputs == {}
 
 
@@ -232,7 +231,7 @@ class TestIRNodeOutputs:
             inputs={"task": "test"},
             outputs={"result": "$output"}
         )
-        
+
         assert len(node.outputs) == 1
         assert "result" in node.outputs
 
@@ -248,7 +247,7 @@ class TestIRNodeOutputs:
                 "output3": "$result3"
             }
         )
-        
+
         assert len(node.outputs) == 3
 
     def test_ir_node_empty_outputs(self):
@@ -259,5 +258,5 @@ class TestIRNodeOutputs:
             inputs={"task": "test"},
             outputs={}
         )
-        
+
         assert node.outputs == {}

@@ -5,6 +5,7 @@ This example shows how to use tracing and different exporters.
 
 from houyi import Agent, Task, Team, tool
 
+
 # Define skills
 @tool
 def search(query: str) -> list[str]:
@@ -21,12 +22,12 @@ def analyze(data: list[str]) -> str:
 def example_default():
     """Example with default console tracing."""
     print("=== Example 1: Default Console Tracing ===\n")
-    
+
     agent = Agent(
         role="Researcher",
         skills=[search]
     )
-    
+
     result = agent.run("What is HouYi?")
     print(f"Result: {result}\n")
 
@@ -35,7 +36,7 @@ def example_default():
 def example_verbose():
     """Example with verbose console tracing."""
     print("=== Example 2: Verbose Console Tracing ===\n")
-    
+
     agent = Agent(
         role="Researcher",
         skills=[search],
@@ -46,7 +47,7 @@ def example_verbose():
             ]
         }
     )
-    
+
     result = agent.run("What is HouYi?")
     print(f"Result: {result}\n")
 
@@ -55,7 +56,7 @@ def example_verbose():
 def example_multiple_exporters():
     """Example with multiple exporters."""
     print("=== Example 3: Multiple Exporters ===\n")
-    
+
     agent = Agent(
         role="Researcher",
         skills=[search],
@@ -67,7 +68,7 @@ def example_multiple_exporters():
             ]
         }
     )
-    
+
     result = agent.run("What is HouYi?")
     print(f"Result: {result}")
     print("✅ Traces also exported to traces.json\n")
@@ -77,7 +78,7 @@ def example_multiple_exporters():
 def example_jaeger():
     """Example with Jaeger exporter."""
     print("=== Example 4: Jaeger Exporter (Placeholder) ===\n")
-    
+
     agent = Agent(
         role="Researcher",
         skills=[search],
@@ -89,7 +90,7 @@ def example_jaeger():
             ]
         }
     )
-    
+
     result = agent.run("What is HouYi?")
     print(f"Result: {result}\n")
 
@@ -98,13 +99,13 @@ def example_jaeger():
 def example_disabled():
     """Example with observability disabled."""
     print("=== Example 5: Disabled Observability ===\n")
-    
+
     agent = Agent(
         role="Researcher",
         skills=[search],
         observability={"enabled": False}
     )
-    
+
     result = agent.run("What is HouYi?")
     print(f"Result: {result}")
     print("(No trace output)\n")
@@ -114,7 +115,7 @@ def example_disabled():
 def example_team():
     """Example with multi-agent team tracing."""
     print("=== Example 6: Multi-Agent Team Tracing ===\n")
-    
+
     researcher = Agent(
         role="Researcher",
         skills=[search],
@@ -123,12 +124,12 @@ def example_team():
             "exporters": [{"type": "console", "verbose": True}]
         }
     )
-    
+
     analyst = Agent(
         role="Analyst",
         skills=[analyze]
     )
-    
+
     team = Team(
         agents=[researcher, analyst],
         tasks=[
@@ -136,7 +137,7 @@ def example_team():
             Task("Analyze findings", agent=analyst, context=[0])
         ]
     )
-    
+
     result = team.run()
     print(f"\nResult: {result}\n")
 
@@ -144,7 +145,7 @@ def example_team():
 if __name__ == "__main__":
     print("HouYi Observability Examples\n")
     print("=" * 60 + "\n")
-    
+
     # Run examples
     example_default()
     example_verbose()
@@ -152,6 +153,6 @@ if __name__ == "__main__":
     example_jaeger()
     example_disabled()
     example_team()
-    
+
     print("=" * 60)
     print("✅ All examples completed!")

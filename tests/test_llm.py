@@ -1,8 +1,8 @@
 """Tests for LLM adapters."""
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
-from pydantic import BaseModel
+
+import pytest
 
 from houyi.llm.base import LLMMessage, LLMResponse, MessageRole
 
@@ -32,7 +32,7 @@ class TestLLMMessage:
             role=MessageRole.USER,
             content="Hello, world!"
         )
-        
+
         assert msg.role == MessageRole.USER
         assert msg.content == "Hello, world!"
         assert msg.name is None
@@ -45,7 +45,7 @@ class TestLLMMessage:
             content="",
             tool_calls=[{"id": "call_1", "type": "function"}]
         )
-        
+
         assert msg.role == MessageRole.ASSISTANT
         assert len(msg.tool_calls) == 1
 
@@ -61,7 +61,7 @@ class TestLLMResponse:
             model="gpt-4",
             usage={"total_tokens": 10}
         )
-        
+
         assert response.content == "Test response"
         assert response.finish_reason == "stop"
         assert response.model == "gpt-4"
@@ -79,9 +79,9 @@ class TestLLMResponse:
         mock_response.usage.completion_tokens = 3
         mock_response.usage.total_tokens = 8
         mock_response.model = "gpt-4"
-        
+
         response = LLMResponse.from_openai(mock_response)
-        
+
         assert response.content == "Hello!"
         assert response.finish_reason == "stop"
         assert response.model == "gpt-4"
@@ -99,9 +99,9 @@ class TestLLMResponse:
         mock_response.usage.input_tokens = 10
         mock_response.usage.output_tokens = 5
         mock_response.model = "claude-3-opus"
-        
+
         response = LLMResponse.from_anthropic(mock_response)
-        
+
         assert response.content == "Hello from Claude!"
         assert response.finish_reason == "end_turn"
         assert response.model == "claude-3-opus"
@@ -114,7 +114,7 @@ class TestOpenAIAdapter:
     def test_adapter_init_with_api_key(self) -> None:
         """Test adapter initialization with API key."""
         adapter = OpenAIAdapter(api_key="test-key", model="gpt-3.5-turbo")
-        
+
         assert adapter.api_key == "test-key"
         assert adapter.model == "gpt-3.5-turbo"
 
@@ -134,7 +134,7 @@ class TestOpenAIAdapter:
     async def test_chat(self) -> None:
         """Test chat completion."""
         adapter = OpenAIAdapter(api_key="test-key")
-        
+
         # Mock the client's chat.completions.create method
         mock_response = MagicMock()
         mock_response.choices = [MagicMock()]
@@ -145,12 +145,12 @@ class TestOpenAIAdapter:
         mock_response.usage.completion_tokens = 3
         mock_response.usage.total_tokens = 8
         mock_response.model = "gpt-4"
-        
+
         adapter.client.chat.completions.create = AsyncMock(return_value=mock_response)
-        
+
         messages = [LLMMessage(role=MessageRole.USER, content="Hello")]
         response = await adapter.chat(messages)
-        
+
         assert response.content == "Test response"
         assert response.finish_reason == "stop"
         assert adapter.client.chat.completions.create.called
@@ -159,7 +159,7 @@ class TestOpenAIAdapter:
     async def test_chat_with_tools(self) -> None:
         """Test chat completion with tools."""
         adapter = OpenAIAdapter(api_key="test-key")
-        
+
         mock_response = MagicMock()
         mock_response.choices = [MagicMock()]
         mock_response.choices[0].message.content = ""
@@ -171,32 +171,32 @@ class TestOpenAIAdapter:
         mock_response.usage.completion_tokens = 5
         mock_response.usage.total_tokens = 15
         mock_response.model = "gpt-4"
-        
+
         adapter.client.chat.completions.create = AsyncMock(return_value=mock_response)
-        
+
         messages = [LLMMessage(role=MessageRole.USER, content="Use a tool")]
         tools = [{"type": "function", "function": {"name": "test_tool"}}]
-        
+
         response = await adapter.chat(messages, tools=tools)
-        
+
         assert response.finish_reason == "tool_calls"
         assert len(response.tool_calls) == 1
 
     def test_normalize_messages(self) -> None:
         """Test message normalization."""
         adapter = OpenAIAdapter(api_key="test-key")
-        
+
         # Test with LLMMessage objects
         messages = [
             LLMMessage(role=MessageRole.USER, content="Hello"),
             LLMMessage(role=MessageRole.ASSISTANT, content="Hi there")
         ]
         normalized = adapter._normalize_messages(messages)
-        
+
         assert len(normalized) == 2
         assert normalized[0]["role"] == "user"
         assert normalized[0]["content"] == "Hello"
-        
+
         # Test with dict messages
         dict_messages = [{"role": "user", "content": "Test"}]
         normalized_dict = adapter._normalize_messages(dict_messages)
@@ -210,7 +210,7 @@ class TestAnthropicAdapter:
     def test_adapter_init_with_api_key(self) -> None:
         """Test adapter initialization with API key."""
         adapter = AnthropicAdapter(api_key="test-key", model="claude-3-opus")
-        
+
         assert adapter.api_key == "test-key"
         assert adapter.model == "claude-3-opus"
 
@@ -229,14 +229,14 @@ class TestAnthropicAdapter:
     def test_normalize_messages(self) -> None:
         """Test message normalization."""
         adapter = AnthropicAdapter(api_key="test-key")
-        
+
         # Test with LLMMessage objects
         messages = [
             LLMMessage(role=MessageRole.USER, content="Hello"),
             LLMMessage(role=MessageRole.ASSISTANT, content="Hi")
         ]
         normalized = adapter._normalize_messages(messages)
-        
+
         assert len(normalized) == 2
         assert normalized[0]["role"] == "user"
         assert normalized[0]["content"] == "Hello"

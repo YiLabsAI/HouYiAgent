@@ -73,6 +73,18 @@ ignore = [
     "E501",  # line too long (handled by formatter)
 ]
 
+# Per-file ignores for test files and examples
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = [
+    "F811",  # redefinition of unused name (common in test fixtures)
+    "F841",  # local variable assigned but never used (test setup)
+    "B011",  # assert False usage (valid in tests)
+    "B905",  # zip without explicit strict parameter
+]
+"examples/**/*.py" = [
+    "E402",  # module level import not at top (examples show step-by-step)
+]
+
 [tool.mypy]
 python_version = "3.10"
 strict = true

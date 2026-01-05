@@ -1,6 +1,5 @@
 """Tests for core abstractions."""
 
-import pytest
 from pydantic import BaseModel
 
 from houyi import AgentSpec, AssertionSpec, SkillSpec
