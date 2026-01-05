@@ -58,7 +58,7 @@ class Team:
                     continue
 
                 # Check if all dependencies are completed
-                deps_completed = all(dep in completed_tasks for dep in task.context)
+                deps_completed = all(dep in completed_tasks for dep in (task.context or []))
                 if deps_completed:
                     ready_tasks.append((i, task))
 
@@ -83,7 +83,7 @@ class Team:
                 # Build context from dependencies
                 context_data = {
                     dep_id: results[dep_id]["result"]
-                    for dep_id in task.context
+                    for dep_id in (task.context or [])
                     if dep_id in results
                 }
 
@@ -97,7 +97,7 @@ class Team:
                     "task": task.description,
                     "agent": agent.role if hasattr(agent, "role") else str(agent),
                     "result": result,
-                    "dependencies": task.context,
+                    "dependencies": task.context or [],
                 }
 
                 completed_tasks.add(task_id)
