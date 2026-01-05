@@ -56,6 +56,7 @@ class EvaluationSummary(BaseModel):
             format: Report format (html, json, markdown)
             title: Report title (for HTML/Markdown)
         """
+        # Lazy import to avoid circular dependency
         from houyi.evaluation.report import ReportGenerator
 
         if format == "html":

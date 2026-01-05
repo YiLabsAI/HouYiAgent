@@ -104,7 +104,7 @@ class JSONExporter(Exporter):
     def flush(self) -> None:
         """Write all traces to file."""
         if self.traces:
-            with open(self.filepath, 'w') as f:
+            with open(self.filepath, 'a', encoding='utf-8') as f:
                 json.dump(self.traces, f, indent=2)
             self.traces = []
 

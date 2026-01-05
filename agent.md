@@ -26,7 +26,8 @@ pip install -e ".[dev]"
 - **Environment**: Conda for isolation
 - **Package manager**: `pip` with `requirements.txt`
 - **Dependency management**: `pyproject.toml` for dev dependencies
-- **Lint/format**: `ruff`
+- **Lint/format**: `ruff` for code formatting
+- **Code quality**: `pylint` for comprehensive code quality checks
 - **Type checking**: `mypy`
 - **Tests**: `pytest` with `pytest-asyncio` and `pytest-cov`
 
@@ -48,6 +49,9 @@ pip install -e ".[dev]"
 ruff check houyi/
 ruff check houyi/ --fix
 
+# Code quality check
+pylint houyi/ --rcfile=.pylintrc
+
 # Type check
 mypy houyi/
 
@@ -62,6 +66,42 @@ python examples/quickstart.py
 ```
 
 ## Coding Standards
+
+### Code Quality Tools
+
+HouYi uses a two-tier approach for code quality:
+
+#### 1. Ruff (Fast Linting & Formatting)
+- **Purpose**: Fast code formatting and common error detection
+- **Usage**: `ruff check houyi/` or `ruff check houyi/ --fix`
+- **Checks**: 
+  - Code formatting (PEP 8)
+  - Import sorting
+  - Unused variables
+  - Common anti-patterns
+- **Speed**: Very fast, runs in milliseconds
+
+#### 2. Pylint (Comprehensive Code Quality)
+- **Purpose**: Deep code quality analysis and best practices enforcement
+- **Usage**: `pylint houyi/ --rcfile=.pylintrc`
+- **Configuration**: `.pylintrc` in project root
+- **Target Score**: **10.00/10** (current score)
+- **Checks**:
+  - Code complexity and maintainability
+  - Naming conventions
+  - Design issues
+  - Potential bugs
+  - Documentation completeness
+- **CI/CD**: Both ruff and pylint run in GitHub Actions
+
+**Best Practice**: Run both tools before committing:
+```bash
+# Quick check with ruff (auto-fix)
+ruff check houyi/ --fix
+
+# Comprehensive check with pylint
+pylint houyi/ --rcfile=.pylintrc
+```
 
 ### API Stability (Critical)
 

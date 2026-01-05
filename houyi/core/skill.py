@@ -107,7 +107,8 @@ class SkillSpec(BaseModel):
                 cache_path = str(cache_dir / filename)
 
                 # Save to cache
-                Path(cache_path).write_text(content)
+                with open(cache_path, 'w', encoding='utf-8') as f:
+                    f.write(content)
 
             return cls(
                 name=parsed["name"],

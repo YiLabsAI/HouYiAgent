@@ -42,4 +42,3 @@ class AgentSpec(BaseModel):
     def get_tool_schemas(self) -> list[dict[str, Any]]:
         """Get OpenAI function calling schemas for all skills."""
         return [skill.to_tool_schema() for skill in self.skills]
-
