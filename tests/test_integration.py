@@ -14,6 +14,7 @@ class TestEndToEndIntegration:
 
     def test_agent_with_skill_execution(self):
         """Test complete agent workflow with skill execution."""
+
         class Input(BaseModel):
             x: int
 
@@ -31,11 +32,7 @@ class TestEndToEndIntegration:
             executor=calculator,
         )
 
-        agent = Agent(
-            role="Calculator Agent",
-            skills=[skill],
-            llm="gpt-4"
-        )
+        agent = Agent(role="Calculator Agent", skills=[skill], llm="gpt-4")
 
         assert agent.role == "Calculator Agent"
         assert len(agent.skills) == 1
@@ -48,16 +45,14 @@ class TestEndToEndIntegration:
         task1 = Task(description="Task 1", agent=agent1)
         task2 = Task(description="Task 2", agent=agent2)
 
-        team = Team(
-            agents=[agent1, agent2],
-            tasks=[task1, task2]
-        )
+        team = Team(agents=[agent1, agent2], tasks=[task1, task2])
 
         assert len(team.agents) == 2
         assert len(team.tasks) == 2
 
     def test_evaluation_workflow(self):
         """Test evaluation workflow."""
+
         class Input(BaseModel):
             query: str
 
@@ -79,10 +74,8 @@ class TestEndToEndIntegration:
 
         results = evaluate(
             agent=agent,
-            test_cases=[
-                {"input": "What is the answer?", "expected_output": "42"}
-            ],
-            evaluators=["accuracy"]
+            test_cases=[{"input": "What is the answer?", "expected_output": "42"}],
+            evaluators=["accuracy"],
         )
 
         assert results is not None
@@ -90,6 +83,7 @@ class TestEndToEndIntegration:
 
     def test_agent_system_prompt_generation(self):
         """Test agent system prompt generation."""
+
         class Input(BaseModel):
             query: str
 
@@ -107,10 +101,7 @@ class TestEndToEndIntegration:
             executor=search,
         )
 
-        agent = Agent(
-            role="Research Agent",
-            skills=[skill]
-        )
+        agent = Agent(role="Research Agent", skills=[skill])
 
         prompt = agent.spec.to_system_prompt()
 
@@ -119,6 +110,7 @@ class TestEndToEndIntegration:
 
     def test_agent_tool_schemas(self):
         """Test agent tool schema generation."""
+
         class Input(BaseModel):
             text: str
 
@@ -136,10 +128,7 @@ class TestEndToEndIntegration:
             executor=counter,
         )
 
-        agent = Agent(
-            role="Counter Agent",
-            skills=[skill]
-        )
+        agent = Agent(role="Counter Agent", skills=[skill])
 
         schemas = agent.spec.get_tool_schemas()
 
@@ -148,6 +137,7 @@ class TestEndToEndIntegration:
 
     def test_multiple_skills_agent(self):
         """Test agent with multiple skills."""
+
         class Input1(BaseModel):
             x: int
 
@@ -182,10 +172,7 @@ class TestEndToEndIntegration:
             executor=uppercaser,
         )
 
-        agent = Agent(
-            role="Multi-Skill Agent",
-            skills=[skill1, skill2]
-        )
+        agent = Agent(role="Multi-Skill Agent", skills=[skill1, skill2])
 
         assert len(agent.skills) == 2
         assert agent.skills[0].name == "adder"
@@ -194,11 +181,7 @@ class TestEndToEndIntegration:
     def test_task_creation(self):
         """Test task creation."""
         agent = Agent(role="Worker")
-        task = Task(
-            description="Complete the work",
-            expected_output="Done",
-            agent=agent
-        )
+        task = Task(description="Complete the work", expected_output="Done", agent=agent)
 
         assert task.description == "Complete the work"
         assert task.expected_output == "Done"
@@ -206,28 +189,19 @@ class TestEndToEndIntegration:
 
     def test_agent_with_custom_system_prompt(self):
         """Test agent with custom system prompt."""
-        agent = Agent(
-            role="Custom Agent",
-            system_prompt="You are a specialized assistant."
-        )
+        agent = Agent(role="Custom Agent", system_prompt="You are a specialized assistant.")
 
         prompt = agent.spec.to_system_prompt()
         assert prompt == "You are a specialized assistant."
 
     def test_agent_with_memory_enabled(self):
         """Test agent with memory configuration."""
-        agent = Agent(
-            role="Memory Agent",
-            memory=True
-        )
+        agent = Agent(role="Memory Agent", memory=True)
 
         assert agent.spec.policies["memory"] is True
 
     def test_agent_with_different_llm(self):
         """Test agent with different LLM."""
-        agent = Agent(
-            role="GPT-3.5 Agent",
-            llm="gpt-3.5-turbo"
-        )
+        agent = Agent(role="GPT-3.5 Agent", llm="gpt-3.5-turbo")
 
         assert agent.spec.policies["llm"] == "gpt-3.5-turbo"

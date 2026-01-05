@@ -18,7 +18,7 @@ class TestReportGenerator:
                 output="output1",
                 expected_output="output1",
                 passed=True,
-                score=1.0
+                score=1.0,
             ),
             EvaluationResult(
                 evaluator="accuracy",
@@ -26,8 +26,8 @@ class TestReportGenerator:
                 output="output2",
                 expected_output="output3",
                 passed=False,
-                score=0.0
-            )
+                score=0.0,
+            ),
         ]
 
         summary = EvaluationSummary(
@@ -38,7 +38,7 @@ class TestReportGenerator:
             avg_score=0.5,
             avg_cost=0.01,
             avg_latency=100.0,
-            results=results
+            results=results,
         )
 
         output_file = tmp_path / "report.html"
@@ -54,11 +54,7 @@ class TestReportGenerator:
         """Test HTML report with custom title."""
         results = [
             EvaluationResult(
-                evaluator="test",
-                input="test",
-                output="output",
-                passed=True,
-                score=1.0
+                evaluator="test", input="test", output="output", passed=True, score=1.0
             )
         ]
 
@@ -70,7 +66,7 @@ class TestReportGenerator:
             avg_score=1.0,
             avg_cost=0.0,
             avg_latency=50.0,
-            results=results
+            results=results,
         )
 
         output_file = tmp_path / "custom_report.html"
@@ -84,11 +80,7 @@ class TestReportGenerator:
         """Test basic JSON report generation."""
         results = [
             EvaluationResult(
-                evaluator="accuracy",
-                input="test1",
-                output="output1",
-                passed=True,
-                score=1.0
+                evaluator="accuracy", input="test1", output="output1", passed=True, score=1.0
             )
         ]
 
@@ -100,7 +92,7 @@ class TestReportGenerator:
             avg_score=1.0,
             avg_cost=0.01,
             avg_latency=100.0,
-            results=results
+            results=results,
         )
 
         output_file = tmp_path / "report.json"
@@ -119,11 +111,7 @@ class TestReportGenerator:
         """Test basic Markdown report generation."""
         results = [
             EvaluationResult(
-                evaluator="accuracy",
-                input="test1",
-                output="output1",
-                passed=True,
-                score=1.0
+                evaluator="accuracy", input="test1", output="output1", passed=True, score=1.0
             ),
             EvaluationResult(
                 evaluator="latency",
@@ -131,8 +119,8 @@ class TestReportGenerator:
                 output="output1",
                 passed=True,
                 score=0.9,
-                duration_ms=50.0
-            )
+                duration_ms=50.0,
+            ),
         ]
 
         summary = EvaluationSummary(
@@ -143,7 +131,7 @@ class TestReportGenerator:
             avg_score=0.95,
             avg_cost=0.01,
             avg_latency=50.0,
-            results=results
+            results=results,
         )
 
         output_file = tmp_path / "report.md"
@@ -161,11 +149,7 @@ class TestReportGenerator:
         """Test Markdown report with custom title."""
         results = [
             EvaluationResult(
-                evaluator="test",
-                input="test",
-                output="output",
-                passed=True,
-                score=1.0
+                evaluator="test", input="test", output="output", passed=True, score=1.0
             )
         ]
 
@@ -177,7 +161,7 @@ class TestReportGenerator:
             avg_score=1.0,
             avg_cost=0.0,
             avg_latency=50.0,
-            results=results
+            results=results,
         )
 
         output_file = tmp_path / "custom.md"
@@ -191,26 +175,14 @@ class TestReportGenerator:
         """Test HTML report with multiple evaluators."""
         results = [
             EvaluationResult(
-                evaluator="accuracy",
-                input="test1",
-                output="output1",
-                passed=True,
-                score=1.0
+                evaluator="accuracy", input="test1", output="output1", passed=True, score=1.0
             ),
             EvaluationResult(
-                evaluator="latency",
-                input="test1",
-                output="output1",
-                passed=True,
-                score=0.9
+                evaluator="latency", input="test1", output="output1", passed=True, score=0.9
             ),
             EvaluationResult(
-                evaluator="accuracy",
-                input="test2",
-                output="output2",
-                passed=False,
-                score=0.0
-            )
+                evaluator="accuracy", input="test2", output="output2", passed=False, score=0.0
+            ),
         ]
 
         summary = EvaluationSummary(
@@ -221,7 +193,7 @@ class TestReportGenerator:
             avg_score=0.63,
             avg_cost=0.01,
             avg_latency=100.0,
-            results=results
+            results=results,
         )
 
         output_file = tmp_path / "multi_eval.html"
@@ -244,7 +216,7 @@ class TestReportGenerator:
                 score=0.95,
                 cost=0.001,
                 duration_ms=50.0,
-                metrics={"custom": "value"}
+                metrics={"custom": "value"},
             )
         ]
 
@@ -256,7 +228,7 @@ class TestReportGenerator:
             avg_score=0.95,
             avg_cost=0.001,
             avg_latency=50.0,
-            results=results
+            results=results,
         )
 
         output_file = tmp_path / "detailed.json"

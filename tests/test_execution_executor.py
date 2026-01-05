@@ -9,17 +9,9 @@ def test_simplified_executor_basic():
     executor = SimplifiedExecutor()
 
     # Create a simple agent
-    agent = AgentSpec(
-        name="TestAgent",
-        role="Test",
-        goal="Test goal",
-        skills=[]
-    )
+    agent = AgentSpec(name="TestAgent", role="Test", goal="Test goal", skills=[])
 
-    result = executor.execute(
-        task_description="Test task",
-        agent_spec=agent
-    )
+    result = executor.execute(task_description="Test task", agent_spec=agent)
 
     assert result is not None
     assert "task" in result
@@ -39,17 +31,9 @@ def test_simplified_executor_with_skills():
         return x * 2
 
     # Create agent with skill
-    agent = AgentSpec(
-        name="TestAgent",
-        role="Test",
-        goal="Test goal",
-        skills=[test_skill]
-    )
+    agent = AgentSpec(name="TestAgent", role="Test", goal="Test goal", skills=[test_skill])
 
-    result = executor.execute(
-        task_description="Double the number 5",
-        agent_spec=agent
-    )
+    result = executor.execute(task_description="Double the number 5", agent_spec=agent)
 
     assert result is not None
     assert "available_tools" in result
@@ -60,17 +44,10 @@ def test_simplified_executor_with_expected_output():
     """Test execution with expected output."""
     executor = SimplifiedExecutor()
 
-    agent = AgentSpec(
-        name="TestAgent",
-        role="Test",
-        goal="Test goal",
-        skills=[]
-    )
+    agent = AgentSpec(name="TestAgent", role="Test", goal="Test goal", skills=[])
 
     result = executor.execute(
-        task_description="Test task",
-        agent_spec=agent,
-        expected_output="A number"
+        task_description="Test task", agent_spec=agent, expected_output="A number"
     )
 
     assert result is not None
@@ -81,17 +58,9 @@ def test_simplified_executor_system_prompt():
     """Test that system prompt is generated."""
     executor = SimplifiedExecutor()
 
-    agent = AgentSpec(
-        name="TestAgent",
-        role="Tester",
-        goal="Test everything",
-        skills=[]
-    )
+    agent = AgentSpec(name="TestAgent", role="Tester", goal="Test everything", skills=[])
 
-    result = executor.execute(
-        task_description="Test task",
-        agent_spec=agent
-    )
+    result = executor.execute(task_description="Test task", agent_spec=agent)
 
     assert "system_prompt" in result
     assert "Tester" in result["system_prompt"]

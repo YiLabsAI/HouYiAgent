@@ -11,6 +11,7 @@ class TestSkillSpecToolSchema:
 
     def test_to_tool_schema_basic(self):
         """Test basic tool schema generation."""
+
         class Input(BaseModel):
             query: str
 
@@ -37,6 +38,7 @@ class TestSkillSpecToolSchema:
 
     def test_to_tool_schema_with_optional_fields(self):
         """Test tool schema with optional input fields."""
+
         class Input(BaseModel):
             query: str
             limit: int = 10
@@ -63,6 +65,7 @@ class TestSkillSpecToolSchema:
 
     def test_to_tool_schema_complex_types(self):
         """Test tool schema with complex nested types."""
+
         class Address(BaseModel):
             street: str
             city: str
@@ -99,6 +102,7 @@ class TestSkillSpecConstraints:
 
     def test_constraints_timeout(self):
         """Test skill with timeout constraint."""
+
         class Input(BaseModel):
             x: int
 
@@ -114,13 +118,14 @@ class TestSkillSpecConstraints:
             input_schema=Input,
             output_schema=Output,
             executor=func,
-            constraints={"timeout_ms": 5000}
+            constraints={"timeout_ms": 5000},
         )
 
         assert skill.constraints["timeout_ms"] == 5000
 
     def test_constraints_max_retries(self):
         """Test skill with max_retries constraint."""
+
         class Input(BaseModel):
             x: int
 
@@ -136,13 +141,14 @@ class TestSkillSpecConstraints:
             input_schema=Input,
             output_schema=Output,
             executor=func,
-            constraints={"max_retries": 3}
+            constraints={"max_retries": 3},
         )
 
         assert skill.constraints["max_retries"] == 3
 
     def test_constraints_max_cost(self):
         """Test skill with max_cost constraint."""
+
         class Input(BaseModel):
             x: int
 
@@ -158,13 +164,14 @@ class TestSkillSpecConstraints:
             input_schema=Input,
             output_schema=Output,
             executor=func,
-            constraints={"max_cost": 0.01}
+            constraints={"max_cost": 0.01},
         )
 
         assert skill.constraints["max_cost"] == 0.01
 
     def test_constraints_multiple(self):
         """Test skill with multiple constraints."""
+
         class Input(BaseModel):
             x: int
 
@@ -178,7 +185,7 @@ class TestSkillSpecConstraints:
             "timeout_ms": 5000,
             "max_retries": 3,
             "max_cost": 0.01,
-            "cache_enabled": True
+            "cache_enabled": True,
         }
 
         skill = SkillSpec(
@@ -187,7 +194,7 @@ class TestSkillSpecConstraints:
             input_schema=Input,
             output_schema=Output,
             executor=func,
-            constraints=constraints
+            constraints=constraints,
         )
 
         assert len(skill.constraints) == 4
@@ -199,6 +206,7 @@ class TestSkillSpecExecution:
 
     def test_execute_simple_function(self):
         """Test executing simple skill function."""
+
         class Input(BaseModel):
             x: int
             y: int
@@ -222,6 +230,7 @@ class TestSkillSpecExecution:
 
     def test_execute_with_string_processing(self):
         """Test executing skill with string processing."""
+
         class Input(BaseModel):
             text: str
 
@@ -232,9 +241,7 @@ class TestSkillSpecExecution:
 
         def process_text(input: Input) -> Output:
             return Output(
-                upper=input.text.upper(),
-                lower=input.text.lower(),
-                length=len(input.text)
+                upper=input.text.upper(), lower=input.text.lower(), length=len(input.text)
             )
 
         skill = SkillSpec(
@@ -252,6 +259,7 @@ class TestSkillSpecExecution:
 
     def test_execute_with_list_processing(self):
         """Test executing skill with list processing."""
+
         class Input(BaseModel):
             numbers: list[int]
 
@@ -264,10 +272,7 @@ class TestSkillSpecExecution:
         def analyze_numbers(input: Input) -> Output:
             nums = input.numbers
             return Output(
-                total=sum(nums),
-                average=sum(nums) / len(nums),
-                max_val=max(nums),
-                min_val=min(nums)
+                total=sum(nums), average=sum(nums) / len(nums), max_val=max(nums), min_val=min(nums)
             )
 
         skill = SkillSpec(
@@ -286,6 +291,7 @@ class TestSkillSpecExecution:
 
     def test_execute_with_dict_processing(self):
         """Test executing skill with dict processing."""
+
         class Input(BaseModel):
             data: dict
 
@@ -298,7 +304,7 @@ class TestSkillSpecExecution:
             return Output(
                 keys=list(input.data.keys()),
                 values=list(input.data.values()),
-                count=len(input.data)
+                count=len(input.data),
             )
 
         skill = SkillSpec(
@@ -319,6 +325,7 @@ class TestSkillSpecValidation:
 
     def test_input_validation_success(self):
         """Test successful input validation."""
+
         class Input(BaseModel):
             email: str
             age: int
@@ -343,6 +350,7 @@ class TestSkillSpecValidation:
 
     def test_input_validation_failure(self):
         """Test input validation failure."""
+
         class Input(BaseModel):
             age: int
 
@@ -366,6 +374,7 @@ class TestSkillSpecValidation:
 
     def test_output_validation_success(self):
         """Test successful output validation."""
+
         class Input(BaseModel):
             x: int
 
@@ -390,6 +399,7 @@ class TestSkillSpecValidation:
 
     def test_output_validation_failure(self):
         """Test output validation failure."""
+
         class Input(BaseModel):
             x: int
 
@@ -414,6 +424,7 @@ class TestSkillSpecEdgeCases:
 
     def test_skill_with_empty_description(self):
         """Test skill with empty description."""
+
         class Input(BaseModel):
             x: int
 
@@ -458,6 +469,7 @@ class TestSkillSpecEdgeCases:
 
     def test_skill_with_unicode_name(self):
         """Test skill with unicode characters in name."""
+
         class Input(BaseModel):
             x: int
 
@@ -479,6 +491,7 @@ class TestSkillSpecEdgeCases:
 
     def test_skill_without_executor(self):
         """Test skill without executor function."""
+
         class Input(BaseModel):
             x: int
 

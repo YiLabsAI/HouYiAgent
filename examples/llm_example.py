@@ -17,11 +17,8 @@ from houyi import Agent, tool
 def search(query: str) -> list[str]:
     """Search the web for information."""
     # In production, this would call a real search API
-    return [
-        f"Result 1 for '{query}'",
-        f"Result 2 for '{query}'",
-        "Additional information"
-    ]
+    return [f"Result 1 for '{query}'", f"Result 2 for '{query}'", "Additional information"]
+
 
 # Example 1: Using OpenAI (requires OPENAI_API_KEY)
 def example_openai():
@@ -35,11 +32,7 @@ def example_openai():
 
     print("=== Example 1: OpenAI GPT-4 ===")
 
-    agent = Agent(
-        role="Research Assistant",
-        skills=[search],
-        llm="gpt-4"
-    )
+    agent = Agent(role="Research Assistant", skills=[search], llm="gpt-4")
 
     # This will call real GPT-4
     result = agent.run("What are the latest developments in AI?")
@@ -58,11 +51,7 @@ def example_anthropic():
 
     print("=== Example 2: Anthropic Claude 3.5 ===")
 
-    agent = Agent(
-        role="Research Assistant",
-        skills=[search],
-        llm="claude-3-5-sonnet-20241022"
-    )
+    agent = Agent(role="Research Assistant", skills=[search], llm="claude-3-5-sonnet-20241022")
 
     # This will call real Claude
     result = agent.run("What are the latest developments in AI?")
@@ -87,14 +76,8 @@ def example_direct_adapter():
         adapter = OpenAIAdapter(model="gpt-4")
 
         messages = [
-            LLMMessage(
-                role=MessageRole.SYSTEM,
-                content="You are a helpful assistant."
-            ),
-            LLMMessage(
-                role=MessageRole.USER,
-                content="What is HouYi framework?"
-            )
+            LLMMessage(role=MessageRole.SYSTEM, content="You are a helpful assistant."),
+            LLMMessage(role=MessageRole.USER, content="What is HouYi framework?"),
         ]
 
         response = await adapter.chat(messages)
@@ -121,12 +104,7 @@ def example_streaming():
     async def run():
         adapter = OpenAIAdapter(model="gpt-4")
 
-        messages = [
-            LLMMessage(
-                role=MessageRole.USER,
-                content="Write a haiku about AI agents."
-            )
-        ]
+        messages = [LLMMessage(role=MessageRole.USER, content="Write a haiku about AI agents.")]
 
         print("Streaming: ", end="", flush=True)
         async for chunk in adapter.stream_chat(messages):

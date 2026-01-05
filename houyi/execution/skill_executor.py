@@ -63,30 +63,20 @@ class SkillExecutor:
             SkillExecutionError: If execution fails after retries
         """
         if not skill.executor:
-            raise SkillExecutionError(
-                skill.name,
-                "Skill has no executor function bound"
-            )
+            raise SkillExecutionError(skill.name, "Skill has no executor function bound")
 
         # Validate input
         try:
             validated_input = skill.input_schema(**input_data)
         except ValidationError as e:
-            raise SkillExecutionError(
-                skill.name,
-                f"Input validation failed: {e}",
-                e
-            ) from e
+            raise SkillExecutionError(skill.name, f"Input validation failed: {e}", e) from e
 
         # Execute with retries
         last_error = None
         for attempt in range(self.max_retries):
             try:
                 # Execute skill (with timeout)
-                result = await self._execute_with_timeout(
-                    skill.executor,
-                    validated_input
-                )
+                result = await self._execute_with_timeout(skill.executor, validated_input)
 
                 # Validate output
                 try:
@@ -94,9 +84,7 @@ class SkillExecutor:
                     return validated_output.model_dump()
                 except ValidationError as e:
                     raise SkillExecutionError(
-                        skill.name,
-                        f"Output validation failed: {e}",
-                        e
+                        skill.name, f"Output validation failed: {e}", e
                     ) from e
 
             except SkillExecutionError:
@@ -106,14 +94,12 @@ class SkillExecutor:
                 last_error = e
                 if attempt < self.max_retries - 1:
                     # Wait before retry (exponential backoff)
-                    await asyncio.sleep(2 ** attempt)
+                    await asyncio.sleep(2**attempt)
                     continue
 
         # All retries failed
         raise SkillExecutionError(
-            skill.name,
-            f"Execution failed after {self.max_retries} retries",
-            last_error
+            skill.name, f"Execution failed after {self.max_retries} retries", last_error
         )
 
     async def _execute_with_timeout(
@@ -136,20 +122,16 @@ class SkillExecutor:
         # Check if executor is async
         if asyncio.iscoroutinefunction(executor):
             # Async executor
-            result = await asyncio.wait_for(
-                executor(input_data),
-                timeout=self.timeout
-            )
+            result = await asyncio.wait_for(executor(input_data), timeout=self.timeout)
         else:
             # Sync executor - run in thread pool
             loop = asyncio.get_event_loop()
             result = await asyncio.wait_for(
-                loop.run_in_executor(None, executor, input_data),
-                timeout=self.timeout
+                loop.run_in_executor(None, executor, input_data), timeout=self.timeout
             )
 
         # Ensure result is a dict
-        if hasattr(result, 'model_dump'):
+        if hasattr(result, "model_dump"):
             # Pydantic model
             return result.model_dump()
         elif isinstance(result, dict):

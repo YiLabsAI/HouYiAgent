@@ -11,9 +11,7 @@ from houyi.evaluation.dataset import Dataset, TestCase
 def test_testcase_creation():
     """Test TestCase creation."""
     tc = TestCase(
-        input="What is 2+2?",
-        expected_output="4",
-        metadata={"category": "math", "id": "test1"}
+        input="What is 2+2?", expected_output="4", metadata={"category": "math", "id": "test1"}
     )
 
     assert tc.input == "What is 2+2?"
@@ -24,10 +22,7 @@ def test_testcase_creation():
 
 def test_testcase_without_expected():
     """Test TestCase without expected output."""
-    tc = TestCase(
-        input="Tell me a joke",
-        metadata={"id": "test2"}
-    )
+    tc = TestCase(input="Tell me a joke", metadata={"id": "test2"})
 
     assert tc.input == "Tell me a joke"
     assert tc.expected_output is None
@@ -37,14 +32,10 @@ def test_dataset_creation():
     """Test Dataset creation."""
     cases = [
         TestCase(input="test1", metadata={"id": "1"}),
-        TestCase(input="test2", metadata={"id": "2"})
+        TestCase(input="test2", metadata={"id": "2"}),
     ]
 
-    dataset = Dataset(
-        name="Test Dataset",
-        test_cases=cases,
-        metadata={"version": "1.0"}
-    )
+    dataset = Dataset(name="Test Dataset", test_cases=cases, metadata={"version": "1.0"})
 
     assert dataset.name == "Test Dataset"
     assert len(dataset.test_cases) == 2
@@ -60,11 +51,11 @@ def test_dataset_from_json():
             "name": "JSON Dataset",
             "test_cases": [
                 {"input": "test1", "expected_output": "output1", "metadata": {"id": "1"}},
-                {"input": "test2", "metadata": {"id": "2"}}
-            ]
+                {"input": "test2", "metadata": {"id": "2"}},
+            ],
         }
 
-        with open(json_file, 'w') as f:
+        with open(json_file, "w") as f:
             json.dump(data, f)
 
         dataset = Dataset.from_file(str(json_file))
@@ -80,11 +71,11 @@ def test_dataset_from_csv():
     with tempfile.TemporaryDirectory() as tmpdir:
         csv_file = Path(tmpdir) / "test.csv"
 
-        with open(csv_file, 'w', newline='') as f:
+        with open(csv_file, "w", newline="") as f:
             writer = csv.writer(f)
-            writer.writerow(['input', 'expected_output'])
-            writer.writerow(['test1', 'output1'])
-            writer.writerow(['test2', ''])
+            writer.writerow(["input", "expected_output"])
+            writer.writerow(["test1", "output1"])
+            writer.writerow(["test2", ""])
 
         dataset = Dataset.from_file(str(csv_file))
 
@@ -102,8 +93,8 @@ def test_dataset_to_json():
             name="Output Dataset",
             test_cases=[
                 TestCase(input="test1", expected_output="output1"),
-                TestCase(input="test2")
-            ]
+                TestCase(input="test2"),
+            ],
         )
 
         dataset.to_file(str(json_file))
@@ -126,31 +117,27 @@ def test_dataset_to_csv():
             name="CSV Dataset",
             test_cases=[
                 TestCase(input="test1", expected_output="output1"),
-                TestCase(input="test2")
-            ]
+                TestCase(input="test2"),
+            ],
         )
 
         dataset.to_file(str(csv_file))
 
         assert csv_file.exists()
 
-        with open(csv_file, newline='') as f:
+        with open(csv_file, newline="") as f:
             reader = csv.DictReader(f)
             rows = list(reader)
 
         assert len(rows) == 2
-        assert rows[0]['input'] == "test1"
+        assert rows[0]["input"] == "test1"
 
 
 def test_dataset_iteration():
     """Test iterating over dataset."""
     dataset = Dataset(
         name="Iter Dataset",
-        test_cases=[
-            TestCase(input="test1"),
-            TestCase(input="test2"),
-            TestCase(input="test3")
-        ]
+        test_cases=[TestCase(input="test1"), TestCase(input="test2"), TestCase(input="test3")],
     )
 
     count = 0
@@ -164,11 +151,7 @@ def test_dataset_iteration():
 def test_dataset_length():
     """Test dataset length."""
     dataset = Dataset(
-        name="Length Dataset",
-        test_cases=[
-            TestCase(input="test1"),
-            TestCase(input="test2")
-        ]
+        name="Length Dataset", test_cases=[TestCase(input="test1"), TestCase(input="test2")]
     )
 
     assert len(dataset) == 2
@@ -180,8 +163,8 @@ def test_dataset_getitem():
         name="Index Dataset",
         test_cases=[
             TestCase(input="test1", metadata={"id": "1"}),
-            TestCase(input="test2", metadata={"id": "2"})
-        ]
+            TestCase(input="test2", metadata={"id": "2"}),
+        ],
     )
 
     assert dataset[0].input == "test1"
@@ -191,10 +174,7 @@ def test_dataset_getitem():
 
 def test_dataset_empty():
     """Test empty dataset."""
-    dataset = Dataset(
-        name="Empty Dataset",
-        test_cases=[]
-    )
+    dataset = Dataset(name="Empty Dataset", test_cases=[])
 
     assert len(dataset) == 0
     assert list(dataset) == []
@@ -203,9 +183,7 @@ def test_dataset_empty():
 def test_testcase_with_context():
     """Test testcase with context."""
     testcase = TestCase(
-        input={"query": "test"},
-        expected={"answer": "result"},
-        context={"source": "test_source"}
+        input={"query": "test"}, expected={"answer": "result"}, context={"source": "test_source"}
     )
 
     assert testcase.context == {"source": "test_source"}
@@ -231,7 +209,7 @@ def test_dataset_slice():
             TestCase(input="Question 1", expected_output="Answer 1"),
             TestCase(input="Question 2", expected_output="Answer 2"),
             TestCase(input="Question 3", expected_output="Answer 3"),
-        ]
+        ],
     )
 
     # Test that we can iterate and access by index
@@ -253,7 +231,7 @@ def test_dataset_filter():
             TestCase(input="Q1", metadata={"category": "math"}),
             TestCase(input="Q2", metadata={"category": "science"}),
             TestCase(input="Q3", metadata={"category": "math"}),
-        ]
+        ],
     )
 
     math_cases = [tc for tc in dataset if tc.metadata.get("category") == "math"]
@@ -290,7 +268,7 @@ def test_dataset_filter():
             TestCase(input="Q1", metadata={"category": "math"}),
             TestCase(input="Q2", metadata={"category": "science"}),
             TestCase(input="Q3", metadata={"category": "math"}),
-        ]
+        ],
     )
 
     math_cases = [tc for tc in dataset if tc.metadata.get("category") == "math"]
@@ -325,7 +303,7 @@ def test_testcase_with_context():
         input="Question",
         expected_output="Answer",
         context="Background information",
-        metadata={"has_context": True, "id": "ctx1"}
+        metadata={"has_context": True, "id": "ctx1"},
     )
 
     assert tc.context == "Background information"

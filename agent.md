@@ -156,7 +156,7 @@ HouYi uses a two-tier approach for code quality:
 #### 1. Ruff (Fast Linting & Formatting)
 - **Purpose**: Fast code formatting and common error detection
 - **Usage**: `ruff check houyi/` or `ruff check houyi/ --fix`
-- **Checks**: 
+- **Checks**:
   - Code formatting (PEP 8)
   - Import sorting
   - Unused variables
@@ -260,7 +260,7 @@ Every new feature or bugfix must be covered by tests.
   class TestAccuracyEvaluator:
       def test_exact_match(self):
           ...
-      
+
       def test_similar_match(self):
           ...
   ```
@@ -282,15 +282,15 @@ Every new feature or bugfix must be covered by tests.
    - **Core business logic modules: ≥ 85%**
    - Run: `pytest tests/ -v --cov=houyi --cov-report=term`
    - Core modules include: core/, evaluation/, execution/, orchestration/, observability/
-   
+
 2. **All Tests Passing**
    - 100% test pass rate required
    - No skipped tests without explicit justification
-   
+
 3. **Code Quality**
    - `ruff check houyi/` passes with no errors
    - `mypy houyi/` passes with no type errors
-   
+
 4. **Documentation**
    - CHANGELOG.md updated with all changes
    - README.md reflects current features

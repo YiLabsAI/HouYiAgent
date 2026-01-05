@@ -79,10 +79,7 @@ class LocalExecutor:
                     raise RuntimeError("DAG has cycle or missing dependencies")
 
                 # Execute ready nodes concurrently
-                tasks = [
-                    self._execute_node(node, node_outputs, metrics)
-                    for node in ready_nodes
-                ]
+                tasks = [self._execute_node(node, node_outputs, metrics) for node in ready_nodes]
                 results = await asyncio.gather(*tasks, return_exceptions=True)
 
                 # Process results
@@ -203,11 +200,12 @@ class LocalExecutor:
                 from houyi.llm.openai_adapter import OpenAIAdapter
 
                 adapter = OpenAIAdapter()
-                task = inputs.get('task', inputs.get('prompt', ''))
+                task = inputs.get("task", inputs.get("prompt", ""))
                 messages = [LLMMessage(role=MessageRole.USER, content=task)]
 
                 # Synchronous call (runtime executor is sync)
                 import asyncio
+
                 response = asyncio.run(adapter.chat(messages))
 
                 return {
@@ -236,7 +234,7 @@ class LocalExecutor:
         # Get skill from node metadata
         skill = node.metadata.get("skill")
 
-        if skill and hasattr(skill, 'executor') and skill.executor:
+        if skill and hasattr(skill, "executor") and skill.executor:
             try:
                 # Execute skill
                 result = skill.executor(**inputs)

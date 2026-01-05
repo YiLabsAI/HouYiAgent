@@ -26,17 +26,14 @@ class TestLocalExecutor:
             return Output(result="test result")
 
         skill = SkillSpec(
-                    name="search",
-                    description="Search the web",
-                    input_schema=Input,
-                    output_schema=Output,
-                    executor=search,
-                )
-
-        agent = AgentSpec(
-            role="Test Agent",
-            skills=[skill]
+            name="search",
+            description="Search the web",
+            input_schema=Input,
+            output_schema=Output,
+            executor=search,
         )
+
+        agent = AgentSpec(role="Test Agent", skills=[skill])
 
         # Create plan
         planner = DAGPlanner()
@@ -82,10 +79,7 @@ class TestLocalExecutor:
             executor=search,
         )
 
-        agent = AgentSpec(
-            role="Test Agent",
-            skills=[skill]
-        )
+        agent = AgentSpec(role="Test Agent", skills=[skill])
 
         planner = DAGPlanner()
         plan = planner.plan("Search test", agent)
@@ -99,12 +93,12 @@ class TestLocalExecutor:
         result = await executor.execute(plan, initial_state)
 
         # Verify result structure
-        assert hasattr(result, 'task_id')
-        assert hasattr(result, 'status')
-        assert hasattr(result, 'output')
-        assert hasattr(result, 'final_state')
-        assert hasattr(result, 'metrics')
-        assert hasattr(result, 'trace_id')
+        assert hasattr(result, "task_id")
+        assert hasattr(result, "status")
+        assert hasattr(result, "output")
+        assert hasattr(result, "final_state")
+        assert hasattr(result, "metrics")
+        assert hasattr(result, "trace_id")
         assert result.task_id.startswith("task_")
         assert result.trace_id.startswith("trace_")
 
@@ -140,10 +134,7 @@ class TestLocalExecutor:
             executor=skill2,
         )
 
-        agent = AgentSpec(
-            role="Test Agent",
-            skills=[skill_a, skill_b]
-        )
+        agent = AgentSpec(role="Test Agent", skills=[skill_a, skill_b])
 
         planner = DAGPlanner()
         plan = planner.plan("Execute both skills", agent)
@@ -181,10 +172,7 @@ class TestLocalExecutor:
             executor=search,
         )
 
-        agent = AgentSpec(
-            role="Test Agent",
-            skills=[skill]
-        )
+        agent = AgentSpec(role="Test Agent", skills=[skill])
 
         planner = DAGPlanner()
         plan = planner.plan("Search test", agent)
@@ -225,10 +213,7 @@ class TestLocalExecutor:
             executor=search,
         )
 
-        agent = AgentSpec(
-            role="Test Agent",
-            skills=[skill]
-        )
+        agent = AgentSpec(role="Test Agent", skills=[skill])
 
         planner = DAGPlanner()
         plan = planner.plan("Search test", agent)

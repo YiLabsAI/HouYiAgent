@@ -33,7 +33,9 @@ class SessionState(BaseModel):
     )
     execution_pointer: str | None = Field(None, description="Current executing node ID")
     parent_state_id: str | None = Field(None, description="Parent state version ID")
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), description="Creation timestamp")
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc), description="Creation timestamp"
+    )
     metadata: dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
 
 

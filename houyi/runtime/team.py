@@ -95,17 +95,14 @@ class Team:
 
                 results[task_id] = {
                     "task": task.description,
-                    "agent": agent.role if hasattr(agent, 'role') else str(agent),
+                    "agent": agent.role if hasattr(agent, "role") else str(agent),
                     "result": result,
-                    "dependencies": task.context
+                    "dependencies": task.context,
                 }
 
                 completed_tasks.add(task_id)
 
-        return {
-            "tasks_completed": len(results),
-            "results": list(results.values())
-        }
+        return {"tasks_completed": len(results), "results": list(results.values())}
 
     def execute(self) -> Any:
         """Alias for run() (for technical users)."""

@@ -11,11 +11,7 @@ class TestAgent:
 
     def test_agent_initialization(self):
         """Test basic agent initialization."""
-        agent = Agent(
-            role="Test Agent",
-            llm="gpt-4",
-            memory=False
-        )
+        agent = Agent(role="Test Agent", llm="gpt-4", memory=False)
 
         assert agent.role == "Test Agent"
         assert agent.spec.role == "Test Agent"
@@ -25,6 +21,7 @@ class TestAgent:
 
     def test_agent_with_skills(self):
         """Test agent initialization with skills."""
+
         class Input(BaseModel):
             query: str
 
@@ -42,25 +39,20 @@ class TestAgent:
             executor=search,
         )
 
-        agent = Agent(
-            role="Search Agent",
-            skills=[skill]
-        )
+        agent = Agent(role="Search Agent", skills=[skill])
 
         assert len(agent.skills) == 1
         assert agent.skills[0].name == "search"
 
     def test_agent_with_system_prompt(self):
         """Test agent with custom system prompt."""
-        agent = Agent(
-            role="Custom Agent",
-            system_prompt="You are a helpful assistant."
-        )
+        agent = Agent(role="Custom Agent", system_prompt="You are a helpful assistant.")
 
         assert agent.spec.system_prompt == "You are a helpful assistant."
 
     def test_agent_properties(self):
         """Test agent property accessors."""
+
         class Input(BaseModel):
             x: int
 
@@ -78,11 +70,7 @@ class TestAgent:
             executor=doubler,
         )
 
-        agent = Agent(
-            role="Math Agent",
-            skills=[skill],
-            llm="gpt-3.5-turbo"
-        )
+        agent = Agent(role="Math Agent", skills=[skill], llm="gpt-3.5-turbo")
 
         # Test properties
         assert agent.role == "Math Agent"
@@ -91,10 +79,7 @@ class TestAgent:
 
     def test_agent_observability_config(self):
         """Test agent observability configuration."""
-        agent = Agent(
-            role="Test Agent",
-            observability={"enabled": True, "export_to": "console"}
-        )
+        agent = Agent(role="Test Agent", observability={"enabled": True, "export_to": "console"})
 
         assert agent.observability_config["enabled"] is True
         assert agent.observability_config["export_to"] == "console"
@@ -117,6 +102,7 @@ class TestAgent:
 
     def test_agent_multiple_skills(self):
         """Test agent with multiple skills."""
+
         class Input1(BaseModel):
             x: int
 
@@ -151,10 +137,7 @@ class TestAgent:
             executor=counter,
         )
 
-        agent = Agent(
-            role="Multi-Skill Agent",
-            skills=[skill1, skill2]
-        )
+        agent = Agent(role="Multi-Skill Agent", skills=[skill1, skill2])
 
         assert len(agent.skills) == 2
         assert agent.skills[0].name == "adder"
@@ -169,18 +152,12 @@ class TestAgent:
 
     def test_agent_memory_enabled(self):
         """Test agent with memory enabled."""
-        agent = Agent(
-            role="Memory Agent",
-            memory=True
-        )
+        agent = Agent(role="Memory Agent", memory=True)
 
         assert agent.spec.policies["memory"] is True
 
     def test_agent_memory_disabled(self):
         """Test agent with memory disabled."""
-        agent = Agent(
-            role="Stateless Agent",
-            memory=False
-        )
+        agent = Agent(role="Stateless Agent", memory=False)
 
         assert agent.spec.policies["memory"] is False

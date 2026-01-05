@@ -5,14 +5,14 @@
       <stop offset="100%" style="stop-color:#4ECDC4;stop-opacity:1" />
     </linearGradient>
   </defs>
-  
+
   <!-- Bow icon -->
   <g transform="translate(20, 30)">
     <path d="M 5 20 Q 0 10 5 0 L 15 10 Z" fill="url(#gradient)" stroke="#333" stroke-width="1.5"/>
     <line x1="15" y1="10" x2="35" y2="10" stroke="#333" stroke-width="2"/>
     <path d="M 35 10 L 45 5 L 45 15 Z" fill="#FF6B6B"/>
   </g>
-  
+
   <!-- Text -->
   <text x="80" y="55" font-family="Arial, sans-serif" font-size="36" font-weight="bold" fill="#2C3E50">
     HouYi

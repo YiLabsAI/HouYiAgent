@@ -74,13 +74,14 @@ class TestTraceManager:
     def test_span_duration(self):
         """Test span tracks duration."""
         import time
+
         tm = TraceManager(enabled=True)
 
         with tm.start_span("timed_op") as span:
             time.sleep(0.01)  # Sleep 10ms
 
         # Span should have recorded some duration
-        assert hasattr(span, 'start_time')
+        assert hasattr(span, "start_time")
 
     def test_multiple_spans(self):
         """Test creating multiple sequential spans."""
@@ -101,10 +102,7 @@ class TestSpan:
 
     def test_span_initialization(self):
         """Test span initialization."""
-        span = Span(
-            name="test_span",
-            attributes={"key": "value"}
-        )
+        span = Span(name="test_span", attributes={"key": "value"})
 
         assert span.name == "test_span"
         assert span.attributes["key"] == "value"

@@ -15,10 +15,7 @@ class SimplifiedExecutor:
     """
 
     def execute(
-        self,
-        task_description: str,
-        agent_spec: AgentSpec,
-        expected_output: str | None = None
+        self, task_description: str, agent_spec: AgentSpec, expected_output: str | None = None
     ) -> Any:
         """Execute a task (simplified).
 
@@ -42,5 +39,5 @@ class SimplifiedExecutor:
             "system_prompt": system_prompt,
             "available_tools": [schema["function"]["name"] for schema in tool_schemas],
             "result": f"Placeholder result for: {task_description}",
-            "note": "SimplifiedExecutor - actual LLM execution not yet implemented"
+            "note": "SimplifiedExecutor - actual LLM execution not yet implemented",
         }

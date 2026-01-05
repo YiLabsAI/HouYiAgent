@@ -45,7 +45,11 @@ def tool(func: Callable) -> SkillSpec:
         default = ... if param.default == inspect.Parameter.empty else param.default
         input_fields[param_name] = (param_type, default)
 
-    input_schema = create_model(f"{name.title()}Input", **input_fields) if input_fields else type("EmptyInput", (BaseModel,), {})
+    input_schema = (
+        create_model(f"{name.title()}Input", **input_fields)
+        if input_fields
+        else type("EmptyInput", (BaseModel,), {})
+    )
 
     # Build output schema from return type
     return_type = hints.get("return", str)

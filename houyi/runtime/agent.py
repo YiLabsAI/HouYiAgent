@@ -33,7 +33,7 @@ class Agent:
             role=role,
             skills=skills or [],
             system_prompt=system_prompt,
-            policies={"llm": llm, "memory": memory}
+            policies={"llm": llm, "memory": memory},
         )
 
         # Initialize observability
@@ -63,10 +63,7 @@ class Agent:
         enabled = self.observability_config.get("enabled", True)
         exporters = self.observability_config.get("exporters", None)
 
-        self.trace_manager = TraceManager(
-            enabled=enabled,
-            exporters=exporters
-        )
+        self.trace_manager = TraceManager(enabled=enabled, exporters=exporters)
 
     def _build_system_prompt(self) -> str:
         """Build system prompt from AgentSpec."""
@@ -102,7 +99,7 @@ class Agent:
                 "agent.role": self.role,
                 "agent.input": description,
                 "agent.expected_output": expected_output,
-            }
+            },
         ) as span:
             # Generate execution plan
             planner = DAGPlanner()

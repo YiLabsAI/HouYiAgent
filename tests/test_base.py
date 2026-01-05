@@ -21,7 +21,7 @@ class MockEvaluator(Evaluator):
             output=output,
             expected_output=expected,
             passed=passed,
-            score=1.0 if passed else 0.0
+            score=1.0 if passed else 0.0,
         )
 
 
@@ -33,7 +33,7 @@ def test_evaluation_result_creation():
         output="test output",
         expected_output="test output",
         passed=True,
-        score=0.95
+        score=0.95,
     )
 
     assert result.evaluator == "test_eval"
@@ -49,7 +49,7 @@ def test_evaluation_result_failed():
         output="wrong output",
         expected_output="correct output",
         passed=False,
-        score=0.3
+        score=0.3,
     )
 
     assert result.passed is False
@@ -65,7 +65,7 @@ def test_evaluation_summary_creation():
         pass_rate=0.8,
         avg_score=0.85,
         avg_cost=0.01,
-        avg_latency=100.0
+        avg_latency=100.0,
     )
 
     assert summary.total_cases == 10
@@ -86,9 +86,7 @@ def test_mock_evaluator():
     assert evaluator.name == "mock_evaluator"
 
     result = evaluator.evaluate(
-        input="test input",
-        output="expected output",
-        expected="expected output"
+        input="test input", output="expected output", expected="expected output"
     )
 
     assert result.passed is True
@@ -100,9 +98,7 @@ def test_mock_evaluator_failed():
     evaluator = MockEvaluator()
 
     result = evaluator.evaluate(
-        input="test input",
-        output="wrong output",
-        expected="expected output"
+        input="test input", output="wrong output", expected="expected output"
     )
 
     assert result.passed is False
@@ -117,7 +113,7 @@ def test_evaluation_result_with_metadata():
         output="test output",
         passed=True,
         score=1.0,
-        metrics={"latency": 0.5, "tokens": 100}
+        metrics={"latency": 0.5, "tokens": 100},
     )
 
     assert result.metrics["latency"] == 0.5
@@ -136,8 +132,8 @@ def test_evaluation_summary_with_metrics():
         avg_latency=150.0,
         metrics={
             "exact_match": {"passed": 80, "failed": 20},
-            "semantic": {"passed": 90, "failed": 10}
-        }
+            "semantic": {"passed": 90, "failed": 10},
+        },
     )
 
     assert summary.metrics["exact_match"]["passed"] == 80

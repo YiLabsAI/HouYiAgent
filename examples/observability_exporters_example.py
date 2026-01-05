@@ -9,6 +9,7 @@ print("Phase 3.4: Jaeger & Datadog Exporters Example")
 print("=" * 70)
 print()
 
+
 # Create a simple agent with a tool
 @tool
 def calculate(a: int, b: int, operation: str = "add") -> int:
@@ -20,6 +21,7 @@ def calculate(a: int, b: int, operation: str = "add") -> int:
     else:
         return 0
 
+
 # Example 1: Console Exporter (default)
 print("Example 1: Console Exporter")
 print("-" * 70)
@@ -27,10 +29,7 @@ print("-" * 70)
 agent1 = Agent(
     role="Calculator",
     skills=[calculate],
-    observability=ObservabilityConfig(
-        enabled=True,
-        exporters=[ConsoleExporter(verbose=False)]
-    )
+    observability=ObservabilityConfig(enabled=True, exporters=[ConsoleExporter(verbose=False)]),
 )
 
 result = agent1.run("Calculate 5 + 3")
@@ -41,7 +40,9 @@ print()
 print("Example 2: Jaeger Exporter")
 print("-" * 70)
 print("Note: Requires Jaeger running on localhost:4318")
-print("Start Jaeger with: docker run -d -p 4318:4318 -p 16686:16686 jaegertracing/all-in-one:latest")
+print(
+    "Start Jaeger with: docker run -d -p 4318:4318 -p 16686:16686 jaegertracing/all-in-one:latest"
+)
 print()
 
 agent2 = Agent(
@@ -51,18 +52,16 @@ agent2 = Agent(
         enabled=True,
         exporters=[
             JaegerExporter(
-                endpoint="http://localhost:4318",
-                service_name="houyi-calculator",
-                batch_size=5
+                endpoint="http://localhost:4318", service_name="houyi-calculator", batch_size=5
             )
-        ]
-    )
+        ],
+    ),
 )
 
 # Run multiple operations to trigger batch export
 for i in range(3):
-    result = agent2.run(f"Calculate {i} + {i+1}")
-    print(f"  Operation {i+1}: {result}")
+    result = agent2.run(f"Calculate {i} + {i + 1}")
+    print(f"  Operation {i + 1}: {result}")
 
 # Flush remaining spans
 for exporter in agent2.observability.exporters:
@@ -87,16 +86,16 @@ agent3 = Agent(
                 agent_url="http://localhost:8126",
                 service_name="houyi-calculator",
                 env="development",
-                batch_size=5
+                batch_size=5,
             )
-        ]
-    )
+        ],
+    ),
 )
 
 # Run operations
 for i in range(3):
     result = agent3.run(f"Calculate {i} * 2")
-    print(f"  Operation {i+1}: {result}")
+    print(f"  Operation {i + 1}: {result}")
 
 # Flush remaining traces
 for exporter in agent3.observability.exporters:
@@ -117,9 +116,9 @@ agent4 = Agent(
         enabled=True,
         exporters=[
             ConsoleExporter(verbose=False),
-            JSONExporter(filepath="traces/calculator_traces.json")
-        ]
-    )
+            JSONExporter(filepath="traces/calculator_traces.json"),
+        ],
+    ),
 )
 
 result = agent4.run("Calculate 10 + 20")

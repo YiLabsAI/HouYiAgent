@@ -8,6 +8,7 @@ print("Phase 3.3: Dataset & Report Generation Example")
 print("=" * 70)
 print()
 
+
 # Create a simple agent
 @tool
 def answer_question(question: str) -> str:
@@ -26,6 +27,7 @@ def answer_question(question: str) -> str:
 
     return "I don't have information about that topic."
 
+
 agent = Agent(role="Q&A Assistant", skills=[answer_question])
 
 # Example 1: Load dataset from JSON
@@ -43,9 +45,7 @@ print("Example 2: Run evaluation with dataset")
 print("-" * 70)
 
 results = evaluate(
-    agent=agent,
-    dataset=dataset,
-    evaluators=["accuracy", "completeness", "coherence", "relevance"]
+    agent=agent, dataset=dataset, evaluators=["accuracy", "completeness", "coherence", "relevance"]
 )
 
 print("Evaluation completed!")
@@ -59,9 +59,7 @@ print("Example 3: Generate HTML report")
 print("-" * 70)
 
 ReportGenerator.generate_html(
-    results,
-    "reports/evaluation_report.html",
-    title="HouYi Agent Evaluation Report"
+    results, "reports/evaluation_report.html", title="HouYi Agent Evaluation Report"
 )
 print("✅ HTML report saved to: reports/evaluation_report.html")
 print()
@@ -70,10 +68,7 @@ print()
 print("Example 4: Generate JSON report")
 print("-" * 70)
 
-ReportGenerator.generate_json(
-    results,
-    "reports/evaluation_report.json"
-)
+ReportGenerator.generate_json(results, "reports/evaluation_report.json")
 print("✅ JSON report saved to: reports/evaluation_report.json")
 print()
 
@@ -82,9 +77,7 @@ print("Example 5: Generate Markdown report")
 print("-" * 70)
 
 ReportGenerator.generate_markdown(
-    results,
-    "reports/evaluation_report.md",
-    title="HouYi Agent Evaluation Report"
+    results, "reports/evaluation_report.md", title="HouYi Agent Evaluation Report"
 )
 print("✅ Markdown report saved to: reports/evaluation_report.md")
 print()
@@ -110,14 +103,14 @@ custom_dataset = Dataset(
         TestCase(
             input="What is AI?",
             expected_output="AI is artificial intelligence.",
-            metadata={"category": "ai", "difficulty": "easy"}
+            metadata={"category": "ai", "difficulty": "easy"},
         ),
         TestCase(
             input="Explain neural networks",
             expected_output="Neural networks are computing systems inspired by biological neural networks.",
-            metadata={"category": "ai", "difficulty": "hard"}
+            metadata={"category": "ai", "difficulty": "hard"},
         ),
-    ]
+    ],
 )
 
 custom_dataset.to_file("datasets/custom_dataset.json")

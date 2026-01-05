@@ -77,7 +77,7 @@ class TestSkillFromFile:
             input_schema=Input,
             output_schema=Output,
             executor=processor,
-            constraints={"timeout": 5000, "max_cost": 0.01}
+            constraints={"timeout": 5000, "max_cost": 0.01},
         )
 
         assert skill.constraints["timeout"] == 5000
@@ -139,7 +139,7 @@ class TestSkillExport:
             description="A test skill",
             input_schema=Input,
             output_schema=Output,
-            executor=executor
+            executor=executor,
         )
 
         output_file = tmp_path / "skill.md"
@@ -168,7 +168,7 @@ class TestSkillExport:
             description="Double a number",
             input_schema=Input,
             output_schema=Output,
-            executor=executor
+            executor=executor,
         )
 
         output_file = tmp_path / "doubler.md"
@@ -198,12 +198,12 @@ class TestSkillExport:
             description="Double",
             input_schema=Input,
             output_schema=Output,
-            executor=executor
+            executor=executor,
         )
 
         examples = [
             {"input": {"value": 5}, "output": {"doubled": 10}},
-            {"input": {"value": 10}, "output": {"doubled": 20}}
+            {"input": {"value": 10}, "output": {"doubled": 20}},
         ]
 
         output_file = tmp_path / "skill.md"
@@ -230,11 +230,7 @@ class TestSkillConstraints:
         def executor(input: Input) -> Output:
             return Output(result=input.value * 2)
 
-        constraints = {
-            "max_tokens": 1000,
-            "timeout": 30,
-            "rate_limit": 10
-        }
+        constraints = {"max_tokens": 1000, "timeout": 30, "rate_limit": 10}
 
         skill = SkillSpec(
             name="constrained",
@@ -242,7 +238,7 @@ class TestSkillConstraints:
             input_schema=Input,
             output_schema=Output,
             executor=executor,
-            constraints=constraints
+            constraints=constraints,
         )
 
         assert skill.constraints["max_tokens"] == 1000
@@ -268,7 +264,7 @@ class TestSkillConstraints:
             input_schema=Input,
             output_schema=Output,
             executor=executor,
-            constraints={"max_tokens": 500}
+            constraints={"max_tokens": 500},
         )
 
         output_file = tmp_path / "skill.md"
@@ -295,7 +291,7 @@ class TestSkillInvalidFormat:
 class TestSkillFromUrl:
     """Test SkillSpec.from_url() method."""
 
-    @patch('urllib.request.urlopen')
+    @patch("urllib.request.urlopen")
     def test_from_url_success(self, mock_urlopen):
         """Test loading skill from URL successfully."""
         # Mock URL response
@@ -315,7 +311,7 @@ A test skill for testing
 ```
 """
         mock_response = MagicMock()
-        mock_response.read.return_value = skill_content.encode('utf-8')
+        mock_response.read.return_value = skill_content.encode("utf-8")
         mock_response.__enter__.return_value = mock_response
         mock_response.__exit__.return_value = None
         mock_urlopen.return_value = mock_response
@@ -327,7 +323,7 @@ A test skill for testing
         assert skill.input_schema is not None
         assert skill.output_schema is not None
 
-    @patch('urllib.request.urlopen')
+    @patch("urllib.request.urlopen")
     def test_from_url_with_cache(self, mock_urlopen, tmp_path):
         """Test loading skill from URL with caching."""
         skill_content = """# Cached Skill
@@ -346,12 +342,12 @@ A cached skill
 ```
 """
         mock_response = MagicMock()
-        mock_response.read.return_value = skill_content.encode('utf-8')
+        mock_response.read.return_value = skill_content.encode("utf-8")
         mock_response.__enter__.return_value = mock_response
         mock_response.__exit__.return_value = None
         mock_urlopen.return_value = mock_response
 
-        with patch('pathlib.Path.home', return_value=tmp_path):
+        with patch("pathlib.Path.home", return_value=tmp_path):
             skill = SkillSpec.from_url("https://example.com/skill.md", cache=True)
 
             assert skill.name == "Cached Skill"
@@ -359,7 +355,7 @@ A cached skill
             cache_dir = tmp_path / ".houyi" / "skill_cache"
             assert cache_dir.exists()
 
-    @patch('urllib.request.urlopen')
+    @patch("urllib.request.urlopen")
     def test_from_url_network_error(self, mock_urlopen):
         """Test handling network errors when loading from URL."""
         mock_urlopen.side_effect = urllib.error.URLError("Network error")
@@ -369,7 +365,7 @@ A cached skill
 
         assert "Network error" in str(exc_info.value)
 
-    @patch('urllib.request.urlopen')
+    @patch("urllib.request.urlopen")
     def test_from_url_invalid_content(self, mock_urlopen):
         """Test handling invalid content from URL."""
         mock_response = MagicMock()
@@ -386,7 +382,7 @@ A cached skill
 class TestSkillFromRegistry:
     """Test SkillSpec.from_registry() method."""
 
-    @patch('urllib.request.urlopen')
+    @patch("urllib.request.urlopen")
     def test_from_registry_basic(self, mock_urlopen):
         """Test loading skill from AgentSkills.io registry."""
         skill_content = """# Web Search
@@ -405,7 +401,7 @@ Search the web
 ```
 """
         mock_response = MagicMock()
-        mock_response.read.return_value = skill_content.encode('utf-8')
+        mock_response.read.return_value = skill_content.encode("utf-8")
         mock_response.__enter__.return_value = mock_response
         mock_response.__exit__.return_value = None
         mock_urlopen.return_value = mock_response
@@ -533,7 +529,7 @@ class TestSkillConstraints:
             input_schema=Input,
             output_schema=Output,
             executor=func,
-            constraints={"timeout": 10, "max_retries": 3, "cost_limit": 0.5}
+            constraints={"timeout": 10, "max_retries": 3, "cost_limit": 0.5},
         )
 
         assert skill.constraints["timeout"] == 10
@@ -559,7 +555,7 @@ class TestSkillConstraints:
             input_schema=Input,
             output_schema=Output,
             executor=func,
-            constraints={"timeout": 10}
+            constraints={"timeout": 10},
         )
 
         # Modify constraints
@@ -569,7 +565,7 @@ class TestSkillConstraints:
         assert skill.constraints["timeout"] == 20
         assert skill.constraints["max_cost"] == 1.0
 
-    @patch('urllib.request.urlopen')
+    @patch("urllib.request.urlopen")
     def test_from_registry_with_version(self, mock_urlopen):
         """Test loading specific version from registry."""
         skill_content = """# Test Skill
@@ -588,7 +584,7 @@ Test
 ```
 """
         mock_response = MagicMock()
-        mock_response.read.return_value = skill_content.encode('utf-8')
+        mock_response.read.return_value = skill_content.encode("utf-8")
         mock_response.__enter__.return_value = mock_response
         mock_response.__exit__.return_value = None
         mock_urlopen.return_value = mock_response

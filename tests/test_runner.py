@@ -13,6 +13,7 @@ class TestEvaluate:
 
     def test_evaluate_single_case(self):
         """Test evaluating a single test case."""
+
         # Simple agent
         class Input(BaseModel):
             query: str
@@ -36,13 +37,8 @@ class TestEvaluate:
         # Evaluate
         results = evaluate(
             agent=agent,
-            test_cases=[
-                {
-                    "input": "test query",
-                    "expected_output": "test result"
-                }
-            ],
-            evaluators=["accuracy"]
+            test_cases=[{"input": "test query", "expected_output": "test result"}],
+            evaluators=["accuracy"],
         )
 
         assert results is not None
@@ -51,6 +47,7 @@ class TestEvaluate:
 
     def test_evaluate_multiple_cases(self):
         """Test evaluating multiple test cases."""
+
         class Input(BaseModel):
             value: int
 
@@ -76,13 +73,14 @@ class TestEvaluate:
                 {"input": "1", "expected_output": "2"},
                 {"input": "5", "expected_output": "10"},
             ],
-            evaluators=["accuracy"]
+            evaluators=["accuracy"],
         )
 
         assert len(results.results) >= 2
 
     def test_evaluate_multiple_evaluators(self):
         """Test using multiple evaluators."""
+
         class Input(BaseModel):
             query: str
 
@@ -105,7 +103,7 @@ class TestEvaluate:
         results = evaluate(
             agent=agent,
             test_cases=[{"input": "query", "expected_output": "answer"}],
-            evaluators=["accuracy", "completeness"]
+            evaluators=["accuracy", "completeness"],
         )
 
         # Should have results from both evaluators
@@ -115,6 +113,7 @@ class TestEvaluate:
 
     def test_evaluate_with_evaluator_instance(self):
         """Test using evaluator instance."""
+
         class Input(BaseModel):
             query: str
 
@@ -140,13 +139,14 @@ class TestEvaluate:
         results = evaluate(
             agent=agent,
             test_cases=[{"input": "query", "expected_output": "test"}],
-            evaluators=[accuracy_eval]
+            evaluators=[accuracy_eval],
         )
 
         assert len(results.results) > 0
 
     def test_evaluate_summary_stats(self):
         """Test evaluation summary statistics."""
+
         class Input(BaseModel):
             value: int
 
@@ -172,7 +172,7 @@ class TestEvaluate:
                 {"input": "1", "expected_output": "2"},
                 {"input": "2", "expected_output": "4"},
             ],
-            evaluators=["accuracy"]
+            evaluators=["accuracy"],
         )
 
         # Check summary exists
@@ -181,6 +181,7 @@ class TestEvaluate:
 
     def test_evaluate_empty_test_cases(self):
         """Test handling empty test cases."""
+
         class Input(BaseModel):
             query: str
 
@@ -200,11 +201,7 @@ class TestEvaluate:
 
         agent = AgentSpec(role="Test Agent", skills=[skill])
 
-        results = evaluate(
-            agent=agent,
-            test_cases=[],
-            evaluators=["accuracy"]
-        )
+        results = evaluate(agent=agent, test_cases=[], evaluators=["accuracy"])
 
         assert results.total_cases == 0
         assert len(results.results) == 0
@@ -212,6 +209,7 @@ class TestEvaluate:
 
 def test_evaluate_with_dataset():
     """Test evaluate with Dataset object."""
+
     # Create a mock agent
     class MockAgent:
         def run(self, input_text):
@@ -223,15 +221,11 @@ def test_evaluate_with_dataset():
         name="Test Dataset",
         test_cases=[
             TestCase(input="test1", expected_output="output1"),
-            TestCase(input="test2", expected_output="output2")
-        ]
+            TestCase(input="test2", expected_output="output2"),
+        ],
     )
 
-    results = evaluate(
-        agent=agent,
-        dataset=dataset,
-        evaluators=[AccuracyEvaluator()]
-    )
+    results = evaluate(agent=agent, dataset=dataset, evaluators=[AccuracyEvaluator()])
 
     assert results.total_cases == 2
     assert len(results.results) == 2
@@ -239,6 +233,7 @@ def test_evaluate_with_dataset():
 
 def test_evaluate_with_multiple_evaluators():
     """Test evaluate with multiple evaluators."""
+
     # Create a mock agent
     class MockAgent:
         def run(self, input_text):
@@ -246,14 +241,10 @@ def test_evaluate_with_multiple_evaluators():
 
     agent = MockAgent()
 
-    test_cases = [
-        {"input": "test1", "expected_output": "output1"}
-    ]
+    test_cases = [{"input": "test1", "expected_output": "output1"}]
 
     results = evaluate(
-        agent=agent,
-        test_cases=test_cases,
-        evaluators=[AccuracyEvaluator(), LatencyEvaluator()]
+        agent=agent, test_cases=test_cases, evaluators=[AccuracyEvaluator(), LatencyEvaluator()]
     )
 
     # 1 test case * 2 evaluators = 2 results
@@ -263,6 +254,7 @@ def test_evaluate_with_multiple_evaluators():
 
 def test_evaluate_with_string_evaluator():
     """Test evaluate with string evaluator names."""
+
     # Create a mock agent
     class MockAgent:
         def run(self, input_text):
@@ -270,15 +262,9 @@ def test_evaluate_with_string_evaluator():
 
     agent = MockAgent()
 
-    test_cases = [
-        {"input": "test1", "expected_output": "output1"}
-    ]
+    test_cases = [{"input": "test1", "expected_output": "output1"}]
 
-    results = evaluate(
-        agent=agent,
-        test_cases=test_cases,
-        evaluators=["accuracy", "latency"]
-    )
+    results = evaluate(agent=agent, test_cases=test_cases, evaluators=["accuracy", "latency"])
 
     # 1 test case * 2 evaluators = 2 results
     assert results.total_cases == 2
@@ -287,6 +273,7 @@ def test_evaluate_with_string_evaluator():
 
 def test_evaluate_empty_test_cases():
     """Test evaluate with empty test cases."""
+
     # Create a mock agent
     class MockAgent:
         def run(self, input_text):
@@ -294,17 +281,14 @@ def test_evaluate_empty_test_cases():
 
     agent = MockAgent()
 
-    results = evaluate(
-        agent=agent,
-        test_cases=[],
-        evaluators=[AccuracyEvaluator()]
-    )
+    results = evaluate(agent=agent, test_cases=[], evaluators=[AccuracyEvaluator()])
 
     assert len(results.results) == 0
 
 
 def test_evaluate_preserves_metadata():
     """Test that evaluate preserves test case metadata."""
+
     # Create a mock agent
     class MockAgent:
         def run(self, input_text):
@@ -317,15 +301,11 @@ def test_evaluate_preserves_metadata():
             "input": "test1",
             "expected_output": "output1",
             "metadata": {"category": "basic"},
-            "expected_skills": ["skill1"]
+            "expected_skills": ["skill1"],
         }
     ]
 
-    results = evaluate(
-        agent=agent,
-        test_cases=test_cases,
-        evaluators=[AccuracyEvaluator()]
-    )
+    results = evaluate(agent=agent, test_cases=test_cases, evaluators=[AccuracyEvaluator()])
 
     assert results.total_cases == 1
     assert len(results.results) == 1
@@ -333,6 +313,7 @@ def test_evaluate_preserves_metadata():
 
 def test_evaluate_records_latency():
     """Test that evaluate records execution latency."""
+
     # Create a mock agent
     class MockAgent:
         def run(self, input_text):
@@ -340,15 +321,9 @@ def test_evaluate_records_latency():
 
     agent = MockAgent()
 
-    test_cases = [
-        {"input": "test1", "expected_output": "output1"}
-    ]
+    test_cases = [{"input": "test1", "expected_output": "output1"}]
 
-    results = evaluate(
-        agent=agent,
-        test_cases=test_cases,
-        evaluators=[LatencyEvaluator()]
-    )
+    results = evaluate(agent=agent, test_cases=test_cases, evaluators=[LatencyEvaluator()])
 
     assert results.total_cases == 1
     assert len(results.results) == 1

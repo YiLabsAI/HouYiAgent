@@ -1,8 +1,8 @@
 <div align="center">
   <img src=".github/images/logo-text.svg" alt="HouYi Logo" width="400">
-  
+
   <h3>Next-generation lightweight multi-agent framework</h3>
-  
+
   <p>
     <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT"></a>
     <a href="https://github.com/YiLabsAI/HouYiAgent/releases"><img src="https://img.shields.io/github/v/release/YiLabsAI/HouYiAgent?label=version" alt="Version"></a>
@@ -357,7 +357,7 @@ class CustomEvaluator(Evaluator):
     @property
     def name(self) -> str:
         return "custom"
-    
+
     def evaluate(self, input, output, expected, metadata):
         score = self.calculate_score(output, expected)
         return EvaluationResult(
@@ -478,7 +478,7 @@ Multi-agent orchestration with DAG execution:
 
 ## 🗺️ Roadmap
 
-**Current Version**: v0.1.0  
+**Current Version**: v0.1.0
 **Current Phase**: Phase 1 - MVP ready now!
 
 ### Development Phases
@@ -488,12 +488,12 @@ Multi-agent orchestration with DAG execution:
   - 19 built-in evaluators
   - OpenTelemetry-based observability
   - Multi-LLM support (OpenAI, Anthropic)
-  
+
 - **Phase 2**: Neuro-Symbolic & Verification - ⏳ Planned (v0.2.0)
   - SQL and Python code verification
   - Structured output enforcement
   - Auto-retry with error feedback
-  
+
 - **Phase 3**: Visualization & Bidirectional Sync - ⏳ Future
 - **Phase 4**: Distributed Execution & Ecosystem - ⏳ Future
 - **Phase 5**: Autonomous Evolution - 🔮 Long-term

@@ -12,6 +12,7 @@ def search(query: str) -> list[str]:
     """Search the web for information."""
     return [f"Result for '{query}'", "Additional info"]
 
+
 @tool
 def analyze(data: list[str]) -> str:
     """Analyze data."""
@@ -23,10 +24,7 @@ def example_default():
     """Example with default console tracing."""
     print("=== Example 1: Default Console Tracing ===\n")
 
-    agent = Agent(
-        role="Researcher",
-        skills=[search]
-    )
+    agent = Agent(role="Researcher", skills=[search])
 
     result = agent.run("What is HouYi?")
     print(f"Result: {result}\n")
@@ -40,12 +38,7 @@ def example_verbose():
     agent = Agent(
         role="Researcher",
         skills=[search],
-        observability={
-            "enabled": True,
-            "exporters": [
-                {"type": "console", "verbose": True}
-            ]
-        }
+        observability={"enabled": True, "exporters": [{"type": "console", "verbose": True}]},
     )
 
     result = agent.run("What is HouYi?")
@@ -62,11 +55,8 @@ def example_multiple_exporters():
         skills=[search],
         observability={
             "enabled": True,
-            "exporters": [
-                {"type": "console"},
-                {"type": "json", "filepath": "traces.json"}
-            ]
-        }
+            "exporters": [{"type": "console"}, {"type": "json", "filepath": "traces.json"}],
+        },
     )
 
     result = agent.run("What is HouYi?")
@@ -86,9 +76,9 @@ def example_jaeger():
             "enabled": True,
             "exporters": [
                 {"type": "console"},
-                {"type": "jaeger", "endpoint": "http://localhost:4318"}
-            ]
-        }
+                {"type": "jaeger", "endpoint": "http://localhost:4318"},
+            ],
+        },
     )
 
     result = agent.run("What is HouYi?")
@@ -100,11 +90,7 @@ def example_disabled():
     """Example with observability disabled."""
     print("=== Example 5: Disabled Observability ===\n")
 
-    agent = Agent(
-        role="Researcher",
-        skills=[search],
-        observability={"enabled": False}
-    )
+    agent = Agent(role="Researcher", skills=[search], observability={"enabled": False})
 
     result = agent.run("What is HouYi?")
     print(f"Result: {result}")
@@ -119,23 +105,17 @@ def example_team():
     researcher = Agent(
         role="Researcher",
         skills=[search],
-        observability={
-            "enabled": True,
-            "exporters": [{"type": "console", "verbose": True}]
-        }
+        observability={"enabled": True, "exporters": [{"type": "console", "verbose": True}]},
     )
 
-    analyst = Agent(
-        role="Analyst",
-        skills=[analyze]
-    )
+    analyst = Agent(role="Analyst", skills=[analyze])
 
     team = Team(
         agents=[researcher, analyst],
         tasks=[
             Task("Research HouYi", agent=researcher),
-            Task("Analyze findings", agent=analyst, context=[0])
-        ]
+            Task("Analyze findings", agent=analyst, context=[0]),
+        ],
     )
 
     result = team.run()

@@ -65,7 +65,9 @@ def _get_evaluator(name_or_instance: str | Evaluator) -> Evaluator:
 
     evaluator_class = evaluators.get(name_or_instance.lower())
     if not evaluator_class:
-        raise ValueError(f"Unknown evaluator: {name_or_instance}. Available: {', '.join(evaluators.keys())}")
+        raise ValueError(
+            f"Unknown evaluator: {name_or_instance}. Available: {', '.join(evaluators.keys())}"
+        )
 
     return evaluator_class()
 
@@ -96,11 +98,13 @@ def evaluate(
     # Handle dataset parameter
     if dataset is not None:
         from houyi.evaluation.dataset import Dataset
+
         if isinstance(dataset, Dataset):
             test_cases = [case.model_dump() for case in dataset.test_cases]
     elif test_cases is not None:
         # Check if test_cases is actually a Dataset
         from houyi.evaluation.dataset import Dataset
+
         if isinstance(test_cases, Dataset):
             test_cases = [case.model_dump() for case in test_cases.test_cases]
     if evaluators is None:
@@ -120,6 +124,7 @@ def evaluate(
 
         # Execute agent and collect metrics
         import time
+
         start_time = time.time()
 
         try:
@@ -128,9 +133,9 @@ def evaluate(
 
             # Extract metadata from agent execution
             metadata = {
-                "cost": getattr(agent, '_last_cost', 0.0),
+                "cost": getattr(agent, "_last_cost", 0.0),
                 "duration_ms": duration_ms,
-                "used_skills": getattr(agent, '_used_skills', []),
+                "used_skills": getattr(agent, "_used_skills", []),
                 "expected_skills": test_case.get("expected_skills", []),
             }
         except Exception as e:

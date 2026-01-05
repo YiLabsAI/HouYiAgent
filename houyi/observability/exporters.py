@@ -52,36 +52,36 @@ class ConsoleExporter(Exporter):
     def export(self, span_data: dict[str, Any]) -> None:
         """Export span to console."""
         if self.verbose:
-            print(f"\n{'='*60}")
+            print(f"\n{'=' * 60}")
             print(f"Trace: {span_data['name']}")
-            print(f"{'='*60}")
+            print(f"{'=' * 60}")
             self._print_span(span_data, indent=0)
-            print(f"{'='*60}\n")
+            print(f"{'=' * 60}\n")
         else:
             # Compact format
-            duration_ms = span_data['duration'] * 1000
-            status = span_data['status']
+            duration_ms = span_data["duration"] * 1000
+            status = span_data["status"]
             status_icon = "✅" if status == "ok" else "❌"
             print(f"{status_icon} {span_data['name']} ({duration_ms:.2f}ms)")
 
     def _print_span(self, span: dict, indent: int = 0) -> None:
         """Print span recursively."""
         prefix = "  " * indent
-        duration_ms = span['duration'] * 1000
+        duration_ms = span["duration"] * 1000
 
         print(f"{prefix}📍 {span['name']} ({duration_ms:.2f}ms)")
 
-        if span['attributes']:
+        if span["attributes"]:
             print(f"{prefix}   Attributes:")
-            for key, value in span['attributes'].items():
+            for key, value in span["attributes"].items():
                 print(f"{prefix}     - {key}: {value}")
 
-        if span['events']:
+        if span["events"]:
             print(f"{prefix}   Events:")
-            for event in span['events']:
+            for event in span["events"]:
                 print(f"{prefix}     - {event['name']}")
 
-        for child in span['children']:
+        for child in span["children"]:
             self._print_span(child, indent + 1)
 
 
@@ -104,7 +104,7 @@ class JSONExporter(Exporter):
     def flush(self) -> None:
         """Write all traces to file."""
         if self.traces:
-            with open(self.filepath, 'a', encoding='utf-8') as f:
+            with open(self.filepath, "a", encoding="utf-8") as f:
                 json.dump(self.traces, f, indent=2)
             self.traces = []
 
@@ -121,7 +121,7 @@ class JaegerExporter(Exporter):
         endpoint: str = "http://localhost:4318",
         service_name: str = "houyi-agent",
         timeout: int = 5,
-        batch_size: int = 10
+        batch_size: int = 10,
     ):
         """Initialize Jaeger exporter.
 
@@ -131,7 +131,7 @@ class JaegerExporter(Exporter):
             timeout: Request timeout
             batch_size: Batch size
         """
-        self.endpoint = endpoint.rstrip('/') + '/v1/traces'
+        self.endpoint = endpoint.rstrip("/") + "/v1/traces"
         self.service_name = service_name
         self.timeout = timeout
         self.batch_size = batch_size
@@ -148,22 +148,22 @@ class JaegerExporter(Exporter):
 
     def _convert_to_otlp(self, span: dict[str, Any]) -> dict:
         """Convert HouYi span to OTLP format."""
-        start_time_ns = int(span['start_time'] * 1e9)
-        end_time_ns = int(span['end_time'] * 1e9)
+        start_time_ns = int(span["start_time"] * 1e9)
+        end_time_ns = int(span["end_time"] * 1e9)
 
         return {
-            "traceId": span['trace_id'],
-            "spanId": span['span_id'],
-            "parentSpanId": span.get('parent_id', ''),
-            "name": span['name'],
+            "traceId": span["trace_id"],
+            "spanId": span["span_id"],
+            "parentSpanId": span.get("parent_id", ""),
+            "name": span["name"],
             "kind": 1,
             "startTimeUnixNano": str(start_time_ns),
             "endTimeUnixNano": str(end_time_ns),
             "attributes": [
                 {"key": k, "value": {"stringValue": str(v)}}
-                for k, v in span.get('attributes', {}).items()
+                for k, v in span.get("attributes", {}).items()
             ],
-            "status": {"code": 1 if span['status'] == 'ok' else 2}
+            "status": {"code": 1 if span["status"] == "ok" else 2},
         }
 
     def flush(self) -> None:
@@ -172,24 +172,22 @@ class JaegerExporter(Exporter):
             return
 
         payload = {
-            "resourceSpans": [{
-                "resource": {
-                    "attributes": [
-                        {"key": "service.name", "value": {"stringValue": self.service_name}}
-                    ]
-                },
-                "scopeSpans": [{
-                    "spans": self.span_batch
-                }]
-            }]
+            "resourceSpans": [
+                {
+                    "resource": {
+                        "attributes": [
+                            {"key": "service.name", "value": {"stringValue": self.service_name}}
+                        ]
+                    },
+                    "scopeSpans": [{"spans": self.span_batch}],
+                }
+            ]
         }
 
         try:
-            data = json.dumps(payload).encode('utf-8')
+            data = json.dumps(payload).encode("utf-8")
             req = urllib.request.Request(
-                self.endpoint,
-                data=data,
-                headers={'Content-Type': 'application/json'}
+                self.endpoint, data=data, headers={"Content-Type": "application/json"}
             )
 
             with urllib.request.urlopen(req, timeout=self.timeout) as response:
@@ -217,7 +215,7 @@ class DatadogExporter(Exporter):
         service_name: str = "houyi-agent",
         env: str = "production",
         timeout: int = 5,
-        batch_size: int = 10
+        batch_size: int = 10,
     ):
         """Initialize Datadog exporter.
 
@@ -228,7 +226,7 @@ class DatadogExporter(Exporter):
             timeout: Request timeout
             batch_size: Batch size
         """
-        self.agent_url = agent_url.rstrip('/') + '/v0.4/traces'
+        self.agent_url = agent_url.rstrip("/") + "/v0.4/traces"
         self.service_name = service_name
         self.env = env
         self.timeout = timeout
@@ -246,33 +244,30 @@ class DatadogExporter(Exporter):
 
     def _convert_to_datadog(self, span: dict[str, Any]) -> list[dict]:
         """Convert HouYi span to Datadog format."""
-        trace_id = int(span['trace_id'][:16], 16)
-        span_id = int(span['span_id'][:16], 16)
-        parent_id = int(span.get('parent_id', '0')[:16] or '0', 16)
+        trace_id = int(span["trace_id"][:16], 16)
+        span_id = int(span["span_id"][:16], 16)
+        parent_id = int(span.get("parent_id", "0")[:16] or "0", 16)
 
-        start_ns = int(span['start_time'] * 1e9)
-        duration_ns = int(span['duration'] * 1e9)
+        start_ns = int(span["start_time"] * 1e9)
+        duration_ns = int(span["duration"] * 1e9)
 
         dd_span = {
             "trace_id": trace_id,
             "span_id": span_id,
             "parent_id": parent_id if parent_id else None,
-            "name": span['name'],
-            "resource": span['name'],
+            "name": span["name"],
+            "resource": span["name"],
             "service": self.service_name,
             "type": "custom",
             "start": start_ns,
             "duration": duration_ns,
-            "error": 1 if span['status'] != 'ok' else 0,
-            "meta": {
-                "env": self.env,
-                **{k: str(v) for k, v in span.get('attributes', {}).items()}
-            }
+            "error": 1 if span["status"] != "ok" else 0,
+            "meta": {"env": self.env, **{k: str(v) for k, v in span.get("attributes", {}).items()}},
         }
 
         # Flatten children into trace
         trace = [dd_span]
-        for child in span.get('children', []):
+        for child in span.get("children", []):
             trace.extend(self._convert_to_datadog(child))
 
         return trace
@@ -283,15 +278,15 @@ class DatadogExporter(Exporter):
             return
 
         try:
-            data = json.dumps(self.trace_batch).encode('utf-8')
+            data = json.dumps(self.trace_batch).encode("utf-8")
             req = urllib.request.Request(
                 self.agent_url,
                 data=data,
                 headers={
-                    'Content-Type': 'application/json',
-                    'Datadog-Meta-Tracer-Version': '1.0',
-                    'Datadog-Meta-Lang': 'python'
-                }
+                    "Content-Type": "application/json",
+                    "Datadog-Meta-Tracer-Version": "1.0",
+                    "Datadog-Meta-Lang": "python",
+                },
             )
 
             with urllib.request.urlopen(req, timeout=self.timeout) as response:

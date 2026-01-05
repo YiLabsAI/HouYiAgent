@@ -34,14 +34,11 @@ class TestToolNodeExecution:
             description="Calculate math expressions",
             input_schema=CalculatorInput,
             output_schema=CalculatorOutput,
-            executor=calculator_executor
+            executor=calculator_executor,
         )
 
         # Create agent with skill
-        agent = AgentSpec(
-            role="Calculator Agent",
-            skills=[skill]
-        )
+        agent = AgentSpec(role="Calculator Agent", skills=[skill])
 
         # Create execution plan with tool node
         plan = ExecutionPlan(
@@ -53,17 +50,14 @@ class TestToolNodeExecution:
                     node_type=NodeType.TOOL,
                     skill_ref=skill,
                     inputs={"expression": "2 + 2 * 3"},
-                    metadata={"skill": skill}
+                    metadata={"skill": skill},
                 )
-            ]
+            ],
         )
 
         # Execute
         executor = LocalExecutor()
-        initial_state = SessionState(
-            session_id="test_session",
-            agent_id="test_agent"
-        )
+        initial_state = SessionState(session_id="test_session", agent_id="test_agent")
 
         result = await executor.execute(plan, initial_state)
 
@@ -91,7 +85,7 @@ class TestToolNodeExecution:
             description="Double a number",
             input_schema=Input,
             output_schema=Output,
-            executor=doubler
+            executor=doubler,
         )
 
         # Plan: LLM node -> Tool node
@@ -103,7 +97,7 @@ class TestToolNodeExecution:
                     node_id="llm_node",
                     node_type=NodeType.LLM,
                     inputs={"task": "generate number"},
-                    dependencies=[]
+                    dependencies=[],
                 ),
                 IRNode(
                     node_id="tool_node",
@@ -111,16 +105,13 @@ class TestToolNodeExecution:
                     skill_ref=skill,
                     inputs={"value": 5},  # Literal value for testing
                     dependencies=["llm_node"],
-                    metadata={"skill": skill}
-                )
-            ]
+                    metadata={"skill": skill},
+                ),
+            ],
         )
 
         executor = LocalExecutor()
-        initial_state = SessionState(
-            session_id="test_session",
-            agent_id="test_agent"
-        )
+        initial_state = SessionState(session_id="test_session", agent_id="test_agent")
 
         result = await executor.execute(plan, initial_state)
 
@@ -142,7 +133,7 @@ class TestToolNodeExecution:
             description="A skill that fails",
             input_schema=Input,
             output_schema=Input,
-            executor=failing_skill
+            executor=failing_skill,
         )
 
         plan = ExecutionPlan(
@@ -154,16 +145,13 @@ class TestToolNodeExecution:
                     node_type=NodeType.TOOL,
                     skill_ref=skill,
                     inputs={"value": "test"},
-                    metadata={"skill": skill}
+                    metadata={"skill": skill},
                 )
-            ]
+            ],
         )
 
         executor = LocalExecutor()
-        initial_state = SessionState(
-            session_id="test_session",
-            agent_id="test_agent"
-        )
+        initial_state = SessionState(session_id="test_session", agent_id="test_agent")
 
         result = await executor.execute(plan, initial_state)
 

@@ -9,22 +9,26 @@ from houyi.core.skill import SkillSpec
 # Common test schemas
 class NumberInput(BaseModel):
     """Input schema for number operations."""
+
     value: int
 
 
 class NumberOutput(BaseModel):
     """Output schema for number operations."""
+
     result: int
 
 
 class TwoNumberInput(BaseModel):
     """Input schema for two-number operations."""
+
     a: int
     b: int
 
 
 class TwoNumberOutput(BaseModel):
     """Output schema for two-number operations."""
+
     result: int
 
 

@@ -19,25 +19,23 @@ def search(query: str) -> list[str]:
     """Search for information."""
     return [f"Information about {query}", "Additional context"]
 
+
 # Create agent
-agent = Agent(
-    role="Research Assistant",
-    skills=[search]
-)
+agent = Agent(role="Research Assistant", skills=[search])
 
 # Test cases
 test_cases = [
     {
         "input": "What is artificial intelligence? How does it work?",
-        "expected_output": "Artificial intelligence is a field of computer science that focuses on creating intelligent machines. It works through machine learning algorithms."
+        "expected_output": "Artificial intelligence is a field of computer science that focuses on creating intelligent machines. It works through machine learning algorithms.",
     },
     {
         "input": "Explain machine learning in simple terms.",
-        "expected_output": "Machine learning is a way for computers to learn from data without being explicitly programmed."
+        "expected_output": "Machine learning is a way for computers to learn from data without being explicitly programmed.",
     },
     {
         "input": "What are the benefits of AI?",
-        "expected_output": "AI can automate tasks, improve decision-making, and solve complex problems."
+        "expected_output": "AI can automate tasks, improve decision-making, and solve complex problems.",
     },
 ]
 
@@ -50,9 +48,7 @@ print()
 print("=== Example 1: Core Evaluators (Phase 1) ===\n")
 
 results = evaluate(
-    agent=agent,
-    test_cases=test_cases,
-    evaluators=["accuracy", "cost", "latency", "skill_usage"]
+    agent=agent, test_cases=test_cases, evaluators=["accuracy", "cost", "latency", "skill_usage"]
 )
 
 print(results.summary())
@@ -64,7 +60,7 @@ print("=== Example 2: Quality Evaluators (Phase 2) ===\n")
 results = evaluate(
     agent=agent,
     test_cases=test_cases,
-    evaluators=["completeness", "relevance", "semantic_similarity"]
+    evaluators=["completeness", "relevance", "semantic_similarity"],
 )
 
 print(results.summary())
@@ -73,11 +69,7 @@ print()
 # Example 3: Safety evaluators (Phase 2)
 print("=== Example 3: Safety Evaluators (Phase 2) ===\n")
 
-results = evaluate(
-    agent=agent,
-    test_cases=test_cases,
-    evaluators=["toxicity", "hallucination"]
-)
+results = evaluate(agent=agent, test_cases=test_cases, evaluators=["toxicity", "hallucination"])
 
 print(results.summary())
 print()
@@ -85,11 +77,7 @@ print()
 # Example 4: LLM Judge (Phase 2)
 print("=== Example 4: LLM Judge Evaluator ===\n")
 
-results = evaluate(
-    agent=agent,
-    test_cases=test_cases,
-    evaluators=["llm_judge"]
-)
+results = evaluate(agent=agent, test_cases=test_cases, evaluators=["llm_judge"])
 
 print(results.summary())
 print()
@@ -116,7 +104,7 @@ results = evaluate(
         "skill_usage",
         # Advanced
         "llm_judge",
-    ]
+    ],
 )
 
 print(results.summary())
@@ -147,7 +135,7 @@ print("=== Example 7: Detailed Results ===\n")
 results = evaluate(
     agent=agent,
     test_cases=[test_cases[0]],  # Single test case
-    evaluators=["completeness", "relevance", "hallucination"]
+    evaluators=["completeness", "relevance", "hallucination"],
 )
 
 for result in results.results:

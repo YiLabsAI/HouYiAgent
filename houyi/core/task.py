@@ -13,7 +13,9 @@ class TaskSpec(BaseModel):
     """
 
     description: str = Field(..., description="Task description")
-    expected_output: str | None = Field(default=None, description="Expected output format or criteria")
+    expected_output: str | None = Field(
+        default=None, description="Expected output format or criteria"
+    )
     agent: Any | None = Field(default=None, description="Agent to execute this task")
     context: list[int] | None = Field(default=None, description="Task dependencies (indices)")
 

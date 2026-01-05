@@ -64,9 +64,7 @@ class TestTeamExecution:
         task = Task(description="Task", agent=agent)
 
         team = Team(
-            agents=[agent],
-            tasks=[task],
-            observability={"enabled": True, "export_to": "console"}
+            agents=[agent], tasks=[task], observability={"enabled": True, "export_to": "console"}
         )
 
         assert team.observability["enabled"] is True
@@ -92,11 +90,7 @@ class TestTeamExecution:
     def test_team_task_with_expected_output(self):
         """Test team task with expected output."""
         agent = Agent(role="Worker")
-        task = Task(
-            description="Generate report",
-            expected_output="Report content",
-            agent=agent
-        )
+        task = Task(description="Generate report", expected_output="Report content", agent=agent)
 
         team = Team(agents=[agent], tasks=[task])
 
@@ -122,16 +116,14 @@ class TestTeamExecution:
         research_task = Task(description="Research topic", agent=agent1)
         writing_task = Task(description="Write article", agent=agent2)
 
-        team = Team(
-            agents=[agent1, agent2],
-            tasks=[research_task, writing_task]
-        )
+        team = Team(agents=[agent1, agent2], tasks=[research_task, writing_task])
 
         assert team.tasks[0].agent == agent1
         assert team.tasks[1].agent == agent2
 
     def test_team_with_skills(self):
         """Test team agents with skills."""
+
         class Input(BaseModel):
             query: str
 
@@ -185,11 +177,7 @@ class TestTaskConfiguration:
     def test_task_with_expected_output(self):
         """Test task with expected output."""
         agent = Agent(role="Worker")
-        task = Task(
-            description="Generate output",
-            expected_output="Expected result",
-            agent=agent
-        )
+        task = Task(description="Generate output", expected_output="Expected result", agent=agent)
 
         assert task.expected_output == "Expected result"
 
@@ -203,11 +191,7 @@ class TestTaskConfiguration:
     def test_task_with_context(self):
         """Test task with context dependencies."""
         agent = Agent(role="Worker")
-        task = Task(
-            description="Dependent task",
-            context=[0, 1, 2],
-            agent=agent
-        )
+        task = Task(description="Dependent task", context=[0, 1, 2], agent=agent)
 
         assert task.context == [0, 1, 2]
 

@@ -1,6 +1,5 @@
 """Tests for ExecutionPlan class."""
 
-
 from houyi.orchestration.plan import ExecutionPlan, IRNode, NodeType
 
 
@@ -13,14 +12,10 @@ class TestExecutionPlanCreation:
             node_id="node1",
             node_type=NodeType.LLM,
             inputs={"task": "test"},
-            outputs={"result": "$output"}
+            outputs={"result": "$output"},
         )
 
-        plan = ExecutionPlan(
-            plan_id="test_plan",
-            nodes=[node],
-            entry_node="node1"
-        )
+        plan = ExecutionPlan(plan_id="test_plan", nodes=[node], entry_node="node1")
 
         assert plan.plan_id == "test_plan"
         assert len(plan.nodes) == 1
@@ -32,7 +27,7 @@ class TestExecutionPlanCreation:
             node_id="node1",
             node_type=NodeType.LLM,
             inputs={"task": "step1"},
-            outputs={"result": "$output"}
+            outputs={"result": "$output"},
         )
 
         node2 = IRNode(
@@ -40,14 +35,10 @@ class TestExecutionPlanCreation:
             node_type=NodeType.TOOL,
             inputs={"input": "$node1.result"},
             outputs={"output": "$result"},
-            dependencies=["node1"]
+            dependencies=["node1"],
         )
 
-        plan = ExecutionPlan(
-            plan_id="multi_node",
-            nodes=[node1, node2],
-            entry_node="node1"
-        )
+        plan = ExecutionPlan(plan_id="multi_node", nodes=[node1, node2], entry_node="node1")
 
         assert len(plan.nodes) == 2
         assert plan.nodes[0].node_id == "node1"
@@ -60,7 +51,7 @@ class TestExecutionPlanCreation:
             node_id="start",
             node_type=NodeType.LLM,
             inputs={"task": "begin"},
-            outputs={"result": "$output"}
+            outputs={"result": "$output"},
         )
 
         branch1 = IRNode(
@@ -68,7 +59,7 @@ class TestExecutionPlanCreation:
             node_type=NodeType.TOOL,
             inputs={"input": "$start.result"},
             outputs={"output": "$result"},
-            dependencies=["start"]
+            dependencies=["start"],
         )
 
         branch2 = IRNode(
@@ -76,24 +67,19 @@ class TestExecutionPlanCreation:
             node_type=NodeType.TOOL,
             inputs={"input": "$start.result"},
             outputs={"output": "$result"},
-            dependencies=["start"]
+            dependencies=["start"],
         )
 
         merge = IRNode(
             node_id="merge",
             node_type=NodeType.LLM,
-            inputs={
-                "input1": "$branch1.output",
-                "input2": "$branch2.output"
-            },
+            inputs={"input1": "$branch1.output", "input2": "$branch2.output"},
             outputs={"result": "$output"},
-            dependencies=["branch1", "branch2"]
+            dependencies=["branch1", "branch2"],
         )
 
         plan = ExecutionPlan(
-            plan_id="dag",
-            nodes=[start, branch1, branch2, merge],
-            entry_node="start"
+            plan_id="dag", nodes=[start, branch1, branch2, merge], entry_node="start"
         )
 
         assert len(plan.nodes) == 4
@@ -104,21 +90,17 @@ class TestExecutionPlanCreation:
         """Test ExecutionPlan with linear chain."""
         nodes = []
         for i in range(5):
-            deps = [f"node{i-1}"] if i > 0 else []
+            deps = [f"node{i - 1}"] if i > 0 else []
             node = IRNode(
                 node_id=f"node{i}",
                 node_type=NodeType.LLM,
                 inputs={"task": f"step{i}"},
                 outputs={"result": "$output"},
-                dependencies=deps
+                dependencies=deps,
             )
             nodes.append(node)
 
-        plan = ExecutionPlan(
-            plan_id="chain",
-            nodes=nodes,
-            entry_node="node0"
-        )
+        plan = ExecutionPlan(plan_id="chain", nodes=nodes, entry_node="node0")
 
         assert len(plan.nodes) == 5
         assert plan.nodes[0].dependencies == []
@@ -136,15 +118,11 @@ class TestExecutionPlanNodeAccess:
                 node_id=f"node{i}",
                 node_type=NodeType.LLM,
                 inputs={"task": f"task{i}"},
-                outputs={"result": "$output"}
+                outputs={"result": "$output"},
             )
             nodes.append(node)
 
-        plan = ExecutionPlan(
-            plan_id="test",
-            nodes=nodes,
-            entry_node="node0"
-        )
+        plan = ExecutionPlan(plan_id="test", nodes=nodes, entry_node="node0")
 
         assert plan.nodes[0].node_id == "node0"
         assert plan.nodes[1].node_id == "node1"
@@ -158,15 +136,11 @@ class TestExecutionPlanNodeAccess:
                 node_id=f"node{i}",
                 node_type=NodeType.LLM,
                 inputs={"task": f"task{i}"},
-                outputs={"result": "$output"}
+                outputs={"result": "$output"},
             )
             nodes.append(node)
 
-        plan = ExecutionPlan(
-            plan_id="test",
-            nodes=nodes,
-            entry_node="node0"
-        )
+        plan = ExecutionPlan(plan_id="test", nodes=nodes, entry_node="node0")
 
         count = 0
         for node in plan.nodes:
@@ -185,7 +159,7 @@ class TestExecutionPlanComplexScenarios:
             node_id="llm",
             node_type=NodeType.LLM,
             inputs={"task": "generate"},
-            outputs={"result": "$output"}
+            outputs={"result": "$output"},
         )
 
         verify_node = IRNode(
@@ -193,14 +167,10 @@ class TestExecutionPlanComplexScenarios:
             node_type=NodeType.VERIFY,
             inputs={"result": "$llm.result"},
             outputs={"verified": "$status"},
-            dependencies=["llm"]
+            dependencies=["llm"],
         )
 
-        plan = ExecutionPlan(
-            plan_id="with_verify",
-            nodes=[llm_node, verify_node],
-            entry_node="llm"
-        )
+        plan = ExecutionPlan(plan_id="with_verify", nodes=[llm_node, verify_node], entry_node="llm")
 
         assert plan.nodes[1].node_type == NodeType.VERIFY
 
@@ -211,36 +181,32 @@ class TestExecutionPlanComplexScenarios:
                 node_id="llm1",
                 node_type=NodeType.LLM,
                 inputs={"task": "think"},
-                outputs={"result": "$output"}
+                outputs={"result": "$output"},
             ),
             IRNode(
                 node_id="tool1",
                 node_type=NodeType.TOOL,
                 inputs={"input": "$llm1.result"},
                 outputs={"output": "$result"},
-                dependencies=["llm1"]
+                dependencies=["llm1"],
             ),
             IRNode(
                 node_id="verify1",
                 node_type=NodeType.VERIFY,
                 inputs={"result": "$tool1.output"},
                 outputs={"verified": "$status"},
-                dependencies=["tool1"]
+                dependencies=["tool1"],
             ),
             IRNode(
                 node_id="llm2",
                 node_type=NodeType.LLM,
                 inputs={"task": "$verify1.verified"},
                 outputs={"result": "$output"},
-                dependencies=["verify1"]
-            )
+                dependencies=["verify1"],
+            ),
         ]
 
-        plan = ExecutionPlan(
-            plan_id="mixed",
-            nodes=nodes,
-            entry_node="llm1"
-        )
+        plan = ExecutionPlan(plan_id="mixed", nodes=nodes, entry_node="llm1")
 
         assert len(plan.nodes) == 4
         assert plan.nodes[0].node_type == NodeType.LLM
@@ -254,7 +220,7 @@ class TestExecutionPlanComplexScenarios:
             node_id="start",
             node_type=NodeType.LLM,
             inputs={"task": "begin"},
-            outputs={"result": "$output"}
+            outputs={"result": "$output"},
         )
 
         # Create 3 parallel branches
@@ -265,40 +231,32 @@ class TestExecutionPlanComplexScenarios:
                 node_type=NodeType.TOOL,
                 inputs={"input": "$start.result"},
                 outputs={"output": "$result"},
-                dependencies=["start"]
+                dependencies=["start"],
             )
             branches.append(branch)
 
-        plan = ExecutionPlan(
-            plan_id="parallel",
-            nodes=[start] + branches,
-            entry_node="start"
-        )
+        plan = ExecutionPlan(plan_id="parallel", nodes=[start] + branches, entry_node="start")
 
         assert len(plan.nodes) == 4
         # All branches depend only on start
         for i in range(3):
-            assert plan.nodes[i+1].dependencies == ["start"]
+            assert plan.nodes[i + 1].dependencies == ["start"]
 
     def test_execution_plan_deep_chain(self):
         """Test ExecutionPlan with deep dependency chain."""
         nodes = []
         for i in range(10):
-            deps = [f"node{i-1}"] if i > 0 else []
+            deps = [f"node{i - 1}"] if i > 0 else []
             node = IRNode(
                 node_id=f"node{i}",
                 node_type=NodeType.LLM,
                 inputs={"task": f"step{i}"},
                 outputs={"result": "$output"},
-                dependencies=deps
+                dependencies=deps,
             )
             nodes.append(node)
 
-        plan = ExecutionPlan(
-            plan_id="deep",
-            nodes=nodes,
-            entry_node="node0"
-        )
+        plan = ExecutionPlan(plan_id="deep", nodes=nodes, entry_node="node0")
 
         assert len(plan.nodes) == 10
         assert plan.nodes[9].dependencies == ["node8"]

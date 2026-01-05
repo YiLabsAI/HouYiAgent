@@ -12,15 +12,17 @@ ANTHROPIC_AVAILABLE = False
 
 try:
     from houyi.llm.openai_adapter import OpenAIAdapter
+
     OPENAI_AVAILABLE = True
 except (ImportError, ValueError):
-    pass
+    OpenAIAdapter = None  # type: ignore
 
 try:
     from houyi.llm.anthropic_adapter import AnthropicAdapter
+
     ANTHROPIC_AVAILABLE = True
 except (ImportError, ValueError):
-    pass
+    AnthropicAdapter = None  # type: ignore
 
 
 class TestLLMMessage:
@@ -28,10 +30,7 @@ class TestLLMMessage:
 
     def test_message_creation(self) -> None:
         """Test creating a message."""
-        msg = LLMMessage(
-            role=MessageRole.USER,
-            content="Hello, world!"
-        )
+        msg = LLMMessage(role=MessageRole.USER, content="Hello, world!")
 
         assert msg.role == MessageRole.USER
         assert msg.content == "Hello, world!"
@@ -43,7 +42,7 @@ class TestLLMMessage:
         msg = LLMMessage(
             role=MessageRole.ASSISTANT,
             content="",
-            tool_calls=[{"id": "call_1", "type": "function"}]
+            tool_calls=[{"id": "call_1", "type": "function"}],
         )
 
         assert msg.role == MessageRole.ASSISTANT
@@ -56,10 +55,7 @@ class TestLLMResponse:
     def test_response_creation(self) -> None:
         """Test creating a response."""
         response = LLMResponse(
-            content="Test response",
-            finish_reason="stop",
-            model="gpt-4",
-            usage={"total_tokens": 10}
+            content="Test response", finish_reason="stop", model="gpt-4", usage={"total_tokens": 10}
         )
 
         assert response.content == "Test response"
@@ -107,10 +103,10 @@ class TestLLMResponse:
         assert response.model == "claude-3-opus"
 
 
-@pytest.mark.skipif(not OPENAI_AVAILABLE, reason="OpenAI package not installed")
 class TestOpenAIAdapter:
     """Test OpenAIAdapter."""
 
+    @pytest.mark.skipif(not OPENAI_AVAILABLE, reason="OpenAI package not installed")
     def test_adapter_init_with_api_key(self) -> None:
         """Test adapter initialization with API key."""
         adapter = OpenAIAdapter(api_key="test-key", model="gpt-3.5-turbo")
@@ -120,19 +116,20 @@ class TestOpenAIAdapter:
 
     def test_adapter_init_without_api_key(self) -> None:
         """Test adapter initialization without API key raises error."""
-        with patch.dict('os.environ', {}, clear=True):
+        with patch.dict("os.environ", {}, clear=True):
             with pytest.raises(ValueError, match="OpenAI API key not provided"):
                 OpenAIAdapter()
 
     def test_adapter_init_from_env(self) -> None:
         """Test adapter initialization from environment variable."""
-        with patch.dict('os.environ', {'OPENAI_API_KEY': 'env-key'}):
+        with patch.dict("os.environ", {"OPENAI_API_KEY": "env-key"}):
             adapter = OpenAIAdapter()
             assert adapter.api_key == "env-key"
 
     @pytest.mark.asyncio
+    @pytest.mark.skipif(not OPENAI_AVAILABLE, reason="OpenAI package not installed")
     async def test_chat(self) -> None:
-        """Test chat completion."""
+        """Test chat method."""
         adapter = OpenAIAdapter(api_key="test-key")
 
         # Mock the client's chat.completions.create method
@@ -156,8 +153,9 @@ class TestOpenAIAdapter:
         assert adapter.client.chat.completions.create.called
 
     @pytest.mark.asyncio
+    @pytest.mark.skipif(not OPENAI_AVAILABLE, reason="OpenAI package not installed")
     async def test_chat_with_tools(self) -> None:
-        """Test chat completion with tools."""
+        """Test chat with tools."""
         adapter = OpenAIAdapter(api_key="test-key")
 
         mock_response = MagicMock()
@@ -182,6 +180,7 @@ class TestOpenAIAdapter:
         assert response.finish_reason == "tool_calls"
         assert len(response.tool_calls) == 1
 
+    @pytest.mark.skipif(not OPENAI_AVAILABLE, reason="OpenAI package not installed")
     def test_normalize_messages(self) -> None:
         """Test message normalization."""
         adapter = OpenAIAdapter(api_key="test-key")
@@ -189,7 +188,7 @@ class TestOpenAIAdapter:
         # Test with LLMMessage objects
         messages = [
             LLMMessage(role=MessageRole.USER, content="Hello"),
-            LLMMessage(role=MessageRole.ASSISTANT, content="Hi there")
+            LLMMessage(role=MessageRole.ASSISTANT, content="Hi there"),
         ]
         normalized = adapter._normalize_messages(messages)
 
@@ -203,10 +202,10 @@ class TestOpenAIAdapter:
         assert len(normalized_dict) == 1
 
 
-@pytest.mark.skipif(not ANTHROPIC_AVAILABLE, reason="Anthropic package not installed")
 class TestAnthropicAdapter:
     """Test AnthropicAdapter."""
 
+    @pytest.mark.skipif(not ANTHROPIC_AVAILABLE, reason="Anthropic package not installed")
     def test_adapter_init_with_api_key(self) -> None:
         """Test adapter initialization with API key."""
         adapter = AnthropicAdapter(api_key="test-key", model="claude-3-opus")
@@ -214,18 +213,21 @@ class TestAnthropicAdapter:
         assert adapter.api_key == "test-key"
         assert adapter.model == "claude-3-opus"
 
+    @pytest.mark.skipif(not ANTHROPIC_AVAILABLE, reason="Anthropic package not installed")
     def test_adapter_init_without_api_key(self) -> None:
         """Test adapter initialization without API key raises error."""
-        with patch.dict('os.environ', {}, clear=True):
+        with patch.dict("os.environ", {}, clear=True):
             with pytest.raises(ValueError, match="Anthropic API key not provided"):
                 AnthropicAdapter()
 
+    @pytest.mark.skipif(not ANTHROPIC_AVAILABLE, reason="Anthropic package not installed")
     def test_adapter_init_from_env(self) -> None:
         """Test adapter initialization from environment variable."""
-        with patch.dict('os.environ', {'ANTHROPIC_API_KEY': 'env-key'}):
+        with patch.dict("os.environ", {"ANTHROPIC_API_KEY": "env-key"}):
             adapter = AnthropicAdapter()
             assert adapter.api_key == "env-key"
 
+    @pytest.mark.skipif(not ANTHROPIC_AVAILABLE, reason="Anthropic package not installed")
     def test_normalize_messages(self) -> None:
         """Test message normalization."""
         adapter = AnthropicAdapter(api_key="test-key")
@@ -233,7 +235,7 @@ class TestAnthropicAdapter:
         # Test with LLMMessage objects
         messages = [
             LLMMessage(role=MessageRole.USER, content="Hello"),
-            LLMMessage(role=MessageRole.ASSISTANT, content="Hi")
+            LLMMessage(role=MessageRole.ASSISTANT, content="Hi"),
         ]
         normalized = adapter._normalize_messages(messages)
 

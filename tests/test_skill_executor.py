@@ -31,7 +31,7 @@ class TestSkillExecutor:
             description="Add two numbers",
             input_schema=Input,
             output_schema=Output,
-            executor=add
+            executor=add,
         )
 
         executor = SkillExecutor()
@@ -58,7 +58,7 @@ class TestSkillExecutor:
             description="Double a number asynchronously",
             input_schema=Input,
             output_schema=Output,
-            executor=async_doubler
+            executor=async_doubler,
         )
 
         executor = SkillExecutor()
@@ -84,7 +84,7 @@ class TestSkillExecutor:
             description="Process a number",
             input_schema=Input,
             output_schema=Output,
-            executor=process
+            executor=process,
         )
 
         executor = SkillExecutor()
@@ -112,7 +112,7 @@ class TestSkillExecutor:
             description="Skill with bad output",
             input_schema=Input,
             output_schema=Output,
-            executor=bad_executor
+            executor=bad_executor,
         )
 
         executor = SkillExecutor()
@@ -139,7 +139,7 @@ class TestSkillExecutor:
             description="A slow task",
             input_schema=Input,
             output_schema=Output,
-            executor=slow_task
+            executor=slow_task,
         )
 
         # Set very short timeout
@@ -171,7 +171,7 @@ class TestSkillExecutor:
             description="A flaky skill",
             input_schema=Input,
             output_schema=Output,
-            executor=flaky_executor
+            executor=flaky_executor,
         )
 
         executor = SkillExecutor(max_retries=3)
@@ -198,7 +198,7 @@ class TestSkillExecutor:
             description="Always fails",
             input_schema=Input,
             output_schema=Output,
-            executor=always_fails
+            executor=always_fails,
         )
 
         executor = SkillExecutor(max_retries=2)
@@ -224,7 +224,7 @@ class TestSkillExecutor:
             description="For debugging",
             input_schema=Input,
             output_schema=Output,
-            executor=failing
+            executor=failing,
         )
 
         executor = SkillExecutor(max_retries=0)

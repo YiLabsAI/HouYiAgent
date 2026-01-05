@@ -149,6 +149,7 @@ class TestSpan:
     def test_span_duration_before_end(self):
         """Test span duration calculation before ending."""
         import time
+
         span = Span(name="test")
         time.sleep(0.01)  # Sleep 10ms
 
@@ -286,6 +287,7 @@ class TestExporters:
     def test_json_exporter_multiple_spans(self, tmp_path):
         """Test JSONExporter with multiple spans."""
         import json
+
         output_file = tmp_path / "multi_traces.json"
         exporter = JSONExporter(filepath=str(output_file))
 
@@ -307,10 +309,7 @@ class TestExporters:
 
     def test_jaeger_exporter_initialization(self):
         """Test JaegerExporter initialization."""
-        exporter = JaegerExporter(
-            endpoint="http://localhost:4318",
-            service_name="test_service"
-        )
+        exporter = JaegerExporter(endpoint="http://localhost:4318", service_name="test_service")
 
         assert exporter.service_name == "test_service"
         assert "4318" in exporter.endpoint
@@ -319,9 +318,7 @@ class TestExporters:
     def test_jaeger_exporter_batching(self):
         """Test JaegerExporter batching behavior."""
         exporter = JaegerExporter(
-            endpoint="http://localhost:4318",
-            service_name="test_service",
-            batch_size=3
+            endpoint="http://localhost:4318", service_name="test_service", batch_size=3
         )
 
         # Add spans to batch
@@ -335,10 +332,7 @@ class TestExporters:
 
     def test_datadog_exporter_initialization(self):
         """Test DatadogExporter initialization."""
-        exporter = DatadogExporter(
-            agent_url="http://localhost:8126",
-            service_name="test_service"
-        )
+        exporter = DatadogExporter(agent_url="http://localhost:8126", service_name="test_service")
 
         assert exporter.service_name == "test_service"
         assert "8126" in exporter.agent_url
@@ -347,9 +341,7 @@ class TestExporters:
     def test_datadog_exporter_with_env(self):
         """Test DatadogExporter with environment setting."""
         exporter = DatadogExporter(
-            agent_url="http://localhost:8126",
-            service_name="test_service",
-            env="staging"
+            agent_url="http://localhost:8126", service_name="test_service", env="staging"
         )
 
         assert exporter.env == "staging"
@@ -372,7 +364,9 @@ class TestExporters:
 
     def test_create_exporter_datadog(self):
         """Test creating Datadog exporter."""
-        exporter = create_exporter({"type": "datadog", "agent_url": "http://localhost:8126", "service_name": "test"})
+        exporter = create_exporter(
+            {"type": "datadog", "agent_url": "http://localhost:8126", "service_name": "test"}
+        )
         assert isinstance(exporter, DatadogExporter)
 
     def test_create_exporter_invalid(self):

@@ -20,7 +20,7 @@ FAILED=0
 run_check() {
     local name=$1
     local command=$2
-    
+
     echo -e "${YELLOW}▶ Running $name...${NC}"
     if eval "$command"; then
         echo -e "${GREEN}✓ $name passed${NC}"

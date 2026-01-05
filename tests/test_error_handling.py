@@ -28,10 +28,13 @@ class TestSkillErrorHandling:
 
         # Test with clearly invalid URL that will fail
         with pytest.raises((urllib.error.URLError, Exception)):
-            SkillSpec.from_url("http://invalid-domain-that-does-not-exist-12345.com/skill.md", cache=False)
+            SkillSpec.from_url(
+                "http://invalid-domain-that-does-not-exist-12345.com/skill.md", cache=False
+            )
 
     def test_skill_missing_required_fields(self):
         """Test skill creation with missing required fields."""
+
         class Input(BaseModel):
             x: int
 
@@ -48,6 +51,7 @@ class TestSkillErrorHandling:
 
     def test_skill_executor_with_invalid_input(self):
         """Test skill executor with invalid input."""
+
         class Input(BaseModel):
             x: int
 
@@ -108,6 +112,7 @@ class TestEvaluationErrorHandling:
 
     def test_evaluate_with_empty_test_cases(self):
         """Test evaluation with empty test cases."""
+
         class Input(BaseModel):
             x: int
 
@@ -127,16 +132,13 @@ class TestEvaluationErrorHandling:
 
         agent = AgentSpec(role="Test", skills=[skill])
 
-        results = evaluate(
-            agent=agent,
-            test_cases=[],
-            evaluators=["accuracy"]
-        )
+        results = evaluate(agent=agent, test_cases=[], evaluators=["accuracy"])
 
         assert results.total_cases == 0
 
     def test_evaluate_with_invalid_evaluator(self):
         """Test evaluation with invalid evaluator name."""
+
         class Input(BaseModel):
             x: int
 
@@ -161,7 +163,7 @@ class TestEvaluationErrorHandling:
             results = evaluate(
                 agent=agent,
                 test_cases=[{"input": "test", "expected_output": "test"}],
-                evaluators=["nonexistent_evaluator"]
+                evaluators=["nonexistent_evaluator"],
             )
         except (KeyError, ValueError):
             pass  # Expected to fail
@@ -204,7 +206,7 @@ class TestExecutionErrorHandling:
             node_type=NodeType.LLM,
             inputs={"task": "test"},
             outputs={"result": "$output"},
-            dependencies=["missing_dep"]
+            dependencies=["missing_dep"],
         )
 
         # Should not be ready without dependencies
@@ -219,7 +221,7 @@ class TestExecutionErrorHandling:
             node_id="node1",
             node_type=NodeType.LLM,
             inputs={"task": "$missing.value"},
-            outputs={"result": "$output"}
+            outputs={"result": "$output"},
         )
 
         context = {}
@@ -236,14 +238,10 @@ class TestExecutionErrorHandling:
             node_id="node1",
             node_type=NodeType.LLM,
             inputs={"task": "test"},
-            outputs={"result": "$output"}
+            outputs={"result": "$output"},
         )
 
-        plan = ExecutionPlan(
-            plan_id="test",
-            nodes=[node],
-            entry_node="node1"
-        )
+        plan = ExecutionPlan(plan_id="test", nodes=[node], entry_node="node1")
 
         assert len(plan.nodes) == 1
 
@@ -253,6 +251,7 @@ class TestConstraintsAndPolicies:
 
     def test_skill_with_timeout_constraint(self):
         """Test skill with timeout constraint."""
+
         class Input(BaseModel):
             x: int
 
@@ -268,7 +267,7 @@ class TestConstraintsAndPolicies:
             input_schema=Input,
             output_schema=Output,
             executor=func,
-            constraints={"timeout_ms": 1000, "max_retries": 3}
+            constraints={"timeout_ms": 1000, "max_retries": 3},
         )
 
         assert skill.constraints["timeout_ms"] == 1000
@@ -276,18 +275,12 @@ class TestConstraintsAndPolicies:
 
     def test_agent_with_cost_policy(self):
         """Test agent with cost budget policy."""
-        agent = AgentSpec(
-            role="Test",
-            policies={"max_cost": 0.10, "cost_per_token": 0.0001}
-        )
+        agent = AgentSpec(role="Test", policies={"max_cost": 0.10, "cost_per_token": 0.0001})
 
         assert agent.policies["max_cost"] == 0.10
 
     def test_agent_with_retry_policy(self):
         """Test agent with retry policy."""
-        agent = AgentSpec(
-            role="Test",
-            policies={"max_retries": 5, "retry_delay_ms": 1000}
-        )
+        agent = AgentSpec(role="Test", policies={"max_retries": 5, "retry_delay_ms": 1000})
 
         assert agent.policies["max_retries"] == 5

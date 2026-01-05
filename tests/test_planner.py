@@ -15,11 +15,7 @@ class TestDAGPlanner:
     def test_plan_simple_llm_only(self):
         """Test planning for agent without skills."""
         planner = DAGPlanner()
-        agent = AgentSpec(
-            name="simple_agent",
-            role="assistant",
-            goal="Answer questions"
-        )
+        agent = AgentSpec(name="simple_agent", role="assistant", goal="Answer questions")
 
         plan = planner.plan(task="What is 2+2?", agent=agent)
 
@@ -33,6 +29,7 @@ class TestDAGPlanner:
 
     def test_plan_with_skills(self):
         """Test planning for agent with skills."""
+
         class Input(BaseModel):
             query: str
 
@@ -47,15 +44,12 @@ class TestDAGPlanner:
             description="Search skill",
             input_schema=Input,
             output_schema=Output,
-            executor=search
+            executor=search,
         )
 
         planner = DAGPlanner()
         agent = AgentSpec(
-            name="skilled_agent",
-            role="assistant",
-            goal="Search and answer",
-            skills=[skill]
+            name="skilled_agent", role="assistant", goal="Search and answer", skills=[skill]
         )
 
         plan = planner.plan(task="Search for Python", agent=agent)
@@ -87,6 +81,7 @@ class TestDAGPlanner:
 
     def test_plan_with_multiple_skills(self):
         """Test planning for agent with multiple skills."""
+
         class Input(BaseModel):
             query: str
 
@@ -104,7 +99,7 @@ class TestDAGPlanner:
             description="Search",
             input_schema=Input,
             output_schema=Output,
-            executor=search
+            executor=search,
         )
 
         skill2 = SkillSpec(
@@ -112,7 +107,7 @@ class TestDAGPlanner:
             description="Calculate",
             input_schema=Input,
             output_schema=Output,
-            executor=calculate
+            executor=calculate,
         )
 
         planner = DAGPlanner()
@@ -120,7 +115,7 @@ class TestDAGPlanner:
             name="multi_skilled",
             role="assistant",
             goal="Search and calculate",
-            skills=[skill1, skill2]
+            skills=[skill1, skill2],
         )
 
         plan = planner.plan(task="Find and sum numbers", agent=agent)
@@ -147,23 +142,13 @@ class TestDAGPlanner:
     def test_plan_with_session_state(self):
         """Test planning with session state."""
         planner = DAGPlanner()
-        agent = AgentSpec(
-            name="agent",
-            role="assistant",
-            goal="Test"
-        )
+        agent = AgentSpec(name="agent", role="assistant", goal="Test")
 
         session_state = SessionState(
-            session_id="test_session",
-            agent_id="test_agent",
-            context={"user": "test_user"}
+            session_id="test_session", agent_id="test_agent", context={"user": "test_user"}
         )
 
-        plan = planner.plan(
-            task="Test task",
-            agent=agent,
-            session_state=session_state
-        )
+        plan = planner.plan(task="Test task", agent=agent, session_state=session_state)
 
         assert plan is not None
         assert plan.metadata["task"] == "Test task"
@@ -172,11 +157,7 @@ class TestDAGPlanner:
     def test_plan_metadata(self):
         """Test plan metadata is correctly set."""
         planner = DAGPlanner()
-        agent = AgentSpec(
-            name="test_agent",
-            role="data_analyst",
-            goal="Analyze data"
-        )
+        agent = AgentSpec(name="test_agent", role="data_analyst", goal="Analyze data")
 
         plan = planner.plan(task="Analyze sales data", agent=agent)
 

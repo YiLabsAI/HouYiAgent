@@ -41,11 +41,11 @@ class OpenAIAdapter(LLMAdapter):
         # Lazy import to avoid requiring openai package if not used
         try:
             from openai import AsyncOpenAI
+
             self.client = AsyncOpenAI(api_key=self.api_key, base_url=self.base_url)
         except ImportError as e:
             raise ImportError(
-                "OpenAI package not installed. "
-                "Install with: pip install openai>=1.0.0"
+                "OpenAI package not installed. Install with: pip install openai>=1.0.0"
             ) from e
 
     async def chat(

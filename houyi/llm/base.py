@@ -66,14 +66,16 @@ class LLMResponse(BaseModel):
             if block.type == "text":
                 content += block.text
             elif block.type == "tool_use":
-                tool_calls.append({
-                    "id": block.id,
-                    "type": "function",
-                    "function": {
-                        "name": block.name,
-                        "arguments": block.input,
+                tool_calls.append(
+                    {
+                        "id": block.id,
+                        "type": "function",
+                        "function": {
+                            "name": block.name,
+                            "arguments": block.input,
+                        },
                     }
-                })
+                )
 
         return cls(
             content=content,
@@ -140,10 +142,7 @@ class LLMAdapter(ABC):
         """
         pass
 
-    def _normalize_messages(
-        self,
-        messages: list[LLMMessage | dict]
-    ) -> list[dict]:
+    def _normalize_messages(self, messages: list[LLMMessage | dict]) -> list[dict]:
         """Normalize messages to dict format.
 
         Args:

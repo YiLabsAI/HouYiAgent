@@ -13,11 +13,11 @@ from houyi.core.skill import SkillSpec
 class NodeType(str, Enum):
     """Types of execution nodes in the DAG."""
 
-    LLM = "llm"           # LLM reasoning node
-    TOOL = "tool"         # Skill execution node
-    VERIFY = "verify"     # Assertion verification node
-    LOGIC = "logic"       # Logic control node
-    ROUTE = "route"       # Routing decision node
+    LLM = "llm"  # LLM reasoning node
+    TOOL = "tool"  # Skill execution node
+    VERIFY = "verify"  # Assertion verification node
+    LOGIC = "logic"  # Logic control node
+    ROUTE = "route"  # Routing decision node
 
 
 class IRNode(BaseModel):
@@ -25,7 +25,9 @@ class IRNode(BaseModel):
 
     node_id: str = Field(..., description="Unique node identifier")
     node_type: NodeType = Field(..., description="Type of execution node")
-    skill_ref: SkillSpec | None = Field(default=None, description="Skill reference (for TOOL nodes)")
+    skill_ref: SkillSpec | None = Field(
+        default=None, description="Skill reference (for TOOL nodes)"
+    )
     inputs: dict[str, Any] = Field(
         default_factory=dict,
         description="Input mapping (key -> value or $variable reference)",

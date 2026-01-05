@@ -20,10 +20,7 @@ class TestTeam:
         task1 = Task(description="Task 1", agent=agent1)
         task2 = Task(description="Task 2", agent=agent2)
 
-        team = Team(
-            agents=[agent1, agent2],
-            tasks=[task1, task2]
-        )
+        team = Team(agents=[agent1, agent2], tasks=[task1, task2])
 
         assert len(team.agents) == 2
         assert len(team.tasks) == 2
@@ -37,10 +34,7 @@ class TestTeam:
         agent = Agent(role="Solo Agent")
         task = Task(description="Solo Task", agent=agent)
 
-        team = Team(
-            agents=[agent],
-            tasks=[task]
-        )
+        team = Team(agents=[agent], tasks=[task])
 
         assert len(team.agents) == 1
         assert team.agents[0].role == "Solo Agent"
@@ -83,10 +77,7 @@ class TestTeam:
         task1 = Task(description="Add task", agent=agent1)
         task2 = Task(description="Multiply task", agent=agent2)
 
-        team = Team(
-            agents=[agent1, agent2],
-            tasks=[task1, task2]
-        )
+        team = Team(agents=[agent1, agent2], tasks=[task1, task2])
 
         assert len(team.agents) == 2
         assert len(team.agents[0].skills) == 1
@@ -102,14 +93,8 @@ class TestTeam:
         """Test team with multiple agents."""
         from houyi.runtime.task import Task
 
-        agents = [
-            Agent(role=f"Agent {i}")
-            for i in range(5)
-        ]
-        tasks = [
-            Task(description=f"Task {i}", agent=agents[i])
-            for i in range(5)
-        ]
+        agents = [Agent(role=f"Agent {i}") for i in range(5)]
+        tasks = [Task(description=f"Task {i}", agent=agents[i]) for i in range(5)]
 
         team = Team(agents=agents, tasks=tasks)
 

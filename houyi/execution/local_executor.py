@@ -17,7 +17,7 @@ class ExecutionResult:
         success: bool,
         output: Any,
         final_state: SessionState,
-        metadata: dict[str, Any] | None = None
+        metadata: dict[str, Any] | None = None,
     ):
         self.success = success
         self.output = output
@@ -35,11 +35,7 @@ class LocalExecutor:
         self.context: dict[str, Any] = {}
         self.trace_manager = trace_manager
 
-    async def execute(
-        self,
-        plan: ExecutionPlan,
-        initial_state: SessionState
-    ) -> ExecutionResult:
+    async def execute(self, plan: ExecutionPlan, initial_state: SessionState) -> ExecutionResult:
         """Execute the plan.
 
         Args:
@@ -68,10 +64,9 @@ class LocalExecutor:
                 break
 
             # Execute ready nodes concurrently
-            results = await asyncio.gather(*[
-                self._execute_node(node, self.context)
-                for node in ready_nodes
-            ])
+            results = await asyncio.gather(
+                *[self._execute_node(node, self.context) for node in ready_nodes]
+            )
 
             # Update context and mark complete
             for node, result in zip(ready_nodes, results, strict=False):
@@ -93,7 +88,7 @@ class LocalExecutor:
             memory_stack=initial_state.memory_stack + [self.context],
             execution_pointer=None,  # Execution complete
             parent_state_id=initial_state.session_id,
-            metadata={**initial_state.metadata, "completed": True}
+            metadata={**initial_state.metadata, "completed": True},
         )
 
         return ExecutionResult(
@@ -103,14 +98,10 @@ class LocalExecutor:
             metadata={
                 "nodes_executed": len(completed_node_ids),
                 "context": self.context,
-            }
+            },
         )
 
-    async def _execute_node(
-        self,
-        node: IRNode,
-        context: dict[str, Any]
-    ) -> dict[str, Any]:
+    async def _execute_node(self, node: IRNode, context: dict[str, Any]) -> dict[str, Any]:
         """Execute a single node.
 
         Args:
@@ -131,7 +122,7 @@ class LocalExecutor:
                 attributes={
                     "node.id": node.node_id,
                     "node.type": node.node_type.value,
-                }
+                },
             ) as span:
                 result = await self._execute_node_impl(node, inputs)
                 span.set_attribute("node.success", True)
@@ -139,11 +130,7 @@ class LocalExecutor:
         else:
             return await self._execute_node_impl(node, inputs)
 
-    async def _execute_node_impl(
-        self,
-        node: IRNode,
-        inputs: dict[str, Any]
-    ) -> dict[str, Any]:
+    async def _execute_node_impl(self, node: IRNode, inputs: dict[str, Any]) -> dict[str, Any]:
         """Execute node implementation.
 
         Args:
@@ -163,11 +150,7 @@ class LocalExecutor:
         else:
             raise ValueError(f"Unsupported node type: {node.node_type}")
 
-    async def _execute_llm_node(
-        self,
-        node: IRNode,
-        inputs: dict[str, Any]
-    ) -> dict[str, Any]:
+    async def _execute_llm_node(self, node: IRNode, inputs: dict[str, Any]) -> dict[str, Any]:
         """Execute LLM node.
 
         Args:
@@ -191,9 +174,7 @@ class LocalExecutor:
 
                 # Build messages
                 task = inputs.get("task", "")
-                messages = [
-                    LLMMessage(role=MessageRole.USER, content=task)
-                ]
+                messages = [LLMMessage(role=MessageRole.USER, content=task)]
 
                 # Call LLM
                 response = await adapter.chat(messages)
@@ -201,23 +182,15 @@ class LocalExecutor:
                 return {"answer": response.content}
             except Exception as e:
                 print(f"LLM call failed: {e}, using mock response")
-                return {
-                    "answer": f"Mock LLM response (LLM unavailable): {inputs.get('task', '')}"
-                }
+                return {"answer": f"Mock LLM response (LLM unavailable): {inputs.get('task', '')}"}
 
         # Mock implementation when LLM is not configured
         task = inputs.get("task", inputs.get("prompt", ""))
         purpose = node.metadata.get("purpose", "reasoning")
 
-        return {
-            "answer": f"Mock {purpose} response: {task}"
-        }
+        return {"answer": f"Mock {purpose} response: {task}"}
 
-    async def _execute_tool_node(
-        self,
-        node: IRNode,
-        inputs: dict[str, Any]
-    ) -> dict[str, Any]:
+    async def _execute_tool_node(self, node: IRNode, inputs: dict[str, Any]) -> dict[str, Any]:
         """Execute TOOL node.
 
         Args:
@@ -245,15 +218,9 @@ class LocalExecutor:
                 print(f"Skill execution failed: {e}, using placeholder")
 
         # Placeholder implementation
-        return {
-            "result": f"Result from {skill.name}"
-        }
+        return {"result": f"Result from {skill.name}"}
 
-    async def _execute_verify_node(
-        self,
-        node: IRNode,
-        inputs: dict[str, Any]
-    ) -> dict[str, Any]:
+    async def _execute_verify_node(self, node: IRNode, inputs: dict[str, Any]) -> dict[str, Any]:
         """Execute VERIFY node.
 
         Args:
@@ -264,6 +231,4 @@ class LocalExecutor:
             Verification result
         """
         # TODO: Implement assertion verification
-        return {
-            "verified": True
-        }
+        return {"verified": True}

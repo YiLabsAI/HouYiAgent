@@ -13,7 +13,9 @@ class ReportGenerator:
     """Generate evaluation reports in various formats."""
 
     @staticmethod
-    def generate_html(summary: EvaluationSummary, output_path: str, title: str | None = None) -> None:
+    def generate_html(
+        summary: EvaluationSummary, output_path: str, title: str | None = None
+    ) -> None:
         """Generate HTML report from evaluation summary.
 
         Args:
@@ -41,7 +43,7 @@ class ReportGenerator:
                 "passed": passed,
                 "total": total,
                 "pass_rate": passed / total if total > 0 else 0.0,
-                "avg_score": avg_score
+                "avg_score": avg_score,
             }
 
         # Generate HTML
@@ -215,7 +217,7 @@ class ReportGenerator:
 <body>
     <div class="container">
         <h1>{title}</h1>
-        <div class="timestamp">Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</div>
+        <div class="timestamp">Generated: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}</div>
 
         <div class="summary">
             <div class="metric">
@@ -251,8 +253,8 @@ class ReportGenerator:
             <div class="evaluator-header">
                 <div class="evaluator-name">{evaluator}</div>
                 <div class="evaluator-stats">
-                    {stats['passed']}/{stats['total']} passed ({stats['pass_rate']:.1%}) |
-                    Avg Score: {stats['avg_score']:.2f}
+                    {stats["passed"]}/{stats["total"]} passed ({stats["pass_rate"]:.1%}) |
+                    Avg Score: {stats["avg_score"]:.2f}
                 </div>
             </div>
             <table class="results-table">
@@ -268,8 +270,14 @@ class ReportGenerator:
 """
 
             for result in results:
-                status_badge = '<span class="badge badge-pass">PASS</span>' if result.passed else '<span class="badge badge-fail">FAIL</span>'
-                input_preview = result.input[:100] + "..." if len(result.input) > 100 else result.input
+                status_badge = (
+                    '<span class="badge badge-pass">PASS</span>'
+                    if result.passed
+                    else '<span class="badge badge-fail">FAIL</span>'
+                )
+                input_preview = (
+                    result.input[:100] + "..." if len(result.input) > 100 else result.input
+                )
 
                 html += f"""
                     <tr>
@@ -305,7 +313,7 @@ class ReportGenerator:
 
         # Write to file
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-        Path(output_path).write_text(html, encoding='utf-8')
+        Path(output_path).write_text(html, encoding="utf-8")
 
     @staticmethod
     def generate_json(summary: EvaluationSummary, output_path: str) -> None:
@@ -341,16 +349,18 @@ class ReportGenerator:
                     "duration_ms": r.duration_ms,
                 }
                 for r in summary.results
-            ]
+            ],
         }
 
         # Write to file
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-        with open(output_path, 'w', encoding='utf-8') as f:
+        with open(output_path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
 
     @staticmethod
-    def generate_markdown(summary: EvaluationSummary, output_path: str, title: str | None = None) -> None:
+    def generate_markdown(
+        summary: EvaluationSummary, output_path: str, title: str | None = None
+    ) -> None:
         """Generate Markdown report from evaluation summary.
 
         Args:
@@ -371,7 +381,7 @@ class ReportGenerator:
         # Generate Markdown
         md = f"""# {title}
 
-**Generated**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+**Generated**: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
 
 ## Summary
 
@@ -397,7 +407,7 @@ class ReportGenerator:
 
             md += f"""### {evaluator}
 
-**Stats**: {passed}/{total} passed ({passed/total:.1%}) | Avg Score: {avg_score:.2f}
+**Stats**: {passed}/{total} passed ({passed / total:.1%}) | Avg Score: {avg_score:.2f}
 
 | Input | Score | Status | Feedback |
 |-------|-------|--------|----------|
@@ -405,7 +415,9 @@ class ReportGenerator:
 
             for result in results:
                 status = "✅ PASS" if result.passed else "❌ FAIL"
-                input_preview = result.input[:50] + "..." if len(result.input) > 50 else result.input
+                input_preview = (
+                    result.input[:50] + "..." if len(result.input) > 50 else result.input
+                )
                 md += f"| {input_preview} | {result.score:.2%} | {status} | {result.feedback} |\n"
 
             md += "\n"
@@ -418,4 +430,4 @@ class ReportGenerator:
 
         # Write to file
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-        Path(output_path).write_text(md, encoding='utf-8')
+        Path(output_path).write_text(md, encoding="utf-8")

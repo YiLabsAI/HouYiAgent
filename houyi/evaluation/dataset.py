@@ -18,7 +18,9 @@ class TestCase(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
 
     # Optional fields for specific evaluators
-    expected_skills: list[str] = Field(default_factory=list, description="Expected skills to be used")
+    expected_skills: list[str] = Field(
+        default_factory=list, description="Expected skills to be used"
+    )
     context: str | None = Field(None, description="Context for RAG scenarios")
     context_chunks: list[str] = Field(default_factory=list, description="Context chunks for RAG")
 
@@ -63,22 +65,21 @@ class Dataset(BaseModel):
         elif suffix in [".yaml", ".yml"]:
             return cls._from_yaml(file_path)
         else:
-            raise ValueError(f"Unsupported file format: {suffix}. Supported: .json, .csv, .yaml, .yml")
+            raise ValueError(
+                f"Unsupported file format: {suffix}. Supported: .json, .csv, .yaml, .yml"
+            )
 
     @classmethod
     def _from_json(cls, path: Path) -> Dataset:
         """Load dataset from JSON file."""
-        with open(path, encoding='utf-8') as f:
+        with open(path, encoding="utf-8") as f:
             data = json.load(f)
 
         # Handle both array of test cases and full dataset format
         if isinstance(data, list):
             # Simple array of test cases
             test_cases = [TestCase(**case) for case in data]
-            return cls(
-                name=path.stem,
-                test_cases=test_cases
-            )
+            return cls(name=path.stem, test_cases=test_cases)
         else:
             # Full dataset format
             test_cases = [TestCase(**case) for case in data.get("test_cases", [])]
@@ -86,7 +87,7 @@ class Dataset(BaseModel):
                 name=data.get("name", path.stem),
                 description=data.get("description"),
                 test_cases=test_cases,
-                metadata=data.get("metadata", {})
+                metadata=data.get("metadata", {}),
             )
 
     @classmethod
@@ -97,28 +98,25 @@ class Dataset(BaseModel):
         """
         test_cases = []
 
-        with open(path, encoding='utf-8') as f:
+        with open(path, encoding="utf-8") as f:
             reader = csv.DictReader(f)
             for row in reader:
                 # Parse metadata if present
                 metadata = {}
-                if 'metadata' in row and row['metadata']:
+                if "metadata" in row and row["metadata"]:
                     try:
-                        metadata = json.loads(row['metadata'])
+                        metadata = json.loads(row["metadata"])
                     except json.JSONDecodeError:
                         pass
 
                 test_case = TestCase(
-                    input=row['input'],
-                    expected_output=row.get('expected_output'),
-                    metadata=metadata
+                    input=row["input"],
+                    expected_output=row.get("expected_output"),
+                    metadata=metadata,
                 )
                 test_cases.append(test_case)
 
-        return cls(
-            name=path.stem,
-            test_cases=test_cases
-        )
+        return cls(name=path.stem, test_cases=test_cases)
 
     @classmethod
     def _from_yaml(cls, path: Path) -> Dataset:
@@ -126,25 +124,24 @@ class Dataset(BaseModel):
         try:
             import yaml
         except ImportError as e:
-            raise ImportError("PyYAML is required to load YAML files. Install with: pip install pyyaml") from e
+            raise ImportError(
+                "PyYAML is required to load YAML files. Install with: pip install pyyaml"
+            ) from e
 
-        with open(path, encoding='utf-8') as f:
+        with open(path, encoding="utf-8") as f:
             data = yaml.safe_load(f)
 
         # Handle both array and full format
         if isinstance(data, list):
             test_cases = [TestCase(**case) for case in data]
-            return cls(
-                name=path.stem,
-                test_cases=test_cases
-            )
+            return cls(name=path.stem, test_cases=test_cases)
         else:
             test_cases = [TestCase(**case) for case in data.get("test_cases", [])]
             return cls(
                 name=data.get("name", path.stem),
                 description=data.get("description"),
                 test_cases=test_cases,
-                metadata=data.get("metadata", {})
+                metadata=data.get("metadata", {}),
             )
 
     def to_file(self, path: str, format: str | None = None) -> None:
@@ -157,7 +154,7 @@ class Dataset(BaseModel):
         file_path = Path(path)
 
         if format is None:
-            format = file_path.suffix.lower().lstrip('.')
+            format = file_path.suffix.lower().lstrip(".")
 
         if format == "json":
             self._to_json(file_path)
@@ -174,11 +171,11 @@ class Dataset(BaseModel):
             "name": self.name,
             "description": self.description,
             "test_cases": [case.model_dump() for case in self.test_cases],
-            "metadata": self.metadata
+            "metadata": self.metadata,
         }
 
         path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, 'w', encoding='utf-8') as f:
+        with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
 
     def _to_csv(self, path: Path) -> None:
@@ -187,34 +184,38 @@ class Dataset(BaseModel):
             return
 
         path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, 'w', encoding='utf-8', newline='') as f:
-            fieldnames = ['input', 'expected_output', 'metadata']
+        with open(path, "w", encoding="utf-8", newline="") as f:
+            fieldnames = ["input", "expected_output", "metadata"]
             writer = csv.DictWriter(f, fieldnames=fieldnames)
 
             writer.writeheader()
             for case in self.test_cases:
-                writer.writerow({
-                    'input': case.input,
-                    'expected_output': case.expected_output or '',
-                    'metadata': json.dumps(case.metadata) if case.metadata else ''
-                })
+                writer.writerow(
+                    {
+                        "input": case.input,
+                        "expected_output": case.expected_output or "",
+                        "metadata": json.dumps(case.metadata) if case.metadata else "",
+                    }
+                )
 
     def _to_yaml(self, path: Path) -> None:
         """Save dataset to YAML file."""
         try:
             import yaml
         except ImportError as e:
-            raise ImportError("PyYAML is required to save YAML files. Install with: pip install pyyaml") from e
+            raise ImportError(
+                "PyYAML is required to save YAML files. Install with: pip install pyyaml"
+            ) from e
 
         data = {
             "name": self.name,
             "description": self.description,
             "test_cases": [case.model_dump() for case in self.test_cases],
-            "metadata": self.metadata
+            "metadata": self.metadata,
         }
 
         path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, 'w', encoding='utf-8') as f:
+        with open(path, "w", encoding="utf-8") as f:
             yaml.dump(data, f, default_flow_style=False, allow_unicode=True)
 
     def __len__(self) -> int:

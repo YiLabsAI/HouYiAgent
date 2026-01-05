@@ -38,11 +38,11 @@ class AnthropicAdapter(LLMAdapter):
         # Lazy import to avoid requiring anthropic package if not used
         try:
             from anthropic import AsyncAnthropic
+
             self.client = AsyncAnthropic(api_key=self.api_key)
         except ImportError as e:
             raise ImportError(
-                "Anthropic package not installed. "
-                "Install with: pip install anthropic>=0.18.0"
+                "Anthropic package not installed. Install with: pip install anthropic>=0.18.0"
             ) from e
 
     async def chat(
@@ -168,9 +168,11 @@ class AnthropicAdapter(LLMAdapter):
         for tool in tools:
             if tool["type"] == "function":
                 func = tool["function"]
-                anthropic_tools.append({
-                    "name": func["name"],
-                    "description": func.get("description", ""),
-                    "input_schema": func.get("parameters", {}),
-                })
+                anthropic_tools.append(
+                    {
+                        "name": func["name"],
+                        "description": func.get("description", ""),
+                        "input_schema": func.get("parameters", {}),
+                    }
+                )
         return anthropic_tools

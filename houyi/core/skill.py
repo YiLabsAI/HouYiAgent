@@ -24,8 +24,12 @@ class SkillSpec(BaseModel):
     description: str = Field(..., description="Human-readable description for LLM")
     input_schema: type[BaseModel] = Field(..., description="Pydantic model for input validation")
     output_schema: type[BaseModel] = Field(..., description="Pydantic model for output validation")
-    executor: Callable[..., Any] | None = Field(default=None, description="Function to execute the skill")
-    skill_md_path: str | None = Field(default=None, description="Path to skill.md file (AgentSkills.io)")
+    executor: Callable[..., Any] | None = Field(
+        default=None, description="Function to execute the skill"
+    )
+    skill_md_path: str | None = Field(
+        default=None, description="Path to skill.md file (AgentSkills.io)"
+    )
     constraints: dict[str, Any] = Field(
         default_factory=dict,
         description="SLA constraints (timeout, cost, etc.)",
@@ -89,7 +93,7 @@ class SkillSpec(BaseModel):
         try:
             # Download content
             with urllib.request.urlopen(url, timeout=10) as response:
-                content = response.read().decode('utf-8')
+                content = response.read().decode("utf-8")
 
             # Parse content
             parsed = cls._parse_skill_md(content)
@@ -107,7 +111,7 @@ class SkillSpec(BaseModel):
                 cache_path = str(cache_dir / filename)
 
                 # Save to cache
-                with open(cache_path, 'w', encoding='utf-8') as f:
+                with open(cache_path, "w", encoding="utf-8") as f:
                     f.write(content)
 
             return cls(
@@ -125,7 +129,9 @@ class SkillSpec(BaseModel):
             raise ValueError(f"Failed to parse skill from {url}: {e}") from e
 
     @classmethod
-    def from_registry(cls, skill_name: str, version: str | None = None, cache: bool = True) -> "SkillSpec":
+    def from_registry(
+        cls, skill_name: str, version: str | None = None, cache: bool = True
+    ) -> "SkillSpec":
         """Load skill from AgentSkills.io registry.
 
         Args:

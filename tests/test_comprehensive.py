@@ -14,20 +14,14 @@ class TestComprehensiveCoverage:
 
     def test_task_spec_creation(self):
         """Test TaskSpec creation."""
-        task = TaskSpec(
-            description="Test task",
-            expected_output="Expected result"
-        )
+        task = TaskSpec(description="Test task", expected_output="Expected result")
 
         assert task.description == "Test task"
         assert task.expected_output == "Expected result"
 
     def test_task_spec_with_context(self):
         """Test TaskSpec with context dependencies."""
-        task = TaskSpec(
-            description="Dependent task",
-            context=[0, 1]
-        )
+        task = TaskSpec(description="Dependent task", context=[0, 1])
 
         assert task.context == [0, 1]
 
@@ -38,7 +32,7 @@ class TestComprehensiveCoverage:
             node_type=NodeType.LLM,
             inputs={"task": "test"},
             outputs={"result": "$output"},
-            dependencies=["dep1", "dep2"]
+            dependencies=["dep1", "dep2"],
         )
 
         # Not ready - missing dependencies
@@ -54,7 +48,7 @@ class TestComprehensiveCoverage:
             node_id="node1",
             node_type=NodeType.LLM,
             inputs={"task": "$node0.result", "static": "value"},
-            outputs={"result": "$output"}
+            outputs={"result": "$output"},
         )
 
         context = {"node0.result": "resolved_value"}
@@ -69,19 +63,14 @@ class TestComprehensiveCoverage:
             node_id="node1",
             node_type=NodeType.LLM,
             inputs={"task": "test"},
-            outputs={"result": "$output"}
+            outputs={"result": "$output"},
         )
 
-        plan = ExecutionPlan(
-            plan_id="test_plan",
-            nodes=[node1],
-            entry_node="node1"
-        )
+        plan = ExecutionPlan(plan_id="test_plan", nodes=[node1], entry_node="node1")
 
         assert plan.plan_id == "test_plan"
         assert len(plan.nodes) == 1
         assert plan.entry_node == "node1"
-
 
     def test_node_types(self):
         """Test different node types."""
@@ -89,21 +78,21 @@ class TestComprehensiveCoverage:
             node_id="llm1",
             node_type=NodeType.LLM,
             inputs={"task": "test"},
-            outputs={"result": "$output"}
+            outputs={"result": "$output"},
         )
 
         tool_node = IRNode(
             node_id="tool1",
             node_type=NodeType.TOOL,
             inputs={"input": "test"},
-            outputs={"output": "$result"}
+            outputs={"output": "$result"},
         )
 
         verify_node = IRNode(
             node_id="verify1",
             node_type=NodeType.VERIFY,
             inputs={"result": "$tool1.output"},
-            outputs={"verified": "$status"}
+            outputs={"verified": "$status"},
         )
 
         assert llm_node.node_type == NodeType.LLM
@@ -119,12 +108,7 @@ class TestComprehensiveCoverage:
     def test_agent_spec_with_policies(self):
         """Test AgentSpec with custom policies."""
         agent = AgentSpec(
-            role="Test Agent",
-            policies={
-                "llm": "gpt-4",
-                "temperature": 0.7,
-                "max_tokens": 1000
-            }
+            role="Test Agent", policies={"llm": "gpt-4", "temperature": 0.7, "max_tokens": 1000}
         )
 
         assert agent.policies["llm"] == "gpt-4"
@@ -133,6 +117,7 @@ class TestComprehensiveCoverage:
 
     def test_skill_spec_with_constraints(self):
         """Test SkillSpec with constraints."""
+
         class Input(BaseModel):
             x: int
 
@@ -148,7 +133,7 @@ class TestComprehensiveCoverage:
             input_schema=Input,
             output_schema=Output,
             executor=func,
-            constraints={"timeout_ms": 5000, "max_retries": 3}
+            constraints={"timeout_ms": 5000, "max_retries": 3},
         )
 
         assert skill.constraints["timeout_ms"] == 5000
@@ -156,6 +141,7 @@ class TestComprehensiveCoverage:
 
     def test_agent_get_tool_schemas(self):
         """Test agent tool schema generation."""
+
         class Input(BaseModel):
             query: str
 
@@ -186,7 +172,7 @@ class TestComprehensiveCoverage:
             node_type=NodeType.TOOL,
             inputs={"x": "1"},
             outputs={"y": "$output"},
-            metadata={"skill_name": "calculator", "version": "1.0"}
+            metadata={"skill_name": "calculator", "version": "1.0"},
         )
 
         assert node.metadata["skill_name"] == "calculator"
@@ -198,7 +184,7 @@ class TestComprehensiveCoverage:
             node_id="node1",
             node_type=NodeType.LLM,
             inputs={"task": "step1"},
-            outputs={"result": "$output"}
+            outputs={"result": "$output"},
         )
 
         node2 = IRNode(
@@ -206,25 +192,17 @@ class TestComprehensiveCoverage:
             node_type=NodeType.TOOL,
             inputs={"input": "$node1.result"},
             outputs={"output": "$result"},
-            dependencies=["node1"]
+            dependencies=["node1"],
         )
 
-        plan = ExecutionPlan(
-            plan_id="multi_node_plan",
-            nodes=[node1, node2],
-            entry_node="node1"
-        )
+        plan = ExecutionPlan(plan_id="multi_node_plan", nodes=[node1, node2], entry_node="node1")
 
         assert len(plan.nodes) == 2
         assert plan.nodes[1].dependencies == ["node1"]
 
     def test_session_state_with_metadata(self):
         """Test SessionState with metadata."""
-        state = SessionState(
-            session_id="session_1",
-            agent_id="agent_1",
-            metadata={"key": "value"}
-        )
+        state = SessionState(session_id="session_1", agent_id="agent_1", metadata={"key": "value"})
 
         assert state.metadata["key"] == "value"
         assert state.session_id == "session_1"
@@ -238,6 +216,7 @@ class TestComprehensiveCoverage:
 
     def test_agent_spec_system_prompt_with_skills(self):
         """Test system prompt generation with skills."""
+
         class Input(BaseModel):
             x: int
 
@@ -255,10 +234,7 @@ class TestComprehensiveCoverage:
             executor=calc,
         )
 
-        agent = AgentSpec(
-            role="Math Agent",
-            skills=[skill]
-        )
+        agent = AgentSpec(role="Math Agent", skills=[skill])
 
         prompt = agent.to_system_prompt()
 
@@ -268,10 +244,7 @@ class TestComprehensiveCoverage:
 
     def test_agent_spec_custom_system_prompt(self):
         """Test AgentSpec with custom system prompt."""
-        agent = AgentSpec(
-            role="Custom Agent",
-            system_prompt="Custom instructions here"
-        )
+        agent = AgentSpec(role="Custom Agent", system_prompt="Custom instructions here")
 
         prompt = agent.to_system_prompt()
         assert prompt == "Custom instructions here"

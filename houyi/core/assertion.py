@@ -57,11 +57,11 @@ class AssertionSpec(BaseModel):
                 "min": min,
                 "max": max,
                 # Add context variables
-                **context
+                **context,
             }
 
             # Validate expression doesn't contain dangerous operations
-            dangerous_keywords = ['import', 'exec', 'eval', '__', 'open', 'file']
+            dangerous_keywords = ["import", "exec", "eval", "__", "open", "file"]
             if any(keyword in self.condition for keyword in dangerous_keywords):
                 raise ValueError(f"Dangerous operation in assertion: {self.condition}")
 

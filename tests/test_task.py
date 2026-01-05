@@ -1,6 +1,5 @@
 """Tests for core/task.py and runtime/task.py."""
 
-
 from houyi.core.task import TaskSpec
 from houyi.orchestration.state import TaskStatus
 from houyi.runtime.task import Task
@@ -11,10 +10,7 @@ class TestTaskSpec:
 
     def test_task_spec_basic(self):
         """Test basic TaskSpec creation."""
-        task = TaskSpec(
-            description="Test task",
-            expected_output="Expected result"
-        )
+        task = TaskSpec(description="Test task", expected_output="Expected result")
 
         assert task.description == "Test task"
         assert task.expected_output == "Expected result"
@@ -24,9 +20,7 @@ class TestTaskSpec:
     def test_task_spec_with_agent(self):
         """Test TaskSpec with agent."""
         task = TaskSpec(
-            description="Research task",
-            expected_output="Research report",
-            agent="researcher"
+            description="Research task", expected_output="Research report", agent="researcher"
         )
 
         assert task.agent == "researcher"
@@ -35,11 +29,7 @@ class TestTaskSpec:
         """Test TaskSpec with context."""
         context = [1, 2, 3]
 
-        task = TaskSpec(
-            description="Research task",
-            expected_output="Report",
-            context=context
-        )
+        task = TaskSpec(description="Research task", expected_output="Report", context=context)
 
         assert task.context == [1, 2, 3]
         assert len(task.context) == 3
@@ -50,10 +40,7 @@ class TestTask:
 
     def test_task_creation(self):
         """Test Task creation."""
-        task = Task(
-            description="Test task",
-            expected_output="Result"
-        )
+        task = Task(description="Test task", expected_output="Result")
 
         assert task.description == "Test task"
         assert task.expected_output == "Result"
@@ -61,10 +48,7 @@ class TestTask:
 
     def test_task_has_spec(self):
         """Test Task has TaskSpec."""
-        task = Task(
-            description="Test task",
-            expected_output="Result"
-        )
+        task = Task(description="Test task", expected_output="Result")
 
         assert isinstance(task.spec, TaskSpec)
         assert task.spec.description == "Test task"
@@ -72,22 +56,16 @@ class TestTask:
     def test_task_with_agent(self):
         """Test Task with assigned agent."""
         from houyi.core.agent import AgentSpec
+
         agent = AgentSpec(role="test_agent")
 
-        task = Task(
-            description="Test task",
-            expected_output="Result",
-            agent=agent
-        )
+        task = Task(description="Test task", expected_output="Result", agent=agent)
 
         assert task.agent == agent
 
     def test_task_repr(self):
         """Test Task string representation."""
-        task = Task(
-            description="Test task",
-            expected_output="Result"
-        )
+        task = Task(description="Test task", expected_output="Result")
 
         repr_str = repr(task)
         assert "Test task" in repr_str

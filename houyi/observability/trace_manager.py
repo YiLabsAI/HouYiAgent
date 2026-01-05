@@ -49,11 +49,13 @@ class Span:
 
     def add_event(self, name: str, attributes: dict[str, Any] | None = None) -> None:
         """Add event to span."""
-        self.events.append({
-            "name": name,
-            "timestamp": time.time(),
-            "attributes": attributes or {},
-        })
+        self.events.append(
+            {
+                "name": name,
+                "timestamp": time.time(),
+                "attributes": attributes or {},
+            }
+        )
 
     def set_status(self, status: str, description: str | None = None) -> None:
         """Set span status."""
@@ -118,8 +120,7 @@ class TraceManager:
             exporters = [{"type": "console"}]
 
         self.exporters = [
-            create_exporter(exp) if isinstance(exp, dict) else exp
-            for exp in exporters
+            create_exporter(exp) if isinstance(exp, dict) else exp for exp in exporters
         ]
 
     @contextmanager

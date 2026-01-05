@@ -15,10 +15,7 @@ def test_message_role_enum():
 
 def test_llm_message_creation():
     """Test LLMMessage creation."""
-    msg = LLMMessage(
-        role=MessageRole.USER,
-        content="Hello, world!"
-    )
+    msg = LLMMessage(role=MessageRole.USER, content="Hello, world!")
 
     assert msg.role == MessageRole.USER
     assert msg.content == "Hello, world!"
@@ -28,11 +25,7 @@ def test_llm_message_creation():
 
 def test_llm_message_with_name():
     """Test LLMMessage with name."""
-    msg = LLMMessage(
-        role=MessageRole.ASSISTANT,
-        content="Response",
-        name="assistant_1"
-    )
+    msg = LLMMessage(role=MessageRole.ASSISTANT, content="Response", name="assistant_1")
 
     assert msg.name == "assistant_1"
 
@@ -42,7 +35,13 @@ def test_llm_message_with_tool_calls():
     msg = LLMMessage(
         role=MessageRole.ASSISTANT,
         content="",
-        tool_calls=[{"id": "call_1", "type": "function", "function": {"name": "search", "arguments": '{"query": "test"}'}}]
+        tool_calls=[
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "search", "arguments": '{"query": "test"}'},
+            }
+        ],
     )
 
     assert msg.tool_calls is not None
@@ -56,7 +55,7 @@ def test_llm_response_creation():
         content="Test response",
         model="gpt-4",
         usage={"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
-        finish_reason="stop"
+        finish_reason="stop",
     )
 
     assert response.content == "Test response"
@@ -67,11 +66,7 @@ def test_llm_response_creation():
 
 def test_llm_response_default_values():
     """Test LLMResponse with default values."""
-    response = LLMResponse(
-        content="Test",
-        model="gpt-3.5-turbo",
-        finish_reason="stop"
-    )
+    response = LLMResponse(content="Test", model="gpt-3.5-turbo", finish_reason="stop")
 
     assert response.usage == {}
     assert response.tool_calls == []
@@ -87,10 +82,7 @@ def test_llm_adapter_abstract():
 
 def test_llm_message_serialization():
     """Test LLMMessage can be serialized."""
-    msg = LLMMessage(
-        role=MessageRole.USER,
-        content="Test message"
-    )
+    msg = LLMMessage(role=MessageRole.USER, content="Test message")
 
     # Pydantic models can be converted to dict
     msg_dict = msg.model_dump()
@@ -101,10 +93,7 @@ def test_llm_message_serialization():
 def test_llm_response_serialization():
     """Test LLMResponse can be serialized."""
     response = LLMResponse(
-        content="Response",
-        model="gpt-4",
-        finish_reason="stop",
-        usage={"total_tokens": 100}
+        content="Response", model="gpt-4", finish_reason="stop", usage={"total_tokens": 100}
     )
 
     response_dict = response.model_dump()
@@ -133,9 +122,9 @@ def test_llm_response_with_tool_calls():
             {
                 "id": "call_1",
                 "type": "function",
-                "function": {"name": "search", "arguments": '{"query": "test"}'}
+                "function": {"name": "search", "arguments": '{"query": "test"}'},
             }
-        ]
+        ],
     )
 
     assert len(response.tool_calls) == 1

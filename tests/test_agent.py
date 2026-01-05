@@ -20,6 +20,7 @@ class TestAgentSpec:
 
     def test_agent_spec_with_skills(self):
         """Test AgentSpec with skills."""
+
         class Input(BaseModel):
             query: str
 
@@ -34,7 +35,7 @@ class TestAgentSpec:
             description="Search skill",
             input_schema=Input,
             output_schema=Output,
-            executor=search
+            executor=search,
         )
 
         agent = AgentSpec(role="researcher", skills=[skill])
@@ -63,6 +64,7 @@ class TestAgentSpec:
 
     def test_to_system_prompt_with_skills(self):
         """Test to_system_prompt() includes skills."""
+
         class Input(BaseModel):
             query: str
 
@@ -77,7 +79,7 @@ class TestAgentSpec:
             description="Search the web",
             input_schema=Input,
             output_schema=Output,
-            executor=search
+            executor=search,
         )
 
         skill2 = SkillSpec(
@@ -85,7 +87,7 @@ class TestAgentSpec:
             description="Perform calculations",
             input_schema=Input,
             output_schema=Output,
-            executor=search
+            executor=search,
         )
 
         agent = AgentSpec(role="researcher", skills=[skill1, skill2])
@@ -100,6 +102,7 @@ class TestAgentSpec:
 
     def test_get_tool_schemas(self):
         """Test get_tool_schemas() method."""
+
         class Input(BaseModel):
             query: str
 
@@ -114,7 +117,7 @@ class TestAgentSpec:
             description="Search skill",
             input_schema=Input,
             output_schema=Output,
-            executor=search
+            executor=search,
         )
 
         agent = AgentSpec(role="assistant", skills=[skill])
@@ -127,6 +130,7 @@ class TestAgentSpec:
 
     def test_get_tool_schemas_multiple_skills(self):
         """Test get_tool_schemas() with multiple skills."""
+
         class Input(BaseModel):
             query: str
 
@@ -141,7 +145,7 @@ class TestAgentSpec:
             description="Skill 1",
             input_schema=Input,
             output_schema=Output,
-            executor=func
+            executor=func,
         )
 
         skill2 = SkillSpec(
@@ -149,7 +153,7 @@ class TestAgentSpec:
             description="Skill 2",
             input_schema=Input,
             output_schema=Output,
-            executor=func
+            executor=func,
         )
 
         agent = AgentSpec(role="assistant", skills=[skill1, skill2])
@@ -170,11 +174,7 @@ class TestAgentSpec:
 
     def test_agent_spec_with_policies(self):
         """Test AgentSpec with policies."""
-        policies = {
-            "llm": "gpt-4",
-            "max_retries": 3,
-            "timeout": 30
-        }
+        policies = {"llm": "gpt-4", "max_retries": 3, "timeout": 30}
 
         agent = AgentSpec(role="assistant", policies=policies)
 

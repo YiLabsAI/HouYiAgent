@@ -42,44 +42,28 @@ class TestAccuracyEvaluator:
     def test_exact_match(self):
         """Test exact match gives high score."""
         evaluator = AccuracyEvaluator()
-        result = evaluator.evaluate(
-            input="test",
-            output="Hello World",
-            expected="Hello World"
-        )
+        result = evaluator.evaluate(input="test", output="Hello World", expected="Hello World")
         assert result.score == 1.0
         assert result.passed is True
 
     def test_similar_match(self):
         """Test similar text gives good score."""
         evaluator = AccuracyEvaluator()
-        result = evaluator.evaluate(
-            input="test",
-            output="Hello World",
-            expected="Hello World!"
-        )
+        result = evaluator.evaluate(input="test", output="Hello World", expected="Hello World!")
         assert result.score > 0.8
         assert result.passed is True
 
     def test_different_text(self):
         """Test different text gives low score."""
         evaluator = AccuracyEvaluator()
-        result = evaluator.evaluate(
-            input="test",
-            output="Hello",
-            expected="Goodbye"
-        )
+        result = evaluator.evaluate(input="test", output="Hello", expected="Goodbye")
         assert result.score < 0.5
         assert result.passed is False
 
     def test_no_expected_output(self):
         """Test without expected output."""
         evaluator = AccuracyEvaluator()
-        result = evaluator.evaluate(
-            input="test",
-            output="Hello World",
-            expected=None
-        )
+        result = evaluator.evaluate(input="test", output="Hello World", expected=None)
         assert result.score == 1.0
         assert result.passed is True
 
@@ -90,11 +74,7 @@ class TestCostEvaluator:
     def test_within_budget(self):
         """Test cost within budget."""
         evaluator = CostEvaluator(max_cost=0.1)
-        result = evaluator.evaluate(
-            input="test",
-            output="response",
-            metadata={"cost": 0.05}
-        )
+        result = evaluator.evaluate(input="test", output="response", metadata={"cost": 0.05})
         assert result.passed is True
         assert result.score >= 0.5  # Changed to >= for exact 0.5 case
         assert result.cost == 0.05
@@ -102,22 +82,14 @@ class TestCostEvaluator:
     def test_exceeds_budget(self):
         """Test cost exceeds budget."""
         evaluator = CostEvaluator(max_cost=0.1)
-        result = evaluator.evaluate(
-            input="test",
-            output="response",
-            metadata={"cost": 0.15}
-        )
+        result = evaluator.evaluate(input="test", output="response", metadata={"cost": 0.15})
         assert result.passed is False
         assert result.score < 1.0
 
     def test_no_cost_metadata(self):
         """Test without cost metadata."""
         evaluator = CostEvaluator(max_cost=0.1)
-        result = evaluator.evaluate(
-            input="test",
-            output="response",
-            metadata={}
-        )
+        result = evaluator.evaluate(input="test", output="response", metadata={})
         assert result.passed is True
         assert result.cost == 0.0
 
@@ -129,9 +101,7 @@ class TestLatencyEvaluator:
         """Test latency within threshold."""
         evaluator = LatencyEvaluator(max_latency_ms=5000.0)
         result = evaluator.evaluate(
-            input="test",
-            output="response",
-            metadata={"duration_ms": 2000.0}
+            input="test", output="response", metadata={"duration_ms": 2000.0}
         )
         assert result.passed is True
         assert result.score > 0.5
@@ -141,20 +111,14 @@ class TestLatencyEvaluator:
         """Test latency exceeds threshold."""
         evaluator = LatencyEvaluator(max_latency_ms=5000.0)
         result = evaluator.evaluate(
-            input="test",
-            output="response",
-            metadata={"duration_ms": 6000.0}
+            input="test", output="response", metadata={"duration_ms": 6000.0}
         )
         assert result.passed is False
 
     def test_no_latency_metadata(self):
         """Test without latency metadata."""
         evaluator = LatencyEvaluator(max_latency_ms=5000.0)
-        result = evaluator.evaluate(
-            input="test",
-            output="response",
-            metadata={}
-        )
+        result = evaluator.evaluate(input="test", output="response", metadata={})
         assert result.passed is True
         assert result.duration_ms == 0.0
 
@@ -170,8 +134,8 @@ class TestSkillUsageEvaluator:
             output="response",
             metadata={
                 "expected_skills": ["search", "analyze"],
-                "used_skills": ["search", "analyze"]
-            }
+                "used_skills": ["search", "analyze"],
+            },
         )
         assert result.passed is True
         assert result.score == 1.0
@@ -184,8 +148,8 @@ class TestSkillUsageEvaluator:
             output="response",
             metadata={
                 "expected_skills": ["search", "analyze", "summarize"],
-                "used_skills": ["search", "analyze"]
-            }
+                "used_skills": ["search", "analyze"],
+            },
         )
         assert result.score < 1.0
         assert result.passed is False
@@ -194,9 +158,7 @@ class TestSkillUsageEvaluator:
         """Test without expected skills."""
         evaluator = SkillUsageEvaluator()
         result = evaluator.evaluate(
-            input="test",
-            output="response",
-            metadata={"used_skills": ["search"]}
+            input="test", output="response", metadata={"used_skills": ["search"]}
         )
         assert result.passed is True
         assert result.score == 1.0
@@ -215,7 +177,7 @@ class TestCompletenessEvaluator:
         evaluator = CompletenessEvaluator()
         result = evaluator.evaluate(
             input="What is Python? Why is it popular?",
-            output="Python is a programming language. It is popular because it's easy to learn."
+            output="Python is a programming language. It is popular because it's easy to learn.",
         )
         # The evaluator extracts questions and checks if terms appear in output
         # This test may not always pass depending on extraction logic
@@ -227,7 +189,7 @@ class TestCompletenessEvaluator:
         evaluator = CompletenessEvaluator()
         result = evaluator.evaluate(
             input="What is Python? Why is it popular? Who created it?",
-            output="Python is a programming language."
+            output="Python is a programming language.",
         )
         assert result.score < 0.7
         assert result.passed is False
@@ -235,10 +197,7 @@ class TestCompletenessEvaluator:
     def test_no_clear_aspects(self):
         """Test input without clear aspects."""
         evaluator = CompletenessEvaluator()
-        result = evaluator.evaluate(
-            input="Hello",
-            output="Hi there"
-        )
+        result = evaluator.evaluate(input="Hello", output="Hi there")
         assert result.passed is True
 
 
@@ -250,7 +209,7 @@ class TestRelevanceEvaluator:
         evaluator = RelevanceEvaluator()
         result = evaluator.evaluate(
             input="Tell me about Python programming",
-            output="Python is a high-level programming language known for simplicity"
+            output="Python is a high-level programming language known for simplicity",
         )
         assert result.score >= 0.5
         assert result.passed is True
@@ -259,8 +218,7 @@ class TestRelevanceEvaluator:
         """Test irrelevant output."""
         evaluator = RelevanceEvaluator()
         result = evaluator.evaluate(
-            input="Tell me about Python programming",
-            output="The weather is nice today"
+            input="Tell me about Python programming", output="The weather is nice today"
         )
         assert result.score < 0.5
         assert result.passed is False
@@ -273,8 +231,7 @@ class TestToxicityEvaluator:
         """Test non-toxic content."""
         evaluator = ToxicityEvaluator()
         result = evaluator.evaluate(
-            input="test",
-            output="This is a helpful and respectful response."
+            input="test", output="This is a helpful and respectful response."
         )
         assert result.passed is True
         assert result.score >= 0.8
@@ -282,10 +239,7 @@ class TestToxicityEvaluator:
     def test_toxic_content(self):
         """Test toxic content."""
         evaluator = ToxicityEvaluator()
-        result = evaluator.evaluate(
-            input="test",
-            output="You are stupid and I hate this."
-        )
+        result = evaluator.evaluate(input="test", output="You are stupid and I hate this.")
         assert result.passed is False
         assert result.score < 0.8
 
@@ -297,8 +251,7 @@ class TestHallucinationEvaluator:
         """Test confident output without hallucination indicators."""
         evaluator = HallucinationEvaluator()
         result = evaluator.evaluate(
-            input="Python programming",
-            output="Python is a programming language."
+            input="Python programming", output="Python is a programming language."
         )
         assert result.score >= 0.7
         assert result.passed is True
@@ -307,8 +260,7 @@ class TestHallucinationEvaluator:
         """Test output with uncertainty indicators."""
         evaluator = HallucinationEvaluator()
         result = evaluator.evaluate(
-            input="Python",
-            output="I think Python might be from 1991, but I'm not sure."
+            input="Python", output="I think Python might be from 1991, but I'm not sure."
         )
         assert result.score < 1.0
 
@@ -322,7 +274,7 @@ class TestSemanticSimilarityEvaluator:
         result = evaluator.evaluate(
             input="test",
             output="Python is a programming language",
-            expected="Python is a language for programming"
+            expected="Python is a language for programming",
         )
         assert result.score >= 0.6
         assert result.passed is True
@@ -331,9 +283,7 @@ class TestSemanticSimilarityEvaluator:
         """Test different outputs."""
         evaluator = SemanticSimilarityEvaluator()
         result = evaluator.evaluate(
-            input="test",
-            output="This is a custom test",
-            expected="This is a custom test"
+            input="test", output="This is a custom test", expected="This is a custom test"
         )
         assert result.score == 1.0
         assert result.evaluator == "custom_test"
@@ -342,9 +292,7 @@ class TestSemanticSimilarityEvaluator:
         """Test different outputs."""
         evaluator = SemanticSimilarityEvaluator()
         result = evaluator.evaluate(
-            input="test",
-            output="Python is a snake",
-            expected="Java is a programming language"
+            input="test", output="Python is a snake", expected="Java is a programming language"
         )
         assert result.score < 0.6
         assert result.passed is False
@@ -352,10 +300,7 @@ class TestSemanticSimilarityEvaluator:
     def test_no_expected_output(self):
         """Test without expected output."""
         evaluator = SemanticSimilarityEvaluator()
-        result = evaluator.evaluate(
-            input="test",
-            output="Python is great"
-        )
+        result = evaluator.evaluate(input="test", output="Python is great")
         assert result.passed is True
         assert result.score == 1.0
 
@@ -368,7 +313,7 @@ class TestLLMJudgeEvaluator:
         evaluator = LLMJudgeEvaluator(use_real_llm=False)
         result = evaluator.evaluate(
             input="test",
-            output="This is a well-structured response with multiple sentences. It provides clear information."
+            output="This is a well-structured response with multiple sentences. It provides clear information.",
         )
         assert result.score > 0.0
         # LLMJudgeEvaluator returns 'details' not 'metrics'
@@ -377,10 +322,7 @@ class TestLLMJudgeEvaluator:
     def test_short_output(self):
         """Test short output gets lower score."""
         evaluator = LLMJudgeEvaluator(use_real_llm=False)
-        result = evaluator.evaluate(
-            input="test",
-            output="Short"
-        )
+        result = evaluator.evaluate(input="test", output="Short")
         # Short output should get lower score
         assert result.score <= 0.5
 
@@ -397,8 +339,7 @@ class TestBiasEvaluator:
         """Test biased content detection."""
         evaluator = BiasEvaluator()
         result = evaluator.evaluate(
-            input="test",
-            output="Women should always stay at home. Men are better leaders."
+            input="test", output="Women should always stay at home. Men are better leaders."
         )
         assert result.passed is False
         assert result.score < 0.8
@@ -408,8 +349,7 @@ class TestBiasEvaluator:
         """Test neutral content."""
         evaluator = BiasEvaluator()
         result = evaluator.evaluate(
-            input="test",
-            output="People of all genders can be effective leaders."
+            input="test", output="People of all genders can be effective leaders."
         )
         assert result.passed is True
         assert result.score >= 0.8
@@ -422,8 +362,7 @@ class TestSafetyEvaluator:
         """Test safe content."""
         evaluator = SafetyEvaluator()
         result = evaluator.evaluate(
-            input="test",
-            output="This is a safe response without sensitive information."
+            input="test", output="This is a safe response without sensitive information."
         )
         assert result.passed is True
         assert result.score == 1.0
@@ -433,8 +372,7 @@ class TestSafetyEvaluator:
         """Test PII detection."""
         evaluator = SafetyEvaluator()
         result = evaluator.evaluate(
-            input="test",
-            output="My email is john@example.com and phone is 123-456-7890"
+            input="test", output="My email is john@example.com and phone is 123-456-7890"
         )
         assert result.passed is False
         assert len(result.metrics["safety_issues"]) > 0
@@ -447,8 +385,7 @@ class TestFactualityEvaluator:
         """Test confident factual claims."""
         evaluator = FactualityEvaluator()
         result = evaluator.evaluate(
-            input="test",
-            output="Python was created in 1991 by Guido van Rossum."
+            input="test", output="Python was created in 1991 by Guido van Rossum."
         )
         assert result.score >= 0.7
         assert result.passed is True
@@ -458,7 +395,7 @@ class TestFactualityEvaluator:
         evaluator = FactualityEvaluator()
         result = evaluator.evaluate(
             input="When was Python created",
-            output="Python was created in 1991. I think it might have been designed for ease of use, but I'm not sure."
+            output="Python was created in 1991. I think it might have been designed for ease of use, but I'm not sure.",
         )
         # With claims and hedging, score should be reduced
         assert result.score < 1.0 or result.metrics["hedging_found"] > 0
@@ -474,7 +411,7 @@ class TestGroundednessEvaluator:
         result = evaluator.evaluate(
             input="test",
             output="Python is a programming language created in 1991.",
-            metadata={"context": context}
+            metadata={"context": context},
         )
         assert result.score >= 0.8
         assert result.passed is True
@@ -486,7 +423,7 @@ class TestGroundednessEvaluator:
         result = evaluator.evaluate(
             input="test",
             output="Python was invented by Bill Gates in 2000.",
-            metadata={"context": context}
+            metadata={"context": context},
         )
         assert result.score < 0.8
         assert result.passed is False
@@ -500,7 +437,7 @@ class TestCoherenceEvaluator:
         evaluator = CoherenceEvaluator()
         result = evaluator.evaluate(
             input="test",
-            output="Python is popular. Moreover, it's easy to learn. Therefore, many beginners choose it."
+            output="Python is popular. Moreover, it's easy to learn. Therefore, many beginners choose it.",
         )
         assert result.score >= 0.7
         assert result.passed is True
@@ -510,7 +447,7 @@ class TestCoherenceEvaluator:
         evaluator = CoherenceEvaluator()
         result = evaluator.evaluate(
             input="test",
-            output="Python is good. Python is not good. It can do things. It cannot do things."
+            output="Python is good. Python is not good. It can do things. It cannot do things.",
         )
         assert result.score < 0.7
         assert result.passed is False
@@ -518,10 +455,7 @@ class TestCoherenceEvaluator:
     def test_empty_output(self):
         """Test empty output."""
         evaluator = CoherenceEvaluator()
-        result = evaluator.evaluate(
-            input="test",
-            output=""
-        )
+        result = evaluator.evaluate(input="test", output="")
         assert result.score == 0.0
         assert result.passed is False
 
@@ -532,14 +466,11 @@ class TestContextPrecisionEvaluator:
     def test_high_precision(self):
         """Test high precision - most chunks used."""
         evaluator = ContextPrecisionEvaluator()
-        chunks = [
-            "Python was created in 1991",
-            "Python is used for web development"
-        ]
+        chunks = ["Python was created in 1991", "Python is used for web development"]
         result = evaluator.evaluate(
             input="test",
             output="Python was created in 1991 and is used for web development.",
-            metadata={"context_chunks": chunks}
+            metadata={"context_chunks": chunks},
         )
         assert result.score >= 0.8
         assert result.passed is True
@@ -551,12 +482,10 @@ class TestContextPrecisionEvaluator:
             "Python was created in 1991",
             "Java is different",
             "C++ is compiled",
-            "JavaScript runs in browsers"
+            "JavaScript runs in browsers",
         ]
         result = evaluator.evaluate(
-            input="test",
-            output="Python was created in 1991.",
-            metadata={"context_chunks": chunks}
+            input="test", output="Python was created in 1991.", metadata={"context_chunks": chunks}
         )
         assert result.score < 1.0
 
@@ -570,10 +499,7 @@ class TestContextRecallEvaluator:
         expected = "Python was created in 1991"
         context = "Python is a programming language. It was created in 1991."
         result = evaluator.evaluate(
-            input="test",
-            output="",
-            expected=expected,
-            metadata={"context": context}
+            input="test", output="", expected=expected, metadata={"context": context}
         )
         assert result.score >= 0.7
         assert result.passed is True
@@ -584,10 +510,7 @@ class TestContextRecallEvaluator:
         expected = "Python was created in 1991 by Guido van Rossum"
         context = "Python is a programming language."
         result = evaluator.evaluate(
-            input="test",
-            output="",
-            expected=expected,
-            metadata={"context": context}
+            input="test", output="", expected=expected, metadata={"context": context}
         )
         assert result.score < 0.7
         assert result.passed is False
@@ -603,7 +526,7 @@ class TestFaithfulnessEvaluator:
         result = evaluator.evaluate(
             input="test",
             output="Python is a programming language. It was created in 1991.",
-            metadata={"context": context}
+            metadata={"context": context},
         )
         assert result.score >= 0.8
         assert result.passed is True
@@ -615,7 +538,7 @@ class TestFaithfulnessEvaluator:
         result = evaluator.evaluate(
             input="test",
             output="Python was created in 2000 by Bill Gates.",
-            metadata={"context": context}
+            metadata={"context": context},
         )
         assert result.score < 0.8
         assert result.passed is False
@@ -626,35 +549,33 @@ class TestCustomEvaluator:
 
     def test_custom_evaluation_function(self):
         """Test custom evaluation function."""
+
         def check_length(input, output, expected, metadata):
             is_long = len(output) > 50
             return {
                 "score": 1.0 if is_long else 0.0,
                 "passed": is_long,
                 "metrics": {"length": len(output)},
-                "feedback": f"Length: {len(output)} chars"
+                "feedback": f"Length: {len(output)} chars",
             }
 
         evaluator = CustomEvaluator(name="length_checker", evaluate_fn=check_length)
 
         # Test long output
         result = evaluator.evaluate(
-            input="test",
-            output="This is a long output with more than fifty characters in total."
+            input="test", output="This is a long output with more than fifty characters in total."
         )
         assert result.passed is True
         assert result.score == 1.0
 
         # Test short output
-        result = evaluator.evaluate(
-            input="test",
-            output="Short"
-        )
+        result = evaluator.evaluate(input="test", output="Short")
         assert result.passed is False
         assert result.score == 0.0
 
     def test_custom_evaluator_name(self):
         """Test custom evaluator name."""
+
         def dummy_eval(input, output, expected, metadata):
             return {"score": 1.0, "passed": True}
 
