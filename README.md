@@ -21,11 +21,10 @@
 - [Key Features](#-key-features)
 - [Installation](#-installation)
 - [Quick Start](#-quick-start)
-- [Documentation](#-documentation)
 - [Examples](#-examples)
-- [Development](#-development)
+- [Documentation](#-documentation)
 - [Contributing](#-contributing)
-- [License](#-license)
+- [Acknowledgments](#-acknowledgments)
 
 ## Overview
 
@@ -112,21 +111,7 @@ result = agent.run("What is HouYi?")
 # Output: ✅ agent.run (13.16ms)
 ```
 
-**See [Getting Started Guide](./docs/getting-started.md) for complete tutorial including:**
-- LLM integration (OpenAI, Anthropic)
-- Multi-agent teams with DAG execution
-- Evaluation with 19 built-in evaluators
-- Advanced features and best practices
-
-## 📚 Documentation
-
-- **[Getting Started](./docs/getting-started.md)** - Complete tutorial
-- **[API Reference](./docs/api-reference.md)** - Full API documentation
-- **[Advanced Features](./docs/advanced-features.md)** - Observability, multi-LLM, DAG
-- **[Evaluation](./docs/evaluation.md)** - All 19 evaluators explained
-- **[Roadmap](./docs/roadmap.md)** - Development roadmap
-- **[Contributing](./CONTRIBUTING.md)** - How to contribute
-- **[Changelog](./CHANGELOG.md)** - Version history
+**See [Getting Started Guide](./docs/getting-started.md) for complete tutorial.**
 
 ## 💡 Examples
 
@@ -139,54 +124,22 @@ python examples/team_example.py        # Multi-agent team
 python examples/evaluation_example.py  # All 19 evaluators
 ```
 
+## 📚 Documentation
 
-## 🛠️ Development
+**User Guides:**
+- [Getting Started](./docs/getting-started.md) - Installation, quick start, core concepts
+- [API Reference](./docs/api-reference.md) - Complete API documentation
+- [Advanced Features](./docs/advanced-features.md) - Observability, multi-LLM, DAG execution
+- [Evaluation](./docs/evaluation.md) - All 19 evaluators explained
 
-```bash
-# Clone and setup
-git clone https://github.com/YiLabsAI/HouYiAgent.git
-cd HouYiAgent
-pip install -e ".[dev]"
-
-# Run tests
-pytest tests/ -v --cov=houyi
-
-# Code quality
-ruff check houyi/ --fix
-```
-
-See [agent.md](./agent.md) for complete development workflow.
-
-
-## 🗺️ Roadmap
-
-**Current**: v0.1.0 (Phase 1 Complete) | **Next**: v0.2.0 (Neuro-Symbolic & Verification)
+**Development:**
+- [CONTRIBUTING.md](./CONTRIBUTING.md) - How to contribute
+- [agent.md](./agent.md) - Development guide and coding standards
+- [CHANGELOG.md](./CHANGELOG.md) - Version history
 
 ## 🤝 Contributing
 
-We welcome contributions! Please see:
-- [Development Guide](./agent.md) - Coding standards and workflow
-- [CONTRIBUTING.md](./CONTRIBUTING.md) - How to contribute
-
-**Quick Start**:
-```bash
-# Fork and clone
-git clone https://github.com/YOUR_USERNAME/HouYiAgent.git
-cd HouYiAgent
-
-# Setup
-pip install -r requirements.txt
-pip install -e ".[dev]"
-
-# Make changes and test
-pytest tests/ -v
-
-# Submit PR
-```
-
-## 📝 License
-
-MIT License - see [LICENSE](./LICENSE) file for details
+We welcome contributions! Please see [CONTRIBUTING.md](./CONTRIBUTING.md) for details.
 
 ## 🙏 Acknowledgments
 
