@@ -9,20 +9,22 @@ from houyi.llm.base import LLMMessage, LLMResponse, MessageRole
 # Try to import adapters, skip tests if dependencies not available
 OPENAI_AVAILABLE = False
 ANTHROPIC_AVAILABLE = False
+OpenAIAdapter = None
+AnthropicAdapter = None
 
 try:
     from houyi.llm.openai_adapter import OpenAIAdapter
 
     OPENAI_AVAILABLE = True
 except (ImportError, ValueError):
-    OpenAIAdapter = None  # type: ignore
+    pass
 
 try:
     from houyi.llm.anthropic_adapter import AnthropicAdapter
 
     ANTHROPIC_AVAILABLE = True
 except (ImportError, ValueError):
-    AnthropicAdapter = None  # type: ignore
+    pass
 
 
 class TestLLMMessage:
@@ -106,9 +108,10 @@ class TestLLMResponse:
 class TestOpenAIAdapter:
     """Test OpenAIAdapter."""
 
-    @pytest.mark.skipif(not OPENAI_AVAILABLE, reason="OpenAI package not installed")
     def test_adapter_init_with_api_key(self) -> None:
         """Test adapter initialization with API key."""
+        if not OPENAI_AVAILABLE:
+            pytest.skip("OpenAI package not installed")
         adapter = OpenAIAdapter(api_key="test-key", model="gpt-3.5-turbo")
 
         assert adapter.api_key == "test-key"
@@ -116,20 +119,25 @@ class TestOpenAIAdapter:
 
     def test_adapter_init_without_api_key(self) -> None:
         """Test adapter initialization without API key raises error."""
+        if not OPENAI_AVAILABLE:
+            pytest.skip("OpenAI package not installed")
         with patch.dict("os.environ", {}, clear=True):
             with pytest.raises(ValueError, match="OpenAI API key not provided"):
                 OpenAIAdapter()
 
     def test_adapter_init_from_env(self) -> None:
         """Test adapter initialization from environment variable."""
+        if not OPENAI_AVAILABLE:
+            pytest.skip("OpenAI package not installed")
         with patch.dict("os.environ", {"OPENAI_API_KEY": "env-key"}):
             adapter = OpenAIAdapter()
             assert adapter.api_key == "env-key"
 
     @pytest.mark.asyncio
-    @pytest.mark.skipif(not OPENAI_AVAILABLE, reason="OpenAI package not installed")
     async def test_chat(self) -> None:
         """Test chat method."""
+        if not OPENAI_AVAILABLE:
+            pytest.skip("OpenAI package not installed")
         adapter = OpenAIAdapter(api_key="test-key")
 
         # Mock the client's chat.completions.create method
@@ -180,9 +188,10 @@ class TestOpenAIAdapter:
         assert response.finish_reason == "tool_calls"
         assert len(response.tool_calls) == 1
 
-    @pytest.mark.skipif(not OPENAI_AVAILABLE, reason="OpenAI package not installed")
     def test_normalize_messages(self) -> None:
         """Test message normalization."""
+        if not OPENAI_AVAILABLE:
+            pytest.skip("OpenAI package not installed")
         adapter = OpenAIAdapter(api_key="test-key")
 
         # Test with LLMMessage objects
@@ -205,31 +214,35 @@ class TestOpenAIAdapter:
 class TestAnthropicAdapter:
     """Test AnthropicAdapter."""
 
-    @pytest.mark.skipif(not ANTHROPIC_AVAILABLE, reason="Anthropic package not installed")
     def test_adapter_init_with_api_key(self) -> None:
         """Test adapter initialization with API key."""
+        if not ANTHROPIC_AVAILABLE:
+            pytest.skip("Anthropic package not installed")
         adapter = AnthropicAdapter(api_key="test-key", model="claude-3-opus")
 
         assert adapter.api_key == "test-key"
         assert adapter.model == "claude-3-opus"
 
-    @pytest.mark.skipif(not ANTHROPIC_AVAILABLE, reason="Anthropic package not installed")
     def test_adapter_init_without_api_key(self) -> None:
         """Test adapter initialization without API key raises error."""
+        if not ANTHROPIC_AVAILABLE:
+            pytest.skip("Anthropic package not installed")
         with patch.dict("os.environ", {}, clear=True):
             with pytest.raises(ValueError, match="Anthropic API key not provided"):
                 AnthropicAdapter()
 
-    @pytest.mark.skipif(not ANTHROPIC_AVAILABLE, reason="Anthropic package not installed")
     def test_adapter_init_from_env(self) -> None:
         """Test adapter initialization from environment variable."""
+        if not ANTHROPIC_AVAILABLE:
+            pytest.skip("Anthropic package not installed")
         with patch.dict("os.environ", {"ANTHROPIC_API_KEY": "env-key"}):
             adapter = AnthropicAdapter()
             assert adapter.api_key == "env-key"
 
-    @pytest.mark.skipif(not ANTHROPIC_AVAILABLE, reason="Anthropic package not installed")
     def test_normalize_messages(self) -> None:
         """Test message normalization."""
+        if not ANTHROPIC_AVAILABLE:
+            pytest.skip("Anthropic package not installed")
         adapter = AnthropicAdapter(api_key="test-key")
 
         # Test with LLMMessage objects
