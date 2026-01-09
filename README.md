@@ -143,13 +143,12 @@ python examples/evaluation_example.py  # All 19 evaluators
 - [Evaluation](./docs/evaluation.md) - All 19 evaluators explained
 
 **Development:**
-- [CONTRIBUTING.md](./CONTRIBUTING.md) - How to contribute
-- [agent.md](./agent.md) - Development guide and coding standards
-- [CHANGELOG.md](./CHANGELOG.md) - Version history
+- [Development Guide](./agent.md) - Coding standards and best practices
+- [Release Notes](./CHANGELOG.md) - Version history and updates
 
 ## 🤝 Contributing
 
-We welcome contributions! Please see [CONTRIBUTING.md](./CONTRIBUTING.md) for details.
+We welcome contributions! Please see our [Contributing Guide](./CONTRIBUTING.md) for details.
 
 ## 🙏 Acknowledgments
 
