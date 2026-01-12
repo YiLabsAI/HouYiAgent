@@ -119,7 +119,7 @@ class NeuroSymbolicEngine:
             try:
                 output = await generator(self._feedback_context)
             except Exception as e:
-                logger.error(f"Generation failed: {e}")
+                logger.error("Generation failed: %s", e)
                 return None, False
 
             # Verify output
@@ -127,19 +127,19 @@ class NeuroSymbolicEngine:
             self.metrics.record_verification(result.passed)
 
             if result.passed:
-                logger.info(f"Verification passed on attempt {retry_count + 1}")
+                logger.info("Verification passed on attempt %d", retry_count + 1)
                 return output, True
 
             last_error = result
 
             # Audit mode: log but don't block
             if self.config.mode == VerificationMode.AUDIT:
-                logger.warning(f"Verification failed (audit mode): {result.error_message}")
+                logger.warning("Verification failed (audit mode): %s", result.error_message)
                 return output, True
 
             # Strict mode: fail immediately
             if self.config.mode == VerificationMode.STRICT:
-                logger.error(f"Verification failed (strict mode): {result.error_message}")
+                logger.error("Verification failed (strict mode): %s", result.error_message)
                 return output, False
 
             # Build structured feedback for LLM
@@ -152,7 +152,7 @@ class NeuroSymbolicEngine:
             )
             self._feedback_context.append(feedback)
 
-            logger.info(f"Built feedback for retry {retry_count + 1}: {result.error_type}")
+            logger.info("Built feedback for retry %d: %s", retry_count + 1, result.error_type)
 
             # Handle error with auto-fix if enabled
             if self.config.auto_fix:
@@ -184,7 +184,7 @@ class NeuroSymbolicEngine:
                 self.metrics.record_retry()
 
         # Max retries exceeded
-        logger.error(f"Verification failed after {retry_count} retries")
+        logger.error("Verification failed after %d retries", retry_count)
 
         # Final escalation
         if self.config.on_failure == "escalate":
@@ -254,7 +254,7 @@ class NeuroSymbolicEngine:
         )
 
         decision = await self.review_queue.submit(request)
-        logger.info(f"Human review decision: {decision}")
+        logger.info("Human review decision: %s", decision)
 
         return decision
 

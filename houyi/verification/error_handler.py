@@ -36,10 +36,10 @@ class AutoFixer:
         try:
             fixed, success = await verifier.auto_fix(output, error)
             if success:
-                logger.info(f"Auto-fixed error: {error.error_type}")
+                logger.info("Auto-fixed error: %s", error.error_type)
             return fixed, success
         except Exception as e:
-            logger.error(f"Auto-fix failed: {e}")
+            logger.error("Auto-fix failed: %s", e)
             return output, False
 
 
@@ -132,7 +132,7 @@ class ErrorHandler:
 
         # Security errors always escalate
         if classification == "security":
-            logger.warning(f"Security error detected: {error.error_type}")
+            logger.warning("Security error detected: %s", error.error_type)
             return output, "escalate"
 
         # Try auto-fix
@@ -143,7 +143,7 @@ class ErrorHandler:
 
         # Check if should escalate
         if self.should_escalate(error, retry_count, max_retries):
-            logger.info(f"Escalating error after {retry_count} retries: {error.error_type}")
+            logger.info("Escalating error after %d retries: %s", retry_count, error.error_type)
             return output, "escalate"
 
         # Retry

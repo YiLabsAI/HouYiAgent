@@ -240,6 +240,7 @@ class DAGPlanner:
             metadata={
                 "task": task,
                 "agent_role": agent.role,
+                "num_skills": len(agent.skills),
                 "direct_execution": True,
             },
         )

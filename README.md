@@ -157,7 +157,3 @@ We welcome contributions! Please see our [Contributing Guide](./CONTRIBUTING.md)
   - **AgentSkills.io** for skill interoperability and sharing
   - **MCP (Model Context Protocol)** for context management
   - **A2A (Agent-to-Agent)** protocol for multi-agent communication
-
----
-
-**Built with ❤️ for the AI agent community**

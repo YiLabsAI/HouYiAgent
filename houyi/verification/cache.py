@@ -274,7 +274,7 @@ class ConstraintSolverCache:
         result = self._cache.get(key)
 
         if result is not None:
-            logger.debug(f"Constraint cache hit for key: {key[:16]}...")
+            logger.debug("Constraint cache hit for key: %s...", key[:16])
 
         return result
 
@@ -295,7 +295,7 @@ class ConstraintSolverCache:
         """
         key = self._make_constraint_key(variables, constraints)
         self._cache.put(key, (is_satisfiable, violated_constraints))
-        logger.debug(f"Cached constraint result for key: {key[:16]}...")
+        logger.debug("Cached constraint result for key: %s...", key[:16])
 
     def get_stats(self) -> dict[str, Any]:
         """Get cache statistics."""
@@ -367,7 +367,7 @@ class VerificationResultCache:
         result = self._cache.get(key)
 
         if result is not None:
-            logger.debug(f"Verification cache hit for key: {key[:16]}...")
+            logger.debug("Verification cache hit for key: %s...", key[:16])
 
         return result
 
@@ -388,7 +388,7 @@ class VerificationResultCache:
         """
         key = self._make_verification_key(code, rule_id, rule_spec)
         self._cache.put(key, result)
-        logger.debug(f"Cached verification result for key: {key[:16]}...")
+        logger.debug("Cached verification result for key: %s...", key[:16])
 
     def invalidate_for_rule(self, rule_id: str) -> int:
         """Invalidate all cached results for a specific rule.

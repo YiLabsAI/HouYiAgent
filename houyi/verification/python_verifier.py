@@ -105,7 +105,7 @@ class PythonVerifier(Verifier):
                 except Exception as e:
                     import logging
 
-                    logging.warning(f"Constraint verification failed: {e}")
+                    logging.warning("Constraint verification failed: %s", e)
 
         return VerificationResult(rule_id=rule.rule_id, passed=True)
 
@@ -131,7 +131,7 @@ class PythonVerifier(Verifier):
             except Exception as e:
                 import logging
 
-                logging.warning(f"Failed to build constraint from spec {spec}: {e}")
+                logging.warning("Failed to build constraint from spec %s: %s", spec, e)
 
         return constraints
 
@@ -142,7 +142,7 @@ class PythonVerifier(Verifier):
         """Auto-fix Python errors."""
         if error.error_type in ["python_syntax", "python_indent"]:
             try:
-                import black
+                import black  # pylint: disable=import-error
 
                 return black.format_str(output, mode=black.Mode()), True
             except Exception:

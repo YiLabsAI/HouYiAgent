@@ -3,7 +3,19 @@
 import logging
 from typing import Any
 
-from z3 import And, Bool, Int, Not, Or, Real, Solver, String, sat, unknown, unsat
+from z3 import (  # pylint: disable=import-error
+    And,
+    Bool,
+    Int,
+    Not,
+    Or,
+    Real,
+    Solver,
+    String,
+    sat,
+    unknown,
+    unsat,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -158,7 +170,7 @@ class ConstraintSolver:
         """
         self.solver.add(constraint)
         self.constraints.append((name, constraint))
-        logger.debug(f"Added constraint: {name or 'unnamed'}")
+        logging.debug("Added constraint: %s", name or "unnamed")
 
     def check_satisfiability(self) -> tuple[bool, dict[str, Any]]:
         """Check if constraints are satisfiable with timeout protection.
@@ -180,7 +192,7 @@ class ConstraintSolver:
         # 2. Problem is too complex to decide
         # 3. Incomplete theory (rare for our use cases)
         if result == unknown:
-            logger.warning(f"Z3 solver timeout after {self.timeout_ms}ms")
+            logging.warning("Z3 solver timeout after %dms", self.timeout_ms)
             return False, {"timeout": True, "message": f"Solver timeout after {self.timeout_ms}ms"}
 
         if result == sat:
@@ -189,7 +201,7 @@ class ConstraintSolver:
             for var_name, var in self.variables.items():
                 if model[var] is not None:
                     solution[var_name] = model[var]
-            logger.info(f"Constraints satisfiable. Solution: {solution}")
+            logging.info("Constraints satisfiable. Solution: %s", solution)
             return True, solution
 
         elif result == unsat:
@@ -199,11 +211,11 @@ class ConstraintSolver:
             for i, (name, _) in enumerate(self.constraints):
                 if name and any(str(c) == str(self.constraints[i][1]) for c in core):
                     violated[name] = str(self.constraints[i][1])
-            logger.warning(f"Constraints unsatisfiable. Violated: {violated}")
+            logging.warning("Constraints unsatisfiable. Violated: %s", violated)
             return False, violated
 
         else:
-            logger.error("Z3 solver returned unknown result")
+            logging.error("Z3 solver returned unknown result")
             return False, {"error": "unknown"}
 
     def verify_constraints(
@@ -241,7 +253,7 @@ class ConstraintSolver:
 
             cached_result = self._cache.get_result(var_values, constraint_exprs)
             if cached_result is not None:
-                logger.debug("Cache hit: Using cached constraint result")
+                logging.debug("Cache hit: Using cached constraint result")
                 return cached_result
 
         self.reset()
@@ -274,7 +286,7 @@ class ConstraintSolver:
                 self.add_constraint(constraint_expr, constraint.name)
                 constraint_names.append(constraint.name)
             except Exception as e:
-                logger.error(f"Failed to parse constraint {constraint.name}: {e}")
+                logging.warning("Failed to build constraint from spec %s: %s", constraint.name, e)
                 violated.append(constraint.name)
 
         # OPTIMIZATION 2: Check satisfiability with timeout protection
@@ -354,7 +366,7 @@ class ConstraintSolver:
         try:
             return eval(expression, eval_context, {})
         except Exception as e:
-            logger.error(f"Failed to parse expression '{expression}': {e}")
+            logger.error("Failed to parse expression '%s': %s", expression, e)
             raise ValueError(f"Invalid constraint expression: {expression}") from e
 
     def reset(self) -> None:

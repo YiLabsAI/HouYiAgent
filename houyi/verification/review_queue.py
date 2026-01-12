@@ -50,7 +50,7 @@ class ReviewQueue:
         future: asyncio.Future = asyncio.Future()
         self.pending_futures[request.request_id] = future
 
-        logger.info(f"Submitted review request: {request.request_id}")
+        logger.info("Submitted review request: %s", request.request_id)
 
         # Notify (in real implementation, this would send to Slack/email)
         await self._notify_reviewers(request)
@@ -60,7 +60,7 @@ class ReviewQueue:
             decision = await asyncio.wait_for(future, timeout=request.timeout_seconds)
             return decision
         except asyncio.TimeoutError:
-            logger.warning(f"Review request timed out: {request.request_id}")
+            logger.warning("Review request timed out: %s", request.request_id)
             request.status = "timeout"
             return "timeout"
         finally:
@@ -91,7 +91,7 @@ class ReviewQueue:
         if future and not future.done():
             future.set_result("approved")
 
-        logger.info(f"Review request approved by {reviewer}: {request_id}")
+        logger.info("Review request approved by %s: %s", reviewer, request_id)
         return True
 
     async def reject(self, request_id: str, reviewer: str, reason: str | None = None) -> bool:
@@ -119,7 +119,7 @@ class ReviewQueue:
         if future and not future.done():
             future.set_result("rejected")
 
-        logger.info(f"Review request rejected by {reviewer}: {request_id}")
+        logger.info("Review request rejected by %s: %s", reviewer, request_id)
         return True
 
     async def _notify_reviewers(self, request: ReviewRequest) -> None:
@@ -129,7 +129,9 @@ class ReviewQueue:
             request: Review request
         """
         # In real implementation, send to Slack/email/dashboard
-        logger.info(f"[NOTIFICATION] Review needed: {request.error_type} - {request.error_message}")
+        logger.info(
+            "[NOTIFICATION] Review needed: %s - %s", request.error_type, request.error_message
+        )
 
     def get_pending_requests(self) -> list[ReviewRequest]:
         """Get all pending review requests.

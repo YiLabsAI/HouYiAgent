@@ -133,7 +133,7 @@ class FeedbackBuilder:
             previous_attempts=self._attempt_history.copy(),
         )
 
-        logger.info(f"Built feedback for error: {error_type}")
+        logger.info("Built feedback for error: %s", error_type)
         return feedback
 
     def _truncate_message(self, message: str) -> str:

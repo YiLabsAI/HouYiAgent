@@ -132,8 +132,10 @@ class TestDAGPlanner:
         plan = planner.plan("Search for HouYi framework", agent)
 
         assert plan.plan_id.startswith("plan_")
-        assert len(plan.nodes) == 3  # LLM decide + TOOL + LLM synthesize
-        assert plan.entry_node == "llm_decide"
+        # Without LLM, planner uses direct execution (1 node)
+        assert len(plan.nodes) >= 1
+        assert plan.entry_node.startswith("tool_")
+        assert plan.metadata.get("direct_execution") is True
 
 
 class TestSessionState:

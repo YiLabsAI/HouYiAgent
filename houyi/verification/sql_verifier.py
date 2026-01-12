@@ -189,7 +189,7 @@ class SQLVerifier(Verifier):
                     # Log but don't fail on constraint checking errors
                     import logging
 
-                    logging.warning(f"Constraint verification failed: {e}")
+                    logging.warning("Constraint verification failed: %s", e)
 
         # All checks passed
         return VerificationResult(
@@ -220,7 +220,7 @@ class SQLVerifier(Verifier):
             except Exception as e:
                 import logging
 
-                logging.warning(f"Failed to build constraint from spec {spec}: {e}")
+                logging.warning("Failed to build constraint from spec %s: %s", spec, e)
 
         return constraints
 

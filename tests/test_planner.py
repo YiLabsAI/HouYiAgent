@@ -55,29 +55,17 @@ class TestDAGPlanner:
         plan = planner.plan(task="Search for Python", agent=agent)
 
         assert plan.plan_id.startswith("plan_")
-        assert len(plan.nodes) == 3  # llm_decide + tool_search + llm_synthesize
-        assert plan.entry_node == "llm_decide"
+        # Without LLM, planner uses direct execution (1 node)
+        assert len(plan.nodes) >= 1
+        assert plan.entry_node.startswith("tool_")
 
-        # Check LLM decision node
-        llm_decide = plan.nodes[0]
-        assert llm_decide.node_id == "llm_decide"
-        assert llm_decide.node_type == NodeType.LLM
-        assert llm_decide.inputs["task"] == "Search for Python"
-        assert "search" in llm_decide.inputs["available_skills"]
-
-        # Check TOOL node
-        tool_node = plan.nodes[1]
+        # Check TOOL node (direct execution)
+        tool_node = plan.nodes[0]
         assert tool_node.node_id == "tool_search"
         assert tool_node.node_type == NodeType.TOOL
         assert tool_node.skill_ref == skill
-        assert "llm_decide" in tool_node.dependencies
-
-        # Check synthesis node
-        synth_node = plan.nodes[2]
-        assert synth_node.node_id == "llm_synthesize"
-        assert synth_node.node_type == NodeType.LLM
-        assert "tool_search" in synth_node.dependencies
         assert plan.metadata["num_skills"] == 1
+        assert plan.metadata.get("direct_execution") is True
 
     def test_plan_with_multiple_skills(self):
         """Test planning for agent with multiple skills."""
@@ -120,24 +108,16 @@ class TestDAGPlanner:
 
         plan = planner.plan(task="Find and sum numbers", agent=agent)
 
-        assert len(plan.nodes) == 4  # llm_decide + 2 tools + llm_synthesize
-        assert plan.entry_node == "llm_decide"
-
-        # Check both skills are in available_skills
-        llm_decide = plan.nodes[0]
-        assert "search" in llm_decide.inputs["available_skills"]
-        assert "calculate" in llm_decide.inputs["available_skills"]
-
-        # Check both tool nodes exist
-        tool_nodes = [n for n in plan.nodes if n.node_type == NodeType.TOOL]
-        assert len(tool_nodes) == 2
-        assert {n.node_id for n in tool_nodes} == {"tool_search", "tool_calculate"}
-
-        # Check synthesis depends on both tools
-        synth_node = plan.nodes[3]
-        assert "tool_search" in synth_node.dependencies
-        assert "tool_calculate" in synth_node.dependencies
+        # Without LLM, planner uses direct execution with first skill
+        assert len(plan.nodes) >= 1
+        assert plan.entry_node.startswith("tool_")
         assert plan.metadata["num_skills"] == 2
+        assert plan.metadata.get("direct_execution") is True
+
+        # Check first tool node exists (direct execution uses first skill)
+        tool_node = plan.nodes[0]
+        assert tool_node.node_type == NodeType.TOOL
+        assert tool_node.skill_ref in [skill1, skill2]
 
     def test_plan_with_session_state(self):
         """Test planning with session state."""

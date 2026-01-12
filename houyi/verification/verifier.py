@@ -103,7 +103,7 @@ class Verifier(ABC):
 
             cached_result = self._cache.get_result(cache_key, rule.rule_id, rule.rule_spec)
             if cached_result is not None:
-                logger.debug(f"Cache hit for rule {rule.rule_id}")
+                logger.debug("Cache hit for rule %s", rule.rule_id)
                 return cached_result
 
         # Perform actual verification
@@ -115,7 +115,7 @@ class Verifier(ABC):
             cache_key = f"{type(output).__name__}:{repr(output)}"
 
             self._cache.put_result(cache_key, rule.rule_id, rule.rule_spec, result)
-            logger.debug(f"Cached result for rule {rule.rule_id}")
+            logger.debug("Cached result for rule %s", rule.rule_id)
 
         return result
 

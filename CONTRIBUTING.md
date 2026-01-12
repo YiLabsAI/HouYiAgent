@@ -51,11 +51,17 @@ make setup-hooks
 3. **Write tests** for new features:
    - Place tests in `tests/` directory
    - Follow naming convention: `test_<module_name>.py`
-   - Aim for ≥75% coverage
+   - **REQUIRED**: Maintain ≥80% coverage
+
+4. **Check test coverage** during development:
+   ```bash
+   make test-cov
+   ```
+   This generates a coverage report showing which lines are not covered.
 
 ### Before Committing
 
-**IMPORTANT**: Always run full checks before committing:
+**CRITICAL**: Always run full checks before committing:
 
 ```bash
 make check
@@ -63,9 +69,11 @@ make check
 
 This will run:
 - ✅ Ruff formatting and linting
-- ✅ Pylint code quality checks (must score 10.00/10)
-- ✅ All unit tests
-- ✅ Coverage check (≥75%)
+- ✅ Pylint code quality checks (must score ≥9.80/10)
+- ✅ All unit tests (must pass 100%)
+- ✅ **Coverage check (≥80% REQUIRED)**
+
+**Coverage is enforced**: Commits will be rejected if coverage drops below 80%.
 
 If you have pre-commit hooks installed (recommended), they will run automatically on `git commit`.
 

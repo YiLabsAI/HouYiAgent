@@ -262,7 +262,7 @@ class LocalExecutor:
                     params[field_name] = task
                     break
                 # Handle list parameters
-                elif hasattr(field_type, "__origin__") and field_type.__origin__ is list:
+                if hasattr(field_type, "__origin__") and field_type.__origin__ is list:
                     params[field_name] = [task]
                     break
 
@@ -280,7 +280,7 @@ class LocalExecutor:
                 if param_type is str:
                     params[param_name] = task
                     break
-                elif hasattr(param_type, "__origin__") and param_type.__origin__ is list:
+                if hasattr(param_type, "__origin__") and param_type.__origin__ is list:
                     params[param_name] = [task]
                     break
 
