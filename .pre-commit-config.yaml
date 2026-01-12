@@ -19,6 +19,14 @@ repos:
         entry: ruff format
         language: system
         types_or: [python, pyi]
+      # Run pylint for code quality checks
+      - id: pylint
+        name: pylint
+        entry: pylint
+        language: system
+        types: [python]
+        args: [--rcfile=.pylintrc]
+        files: ^houyi/
 
   # Basic file checks (using local tools)
   - repo: local

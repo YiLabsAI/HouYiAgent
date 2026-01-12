@@ -142,7 +142,7 @@ class PythonVerifier(Verifier):
         """Auto-fix Python errors."""
         if error.error_type in ["python_syntax", "python_indent"]:
             try:
-                import black  # pylint: disable=import-error
+                import black
 
                 return black.format_str(output, mode=black.Mode()), True
             except Exception:

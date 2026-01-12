@@ -3,7 +3,7 @@
 import logging
 from typing import Any
 
-from z3 import (  # pylint: disable=import-error
+from z3 import (
     And,
     Bool,
     Int,
@@ -305,7 +305,7 @@ class ConstraintSolver:
             # Timeout occurred: Z3 couldn't solve within time limit
             # This is acceptable behavior - we return conservative result (fail)
             # rather than hanging indefinitely
-            logger.warning(f"Constraint solving timeout after {self.timeout_ms}ms")
+            logger.warning("Constraint solving timeout after %dms", self.timeout_ms)
             is_sat = False
             violated_list = ["timeout"]
         elif result == unsat:

@@ -39,6 +39,8 @@ disable=
     too-many-statements,
     too-many-instance-attributes,
     too-many-positional-arguments,
+    # Too many return statements (complex verification logic requires multiple exits)
+    too-many-return-statements,
     # Fixme comments are okay during development
     fixme,
     # Protected access is sometimes necessary
@@ -75,7 +77,15 @@ disable=
     # Trailing newlines
     trailing-newlines,
     # Unspecified encoding (now fixed)
-    unspecified-encoding
+    unspecified-encoding,
+    # Global statement (acceptable for singleton pattern)
+    global-statement,
+    # Global variable not assigned (acceptable for read-only global access)
+    global-variable-not-assigned,
+    # Import error (false positives for optional dependencies like black, z3)
+    import-error,
+    # Unsubscriptable object (false positives with Pydantic models)
+    unsubscriptable-object
 
 [REPORTS]
 # Set the output format
