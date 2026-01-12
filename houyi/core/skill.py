@@ -34,6 +34,14 @@ class SkillSpec(BaseModel):
         default_factory=dict,
         description="SLA constraints (timeout, cost, etc.)",
     )
+    verification_config: Any = Field(
+        default=None,
+        description="Skill-level verification configuration",
+    )
+    metadata: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Additional metadata (output_type, etc.)",
+    )
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 

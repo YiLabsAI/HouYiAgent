@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+from houyi.core.skill import SkillSpec
 from houyi.orchestration.plan import ExecutionPlan, IRNode, NodeType
 from houyi.orchestration.state import SessionState
 
@@ -210,8 +211,19 @@ class LocalExecutor:
             from houyi.execution.skill_executor import SkillExecutor
 
             executor = SkillExecutor()
+
+            # Check if this is direct execution mode (no LLM)
+            is_direct_mode = node.metadata.get("direct_execution", False)
+
+            if is_direct_mode:
+                # Extract parameters from task string using skill schema
+                params = self._extract_params_from_task(inputs.get("task", ""), skill)
+            else:
+                # Use params from LLM decision
+                params = inputs.get("params", {})
+
             try:
-                result = await executor.execute(skill, inputs.get("params", {}))
+                result = await executor.execute(skill, params)
                 return {"result": result}
             except Exception as e:
                 # Fallback to placeholder on error
@@ -219,6 +231,60 @@ class LocalExecutor:
 
         # Placeholder implementation
         return {"result": f"Result from {skill.name}"}
+
+    def _extract_params_from_task(self, task: str, skill: SkillSpec) -> dict[str, Any]:
+        """Extract skill parameters from task string.
+
+        Simple heuristic-based parameter extraction for fallback mode.
+
+        Args:
+            task: Task description string
+            skill: Skill specification
+
+        Returns:
+            Dictionary of extracted parameters
+        """
+        import inspect
+        from typing import get_type_hints
+
+        params = {}
+
+        # Get skill input schema fields
+        if hasattr(skill.input_schema, "model_fields"):
+            fields = skill.input_schema.model_fields
+
+            # Simple heuristic: use task as first string parameter
+            for field_name, field_info in fields.items():
+                field_type = field_info.annotation
+
+                # Handle string parameters
+                if field_type is str or str(field_type) == "<class 'str'>":
+                    params[field_name] = task
+                    break
+                # Handle list parameters
+                elif hasattr(field_type, "__origin__") and field_type.__origin__ is list:
+                    params[field_name] = [task]
+                    break
+
+        # If no params extracted, try using original function signature
+        if not params and hasattr(skill, "_original_func"):
+            sig = inspect.signature(skill._original_func)
+            hints = get_type_hints(skill._original_func)
+
+            for param_name, _param in sig.parameters.items():
+                if param_name == "self":
+                    continue
+
+                param_type = hints.get(param_name, str)
+
+                if param_type is str:
+                    params[param_name] = task
+                    break
+                elif hasattr(param_type, "__origin__") and param_type.__origin__ is list:
+                    params[param_name] = [task]
+                    break
+
+        return params
 
     async def _execute_verify_node(self, node: IRNode, inputs: dict[str, Any]) -> dict[str, Any]:
         """Execute VERIFY node.
@@ -230,5 +296,43 @@ class LocalExecutor:
         Returns:
             Verification result
         """
-        # TODO: Implement assertion verification
-        return {"verified": True}
+        from houyi.verification import ConstraintChecker, PythonVerifier, SQLVerifier
+
+        if not node.verification_rules:
+            return {"verified": True}
+
+        # Get output to verify
+        output = inputs.get("output")
+        if output is None:
+            return {"verified": False, "error": "No output to verify"}
+
+        # Run all verification rules
+        all_passed = True
+        errors = []
+
+        for rule in node.verification_rules:
+            # Select verifier based on type
+            verifier = None
+            if rule.verifier_type == "sql":
+                verifier = SQLVerifier()
+            elif rule.verifier_type == "python":
+                verifier = PythonVerifier()
+            elif rule.verifier_type == "constraint":
+                verifier = ConstraintChecker()
+
+            if verifier:
+                result = await verifier.verify(output, rule)
+                if not result.passed:
+                    all_passed = False
+                    errors.append(
+                        {
+                            "rule_id": result.rule_id,
+                            "error_type": result.error_type,
+                            "error_message": result.error_message,
+                        }
+                    )
+
+        return {
+            "verified": all_passed,
+            "errors": errors if not all_passed else None,
+        }

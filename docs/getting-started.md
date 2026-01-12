@@ -37,26 +37,57 @@ pip install -e .
 
 ## Quick Start
 
-### 1. Basic Agent
+### 1. Basic Agent (Without LLM)
 
-Create your first agent in just 2 lines:
+For simple demos and testing, you can create agents without LLM:
 
 ```python
 from houyi import Agent, tool
 
-# Define a skill
 @tool
 def search(query: str) -> list[str]:
     """Search the web for information."""
     return [f"Result for {query}"]
 
-# Create an agent
+# Create an agent (uses fallback mode without LLM)
 agent = Agent(role="Researcher", skills=[search])
 
 # Run it
-result = agent.run("What is HouYi?")
+result = agent.run("What is AI?")
 print(result)
 ```
+
+> **Note**: Without LLM, the agent uses simple heuristics to extract parameters from the task string. This works for basic scenarios but is limited for complex tasks.
+
+### Agent with LLM (Recommended)
+
+For production use, configure an LLM adapter:
+
+```python
+from houyi import Agent, tool
+from houyi.llm import OpenAIAdapter
+
+@tool
+def search(query: str) -> list[str]:
+    """Search the web for information."""
+    return [f"Result for {query}"]
+
+# Create agent with OpenAI
+agent = Agent(
+    role="Researcher",
+    skills=[search],
+    llm=OpenAIAdapter(
+        model="gpt-4",
+        api_key="your-api-key"  # or set OPENAI_API_KEY env var
+    )
+)
+
+result = agent.run("What is AI?")
+```
+
+**Supported LLM Adapters**:
+- `OpenAIAdapter` - OpenAI models (GPT-4, GPT-3.5, etc.)
+- `AnthropicAdapter` - Anthropic models (Claude 3.5 Sonnet, etc.)
 
 ### 2. Agent with LLM
 

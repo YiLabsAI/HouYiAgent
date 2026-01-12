@@ -23,7 +23,7 @@ class Agent:
         self,
         role: str,
         skills: list[SkillSpec] | None = None,
-        llm: str = "gpt-4",
+        llm: Any = None,
         memory: bool = False,
         system_prompt: str | None = None,
         observability: dict | None = None,

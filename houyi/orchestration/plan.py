@@ -8,6 +8,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from houyi.core.skill import SkillSpec
+from houyi.verification.verifier import VerificationRule
 
 
 class NodeType(str, Enum):
@@ -27,6 +28,9 @@ class IRNode(BaseModel):
     node_type: NodeType = Field(..., description="Type of execution node")
     skill_ref: SkillSpec | None = Field(
         default=None, description="Skill reference (for TOOL nodes)"
+    )
+    verification_rules: list[VerificationRule] | None = Field(
+        default=None, description="Verification rules (for VERIFY nodes)"
     )
     inputs: dict[str, Any] = Field(
         default_factory=dict,

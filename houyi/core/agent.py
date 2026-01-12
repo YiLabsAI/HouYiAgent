@@ -21,7 +21,11 @@ class AgentSpec(BaseModel):
     system_prompt: str | None = Field(default=None, description="Optional custom system prompt")
     policies: dict[str, Any] = Field(
         default_factory=dict,
-        description="Policy configuration (LLM, retry, timeout, cost budget, etc.)",
+        description="Agent policies (LLM, memory, etc.)",
+    )
+    verification_config: Any = Field(
+        default=None,
+        description="Agent-level verification configuration",
     )
 
     def to_system_prompt(self) -> str:

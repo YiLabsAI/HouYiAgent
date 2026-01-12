@@ -17,6 +17,9 @@ def analyze(data: list[str]) -> str:
 
 
 # 2. Create agents
+# Note: For production use, configure LLM adapter:
+#   from houyi.llm import OpenAIAdapter
+#   researcher = Agent(role="Researcher", skills=[search], llm=OpenAIAdapter(api_key="..."))
 researcher = Agent(role="Researcher", skills=[search])
 
 analyst = Agent(role="Analyst", skills=[analyze])

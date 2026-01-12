@@ -51,13 +51,17 @@ dmypy.json
 # Ruff
 .ruff_cache/
 
-# Design docs (ignore)
+docs/design/archive/
 docs/design/
-docs/roadmap.md
-Design.md
-PROJECT_ROADMAP.md
+docs/verification/
+docs/progress/
 RELEASE_*.md
+Design.md
+ROADMAP.md
+*SUMMARY*.md
 CODE_REVIEW*.md
+*backup*
+*bak*
 
 reports/
 datasets/
