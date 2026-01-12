@@ -135,13 +135,13 @@ class TestConstraintSolverPerformance:
 
         # Benchmark
         iterations = 100
-        start_time = time.time()
+        start_time = time.perf_counter()
 
         for _ in range(iterations):
             solver.verify_constraints(constraints, values)
             solver.reset()
 
-        elapsed = time.time() - start_time
+        elapsed = time.perf_counter() - start_time
         latency = (elapsed / iterations) * 1000  # Convert to ms
         throughput = iterations / elapsed
 
@@ -179,12 +179,12 @@ class TestConstraintSolverPerformance:
 
         # Benchmark with cache hits
         iterations = 100  # Reduced for more realistic test
-        start_time = time.time()
+        start_time = time.perf_counter()
 
         for _ in range(iterations):
             solver.verify_constraints(constraints, values)
 
-        elapsed = time.time() - start_time
+        elapsed = time.perf_counter() - start_time
         latency = (elapsed / iterations) * 1000  # Convert to ms
         throughput = iterations / elapsed
 
@@ -219,11 +219,11 @@ class TestConstraintSolverPerformance:
         values = {"x": 10, "y": 20}
 
         iterations = 100
-        start = time.time()
+        start = time.perf_counter()
         for _ in range(iterations):
             solver_no_cache.verify_constraints(constraints, values)
             solver_no_cache.reset()
-        time_no_cache = time.time() - start
+        time_no_cache = time.perf_counter() - start
 
         # With cache
         clear_all_caches()
@@ -233,10 +233,10 @@ class TestConstraintSolverPerformance:
         solver_with_cache.verify_constraints(constraints, values)
 
         # Measure cached performance
-        start = time.time()
+        start = time.perf_counter()
         for _ in range(iterations):
             solver_with_cache.verify_constraints(constraints, values)
-        time_with_cache = time.time() - start
+        time_with_cache = time.perf_counter() - start
 
         speedup = time_no_cache / time_with_cache if time_with_cache > 0 else 0
 
@@ -277,13 +277,13 @@ class TestVerificationPerformance:
 
         # Benchmark
         iterations = 50
-        start_time = time.time()
+        start_time = time.perf_counter()
 
         for _ in range(iterations):
             for query in queries:
                 await verifier.verify(query, rule)
 
-        elapsed = time.time() - start_time
+        elapsed = time.perf_counter() - start_time
         total_ops = iterations * len(queries)
         throughput = total_ops / elapsed
         avg_latency = (elapsed / total_ops) * 1000
@@ -321,13 +321,13 @@ class TestVerificationPerformance:
 
         # Benchmark
         iterations = 50
-        start_time = time.time()
+        start_time = time.perf_counter()
 
         for _ in range(iterations):
             for code in code_samples:
                 await verifier.verify(code, rule)
 
-        elapsed = time.time() - start_time
+        elapsed = time.perf_counter() - start_time
         total_ops = iterations * len(code_samples)
         throughput = total_ops / elapsed
         avg_latency = (elapsed / total_ops) * 1000
@@ -364,16 +364,16 @@ class TestVerificationPerformance:
         query = "SELECT * FROM users WHERE id = 1;"
 
         # First verification (cache miss)
-        start = time.time()
+        start = time.perf_counter()
         await verifier.verify(query, rule)
-        time_miss = time.time() - start
+        time_miss = time.perf_counter() - start
 
         # Subsequent verifications (cache hits)
         times_hit = []
         for _ in range(100):
-            start = time.time()
+            start = time.perf_counter()
             await verifier.verify(query, rule)
-            times_hit.append(time.time() - start)
+            times_hit.append(time.perf_counter() - start)
 
         avg_time_hit = statistics.mean(times_hit)
         speedup = time_miss / avg_time_hit if avg_time_hit > 0 else 0
@@ -406,17 +406,17 @@ class TestConcurrentPerformance:
         queries = [f"SELECT * FROM users WHERE id = {i};" for i in range(100)]
 
         # Sequential execution
-        start = time.time()
+        start = time.perf_counter()
         for query in queries:
             await verifier.verify(query, rule)
-        sequential_time = time.time() - start
+        sequential_time = time.perf_counter() - start
 
         # Concurrent execution
         clear_all_caches()
-        start = time.time()
+        start = time.perf_counter()
         tasks = [verifier.verify(query, rule) for query in queries]
         await asyncio.gather(*tasks)
-        concurrent_time = time.time() - start
+        concurrent_time = time.perf_counter() - start
 
         speedup = sequential_time / concurrent_time if concurrent_time > 0 else 0
 
@@ -450,10 +450,10 @@ class TestConcurrentPerformance:
 
         # Concurrent verification with cache
         num_tasks = 1000
-        start = time.time()
+        start = time.perf_counter()
         tasks = [verifier.verify(query, rule) for _ in range(num_tasks)]
         await asyncio.gather(*tasks)
-        elapsed = time.time() - start
+        elapsed = time.perf_counter() - start
 
         throughput = num_tasks / elapsed
         cache_stats = cache.get_stats()
@@ -523,13 +523,13 @@ class TestEndToEndPerformance:
 
         # Benchmark
         iterations = 50
-        start_time = time.time()
+        start_time = time.perf_counter()
 
         for _ in range(iterations):
             engine.clear_feedback_context()
             await engine.generate_and_verify(generator, verifier, rule)
 
-        elapsed = time.time() - start_time
+        elapsed = time.perf_counter() - start_time
         throughput = iterations / elapsed
         avg_latency = (elapsed / iterations) * 1000
 
