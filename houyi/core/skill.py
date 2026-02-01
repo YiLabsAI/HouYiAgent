@@ -5,11 +5,19 @@ import re
 import urllib.error
 import urllib.request
 from collections.abc import Callable
+from enum import Enum
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Field, create_model
+
+
+class ExecutionMode(str, Enum):
+    PYTHON = "python"
+    CLIENT = "client"
+    PLUGIN = "plugin"
+    MCP = "mcp"
 
 
 class SkillSpec(BaseModel):
@@ -33,6 +41,10 @@ class SkillSpec(BaseModel):
     constraints: dict[str, Any] = Field(
         default_factory=dict,
         description="SLA constraints (timeout, cost, etc.)",
+    )
+    execution_mode: ExecutionMode = Field(
+        default=ExecutionMode.PYTHON,
+        description="How the skill is executed (python/plugin/mcp)",
     )
     verification_config: Any = Field(
         default=None,

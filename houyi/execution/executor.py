@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import warnings
 from typing import Any
 
 from houyi.core.agent import AgentSpec
@@ -27,6 +28,11 @@ class SimplifiedExecutor:
         Returns:
             Execution result (placeholder)
         """
+        warnings.warn(
+            "SimplifiedExecutor is deprecated and will be replaced by LocalExecutor.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         # TODO: Implement actual LLM call and skill execution
         # For now, return placeholder result
 
