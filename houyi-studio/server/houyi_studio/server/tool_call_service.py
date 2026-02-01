@@ -43,7 +43,7 @@ class ToolCallService:
         self.tool_call_cache = tool_call_cache
         self.llm_tool_call_cache = llm_tool_call_cache
         self.skill_registry = skill_registry or DEFAULT_SKILL_REGISTRY
-        self.tool_call_runner = ToolCallRunnerService(skill_registry=self.skill_registry)
+        self.tool_call_runner = ToolCallRunnerService()
 
     async def execute_tool_calls(
         self,
