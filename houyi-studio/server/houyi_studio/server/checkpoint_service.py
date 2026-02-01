@@ -109,6 +109,19 @@ class CheckpointService:
                 )
             )
 
+        def _normalize_payload(value: Any) -> dict[str, Any]:
+            if isinstance(value, dict):
+                return value
+            if hasattr(value, "model_dump"):
+                dumped = value.model_dump()
+                if isinstance(dumped, dict):
+                    return dumped
+            if hasattr(value, "dict"):
+                dumped = value.dict()
+                if isinstance(dumped, dict):
+                    return dumped
+            return {"value": value}
+
         for node_payload in outcome.node_statuses:
             await self._observation_service.emit(
                 NodeStatusEvent(
@@ -117,8 +130,8 @@ class CheckpointService:
                     execution_id=node_payload.execution_id,
                     node_id=node_payload.node_id,
                     status=node_payload.status,
-                    inputs=node_payload.inputs,
-                    outputs=node_payload.outputs,
+                    inputs=_normalize_payload(node_payload.inputs),
+                    outputs=_normalize_payload(node_payload.outputs),
                     error=node_payload.error,
                 )
             )

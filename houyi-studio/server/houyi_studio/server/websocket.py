@@ -7,7 +7,6 @@ import logging
 from typing import Any
 
 from fastapi import WebSocket, WebSocketDisconnect
-from starlette.websockets import WebSocketState
 
 from .events import ServerEvent
 from .logging_config import truncate_payload
@@ -120,13 +119,7 @@ class ConnectionManager:
         except WebSocketDisconnect:
             return None
         except RuntimeError:
-            # Starlette can raise RuntimeError when receive_* is called on a websocket
-            # that is no longer connected / accepted (often due to a race during disconnect).
-            # Use websocket state (not string matching) to decide if we should treat it as closed.
-            state = getattr(websocket, "client_state", None)
-            if state in (WebSocketState.DISCONNECTED, WebSocketState.CONNECTING):
-                return None
-            raise
+            return None
         except json.JSONDecodeError as e:
             logger.error("[WebSocket] JSON decode error: %s", e)
             return None
