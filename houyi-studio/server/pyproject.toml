@@ -1,0 +1,26 @@
+[project]
+name = "houyi-studio-server"
+version = "0.1.0"
+description = "HouYi Studio server (FastAPI/WebSocket)"
+requires-python = ">=3.11"
+dependencies = [
+  "houyi",
+  "fastapi>=0.104.0",
+  "uvicorn[standard]>=0.24.0",
+  "websockets>=12.0",
+  "python-dotenv>=1.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=7.4.0",
+  "pytest-asyncio>=0.21.0",
+]
+
+[build-system]
+requires = ["setuptools>=68.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["houyi_studio*"]
