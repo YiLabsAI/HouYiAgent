@@ -24,15 +24,15 @@ help:
 	@echo ""
 	@echo "Cleanup:"
 	@echo "  make clean            Remove cache and build files"
+	@echo ""
 
 # Installation
 install:
-	pip install -r requirements.txt
+	pip install -e .
 
 install-dev:
-	pip install -r requirements.txt
 	pip install -e ".[dev]"
-	pip install pre-commit ruff pylint pytest pytest-asyncio pytest-cov
+	pip install pre-commit pylint
 
 setup-hooks:
 	pre-commit install

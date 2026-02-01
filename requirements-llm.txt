@@ -1,7 +1,0 @@
-# LLM Integration Dependencies
-
-# OpenAI support
-openai>=1.0.0
-
-# Anthropic support
-anthropic>=0.18.0

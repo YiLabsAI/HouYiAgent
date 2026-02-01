@@ -16,7 +16,7 @@ conda create -n houyi python=3.11 -y
 conda activate houyi
 
 # Install dependencies
-pip install -r requirements.txt
+pip install -e .
 pip install -e ".[dev]"
 ```
 
@@ -24,8 +24,8 @@ pip install -e ".[dev]"
 
 - **Python**: 3.10+ (3.11 recommended)
 - **Environment**: Conda for isolation
-- **Package manager**: `pip` with `requirements.txt`
-- **Dependency management**: `pyproject.toml` for dev dependencies
+- **Package manager**: `pip` (editable installs)
+- **Dependency management**: `pyproject.toml`
 - **Lint/format**: `ruff` for code formatting
 - **Code quality**: `pylint` for comprehensive code quality checks
 - **Type checking**: `mypy`
@@ -40,7 +40,7 @@ All commands should be run within the activated conda environment:
 conda activate houyi
 
 # Install production dependencies
-pip install -r requirements.txt
+pip install -e .
 
 # Install in development mode with dev dependencies
 pip install -e ".[dev]"

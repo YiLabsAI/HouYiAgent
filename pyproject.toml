@@ -6,16 +6,17 @@ authors = [
     {name = "HouYi Team"}
 ]
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = {text = "MIT"}
 keywords = ["agent", "multi-agent", "llm", "neuro-symbolic", "orchestration"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+
 ]
 
 dependencies = [
@@ -33,6 +34,22 @@ dev = [
     "pytest-cov>=4.1.0",
     "ruff>=0.1.0",
     "mypy>=1.5.0",
+    "httpx>=0.25.0",
+]
+
+studio-server = [
+    "fastapi>=0.104.0",
+    "uvicorn[standard]>=0.24.0",
+    "websockets>=12.0",
+]
+
+websearch-tavily = [
+    "tavily-python>=0.3.0",
+]
+
+websearch-readability = [
+    "readability-lxml>=0.8.1",
+    "beautifulsoup4>=4.11.0",
 ]
 
 distributed = [
@@ -46,7 +63,7 @@ model-adapters = [
 ]
 
 all = [
-    "houyi[dev,distributed,model-adapters]",
+    "houyi[dev,studio-server,distributed,model-adapters,websearch-tavily,websearch-readability]",
 ]
 
 [build-system]
@@ -56,10 +73,18 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["houyi*"]
+exclude = [
+    "houyi.studio.server",
+    "houyi.studio.server.*",
+]
 
 [tool.ruff]
 line-length = 100
 target-version = "py310"
+extend-exclude = [
+    "houyi/houyi/studio/server/_stash_extra_stash0_full_dump",
+    "houyi/houyi/studio/server/_stash_extra_stash3_console_server",
+]
 
 [tool.ruff.lint]
 select = [
@@ -101,4 +126,7 @@ addopts = "--cov=houyi --cov-report=term-missing"
 python_classes = ["Test*", "!TestCase"]
 filterwarnings = [
     "ignore::pytest.PytestCollectionWarning"
+]
+markers = [
+    "benchmark: performance benchmark tests",
 ]

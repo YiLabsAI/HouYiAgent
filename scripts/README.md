@@ -2,6 +2,8 @@
 
 This directory contains scripts to help maintain code quality.
 
+It also includes convenience scripts for starting the HouYi Studio backend and UI during development.
+
 ## Quick Reference
 
 ```bash
@@ -14,6 +16,52 @@ This directory contains scripts to help maintain code quality.
 # Or use Makefile (easier)
 make quick-check
 make check
+```
+
+## Pre-Commit Verification
+
+Before committing, make sure the quick checks are green:
+
+```bash
+make quick-check
+```
+
+For a more comprehensive local check, run:
+
+```bash
+make check
+```
+
+These commands are the canonical entrypoints. The shell scripts below are convenience wrappers.
+
+## Startup Scripts (Development)
+
+### All-in-one: `dev.sh`
+
+Starts the backend and the UI in a single tmux session.
+
+```bash
+./scripts/dev.sh
+```
+
+Notes:
+- This script expects `tmux` to be installed.
+- The backend is started via `python -m houyi_studio.server.app`.
+
+### Split: `restart-backend.sh`
+
+Restarts only the backend (useful when iterating on Python code).
+
+```bash
+./scripts/restart-backend.sh
+```
+
+### Split: `restart-frontend.sh`
+
+Restarts only the UI (useful when iterating on frontend code).
+
+```bash
+./scripts/restart-frontend.sh
 ```
 
 ## Scripts

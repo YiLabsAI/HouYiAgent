@@ -29,6 +29,7 @@ ENV/
 # Testing
 .pytest_cache/
 .coverage
+coverage.xml
 htmlcov/
 .tox/
 
@@ -50,6 +51,15 @@ dmypy.json
 
 # Ruff
 .ruff_cache/
+
+.env
+tests/.env
+.stash-archive/
+data/
+console-ui/
+docs/console/
+
+houyi/houyi/studio/server/_stash_extra_*/
 
 docs/design/archive/
 docs/design/
