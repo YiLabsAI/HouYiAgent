@@ -22,7 +22,7 @@ pip install -e ".[dev]"
 
 ### Development Tools
 
-- **Python**: 3.10+ (3.11 recommended)
+- **Python**: 3.11+
 - **Environment**: Conda for isolation
 - **Package manager**: `pip` (editable installs)
 - **Dependency management**: `pyproject.toml`

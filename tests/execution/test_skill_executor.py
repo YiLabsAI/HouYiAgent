@@ -1,6 +1,7 @@
 """Tests for SkillExecutor - core skill execution engine."""
 
 import asyncio
+from typing import Any
 
 import pytest
 from pydantic import BaseModel, ValidationError
@@ -38,6 +39,59 @@ class TestSkillExecutor:
         result = await executor.execute(skill, {"x": 3, "y": 5})
 
         assert result["result"] == 8
+
+    @pytest.mark.asyncio
+    async def test_execute_kwargs_executor(self) -> None:
+        class Input(BaseModel):
+            a: int
+            b: int
+
+        class Output(BaseModel):
+            total: int
+
+        def add(a: int, b: int) -> Output:
+            return Output(total=a + b)
+
+        skill = SkillSpec(
+            name="add_kwargs",
+            description="Add two numbers with kwargs",
+            input_schema=Input,
+            output_schema=Output,
+            executor=add,
+        )
+
+        executor = SkillExecutor()
+        result = await executor.execute(skill, {"a": 2, "b": 4})
+        assert result["total"] == 6
+
+    @pytest.mark.asyncio
+    async def test_execute_preserves_extra_output_fields(self) -> None:
+        class Input(BaseModel):
+            x: int
+            y: int
+
+        class Output(BaseModel):
+            total: int
+
+        def add_with_metadata(input_data: Input) -> dict[str, Any]:
+            return {
+                "total": input_data.x + input_data.y,
+                "metadata": {"source": "unit_test"},
+            }
+
+        skill = SkillSpec(
+            name="add_with_metadata",
+            description="Add numbers and attach metadata",
+            input_schema=Input,
+            output_schema=Output,
+            executor=add_with_metadata,
+        )
+
+        executor = SkillExecutor()
+        result = await executor.execute(skill, {"x": 1, "y": 2})
+
+        assert result["total"] == 3
+        assert result["metadata"] == {"source": "unit_test"}
 
     @pytest.mark.asyncio
     async def test_execute_async_skill(self) -> None:

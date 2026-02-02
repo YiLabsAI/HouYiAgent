@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import functools
+import inspect
 from typing import Any
 
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from houyi.core.skill import SkillSpec
 
@@ -78,14 +80,7 @@ class SkillExecutor:
                 # Execute skill (with timeout)
                 result = await self._execute_with_timeout(skill.executor, validated_input)
 
-                # Validate output
-                try:
-                    validated_output = skill.output_schema(**result)
-                    return validated_output.model_dump()
-                except ValidationError as e:
-                    raise SkillExecutionError(
-                        skill.name, f"Output validation failed: {e}", e
-                    ) from e
+                return self._validate_and_merge_output(skill, result)
 
             except SkillExecutionError:
                 # Re-raise validation errors immediately
@@ -101,6 +96,19 @@ class SkillExecutor:
         raise SkillExecutionError(
             skill.name, f"Execution failed after {self.max_retries} retries", last_error
         )
+
+    def _validate_and_merge_output(self, skill: SkillSpec, result: Any) -> dict[str, Any]:
+        try:
+            validated_output = skill.output_schema(**result)
+        except ValidationError as e:
+            raise SkillExecutionError(skill.name, f"Output validation failed: {e}", e) from e
+
+        dumped = validated_output.model_dump()
+        if isinstance(result, dict) and isinstance(dumped, dict):
+            for key, value in result.items():
+                if key not in dumped:
+                    dumped[key] = value
+        return dumped
 
     async def _execute_with_timeout(
         self,
@@ -119,16 +127,76 @@ class SkillExecutor:
         Raises:
             asyncio.TimeoutError: If execution exceeds timeout
         """
+
+        def _build_kwargs() -> tuple[dict[str, Any], bool]:
+            if not hasattr(input_data, "model_dump"):
+                return {}, False
+            dumped = input_data.model_dump()
+            if not isinstance(dumped, dict):
+                return {}, False
+            try:
+                signature = inspect.signature(executor)
+            except (TypeError, ValueError):
+                return dumped, True
+
+            params = [
+                p
+                for p in signature.parameters.values()
+                if p.kind
+                in {
+                    inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                    inspect.Parameter.KEYWORD_ONLY,
+                }
+            ]
+            accepts_kwargs = any(
+                p.kind == inspect.Parameter.VAR_KEYWORD for p in signature.parameters.values()
+            )
+            if accepts_kwargs:
+                return dumped, True
+            allowed = {p.name for p in params}
+            return {k: v for k, v in dumped.items() if k in allowed}, True
+
+        def _should_pass_model() -> bool:
+            if not isinstance(input_data, BaseModel):
+                return True
+            try:
+                signature = inspect.signature(executor)
+            except (TypeError, ValueError):
+                return True
+            params = list(signature.parameters.values())
+            if len(params) != 1:
+                return False
+            annotation = params[0].annotation
+            if annotation is inspect._empty:
+                return False
+            try:
+                return isinstance(annotation, type) and issubclass(annotation, BaseModel)
+            except TypeError:
+                return False
+
+        def _call_executor_sync() -> Any:
+            if isinstance(input_data, BaseModel) and not _should_pass_model():
+                kwargs, ok = _build_kwargs()
+                if ok and kwargs:
+                    return executor(**kwargs)
+            return executor(input_data)
+
+        async def _call_executor_async() -> Any:
+            if isinstance(input_data, BaseModel) and not _should_pass_model():
+                kwargs, ok = _build_kwargs()
+                if ok and kwargs:
+                    return await executor(**kwargs)
+            return await executor(input_data)
+
         # Check if executor is async
         if asyncio.iscoroutinefunction(executor):
             # Async executor
-            result = await asyncio.wait_for(executor(input_data), timeout=self.timeout)
+            result = await asyncio.wait_for(_call_executor_async(), timeout=self.timeout)
         else:
             # Sync executor - run in thread pool
-            loop = asyncio.get_event_loop()
-            result = await asyncio.wait_for(
-                loop.run_in_executor(None, executor, input_data), timeout=self.timeout
-            )
+            loop = asyncio.get_running_loop()
+            call = functools.partial(_call_executor_sync)
+            result = await asyncio.wait_for(loop.run_in_executor(None, call), timeout=self.timeout)
 
         # Ensure result is a dict
         if hasattr(result, "model_dump"):
