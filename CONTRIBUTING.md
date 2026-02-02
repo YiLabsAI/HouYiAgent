@@ -11,11 +11,11 @@ git clone https://github.com/YOUR_USERNAME/houyi.git
 cd houyi
 ```
 
-### 2. Create Conda Environment
+### 2. Create Virtual Environment
 
 ```bash
-conda create -n houyi python=3.11 -y
-conda activate houyi
+uv python install 3.11
+uv sync --extra dev
 ```
 
 ### 3. Install Dependencies

@@ -11,6 +11,16 @@ if ! command -v tmux &> /dev/null; then
     exit 1
 fi
 
+if ! command -v uv &> /dev/null; then
+    echo "❌ uv is not installed. Install uv first: https://docs.astral.sh/uv/"
+    exit 1
+fi
+
+if [ ! -d "${ROOT_DIR}/.venv" ]; then
+    echo "❌ .venv not found. Run: uv sync --extra dev"
+    exit 1
+fi
+
 # Stop existing frontend process(es)
 echo "🔄 Stopping existing frontend process(es)..."
 pkill -f "node.*vite" 2>/dev/null
@@ -37,11 +47,7 @@ WEB_SEARCH_CACHE_LOG_HITS=${WEB_SEARCH_CACHE_LOG_HITS:-1}
 WEB_SEARCH_PROVIDER=${WEB_SEARCH_PROVIDER:-ddg}
 
 # Create a new session and run backend
-# NOTE: We intentionally avoid `conda run` here. In some environments, `conda run` can cause
-# stdout/stderr capture issues under tmux/PTY (especially combined with uvicorn reload), which makes
-# backend logs appear blank even though the server is running. Using `bash -lc` + `conda activate`
-# keeps IO behavior consistent with an interactive shell.
-tmux new-session -d -s $SESSION_NAME -n "backend" "cd ${ROOT_DIR} && bash -lc 'source "$(conda info --base)/etc/profile.d/conda.sh" && conda activate houyi && env WEB_SEARCH_CACHE_ENABLED=${WEB_SEARCH_CACHE_ENABLED} WEB_SEARCH_CACHE_TTL=${WEB_SEARCH_CACHE_TTL} WEB_SEARCH_CACHE_MAX_SIZE=${WEB_SEARCH_CACHE_MAX_SIZE} WEB_SEARCH_CACHE_LOG_HITS=${WEB_SEARCH_CACHE_LOG_HITS} WEB_SEARCH_PROVIDER=${WEB_SEARCH_PROVIDER} python -m houyi_studio.server.app'"
+tmux new-session -d -s $SESSION_NAME -n "backend" "cd ${ROOT_DIR} && env WEB_SEARCH_CACHE_ENABLED=${WEB_SEARCH_CACHE_ENABLED} WEB_SEARCH_CACHE_TTL=${WEB_SEARCH_CACHE_TTL} WEB_SEARCH_CACHE_MAX_SIZE=${WEB_SEARCH_CACHE_MAX_SIZE} WEB_SEARCH_CACHE_LOG_HITS=${WEB_SEARCH_CACHE_LOG_HITS} WEB_SEARCH_PROVIDER=${WEB_SEARCH_PROVIDER} uv run python -m houyi_studio.server.app"
 
 # Create a new window for frontend
 tmux new-window -t $SESSION_NAME -n "frontend" "cd ${ROOT_DIR}/houyi-studio/ui && npm run dev"

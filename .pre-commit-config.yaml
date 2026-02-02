@@ -4,64 +4,40 @@
 # Run manually: pre-commit run --all-files
 
 repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+        exclude: ^tests/
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-json
+      - id: check-toml
+      - id: check-merge-conflict
+
   # Ruff - Fast Python linter and formatter (using local installation)
   - repo: local
     hooks:
       # Run the linter
       - id: ruff
         name: ruff
-        entry: ruff check --fix
+        entry: uv run ruff check --fix
         language: system
         types_or: [python, pyi]
       # Run the formatter
       - id: ruff-format
         name: ruff-format
-        entry: ruff format
+        entry: uv run ruff format
         language: system
         types_or: [python, pyi]
       # Run pylint for code quality checks
       - id: pylint
         name: pylint
-        entry: pylint
+        entry: uv run pylint
         language: system
         types: [python]
         args: [--rcfile=.pylintrc]
         files: ^houyi/
-
-  # Basic file checks (using local tools)
-  - repo: local
-    hooks:
-      - id: trailing-whitespace
-        name: Trim Trailing Whitespace
-        entry: bash -c 'for file in "$@"; do sed -i "" "s/[[:space:]]*$//" "$file"; done' --
-        language: system
-        types: [text]
-        exclude: ^tests/
-      - id: end-of-file-fixer
-        name: Fix End of Files
-        entry: bash -c 'for file in "$@"; do [ -s "$file" ] && [ -z "$(tail -c 1 "$file")" ] || echo >> "$file"; done' --
-        language: system
-        types: [text]
-      - id: check-yaml
-        name: Check Yaml
-        entry: python -c "import sys, yaml; [yaml.safe_load(open(f)) for f in sys.argv[1:]]"
-        language: system
-        types: [yaml]
-      - id: check-json
-        name: Check JSON
-        entry: python -c "import sys, json; [json.load(open(f)) for f in sys.argv[1:]]"
-        language: system
-        types: [json]
-      - id: check-toml
-        name: Check Toml
-        entry: python -c "import sys, tomllib; [tomllib.load(open(f, 'rb')) for f in sys.argv[1:]]"
-        language: system
-        types: [toml]
-      - id: check-merge-conflict
-        name: Check for merge conflicts
-        entry: bash -c 'for file in "$@"; do grep -H "^<<<<<<< " "$file" && exit 1 || true; done; exit 0' --
-        language: system
-        types: [text]
 
   # MyPy - Static type checker (optional, can be slow)
   # - repo: https://github.com/pre-commit/mirrors-mypy

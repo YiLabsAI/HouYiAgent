@@ -4,28 +4,31 @@ This document defines development standards, coding conventions, version managem
 
 ## Development Environment
 
-### Conda Environment (Recommended)
+### Virtual Environment (Required)
 
-HouYi uses Conda for environment management to ensure isolated and reproducible development environments.
+HouYi uses `uv` + a local virtual environment at `.venv/` for isolated and reproducible development.
+
+**Policy (2B)**:
+- Development MUST run inside `.venv`.
+- Dependency resolution MUST use `pyproject.toml` + `uv.lock` as the single source of truth.
+- Conda MAY be used to install a Python interpreter, but MUST NOT be used as the development dependency environment.
 
 ```bash
-# Create conda environment
-conda create -n houyi python=3.11 -y
+# Install uv (see https://docs.astral.sh/uv/)
 
-# Activate environment
-conda activate houyi
+# Use Python 3.11 by default
+uv python install 3.11
 
-# Install dependencies
-pip install -e .
-pip install -e ".[dev]"
+# Create/sync the virtualenv in .venv and install dev dependencies
+uv sync --extra dev
 ```
 
 ### Development Tools
 
 - **Python**: 3.11+
-- **Environment**: Conda for isolation
-- **Package manager**: `pip` (editable installs)
-- **Dependency management**: `pyproject.toml`
+- **Environment**: `.venv` (required)
+- **Package manager**: `uv`
+- **Dependency management**: `pyproject.toml` + `uv.lock`
 - **Lint/format**: `ruff` for code formatting
 - **Code quality**: `pylint` for comprehensive code quality checks
 - **Type checking**: `mypy`
@@ -33,17 +36,11 @@ pip install -e ".[dev]"
 
 ## Common Commands
 
-All commands should be run within the activated conda environment:
+All commands MUST be run inside `.venv` via `uv run` (or through Makefile targets).
 
 ```bash
-# Activate conda environment first
-conda activate houyi
-
-# Install production dependencies
-pip install -e .
-
-# Install in development mode with dev dependencies
-pip install -e ".[dev]"
+# Create/sync environment
+uv sync --extra dev
 ```
 
 ### Using Makefile (Recommended)
@@ -80,23 +77,23 @@ If you prefer to run commands manually:
 
 ```bash
 # Lint / format
-ruff check houyi/
-ruff check houyi/ --fix
+uv run ruff check houyi/
+uv run ruff check houyi/ --fix
 
 # Code quality check
-pylint houyi/ --rcfile=.pylintrc
+uv run pylint houyi/ --rcfile=.pylintrc
 
 # Type check
-mypy houyi/
+uv run mypy houyi/
 
 # Run tests with coverage
-pytest tests/ -v --cov=houyi
+uv run pytest tests/ -v --cov=houyi
 
 # Run specific test
-pytest tests/test_core.py -v
+uv run pytest tests/test_core.py -v
 
 # Run example
-python examples/quickstart.py
+uv run python examples/quickstart.py
 ```
 
 ## Pre-commit Workflow
@@ -120,10 +117,6 @@ Install pre-commit hooks to automatically check code before every commit:
 ```bash
 # One-time setup
 make setup-hooks
-
-# Or manually
-pip install pre-commit
-pre-commit install
 ```
 
 Once installed, hooks will automatically run on `git commit`:
@@ -225,19 +218,19 @@ Every new feature or bugfix must be covered by tests.
 - **Test location**:
   - **All tests must be in `tests/` directory**
   - **Never place test files in project root**
-  - Mirror the source layout: `houyi/core/agent.py` → `tests/test_core.py`
+  - Mirror the source layout under `tests/`: `houyi/core/agent.py` → `tests/core/test_agent.py`
 
 ### Test Naming Convention (CRITICAL)
 
 **Follow the `test_<class_or_module_name>.py` pattern:**
 
 ✅ **Correct naming**:
-- `tests/test_evaluators.py` - tests all Evaluator classes
-- `tests/test_skill_executor.py` - tests SkillExecutor class
-- `tests/test_observability.py` - tests TraceManager, Span, Exporters
-- `tests/test_dataset.py` - tests Dataset class
-- `tests/test_llm.py` - tests LLM adapters (OpenAI, Anthropic)
-- `tests/test_orchestration.py` - tests orchestration classes (Plan, Planner, State)
+- `tests/evaluation/test_evaluators.py` - tests all Evaluator classes
+- `tests/execution/test_skill_executor.py` - tests SkillExecutor class
+- `tests/observability/test_observability.py` - tests TraceManager, Span, Exporters
+- `tests/evaluation/test_dataset.py` - tests Dataset class
+- `tests/llm/test_llm.py` - tests LLM adapters (OpenAI, Anthropic)
+- `tests/orchestration/test_orchestration.py` - tests orchestration classes (Plan, Planner, State)
 
 ❌ **Incorrect naming** (DO NOT USE):
 - `tests/test_phase3_evaluators.py` - phase-based naming
@@ -280,7 +273,7 @@ Every new feature or bugfix must be covered by tests.
 1. **Test Coverage Requirements**
    - **Overall project coverage: ≥ 80%**
    - **Core business logic modules: ≥ 85%**
-   - Run: `pytest tests/ -v --cov=houyi --cov-report=term`
+   - Run: `uv run pytest tests/ -v --cov=houyi --cov-report=term`
    - Core modules include: core/, evaluation/, execution/, orchestration/, observability/
 
 2. **All Tests Passing**
@@ -325,7 +318,7 @@ HouYi follows [Semantic Versioning 2.0.0](https://semver.org/): `MAJOR.MINOR.PAT
 
 1. Update `CHANGELOG.md` with changes (Added/Changed/Fixed/Removed)
 2. Update `pyproject.toml` version
-3. Run full test suite: `pytest tests/ -v --cov=houyi`
+3. Run full test suite: `uv run pytest tests/ -v --cov=houyi`
 4. Create git tag: `git tag -a vX.Y.Z -m "Release vX.Y.Z"`
 5. Update `README.md` if major/minor release
 

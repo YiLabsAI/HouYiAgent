@@ -145,9 +145,9 @@ chmod +x scripts/*.sh
 
 ### "Command not found"
 
-Ensure you're in the conda environment:
+Ensure you have `uv` installed and `.venv` created:
 ```bash
-conda activate houyi
+uv sync --extra dev
 make install-dev
 ```
 

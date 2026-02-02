@@ -64,7 +64,7 @@ Token budget control with dynamic model routing enables automatic cost optimizat
 ### Prerequisites
 
 - Python 3.11+
-- pip or conda
+- uv (recommended for development)
 
 ### Quick Install
 
@@ -80,26 +80,13 @@ pip install houyi
 git clone https://github.com/YiLabsAI/HouYiAgent.git
 cd HouYiAgent
 
-# Install in editable mode
-pip install -e .
-```
+# Install uv (see https://docs.astral.sh/uv/)
 
-### Using Conda (Recommended for Development)
+# Use Python 3.11 by default
+uv python install 3.11
 
-```bash
-# Clone the repository first
-git clone https://github.com/YiLabsAI/HouYiAgent.git
-cd HouYiAgent
-
-# Create and activate conda environment
-conda create -n houyi python=3.11 -y
-conda activate houyi
-
-# Install in editable mode
-pip install -e .
-
-# Install dev dependencies for testing
-pip install pytest pytest-cov ruff mypy
+# Create/sync the virtualenv in .venv and install dev dependencies
+uv sync --extra dev
 ```
 
 ## 🚀 Quick Start

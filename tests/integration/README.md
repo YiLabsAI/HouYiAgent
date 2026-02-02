@@ -15,7 +15,7 @@ when `HOUYI_DISABLE_E2E_TOOLS` is not set.
 ### Running the tool-call scenario
 
 ```bash
-conda run -n houyi pytest tests/integration/test_llm_tool_scenario.py -k tool_scenario -q
+uv run pytest tests/integration/test_llm_tool_scenario.py -k tool_scenario -q
 ```
 
 If your environment does not allow external calls, set:

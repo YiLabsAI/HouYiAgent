@@ -7,7 +7,7 @@ This guide will help you get started with HouYi, a lightweight multi-agent frame
 ### Prerequisites
 
 - Python 3.11, 3.12, or 3.13
-- pip or conda
+- uv (recommended for development)
 
 ### Install from Source
 
@@ -16,23 +16,13 @@ This guide will help you get started with HouYi, a lightweight multi-agent frame
 git clone https://github.com/YiLabsAI/HouYiAgent.git
 cd HouYiAgent
 
-# Install in editable mode
-pip install -e .
-```
+# Install uv (see https://docs.astral.sh/uv/)
 
-### Using Conda (Recommended for Development)
+# Use Python 3.11 by default
+uv python install 3.11
 
-```bash
-# Clone the repository first
-git clone https://github.com/YiLabsAI/HouYiAgent.git
-cd HouYiAgent
-
-# Create and activate conda environment
-conda create -n houyi python=3.11 -y
-conda activate houyi
-
-# Install in editable mode
-pip install -e .
+# Create/sync the virtualenv in .venv and install dev dependencies
+uv sync --extra dev
 ```
 
 ## Quick Start

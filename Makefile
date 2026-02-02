@@ -28,14 +28,13 @@ help:
 
 # Installation
 install:
-	pip install -e .
+	uv sync
 
 install-dev:
-	pip install -e ".[dev]"
-	pip install pre-commit pylint
+	uv sync --extra dev
 
 setup-hooks:
-	pre-commit install
+	uv run pre-commit install
 	@echo "✓ Pre-commit hooks installed"
 
 # Quick checks (for frequent use during development)
@@ -48,26 +47,26 @@ check:
 
 # Formatting
 format:
-	ruff format houyi/ tests/
-	ruff check houyi/ tests/ --fix
+	uv run ruff format houyi/ tests/
+	uv run ruff check houyi/ tests/ --fix
 
 # Linting
 lint:
-	ruff check .
-	pylint houyi/ --rcfile=.pylintrc
+	uv run ruff check .
+	uv run pylint houyi/ --rcfile=.pylintrc
 
 lint-fix:
-	ruff check . --fix
+	uv run ruff check . --fix
 
 # Testing
 test:
-	pytest tests/ -v
+	uv run pytest tests/ -v
 
 test-cov:
-	pytest tests/ --cov=houyi --cov-report=term-missing --cov-report=html
+	uv run pytest tests/ --cov=houyi --cov-report=term-missing --cov-report=html
 
 test-fast:
-	pytest tests/ -x --tb=short
+	uv run pytest tests/ -x --tb=short
 
 # Cleanup
 clean:
