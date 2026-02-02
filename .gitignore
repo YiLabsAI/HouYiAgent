@@ -56,10 +56,8 @@ dmypy.json
 tests/.env
 .stash-archive/
 data/
-console-ui/
 docs/console/
 
-houyi/houyi/studio/server/_stash_extra_*/
 
 docs/design/archive/
 docs/design/

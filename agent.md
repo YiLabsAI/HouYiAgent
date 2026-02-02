@@ -2,16 +2,28 @@
 
 This document defines development standards, coding conventions, version management, and best practices for the HouYi project.
 
+## Repo Layout (Monorepo)
+
+HouYi is a monorepo with multiple subsystems.
+
+- **Python core**: `houyi/`
+- **Console UI**: `houyi-studio/ui/`
+- **Automation / CI**: `scripts/`, `.github/`
+
+**Policy**:
+- Changes MUST respect subsystem boundaries.
+- Cross-subsystem changes SHOULD be split into small, reviewable commits and include regression coverage across impacted subsystems.
+
 ## Development Environment
 
 ### Virtual Environment (Required)
 
 HouYi uses `uv` + a local virtual environment at `.venv/` for isolated and reproducible development.
 
-**Policy (2B)**:
+**Policy**:
 - Development MUST run inside `.venv`.
 - Dependency resolution MUST use `pyproject.toml` + `uv.lock` as the single source of truth.
-- Conda MAY be used to install a Python interpreter, but MUST NOT be used as the development dependency environment.
+
 
 ```bash
 # Install uv (see https://docs.astral.sh/uv/)
@@ -33,6 +45,21 @@ uv sync --extra dev
 - **Code quality**: `pylint` for comprehensive code quality checks
 - **Type checking**: `mypy`
 - **Tests**: `pytest` with `pytest-asyncio` and `pytest-cov`
+
+### Frontend Tools (Console UI)
+
+HouYi Console UI lives in `houyi-studio/ui/`.
+
+**Policy**:
+- The UI package manager MUST be `pnpm@9` (via `corepack`).
+- The repository MUST NOT use `npm` (including `npm run ...`) in scripts, docs, or CI.
+
+```bash
+# In houyi-studio/ui/
+corepack enable
+corepack prepare pnpm@9 --activate
+pnpm install
+```
 
 ## Common Commands
 
@@ -96,6 +123,31 @@ uv run pytest tests/test_core.py -v
 uv run python examples/quickstart.py
 ```
 
+### Frontend (Console UI) Commands
+
+All UI commands MUST be run from `houyi-studio/ui/`.
+
+```bash
+# Install deps
+corepack enable
+corepack prepare pnpm@9 --activate
+pnpm install
+
+# One-time: install Playwright browser binaries
+pnpm run e2e:install-browsers
+
+# Lint / typecheck / unit tests
+pnpm lint
+pnpm type-check
+pnpm test
+
+# E2E (Playwright)
+pnpm test:e2e
+
+# If Playwright browser download is blocked, you can use system Chrome:
+HOUYI_USE_SYSTEM_CHROME=1 pnpm test:e2e
+```
+
 ## Pre-commit Workflow
 
 ### Recommended Development Flow
@@ -138,7 +190,7 @@ If not using automated hooks, run these before committing:
 1. **Format code**: `make format`
 2. **Run linters**: `make lint`
 3. **Run tests**: `make test-fast`
-4. **Check coverage**: `make test-cov` (ensure ≥75%)
+4. **Check coverage**: `make test-cov` (ensure ≥75 for now; target ≥80)
 
 ## Coding Standards
 
@@ -206,6 +258,29 @@ pylint houyi/ --rcfile=.pylintrc
 - No `eval()` / `exec()` / `pickle` on user-controlled input.
 - Be explicit about any filesystem/network side effects.
 - Ensure proper resource cleanup (files, sockets, subprocesses, threads).
+
+## End-to-End Testing (Playwright)
+
+HouYi Console UI uses Playwright for E2E testing.
+
+**Policy**:
+- E2E tests MUST be categorized as `smoke` or `full`.
+- Pull requests MUST run `smoke` by default.
+- `full` is triggered by one of:
+  - PR label: `e2e-full`
+  - scheduled (nightly)
+  - manual dispatch
+
+**Smoke scope (current baseline)**:
+- UI startup
+- Home page render
+- Run the `position_test` workflow end-to-end
+
+**Playwright browser install policy**:
+- Default is no proxy.
+- If browser downloads fail, use the optional scripts in `houyi-studio/ui/package.json`:
+  - `pnpm run e2e:install-browsers:proxy`
+  - `pnpm run e2e:install-browsers:host`
 
 ## Testing Requirements
 
@@ -303,6 +378,19 @@ Every new feature or bugfix must be covered by tests.
 - **Quality**: `ruff`, `mypy`, and `pytest` pass.
 - **Observability**: new critical paths include tracing/logging.
 - **Security**: tool execution respects sandbox/permission boundaries.
+
+## GitHub Collaboration Rules
+
+**Issue / PR templates**:
+- Issues SHOULD be opened via GitHub Issue Forms (YAML) to ensure reproducible bug reports and structured feature requests.
+- Pull requests SHOULD follow the repository PR template.
+
+**Stale issue management**:
+- The repository uses a scheduled workflow to label/close inactive issues.
+
+**Translator workflow (issues/comments)**:
+- The repository MAY run an automated translator to normalize issue titles to English and append an English translation to bodies/comments.
+- Translator MUST include anti-abuse measures (idempotency, concurrency control, rate limiting) and MUST ignore bot activity.
 
 ## Version Management
 

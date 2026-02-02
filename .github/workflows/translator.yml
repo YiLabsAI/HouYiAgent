@@ -1,0 +1,116 @@
+name: Translator
+
+on:
+  issues:
+    types: [opened, edited]
+  issue_comment:
+    types: [created, edited]
+
+permissions:
+  issues: write
+
+concurrency:
+  group: translator-${{ github.event.issue.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  translate:
+    runs-on: ubuntu-latest
+    if: >-
+      github.repository_owner == 'YiLabsAI' &&
+      github.actor != 'dependabot[bot]' &&
+      github.actor != 'github-actions[bot]'
+    steps:
+      - name: Translate and normalize
+        uses: actions/github-script@v7
+        env:
+          TRANSLATOR_API_KEY: ${{ secrets.TRANSLATOR_API_KEY }}
+          TRANSLATOR_API_URL: ${{ secrets.TRANSLATOR_API_URL }}
+        with:
+          script: |
+            const apiKey = process.env.TRANSLATOR_API_KEY;
+            const apiUrl = process.env.TRANSLATOR_API_URL;
+            if (!apiKey || !apiUrl) {
+              core.info('Translator secrets not configured; skipping.');
+              return;
+            }
+
+            const isIssueEvent = !!context.payload.issue;
+            const issue = context.payload.issue;
+            const comment = context.payload.comment;
+
+            const hasCJK = (s) => /[\u4E00-\u9FFF]/.test(s || '');
+            const marker = '<!-- translated-by-houyi-bot -->';
+
+            async function translate(text) {
+              const res = await fetch(apiUrl, {
+                method: 'POST',
+                headers: {
+                  'content-type': 'application/json',
+                  'authorization': `Bearer ${apiKey}`,
+                },
+                body: JSON.stringify({ text, target: 'en' }),
+              });
+              if (!res.ok) {
+                const body = await res.text();
+                throw new Error(`translate failed: ${res.status} ${body}`);
+              }
+              const data = await res.json();
+              return data.translation || data.translatedText || data.text || '';
+            }
+
+            function normalizeTitle(originalTitle, translatedTitle) {
+              const prefixes = ['[Bug]:', '[Feature]:', '[Docs]:', '[Chore]:', '[Question]:'];
+              const hasPrefix = prefixes.some((p) => (originalTitle || '').startsWith(p));
+              if (hasPrefix) return originalTitle;
+              return `[Question]: ${translatedTitle || originalTitle}`.trim();
+            }
+
+            if (comment) {
+              const body = comment.body || '';
+              if (!hasCJK(body) || body.includes(marker)) {
+                core.info('No CJK or already translated; skipping comment.');
+                return;
+              }
+              const translated = await translate(body);
+              const newBody = `${marker}\n\n<details>\n<summary>English</summary>\n\n${translated}\n\n</details>\n\n<details>\n<summary>Original</summary>\n\n${body}\n\n</details>\n`;
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: comment.id,
+                body: newBody,
+              });
+              return;
+            }
+
+            if (!issue) return;
+
+            const title = issue.title || '';
+            const body = issue.body || '';
+
+            const needTitle = hasCJK(title);
+            const needBody = hasCJK(body) && !body.includes(marker);
+            if (!needTitle && !needBody) {
+              core.info('No translation needed; skipping issue.');
+              return;
+            }
+
+            let translatedTitle = '';
+            if (needTitle) translatedTitle = await translate(title);
+
+            let newTitle = title;
+            if (needTitle) newTitle = normalizeTitle(title, translatedTitle);
+
+            let newBody = body;
+            if (needBody) {
+              const translatedBody = await translate(body);
+              newBody = `${marker}\n\n<details>\n<summary>English</summary>\n\n${translatedBody}\n\n</details>\n\n<details>\n<summary>Original</summary>\n\n${body}\n\n</details>\n`;
+            }
+
+            await github.rest.issues.update({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issue.number,
+              title: newTitle,
+              body: newBody,
+            });

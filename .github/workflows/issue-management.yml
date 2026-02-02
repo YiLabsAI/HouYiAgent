@@ -1,0 +1,29 @@
+name: Issue Management
+
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  issues: write
+
+jobs:
+  stale:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/stale@v9
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          only-issues: true
+          days-before-stale: 30
+          days-before-close: 14
+          stale-issue-label: "inactive"
+          close-issue-label: "closed-by-bot"
+          exempt-issue-labels: "pinned,security,never-stale"
+          stale-issue-message: |
+            This issue has been automatically marked as stale due to inactivity.
+            If this is still relevant, please add more context or reproduce info.
+          close-issue-message: |
+            Closing this issue due to prolonged inactivity.
+            Feel free to reopen with new details.

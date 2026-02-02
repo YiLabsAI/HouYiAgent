@@ -1,0 +1,15 @@
+# Order matters. Last matching pattern takes the most precedence.
+
+# Default owners
+* @YiLabsAI
+
+# Python core
+/houyi/ @YiLabsAI
+
+# Console UI
+/houyi-studio/ui/ @YiLabsAI
+
+# GitHub automation
+/.github/workflows/ @YiLabsAI
+/.github/ISSUE_TEMPLATE/ @YiLabsAI
+/.github/PULL_REQUEST_TEMPLATE.md @YiLabsAI

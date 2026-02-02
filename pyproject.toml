@@ -1,6 +1,6 @@
 [project]
 name = "houyi"
-version = "0.1.0"
+version = "0.1.1"
 description = "Next-generation lightweight multi-agent framework with industry-leading capabilities"
 authors = [
     {name = "HouYi Team"}
@@ -86,10 +86,6 @@ exclude = [
 [tool.ruff]
 line-length = 100
 target-version = "py310"
-extend-exclude = [
-    "houyi/houyi/studio/server/_stash_extra_stash0_full_dump",
-    "houyi/houyi/studio/server/_stash_extra_stash3_console_server",
-]
 
 [tool.ruff.lint]
 select = [
