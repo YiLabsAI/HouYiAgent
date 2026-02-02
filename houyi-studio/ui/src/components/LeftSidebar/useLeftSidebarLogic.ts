@@ -146,7 +146,7 @@ export const useLeftSidebarLogic = () => {
     console.log('[LeftSidebar] WebSocket:', store.ws ? 'connected' : 'not connected');
 
     if (store.connectionStatus !== 'connected' || !store.ws) {
-      store.showToastOnce('ws-command', 'Backend not connected. Please start the server.', 'error');
+      store.showToastOnce('backend-connection', 'Backend not connected. Please start the server.', 'error');
       return;
     }
 

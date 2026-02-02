@@ -163,7 +163,10 @@ class ExecutionEngine:
         self.plan_store.plans_dir.mkdir(parents=True, exist_ok=True)
 
         # Workflow persistence directory (user-saved, permanent)
-        self.workflows_dir = Path("data/workflows")
+        workflows_dir_env = os.getenv("HOUYI_WORKFLOWS_DIR")
+        self.workflows_dir = (
+            Path(workflows_dir_env) if workflows_dir_env else Path("data/workflows")
+        )
         self.workflows_dir.mkdir(parents=True, exist_ok=True)
         self.workflow_service = WorkflowService(self.workflows_dir)
 

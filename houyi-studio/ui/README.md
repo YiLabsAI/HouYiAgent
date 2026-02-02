@@ -17,13 +17,15 @@ Frontend for HouYi Agent execution visualization and control.
 ### Install Dependencies
 
 ```bash
-npm install
+corepack enable
+corepack prepare pnpm@9 --activate
+pnpm install
 ```
 
 ### Run Development Server
 
 ```bash
-npm run dev
+pnpm run dev
 ```
 
 The UI will be available at http://localhost:3000
@@ -31,13 +33,13 @@ The UI will be available at http://localhost:3000
 ### Build for Production
 
 ```bash
-npm run build
+pnpm run build
 ```
 
 ### Type Check
 
 ```bash
-npm run type-check
+pnpm run type-check
 ```
 
 ## Project Structure

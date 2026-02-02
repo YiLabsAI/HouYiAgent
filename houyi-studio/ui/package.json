@@ -5,14 +5,23 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:strict-3000": "node -e \"const { spawnSync, spawn } = require('child_process'); const port = 3000; const isWin = process.platform === 'win32'; const killPort = () => { if (isWin) { console.log('[dev:strict-3000] Windows detected; port-kill is not implemented here. Ensure 3000 is free.'); return; } const r = spawnSync('lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t'], { encoding: 'utf-8' }); const pids = (r.stdout || '').split(/\\s+/).map((s) => s.trim()).filter(Boolean); if (!pids.length) return; console.log(`[dev:strict-3000] Port ${port} is in use by PID(s): ${pids.join(', ')}. Killing...`); for (const pid of pids) { try { process.kill(Number(pid), 'SIGTERM'); } catch {} } for (const pid of pids) { try { process.kill(Number(pid), 'SIGKILL'); } catch {} } }; killPort(); const cmd = isWin ? 'pnpm.cmd' : 'pnpm'; const child = spawn(cmd, ['exec', 'vite', '--host', '127.0.0.1', '--port', String(port), '--strictPort'], { stdio: 'inherit' }); child.on('exit', (code) => process.exit(code ?? 1));\"",
+    "dev:e2e": "pnpm run dev:strict-3000",
     "build": "tsc && vite build",
     "preview": "vite preview",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
     "type-check": "tsc --noEmit",
     "test": "vitest",
+    "test:once": "vitest run",
+    "test:ci": "vitest run --reporter=default",
     "test:e2e": "playwright test",
+    "e2e:install-browsers": "playwright install chromium",
+    "e2e:install-browsers:proxy": "node -e \"const { spawnSync } = require('child_process'); const isWin = process.platform === 'win32'; const env = { ...process.env }; if (!env.HTTPS_PROXY && !env.HTTP_PROXY && !env.ALL_PROXY && !isWin) { const r = spawnSync('scutil', ['--proxy'], { encoding: 'utf-8' }); const out = r.stdout || ''; const httpEnabled = /HTTPEnable\\s*:\\s*1/.test(out); const httpsEnabled = /HTTPSEnable\\s*:\\s*1/.test(out); const httpProxy = (out.match(/HTTPProxy\\s*:\\s*([^\\n]+)/) || [])[1]?.trim(); const httpPort = (out.match(/HTTPPort\\s*:\\s*(\\d+)/) || [])[1]?.trim(); const httpsProxy = (out.match(/HTTPSProxy\\s*:\\s*([^\\n]+)/) || [])[1]?.trim(); const httpsPort = (out.match(/HTTPSPort\\s*:\\s*(\\d+)/) || [])[1]?.trim(); if (httpEnabled && httpProxy && httpPort) env.HTTP_PROXY = `http://${httpProxy}:${httpPort}`; if (httpsEnabled && httpsProxy && httpsPort) env.HTTPS_PROXY = `http://${httpsProxy}:${httpsPort}`; } const cmd = isWin ? 'pnpm.cmd' : 'pnpm'; const r2 = spawnSync(cmd, ['exec', 'playwright', 'install', 'chromium'], { stdio: 'inherit', env }); process.exit(r2.status ?? 1);\"",
+    "e2e:install-browsers:host": "node -e \"const host = process.env.PLAYWRIGHT_DOWNLOAD_HOST; if (!host) { console.error('Missing PLAYWRIGHT_DOWNLOAD_HOST. Set it in your shell, or use HTTPS_PROXY/HTTP_PROXY for Playwright downloads.'); process.exit(1); } const { spawnSync } = require('child_process'); const cmd = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm'; const env = { ...process.env, PLAYWRIGHT_DOWNLOAD_HOST: host }; const r = spawnSync(cmd, ['exec','playwright','install','chromium'], { stdio: 'inherit', env }); process.exit(r.status ?? 1);\"",
+    "e2e:use-system-chrome": "node -e \"console.log('Using system Chrome for Playwright via HOUYI_USE_SYSTEM_CHROME=1');\"",
+    "e2e:setup": "pnpm install && pnpm run e2e:install-browsers",
     "test:e2e:cli": "node scripts/run-e2e.mjs",
-    "test:stage": "npm run type-check && npm run lint && npm run test:e2e"
+    "test:stage": "pnpm run type-check && pnpm run lint && pnpm run test:e2e"
   },
   "dependencies": {
     "lucide-react": "^0.344.0",

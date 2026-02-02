@@ -16,18 +16,16 @@ export const createWsActions = (set: StoreSet, get: StoreGet) => ({
     });
 
     ws.onStatus((status) => {
-      const toastKey = 'ws-connection';
+      const toastKey = 'backend-connection';
       if (status === 'connected') {
         set({ connectionStatus: 'connected' });
         get().removeToastByKey(toastKey);
-        get().removeToastByKey('ws-command');
         return;
       }
 
       if (status === 'disconnected') {
         set({ connectionStatus: 'disconnected' });
-        get().removeToastByKey(toastKey);
-        get().showToastOnce(toastKey, 'Backend disconnected. Please start the server.', 'error');
+        get().showToastOnce(toastKey, 'Backend not connected. Please start the server.', 'error');
         const { currentExecution, viewMode, liveExecution } = get();
         const target = viewMode === 'checkpoint' ? liveExecution : currentExecution;
         if (target && target.status === 'running') {
@@ -48,8 +46,7 @@ export const createWsActions = (set: StoreSet, get: StoreGet) => ({
       }
 
       set({ connectionStatus: 'error' });
-      get().removeToastByKey(toastKey);
-      get().showToastOnce(toastKey, 'Cannot connect to backend. Is the server running?', 'error');
+      get().showToastOnce(toastKey, 'Backend not connected. Please start the server.', 'error');
     });
 
     ws.connect();

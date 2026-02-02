@@ -1,0 +1,204 @@
+{
+  "plan_id": "plan_tool_system_5node_demo",
+  "version": 11,
+  "nodes": [
+    {
+      "node_id": "llm_1",
+      "node_type": "llm",
+      "position": {
+        "x": 48.91839080459772,
+        "y": -134.75632183908047
+      },
+      "config": {
+        "model": "deepseek-ai/DeepSeek-V3",
+        "max_tokens": 800,
+        "prompt": "You are a research assistant. Goal: produce a \"comparative conclusion with citations\" based on publicly available web evidence.\n\nTask: compare DeepSeek-R1 vs DeepSeek-V3 positioning differences (reasoning capability, cost, latency, and use cases). Output requirements:\n1) 3-5 bullet points of comparison\n2) At least 2 source links\n\nNote: downstream nodes will write search results into context. You only need to understand the task and provide a brief execution strategy summary.\n"
+      },
+      "inputs": {},
+      "outputs": {
+        "result": "task_summary"
+      },
+      "deleted_at": null,
+      "metadata": {
+        "label": "Task Summary / Strategy"
+      }
+    },
+    {
+      "node_id": "tool_search",
+      "node_type": "tool",
+      "position": {
+        "x": 21.07255185712347,
+        "y": 191.67983115550257
+      },
+      "config": {
+        "tool_name": "web_search"
+      },
+      "inputs": {
+        "query": "DeepSeek R1 vs DeepSeek V3 differences reasoning cost latency use cases",
+        "max_results": 3,
+        "provider": "ddg"
+      },
+      "outputs": {
+        "result": "search_results"
+      },
+      "deleted_at": null,
+      "metadata": {
+        "label": "Search (DDG)"
+      }
+    },
+    {
+      "node_id": "tool_browse",
+      "node_type": "tool",
+      "position": {
+        "x": 68.12531654928284,
+        "y": 419.8551169852073
+      },
+      "config": {
+        "tool_name": "web_search"
+      },
+      "inputs": {
+        "query": "DeepSeek R1 vs DeepSeek V3 pricing latency",
+        "max_results": 1,
+        "mode": "browse",
+        "provider": "serper"
+      },
+      "outputs": {
+        "result": "browse_results"
+      },
+      "deleted_at": null,
+      "metadata": {
+        "label": "Browse / Extract (include_content=true)"
+      }
+    },
+    {
+      "node_id": "verify_1",
+      "node_type": "verify",
+      "position": {
+        "x": 455.1022988505748,
+        "y": 0.9229885057471279
+      },
+      "config": {
+        "raise_on_failure": false,
+        "verification_rules": [
+          {
+            "rule_id": "require_results",
+            "verifier_type": "constraint",
+            "rule_spec": {
+              "require_keys": [
+                "results"
+              ]
+            },
+            "severity": "error",
+            "auto_fixable": false
+          },
+          {
+            "rule_id": "min_results",
+            "verifier_type": "constraint",
+            "rule_spec": {
+              "min_items_path": "results",
+              "min_items": 1
+            },
+            "severity": "error",
+            "auto_fixable": false
+          }
+        ]
+      },
+      "inputs": {
+        "output": "$browse_results"
+      },
+      "outputs": {
+        "verified": "browse_verified"
+      },
+      "deleted_at": null,
+      "metadata": {
+        "label": "Verify: Extracted results exist"
+      }
+    },
+    {
+      "node_id": "logic_1",
+      "node_type": "logic",
+      "position": {
+        "x": 764.3264367816091,
+        "y": 90.4528735632184
+      },
+      "config": {
+        "template": "task_summary={task_summary}\nsearch_results={search_results}\nbrowse_results={browse_results}\nbrowse_verified={browse_verified}\n"
+      },
+      "inputs": {
+        "task_summary": "$task_summary",
+        "search_results": "$search_results",
+        "browse_results": "$browse_results",
+        "browse_verified": "$browse_verified"
+      },
+      "outputs": {
+        "result": "final_report"
+      },
+      "deleted_at": null,
+      "metadata": {
+        "label": "Summary: Regression verification"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "edge_id": "llm_1-tool_search",
+      "source_node_id": "llm_1",
+      "target_node_id": "tool_search",
+      "label": null,
+      "metadata": {}
+    },
+    {
+      "edge_id": "tool_search-tool_browse",
+      "source_node_id": "tool_search",
+      "target_node_id": "tool_browse",
+      "label": null,
+      "metadata": {}
+    },
+    {
+      "edge_id": "tool_browse-verify_1",
+      "source_node_id": "tool_browse",
+      "target_node_id": "verify_1",
+      "label": null,
+      "metadata": {}
+    },
+    {
+      "edge_id": "verify_1-logic_1",
+      "source_node_id": "verify_1",
+      "target_node_id": "logic_1",
+      "label": null,
+      "metadata": {}
+    }
+  ],
+  "entry_node_id": "llm_1",
+  "layout": {
+    "positions": {
+      "llm_1": {
+        "x": 48.91839080459772,
+        "y": -134.75632183908047
+      },
+      "tool_search": {
+        "x": 21.07255185712347,
+        "y": 191.67983115550257
+      },
+      "tool_browse": {
+        "x": 68.12531654928284,
+        "y": 419.8551169852073
+      },
+      "verify_1": {
+        "x": 455.1022988505748,
+        "y": 0.9229885057471279
+      },
+      "logic_1": {
+        "x": 764.3264367816091,
+        "y": 90.4528735632184
+      }
+    }
+  },
+  "created_at": "2026-01-27T02:10:00Z",
+  "updated_at": "2026-01-27T02:10:00Z",
+  "metadata": {
+    "source": "console_ui"
+  },
+  "workflow_name": "position_test",
+  "saved_at": "2026-01-28T13:08:37.722780"
+}

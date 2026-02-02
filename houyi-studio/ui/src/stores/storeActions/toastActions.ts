@@ -23,13 +23,15 @@ export const createToastActions = (set: StoreSet, get: StoreGet) => ({
   },
 
   showToastOnce: (key: string, message: string, type: 'success' | 'error' | 'info') => {
-    const existing = get().toastKeys[key];
-    if (existing) return;
     const id = `toast_${Date.now()}`;
-    set((state: any) => ({
-      toasts: [...state.toasts, { id, message, type }],
-      toastKeys: { ...state.toastKeys, [key]: id },
-    }));
+    set((state: any) => {
+      const existing = state.toastKeys?.[key];
+      if (existing) return state;
+      return {
+        toasts: [...state.toasts, { id, message, type }],
+        toastKeys: { ...state.toastKeys, [key]: id },
+      };
+    });
   },
 
   removeToast: (id: string) => {

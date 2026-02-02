@@ -11,4 +11,4 @@ echo "🚀 Starting frontend service..."
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 
-cd "$(dirname "$0")/../houyi-studio/ui" && npm run dev
+cd "$(dirname "$0")/../houyi-studio/ui" && pnpm run dev:strict-3000

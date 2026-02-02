@@ -5,7 +5,7 @@ import os from 'os';
 import path from 'path';
 
 const PID_FILE = path.join(os.tmpdir(), 'houyi-console-e2e.pid');
-const CONDA_PID_FILE = path.join(os.tmpdir(), 'houyi-console-e2e-conda.pid');
+const UV_PID_FILE = path.join(os.tmpdir(), 'houyi-console-e2e-uv.pid');
 
 export default async function globalTeardown(): Promise<void> {
   if (fs.existsSync(PID_FILE)) {
@@ -21,16 +21,16 @@ export default async function globalTeardown(): Promise<void> {
     fs.unlinkSync(PID_FILE);
   }
 
-  if (fs.existsSync(CONDA_PID_FILE)) {
-    const condaPidRaw = fs.readFileSync(CONDA_PID_FILE, 'utf-8');
-    const condaPid = Number(condaPidRaw);
-    if (Number.isFinite(condaPid)) {
+  if (fs.existsSync(UV_PID_FILE)) {
+    const uvPidRaw = fs.readFileSync(UV_PID_FILE, 'utf-8');
+    const uvPid = Number(uvPidRaw);
+    if (Number.isFinite(uvPid)) {
       try {
-        process.kill(condaPid, 'SIGTERM');
+        process.kill(uvPid, 'SIGTERM');
       } catch (error) {
-        console.warn('[E2E] Failed to stop conda wrapper:', error);
+        console.warn('[E2E] Failed to stop uv wrapper:', error);
       }
     }
-    fs.unlinkSync(CONDA_PID_FILE);
+    fs.unlinkSync(UV_PID_FILE);
   }
 }

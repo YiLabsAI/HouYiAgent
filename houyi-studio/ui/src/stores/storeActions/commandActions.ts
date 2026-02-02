@@ -19,8 +19,7 @@ export const createCommandActions = (_set: StoreSet, get: StoreGet) => ({
       ws.sendCommand(command);
     } else {
       console.error('[Store] WebSocket not initialized, cannot send command');
-      get().showToast('Backend not connected. Please start the server.', 'error');
-      get().showToastOnce('command-send-failure', 'Failed to send command. Please try again.', 'error');
+      get().showToastOnce('backend-connection', 'Backend not connected. Please start the server.', 'error');
     }
   },
 

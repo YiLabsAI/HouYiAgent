@@ -10,7 +10,7 @@ import { fileURLToPath } from 'url';
 const SERVER_URL = 'http://127.0.0.1:8000/';
 const SERVER_PORT = 8000;
 const PID_FILE = path.join(os.tmpdir(), 'houyi-console-e2e.pid');
-const CONDA_PID_FILE = path.join(os.tmpdir(), 'houyi-console-e2e-conda.pid');
+const UV_PID_FILE = path.join(os.tmpdir(), 'houyi-console-e2e-uv.pid');
 const SKIP_KILL_PORT = process.env.SKIP_KILL_E2E_PORT === '1';
 const CONFIG_PATH = process.env.HOUYI_E2E_CONFIG;
 
@@ -132,8 +132,8 @@ export default async function globalSetup(): Promise<void> {
   if (fs.existsSync(PID_FILE)) {
     fs.unlinkSync(PID_FILE);
   }
-  if (fs.existsSync(CONDA_PID_FILE)) {
-    fs.unlinkSync(CONDA_PID_FILE);
+  if (fs.existsSync(UV_PID_FILE)) {
+    fs.unlinkSync(UV_PID_FILE);
   }
 
   const __filename = fileURLToPath(import.meta.url);
@@ -153,10 +153,12 @@ export default async function globalSetup(): Promise<void> {
   const parallelToolCalls = config.parallelToolCalls ?? null;
   const toolcallToolLatencyMs = config.toolcallToolLatencyMs ?? null;
   const toolcallFastPath = config.toolcallFastPath ?? false;
+  const serverRoot = path.join(repoRoot, 'houyi-studio', 'server');
+  const workflowsDir = path.join(repoRoot, 'tests', 'integration', 'fixtures', 'workflows');
   const pythonPath = process.env.PYTHONPATH
-    ? `${repoRoot}${path.delimiter}${process.env.PYTHONPATH}`
-    : repoRoot;
-  const child = spawn('conda', ['run', '--no-capture-output', '-n', 'houyi', 'python', 'tests/integration/fixtures/console_e2e_tools.py'], {
+    ? `${serverRoot}${path.delimiter}${repoRoot}${path.delimiter}${process.env.PYTHONPATH}`
+    : `${serverRoot}${path.delimiter}${repoRoot}`;
+  const child = spawn('uv', ['run', 'python', 'tests/integration/fixtures/console_e2e_tools.py'], {
     cwd: repoRoot,
     stdio: quietLogs ? 'ignore' : 'inherit',
     env: {
@@ -171,6 +173,7 @@ export default async function globalSetup(): Promise<void> {
       HOUYI_DISABLE_LIVE_WEATHER: disableLiveWeather ? '1' : '0',
       HOUYI_DISABLE_PLAN_PERSISTENCE: disablePlanPersistence ? '1' : '0',
       HOUYI_TOOLCALL_ADAPTER: toolcallAdapter,
+      HOUYI_WORKFLOWS_DIR: workflowsDir,
       ...(toolcallModel ? { HOUYI_TOOLCALL_MODEL: toolcallModel } : {}),
       ...(toolcallMaxTokens != null ? { HOUYI_TOOLCALL_MAX_TOKENS: String(toolcallMaxTokens) } : {}),
       ...(parallelToolCalls !== null
@@ -186,7 +189,7 @@ export default async function globalSetup(): Promise<void> {
   child.unref();
 
   if (child.pid) {
-    fs.writeFileSync(CONDA_PID_FILE, String(child.pid));
+    fs.writeFileSync(UV_PID_FILE, String(child.pid));
   }
 
   if (!child.pid) {

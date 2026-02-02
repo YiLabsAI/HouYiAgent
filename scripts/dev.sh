@@ -50,7 +50,7 @@ WEB_SEARCH_PROVIDER=${WEB_SEARCH_PROVIDER:-ddg}
 tmux new-session -d -s $SESSION_NAME -n "backend" "cd ${ROOT_DIR} && env WEB_SEARCH_CACHE_ENABLED=${WEB_SEARCH_CACHE_ENABLED} WEB_SEARCH_CACHE_TTL=${WEB_SEARCH_CACHE_TTL} WEB_SEARCH_CACHE_MAX_SIZE=${WEB_SEARCH_CACHE_MAX_SIZE} WEB_SEARCH_CACHE_LOG_HITS=${WEB_SEARCH_CACHE_LOG_HITS} WEB_SEARCH_PROVIDER=${WEB_SEARCH_PROVIDER} uv run python -m houyi_studio.server.app"
 
 # Create a new window for frontend
-tmux new-window -t $SESSION_NAME -n "frontend" "cd ${ROOT_DIR}/houyi-studio/ui && npm run dev"
+tmux new-window -t $SESSION_NAME -n "frontend" "cd ${ROOT_DIR}/houyi-studio/ui && pnpm run dev:strict-3000"
 
 # Select backend window
 tmux select-window -t $SESSION_NAME:0

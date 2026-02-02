@@ -1,5 +1,7 @@
 import { defineConfig } from '@playwright/test';
 
+const useSystemChrome = (globalThis as any).process?.env?.HOUYI_USE_SYSTEM_CHROME === '1';
+
 export default defineConfig({
   testDir: './tests/e2e',
   timeout: 30_000,
@@ -11,10 +13,10 @@ export default defineConfig({
   use: {
     baseURL: 'http://localhost:3000',
     trace: 'retain-on-failure',
-    video: 'retain-on-failure',
+    video: useSystemChrome ? 'off' : 'retain-on-failure',
   },
   webServer: {
-    command: 'npm run dev -- --host 127.0.0.1 --port 3000 --strictPort',
+    command: 'pnpm run dev:strict-3000',
     url: 'http://localhost:3000',
     reuseExistingServer: !(globalThis as any).process?.env?.CI,
     timeout: 120_000,
@@ -22,7 +24,7 @@ export default defineConfig({
   projects: [
     {
       name: 'chromium',
-      use: { browserName: 'chromium' },
+      use: useSystemChrome ? { browserName: 'chromium', channel: 'chrome' } : { browserName: 'chromium' },
     },
   ],
 });

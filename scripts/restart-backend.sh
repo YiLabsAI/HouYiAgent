@@ -18,6 +18,13 @@ fi
 echo "🔄 Stopping existing backend process..."
 # Stop existing backend process(es) (including those started outside tmux)
 pkill -f "houyi_studio\.server\.app" 2>/dev/null || true
+PIDS=$(lsof -nP -iTCP:8000 -sTCP:LISTEN -t 2>/dev/null || true)
+if [ -n "${PIDS}" ]; then
+    echo "🔪 Killing process(es) listening on port 8000: ${PIDS}"
+    kill -TERM ${PIDS} 2>/dev/null || true
+    sleep 1
+    kill -KILL ${PIDS} 2>/dev/null || true
+fi
 sleep 1
 
 echo "✅ Backend process stopped"
