@@ -190,7 +190,7 @@ If not using automated hooks, run these before committing:
 1. **Format code**: `make format`
 2. **Run linters**: `make lint`
 3. **Run tests**: `make test-fast`
-4. **Check coverage**: `make test-cov` (ensure ≥75 for now; target ≥80)
+4. **Check coverage**: `make test-cov` (ensure ≥80)
 
 ## Coding Standards
 

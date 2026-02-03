@@ -2,10 +2,10 @@ import { act } from 'react';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
-import { RightSidebar } from '../src/components/RightSidebar';
-import { useConsoleStore } from '../src/stores/useConsoleStore';
+import { RightSidebar } from '@/components/RightSidebar';
+import { useConsoleStore } from '@/stores/useConsoleStore';
 
-vi.mock('../src/stores/useConsoleStore', () => ({
+vi.mock('@/stores/useConsoleStore', () => ({
   useConsoleStore: vi.fn(),
 }));
 

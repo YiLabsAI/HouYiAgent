@@ -13,6 +13,11 @@ export default defineConfig({
     environment: 'jsdom',
     setupFiles: ['./tests/setup.ts'],
     globals: true,
+    coverage: {
+      provider: 'v8',
+      reportsDirectory: 'coverage',
+      reporter: ['text', 'lcov'],
+    },
     exclude: [
       '**/node_modules/**',
       '**/dist/**',

@@ -87,7 +87,7 @@ Restarts only the UI (useful when iterating on frontend code).
 - ✅ Ruff basic checks (tests)
 - ✅ Pylint deep analysis (must score 10.00/10)
 - ✅ All unit tests
-- ✅ Coverage check (must be ≥75%)
+- ✅ Coverage check (must be ≥80%)
 
 **When to use**: Before committing code, before opening PR
 

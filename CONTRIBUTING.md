@@ -31,7 +31,7 @@ make setup-hooks
 ## Quality Gates (Required)
 
 Follow the exact requirements in [agent.md](agent.md). In particular:
-- Coverage gate is ≥75% for now; target is ≥80%.
+- Coverage gate is ≥80%.
 - Pylint target score is 10.00/10.
 
 ## Useful Makefile Commands

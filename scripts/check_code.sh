@@ -58,8 +58,8 @@ run_check "Unit Tests" "uv run pytest tests/ -v --tb=short -x"
 
 # 6. Check test coverage
 echo -e "${YELLOW}▶ Checking test coverage...${NC}"
-uv run pytest tests/ --cov=houyi --cov-report=term-missing --cov-fail-under=75 || {
-    echo -e "${RED}✗ Coverage below 75%${NC}"
+uv run pytest tests/ --cov=houyi --cov-report=term-missing --cov-fail-under=80 || {
+    echo -e "${RED}✗ Coverage below 80%${NC}"
     FAILED=1
 }
 echo ""

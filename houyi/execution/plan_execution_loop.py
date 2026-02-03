@@ -57,7 +57,7 @@ class PlanExecutionLoop:
             executed_nodes = {
                 node_id
                 for node_id, node_exec in (execution.node_executions or {}).items()
-                if getattr(node_exec, "status", None) == NodeStatus.COMPLETED
+                if getattr(node_exec, "status", None) in (NodeStatus.COMPLETED, NodeStatus.SKIPPED)
             }
             context = self._context_factory(session_id, execution, plan)
             await self._notify_lifecycle("on_execution_start", context)
@@ -104,6 +104,8 @@ class PlanExecutionLoop:
 
         except asyncio.CancelledError:
             logger.info("Execution task cancelled: %s", execution.execution_id)
+            execution.status = ExecutionStatus.ABORTED
+            execution.error = None
             return
 
         except Exception as exc:
