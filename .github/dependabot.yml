@@ -1,9 +1,19 @@
+# Dependabot: group updates, control frequency and PR limit to reduce noise.
+# See: https://docs.github.com/en/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
 version: 2
 updates:
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 5
+      interval: "monthly"
+      day: "monday"
+    open-pull-requests-limit: 1
     labels:
       - "dependencies"
+    groups:
+      # Merge all GitHub Actions updates into a single PR instead of one per action.
+      github-actions:
+        patterns:
+          - "*"
+    commit-message:
+      prefix: "chore(deps)"
