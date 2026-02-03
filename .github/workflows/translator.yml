@@ -42,8 +42,32 @@ jobs:
             const hasCJK = (s) => /[\u4E00-\u9FFF]/.test(s || '');
             const marker = '<!-- translated-by-houyi-bot -->';
 
+            const isDeepSeek = apiUrl.includes('deepseek') || apiUrl.includes('chat/completions');
+
             async function translate(text) {
-              const res = await fetch(apiUrl, {
+              let res, data;
+              if (isDeepSeek) {
+                res = await fetch(apiUrl, {
+                  method: 'POST',
+                  headers: {
+                    'content-type': 'application/json',
+                    'authorization': `Bearer ${apiKey}`,
+                  },
+                  body: JSON.stringify({
+                    model: 'deepseek-chat',
+                    messages: [{ role: 'user', content: `Translate the following to English. Output only the translation, no explanation.\n\n${text}` }],
+                  }),
+                });
+                if (!res.ok) {
+                  const body = await res.text();
+                  core.warning(`Translator API failed: ${res.status} ${body}`);
+                  return '';
+                }
+                data = await res.json();
+                const content = data.choices?.[0]?.message?.content?.trim();
+                return content || '';
+              }
+              res = await fetch(apiUrl, {
                 method: 'POST',
                 headers: {
                   'content-type': 'application/json',
@@ -53,9 +77,10 @@ jobs:
               });
               if (!res.ok) {
                 const body = await res.text();
-                throw new Error(`translate failed: ${res.status} ${body}`);
+                core.warning(`Translator API failed: ${res.status} ${body}`);
+                return '';
               }
-              const data = await res.json();
+              data = await res.json();
               return data.translation || data.translatedText || data.text || '';
             }
 
@@ -73,6 +98,10 @@ jobs:
                 return;
               }
               const translated = await translate(body);
+              if (!translated) {
+                core.warning('Translation empty; skipping comment update.');
+                return;
+              }
               const newBody = `${marker}\n\n<details>\n<summary>English</summary>\n\n${translated}\n\n</details>\n\n<details>\n<summary>Original</summary>\n\n${body}\n\n</details>\n`;
               await github.rest.issues.updateComment({
                 owner: context.repo.owner,
@@ -99,12 +128,14 @@ jobs:
             if (needTitle) translatedTitle = await translate(title);
 
             let newTitle = title;
-            if (needTitle) newTitle = normalizeTitle(title, translatedTitle);
+            if (needTitle && translatedTitle) newTitle = normalizeTitle(title, translatedTitle);
 
             let newBody = body;
             if (needBody) {
               const translatedBody = await translate(body);
-              newBody = `${marker}\n\n<details>\n<summary>English</summary>\n\n${translatedBody}\n\n</details>\n\n<details>\n<summary>Original</summary>\n\n${body}\n\n</details>\n`;
+              if (translatedBody) {
+                newBody = `${marker}\n\n<details>\n<summary>English</summary>\n\n${translatedBody}\n\n</details>\n\n<details>\n<summary>Original</summary>\n\n${body}\n\n</details>\n`;
+              }
             }
 
             await github.rest.issues.update({

@@ -12,12 +12,13 @@ jobs:
   stale:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/stale@v9
+      - uses: actions/stale@v10
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
-          only-issues: true
-          days-before-stale: 30
-          days-before-close: 14
+          days-before-issue-stale: 30
+          days-before-issue-close: 14
+          days-before-pr-stale: -1
+          days-before-pr-close: -1
           stale-issue-label: "inactive"
           close-issue-label: "closed-by-bot"
           exempt-issue-labels: "pinned,security,never-stale"
