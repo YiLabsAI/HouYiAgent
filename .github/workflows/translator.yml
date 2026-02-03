@@ -8,6 +8,7 @@ on:
 
 permissions:
   issues: write
+  actions: read
 
 concurrency:
   group: translator-${{ github.event.issue.number || github.run_id }}
@@ -29,6 +30,12 @@ jobs:
           TRANSLATOR_MODEL: ${{ secrets.TRANSLATOR_MODEL }}
         with:
           script: |
+            // --- Anti-abuse: ignore all bot actors (agent.md) ---
+            if (context.actor.endsWith('[bot]')) {
+              core.info('Bot actor; skipping.');
+              return;
+            }
+
             const apiKey = process.env.TRANSLATOR_API_KEY;
             const apiUrl = process.env.TRANSLATOR_API_URL;
             const modelOverride = process.env.TRANSLATOR_MODEL || '';
@@ -37,57 +44,92 @@ jobs:
               return;
             }
 
-            const isIssueEvent = !!context.payload.issue;
+            // --- Cross-run rate limit: protect APIquota when many issues arrive at once ---
+            const RATE_WINDOW_MIN = 5;
+            const RATE_MAX_RUNS = 3;
+            const sinceTs = Date.now() - RATE_WINDOW_MIN * 60 * 1000;
+            const { data } = await github.rest.actions.listWorkflowRunsForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'translator.yml',
+              per_page: 30,
+            });
+            const recentRuns = data.workflow_runs.filter((r) => new Date(r.created_at).getTime() >= sinceTs);
+            if (recentRuns.length >= RATE_MAX_RUNS) {
+              core.info(`Rate limit: ${recentRuns.length} translator run(s) in last ${RATE_WINDOW_MIN} min; skipping to preserve API quota.`);
+              return;
+            }
+
             const issue = context.payload.issue;
             const comment = context.payload.comment;
 
+            // Idempotency: only translate CJK content; marker prevents re-translating (agent.md)
             const hasCJK = (s) => /[\u4E00-\u9FFF]/.test(s || '');
             const marker = '<!-- translated-by-houyi-bot -->';
 
+            // Cap input length to avoid token limits and reduce cost per request
+            const MAX_TITLE_LEN = 400;
+            const MAX_BODY_LEN = 12000;
+            const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+            // Chat API: DeepSeek official vs SiliconFlow (different model names)
             const isSiliconFlow = apiUrl.includes('siliconflow');
             const isDeepSeek = apiUrl.includes('deepseek') || apiUrl.includes('chat/completions');
             const chatModel = modelOverride || (isSiliconFlow ? 'deepseek-ai/DeepSeek-V3' : 'deepseek-chat');
 
-            async function translate(text) {
-              let res, data;
-              if (isDeepSeek || isSiliconFlow) {
-                res = await fetch(apiUrl, {
+            function truncate(text, maxLen) {
+              if (!text || text.length <= maxLen) return text || '';
+              return text.slice(0, maxLen) + '\n\n[... truncated]';
+            }
+
+            // Translate via chat or generic API; retry on 5xx to handle transient failures
+            async function translate(text, retries = 2) {
+              const doFetch = async (isChat) => {
+                if (isChat) {
+                  const res = await fetch(apiUrl, {
+                    method: 'POST',
+                    headers: {
+                      'content-type': 'application/json',
+                      'authorization': `Bearer ${apiKey}`,
+                    },
+                    body: JSON.stringify({
+                      model: chatModel,
+                      messages: [{ role: 'user', content: `Translate the following to English. Output only the translation, no explanation.\n\n${text}` }],
+                    }),
+                  });
+                  return res;
+                }
+                return await fetch(apiUrl, {
                   method: 'POST',
                   headers: {
                     'content-type': 'application/json',
                     'authorization': `Bearer ${apiKey}`,
                   },
-                  body: JSON.stringify({
-                    model: chatModel,
-                    messages: [{ role: 'user', content: `Translate the following to English. Output only the translation, no explanation.\n\n${text}` }],
-                  }),
+                  body: JSON.stringify({ text, target: 'en' }),
                 });
-                if (!res.ok) {
-                  const body = await res.text();
+              };
+              const isChat = isDeepSeek || isSiliconFlow;
+              for (let attempt = 0; attempt <= retries; attempt++) {
+                const res = await doFetch(isChat);
+                if (res.ok) {
+                  const data = await res.json();
+                  if (isChat) return (data.choices?.[0]?.message?.content?.trim() || '');
+                  return data.translation || data.translatedText || data.text || '';
+                }
+                const body = await res.text();
+                const retryable = res.status >= 500 && attempt < retries;
+                if (retryable) {
+                  core.warning(`Translator API ${res.status}, retrying in 2s (${attempt + 1}/${retries})...`);
+                  await sleep(2000);
+                } else {
                   core.warning(`Translator API failed: ${res.status} ${body}`);
                   return '';
                 }
-                data = await res.json();
-                const content = data.choices?.[0]?.message?.content?.trim();
-                return content || '';
               }
-              res = await fetch(apiUrl, {
-                method: 'POST',
-                headers: {
-                  'content-type': 'application/json',
-                  'authorization': `Bearer ${apiKey}`,
-                },
-                body: JSON.stringify({ text, target: 'en' }),
-              });
-              if (!res.ok) {
-                const body = await res.text();
-                core.warning(`Translator API failed: ${res.status} ${body}`);
-                return '';
-              }
-              data = await res.json();
-              return data.translation || data.translatedText || data.text || '';
+              return '';
             }
 
+            // Normalize title: keep existing [Bug]/[Feature]/... prefix; else prefix with [Question]:
             function normalizeTitle(originalTitle, translatedTitle) {
               const prefixes = ['[Bug]:', '[Feature]:', '[Docs]:', '[Chore]:', '[Question]:'];
               const hasPrefix = prefixes.some((p) => (originalTitle || '').startsWith(p));
@@ -95,13 +137,14 @@ jobs:
               return `[Question]: ${translatedTitle || originalTitle}`.trim();
             }
 
+            // --- Comment path: translate body, append English + Original in <details> ---
             if (comment) {
               const body = comment.body || '';
               if (!hasCJK(body) || body.includes(marker)) {
                 core.info('No CJK or already translated; skipping comment.');
                 return;
               }
-              const translated = await translate(body);
+              const translated = await translate(truncate(body, MAX_BODY_LEN));
               if (!translated) {
                 core.warning('Translation empty; skipping comment update.');
                 return;
@@ -118,6 +161,7 @@ jobs:
 
             if (!issue) return;
 
+            // --- Issue path: translate title and/or body; in-run throttle between title and body ---
             const title = issue.title || '';
             const body = issue.body || '';
 
@@ -129,14 +173,15 @@ jobs:
             }
 
             let translatedTitle = '';
-            if (needTitle) translatedTitle = await translate(title);
+            if (needTitle) translatedTitle = await translate(truncate(title, MAX_TITLE_LEN));
 
             let newTitle = title;
             if (needTitle && translatedTitle) newTitle = normalizeTitle(title, translatedTitle);
 
             let newBody = body;
             if (needBody) {
-              const translatedBody = await translate(body);
+              if (needTitle) await sleep(1500);
+              const translatedBody = await translate(truncate(body, MAX_BODY_LEN));
               if (translatedBody) {
                 newBody = `${marker}\n\n<details>\n<summary>English</summary>\n\n${translatedBody}\n\n</details>\n\n<details>\n<summary>Original</summary>\n\n${body}\n\n</details>\n`;
               }
