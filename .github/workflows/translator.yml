@@ -26,10 +26,12 @@ jobs:
         env:
           TRANSLATOR_API_KEY: ${{ secrets.TRANSLATOR_API_KEY }}
           TRANSLATOR_API_URL: ${{ secrets.TRANSLATOR_API_URL }}
+          TRANSLATOR_MODEL: ${{ secrets.TRANSLATOR_MODEL }}
         with:
           script: |
             const apiKey = process.env.TRANSLATOR_API_KEY;
             const apiUrl = process.env.TRANSLATOR_API_URL;
+            const modelOverride = process.env.TRANSLATOR_MODEL || '';
             if (!apiKey || !apiUrl) {
               core.info('Translator secrets not configured; skipping.');
               return;
@@ -42,11 +44,13 @@ jobs:
             const hasCJK = (s) => /[\u4E00-\u9FFF]/.test(s || '');
             const marker = '<!-- translated-by-houyi-bot -->';
 
+            const isSiliconFlow = apiUrl.includes('siliconflow');
             const isDeepSeek = apiUrl.includes('deepseek') || apiUrl.includes('chat/completions');
+            const chatModel = modelOverride || (isSiliconFlow ? 'deepseek-ai/DeepSeek-V3' : 'deepseek-chat');
 
             async function translate(text) {
               let res, data;
-              if (isDeepSeek) {
+              if (isDeepSeek || isSiliconFlow) {
                 res = await fetch(apiUrl, {
                   method: 'POST',
                   headers: {
@@ -54,7 +58,7 @@ jobs:
                     'authorization': `Bearer ${apiKey}`,
                   },
                   body: JSON.stringify({
-                    model: 'deepseek-chat',
+                    model: chatModel,
                     messages: [{ role: 'user', content: `Translate the following to English. Output only the translation, no explanation.\n\n${text}` }],
                   }),
                 });
