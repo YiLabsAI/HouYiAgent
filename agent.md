@@ -152,24 +152,23 @@ HOUYI_USE_SYSTEM_CHROME=1 pnpm test:e2e
 
 ### Recommended Development Flow
 
-**Before committing code, always run:**
+**One-time setup (recommended): install pre-commit hooks first.**
 
 ```bash
-# Option 1: Quick check during development (fast)
+make setup-hooks
+```
+
+**Day-to-day commands:**
+
+```bash
+# During development (fast)
 make quick-check
 
-# Option 2: Full check before commit (comprehensive)
+# Before commit (comprehensive)
 make check
 ```
 
 ### Automated Pre-commit Hooks (Recommended)
-
-Install pre-commit hooks to automatically check code before every commit:
-
-```bash
-# One-time setup
-make setup-hooks
-```
 
 Once installed, hooks will automatically run on `git commit`:
 - ✅ Ruff formatting and linting
@@ -185,7 +184,11 @@ git commit --no-verify -m "emergency fix"
 
 ### Manual Pre-commit Checklist
 
-If not using automated hooks, run these before committing:
+If you cannot use automated hooks, run `make check` before committing.
+
+If hooks are installed, you do not need to run the manual checklist by default; `make check` is the source of truth before commit.
+
+If you need to run individual steps (debugging or CI triage), use:
 
 1. **Format code**: `make format`
 2. **Run linters**: `make lint`

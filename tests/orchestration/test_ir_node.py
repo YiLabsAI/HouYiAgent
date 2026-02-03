@@ -240,3 +240,12 @@ class TestIRNodeOutputs:
         node = IRNode(node_id="node1", node_type=NodeType.LLM, inputs={"task": "test"}, outputs={})
 
         assert node.outputs == {}
+
+
+class TestNodeTypeEnum:
+    """Test NodeType enum values."""
+
+    def test_node_type_enum_values(self):
+        assert NodeType.LLM == "llm"
+        assert NodeType.TOOL == "tool"
+        assert NodeType.VERIFY == "verify"

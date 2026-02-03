@@ -3,7 +3,7 @@
 import logging
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +38,10 @@ class FeedbackProtocol(BaseModel):
         default_factory=list, description="Historical failed attempts to avoid repetition"
     )
 
+    model_config = ConfigDict(
+        frozen=False,
+    )
+
     def to_llm_prompt(self) -> str:
         """Convert feedback to LLM-understandable prompt.
 
@@ -63,11 +67,6 @@ class FeedbackProtocol(BaseModel):
         prompt_parts.append("\n**Please regenerate the output addressing the above issues.**")
 
         return "\n".join(prompt_parts)
-
-    class Config:
-        """Pydantic config."""
-
-        frozen = False  # Allow mutation for context accumulation
 
 
 class FeedbackBuilder:
