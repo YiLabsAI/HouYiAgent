@@ -16,8 +16,23 @@ logger = logging.getLogger(__name__)
 def register_console_skills() -> None:
     """Register default skills for console runtime."""
     DEFAULT_SKILL_REGISTRY.register(build_web_search_skill(), overwrite=True)
+
+    # Register RAG kb-search skill
+    _register_rag_skill()
+
     if _should_load_e2e_tools():
         _load_e2e_tools()
+
+
+def _register_rag_skill() -> None:
+    """Register knowledge base search skill if available."""
+    try:
+        from houyi.rag.skills.kb_search import kb_search_skill
+
+        DEFAULT_SKILL_REGISTRY.register(kb_search_skill, overwrite=True)
+        logger.info("Registered kb-search skill")
+    except ImportError as e:
+        logger.debug("RAG skill not available: %s", e)
 
 
 def _should_load_e2e_tools() -> bool:

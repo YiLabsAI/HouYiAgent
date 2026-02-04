@@ -28,7 +28,7 @@ def test_vertex_gemini_tool_schema_conversion() -> None:
             },
         }
     ]
-    converted = adapter._convert_tools_to_vertex(tools)
+    converted = adapter._convert_tools(tools)
     assert converted
     declarations = converted[0]["function_declarations"]
     assert declarations[0]["name"] == "weather"
@@ -67,6 +67,7 @@ def test_vertex_gemini_normalize_response_with_tool_calls() -> None:
     class _Response:
         def __init__(self) -> None:
             self.candidates = [_Candidate()]
+            self.usage_metadata = None
 
     adapter = _build_adapter()
     result = adapter._normalize_response(_Response())
@@ -78,8 +79,8 @@ def test_vertex_gemini_convert_tools_empty() -> None:
     """Empty or invalid tools should return empty list."""
 
     adapter = _build_adapter()
-    assert adapter._convert_tools_to_vertex([]) == []
-    assert adapter._convert_tools_to_vertex([{"type": "noop"}]) == []
+    assert adapter._convert_tools([]) == []
+    assert adapter._convert_tools([{"type": "noop"}]) == []
 
 
 def test_vertex_gemini_from_env(monkeypatch) -> None:
@@ -114,8 +115,8 @@ def test_vertex_gemini_from_env_requires_project(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_vertex_gemini_chat_builds_config(monkeypatch) -> None:
-    """chat should build config and pass tools/tool_choice to generate_content_async."""
+async def test_vertex_gemini_chat_builds_config() -> None:
+    """chat should build config and pass tools/tool_choice to generate_content."""
 
     class _FunctionCall:
         def __init__(self) -> None:
@@ -135,21 +136,32 @@ async def test_vertex_gemini_chat_builds_config(monkeypatch) -> None:
         def __init__(self) -> None:
             self.content = _Content()
 
+    class _UsageMetadata:
+        def __init__(self) -> None:
+            self.prompt_token_count = 10
+            self.candidates_token_count = 5
+            self.total_token_count = 15
+
     class _Response:
         def __init__(self) -> None:
             self.candidates = [_Candidate()]
+            self.usage_metadata = _UsageMetadata()
 
     captured: dict[str, object] = {}
 
-    class _Model:
-        async def generate_content_async(self, contents, generation_config=None, **kwargs):
+    class _Models:
+        async def generate_content(self, model=None, contents=None, config=None):
+            captured["model"] = model
             captured["contents"] = contents
-            captured["config"] = generation_config
-            captured["kwargs"] = kwargs
+            captured["config"] = config
             return _Response()
 
+    class _Aio:
+        def __init__(self) -> None:
+            self.models = _Models()
+
     adapter = _build_adapter()
-    adapter._model = _Model()
+    adapter._client = type("FakeClient", (), {"aio": _Aio()})()
 
     result = await adapter.chat(
         [{"role": "user", "content": "hi"}],
@@ -158,30 +170,37 @@ async def test_vertex_gemini_chat_builds_config(monkeypatch) -> None:
         max_tokens=5,
     )
     assert result.tool_calls
-    assert captured["config"]["max_output_tokens"] == 5
-    assert captured["config"]["tool_config"]["function_calling_config"]["mode"] == "ANY"
+    config = captured["config"]
+    assert config.max_output_tokens == 5
+    assert config.tool_config.function_calling_config.mode == "ANY"
 
 
 @pytest.mark.asyncio
-async def test_vertex_gemini_stream_chat(monkeypatch) -> None:
-    """stream_chat should yield content when present."""
+async def test_vertex_gemini_stream_chat() -> None:
+    """stream_chat should yield content from streaming response."""
 
     adapter = _build_adapter()
 
-    async def _fake_chat(*_args, **_kwargs):
-        from houyi.llm.base import LLMResponse
+    class _Chunk:
+        def __init__(self, text: str) -> None:
+            self.text = text
 
-        return LLMResponse(
-            content="stream",
-            tool_calls=[],
-            finish_reason="stop",
-            usage={},
-            model="test-model",
-        )
+    async def _fake_stream(model=None, contents=None, config=None):
+        for text in ["hello", " world"]:
+            yield _Chunk(text)
 
-    monkeypatch.setattr(adapter, "chat", _fake_chat)
+    class _Models:
+        async def generate_content_stream(self, model=None, contents=None, config=None):
+            return _fake_stream(model, contents, config)
+
+    class _Aio:
+        def __init__(self) -> None:
+            self.models = _Models()
+
+    adapter._client = type("FakeClient", (), {"aio": _Aio()})()
+
     chunks = []
     async for chunk in adapter.stream_chat([{"role": "user", "content": "hi"}]):
         chunks.append(chunk)
 
-    assert chunks == ["stream"]
+    assert chunks == ["hello", " world"]

@@ -54,6 +54,8 @@ dmypy.json
 
 .env
 tests/.env
+service-account-key.json
+*-credentials.json
 .stash-archive/
 data/
 docs/console/

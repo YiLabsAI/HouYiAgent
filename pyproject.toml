@@ -71,8 +71,17 @@ skill-yaml = [
     "pyyaml>=6.0.3",
 ]
 
+vertex-ai = [
+    "google-cloud-aiplatform>=1.38.0",
+]
+
+rag = [
+    "hnswlib>=0.8.0",
+    "bm25s>=0.2.0",
+]
+
 all = [
-    "houyi[dev,studio-server,distributed,model-adapters,websearch-tavily,websearch-readability,skill-yaml]",
+    "houyi[dev,studio-server,distributed,model-adapters,vertex-ai,rag,websearch-tavily,websearch-readability,skill-yaml]",
 ]
 
 [build-system]
@@ -135,3 +144,8 @@ filterwarnings = [
 markers = [
     "benchmark: performance benchmark tests",
 ]
+
+[tool.uv]
+# Mirror fallback: PyPI first, Tsinghua mirror as backup for network timeout
+index-url = "https://pypi.org/simple"
+extra-index-url = ["https://pypi.tuna.tsinghua.edu.cn/simple"]
