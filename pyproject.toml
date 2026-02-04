@@ -67,8 +67,12 @@ model-adapters = [
     "anthropic>=0.7.0",
 ]
 
+skill-yaml = [
+    "pyyaml>=6.0.3",
+]
+
 all = [
-    "houyi[dev,studio-server,distributed,model-adapters,websearch-tavily,websearch-readability]",
+    "houyi[dev,studio-server,distributed,model-adapters,websearch-tavily,websearch-readability,skill-yaml]",
 ]
 
 [build-system]

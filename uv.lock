@@ -483,6 +483,7 @@ all = [
     { name = "pytest-asyncio" },
     { name = "pytest-cov" },
     { name = "python-dotenv" },
+    { name = "pyyaml" },
     { name = "readability-lxml" },
     { name = "redis" },
     { name = "ruff" },
@@ -511,6 +512,9 @@ model-adapters = [
     { name = "anthropic" },
     { name = "openai" },
 ]
+skill-yaml = [
+    { name = "pyyaml" },
+]
 studio-server = [
     { name = "fastapi" },
     { name = "uvicorn", extra = ["standard"] },
@@ -531,7 +535,7 @@ requires-dist = [
     { name = "celery", marker = "extra == 'distributed'", specifier = ">=5.3.0" },
     { name = "fastapi", marker = "extra == 'dev'", specifier = ">=0.104.0" },
     { name = "fastapi", marker = "extra == 'studio-server'", specifier = ">=0.104.0" },
-    { name = "houyi", extras = ["dev", "studio-server", "distributed", "model-adapters", "websearch-tavily", "websearch-readability"], marker = "extra == 'all'" },
+    { name = "houyi", extras = ["dev", "studio-server", "distributed", "model-adapters", "websearch-tavily", "websearch-readability", "skill-yaml"], marker = "extra == 'all'" },
     { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.25.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.5.0" },
     { name = "openai", marker = "extra == 'model-adapters'", specifier = ">=1.0.0" },
@@ -544,6 +548,7 @@ requires-dist = [
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.21.0" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.1.0" },
     { name = "python-dotenv", marker = "extra == 'dev'", specifier = ">=1.0.0" },
+    { name = "pyyaml", marker = "extra == 'skill-yaml'", specifier = ">=6.0.3" },
     { name = "readability-lxml", marker = "extra == 'websearch-readability'", specifier = ">=0.8.1" },
     { name = "redis", marker = "extra == 'distributed'", specifier = ">=5.0.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.1.0" },
@@ -554,7 +559,7 @@ requires-dist = [
     { name = "websockets", marker = "extra == 'studio-server'", specifier = ">=12.0" },
     { name = "z3-solver", specifier = ">=4.12.0" },
 ]
-provides-extras = ["dev", "studio-server", "websearch-tavily", "websearch-readability", "distributed", "model-adapters", "all"]
+provides-extras = ["dev", "studio-server", "websearch-tavily", "websearch-readability", "distributed", "model-adapters", "skill-yaml", "all"]
 
 [[package]]
 name = "httpcore"

@@ -1,5 +1,7 @@
 """Skill specification and execution."""
 
+from __future__ import annotations
+
 import json
 import re
 import urllib.error
@@ -7,10 +9,13 @@ import urllib.request
 from collections.abc import Callable
 from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Field, create_model
+
+if TYPE_CHECKING:
+    from houyi.core.skill.hooks import SkillHook
 
 
 class ExecutionMode(str, Enum):
@@ -23,7 +28,7 @@ class ExecutionMode(str, Enum):
 class SkillSpec(BaseModel):
     """Specification for a skill (capability) that an agent can use.
 
-    Supports AgentSkills.io standard (skill.md format).
+    Supports both AgentSkills.io standard (skill.md) and SimpleSkill format (SKILL.md with frontmatter).
     A skill wraps a deterministic function with input/output schemas,
     enabling automatic validation and LLM tool calling.
     """
@@ -37,6 +42,9 @@ class SkillSpec(BaseModel):
     )
     skill_md_path: str | None = Field(
         default=None, description="Path to skill.md file (AgentSkills.io)"
+    )
+    skill_dir: Path | None = Field(
+        default=None, description="Skill directory path (for directory structure)"
     )
     constraints: dict[str, Any] = Field(
         default_factory=dict,
@@ -53,6 +61,23 @@ class SkillSpec(BaseModel):
     metadata: dict[str, Any] = Field(
         default_factory=dict,
         description="Additional metadata (output_type, etc.)",
+    )
+    # SimpleSkill extensions
+    version: str | None = Field(
+        default=None,
+        description="Skill version (SemVer)",
+    )
+    user_invocable: bool = Field(
+        default=True,
+        description="Whether user can directly invoke this skill",
+    )
+    allowed_tools: list[str] = Field(
+        default_factory=list,
+        description="List of tools this skill is allowed to use",
+    )
+    hooks: list[Any] = Field(
+        default_factory=list,
+        description="Lifecycle hooks (SkillHook objects)",
     )
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -73,26 +98,53 @@ class SkillSpec(BaseModel):
         self.executor = executor
 
     @classmethod
-    def from_file(cls, path: str) -> "SkillSpec":
-        """Load skill from skill.md file (AgentSkills.io standard).
+    def from_file(cls, path: str, skill_dir: str | None = None) -> "SkillSpec":
+        """Load skill from skill.md or SKILL.md file.
+
+        Supports both:
+        - AgentSkills.io standard (skill.md without frontmatter)
+        - SimpleSkill format (SKILL.md with YAML frontmatter)
 
         Args:
-            path: Path to skill.md file
+            path: Path to skill.md or SKILL.md file
+            skill_dir: Optional skill directory path (auto-detected if not provided)
 
         Returns:
             SkillSpec instance (executor needs to be bound separately)
         """
-        content = Path(path).read_text()
-        parsed = cls._parse_skill_md(content)
+        path_obj = Path(path)
+        content = path_obj.read_text()
 
+        # Auto-detect skill directory
+        detected_skill_dir: Path | None = None
+        if skill_dir:
+            detected_skill_dir = Path(skill_dir)
+        elif path_obj.name.upper() in ("SKILL.MD", "SKILL.md"):
+            detected_skill_dir = path_obj.parent
+
+        # Try new parser with YAML frontmatter support
+        try:
+            from houyi.core.skill.schema import parse_skill_md
+
+            parsed = parse_skill_md(content)
+        except ImportError:
+            # Fallback to legacy parser
+            parsed = cls._parse_skill_md(content)
+
+        # Build SkillSpec
         return cls(
-            name=parsed["name"],
-            description=parsed["description"],
+            name=parsed.get("name", "unknown"),
+            description=parsed.get("description", ""),
             input_schema=cls._json_to_pydantic(parsed.get("input_schema", {}), "Input"),
             output_schema=cls._json_to_pydantic(parsed.get("output_schema", {}), "Output"),
             executor=None,
             skill_md_path=path,
+            skill_dir=detected_skill_dir,
             constraints=parsed.get("constraints", {}),
+            version=parsed.get("version"),
+            user_invocable=parsed.get("user-invocable", parsed.get("user_invocable", True)),
+            allowed_tools=parsed.get("allowed-tools", parsed.get("allowed_tools", [])),
+            hooks=parsed.get("hooks", []),
         )
 
     @classmethod
@@ -115,8 +167,14 @@ class SkillSpec(BaseModel):
             with urllib.request.urlopen(url, timeout=10) as response:
                 content = response.read().decode("utf-8")
 
-            # Parse content
-            parsed = cls._parse_skill_md(content)
+            # Try new parser with YAML frontmatter support
+            try:
+                from houyi.core.skill.schema import parse_skill_md
+
+                parsed = parse_skill_md(content)
+            except ImportError:
+                # Fallback to legacy parser
+                parsed = cls._parse_skill_md(content)
 
             # Optionally cache to local file
             cache_path = None
@@ -135,13 +193,17 @@ class SkillSpec(BaseModel):
                     f.write(content)
 
             return cls(
-                name=parsed["name"],
-                description=parsed["description"],
+                name=parsed.get("name", "unknown"),
+                description=parsed.get("description", ""),
                 input_schema=cls._json_to_pydantic(parsed.get("input_schema", {}), "Input"),
                 output_schema=cls._json_to_pydantic(parsed.get("output_schema", {}), "Output"),
                 executor=None,
                 skill_md_path=cache_path or url,
                 constraints=parsed.get("constraints", {}),
+                version=parsed.get("version"),
+                user_invocable=parsed.get("user-invocable", parsed.get("user_invocable", True)),
+                allowed_tools=parsed.get("allowed-tools", parsed.get("allowed_tools", [])),
+                hooks=parsed.get("hooks", []),
             )
         except urllib.error.URLError as e:
             raise urllib.error.URLError(f"Failed to load skill from {url}: {e}") from e

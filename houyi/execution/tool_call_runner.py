@@ -9,19 +9,35 @@ import json
 import logging
 import os
 import time
-from typing import Any
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 from houyi.core.skill import SkillSpec
 from houyi.execution.skill_executor import SkillExecutionError
+
+if TYPE_CHECKING:
+    from houyi.core.skill.consent import ConsentManager
+    from houyi.core.skill.hooks import SkillHooksManager
+    from houyi.core.skill.policy import PolicyEnforcer
 
 logger = logging.getLogger(__name__)
 
 
 class ToolCallRunner:
-    """Run tool-calling loops with hooks and trace events."""
+    """Run tool-calling loops with hooks, policy enforcement, and trace events."""
 
-    def __init__(self, trace_manager: Any | None = None) -> None:
+    def __init__(
+        self,
+        trace_manager: Any | None = None,
+        skill_hooks_manager: SkillHooksManager | None = None,
+        policy_enforcer: PolicyEnforcer | None = None,
+        consent_manager: ConsentManager | None = None,
+    ) -> None:
         self.trace_manager = trace_manager
+        self.skill_hooks_manager = skill_hooks_manager
+        self.policy_enforcer = policy_enforcer
+        self.consent_manager = consent_manager
+        self._consent_cache: dict[str, bool] = {}  # skill_name -> consent_granted
 
     async def run(
         self,
@@ -165,12 +181,138 @@ class ToolCallRunner:
                 requested_tool_name = tool_name
                 attempted_tool_name: str | None = None
                 skill = skills_by_name.get(tool_name) if tool_name else None
+
+                # Policy enforcement check (SimpleSkill v0.1 §5.2)
+                if self.policy_enforcer and tool_name:
+                    consent_given = self._consent_cache.get(tool_name, False)
+                    decision = self.policy_enforcer.check_invocation(
+                        skill_name=tool_name,
+                        is_model_initiated=True,  # Tool calls from LLM are model-initiated
+                        user_consent_given=consent_given,
+                    )
+
+                    if decision.requires_consent and self.consent_manager:
+                        # Request consent asynchronously
+                        from houyi.core.skill.consent import ConsentRequest, ConsentType
+                        from houyi.core.skill.policy import Permissions
+
+                        policy = self.policy_enforcer.get_policy(tool_name)
+                        consent_request = ConsentRequest(
+                            consent_type=ConsentType.INVOKE_CONFIRM,
+                            skill_name=tool_name,
+                            operation=f"invoke tool '{tool_name}'",
+                            policy=policy,
+                            context={"args": args, "tool_call_id": tool_call_id},
+                        )
+                        consent_response = await self.consent_manager.request_consent(
+                            consent_request
+                        )
+                        if consent_response.is_granted():
+                            self._consent_cache[tool_name] = True
+                            decision = self.policy_enforcer.check_invocation(
+                                skill_name=tool_name,
+                                is_model_initiated=True,
+                                user_consent_given=True,
+                            )
+                        else:
+                            # Consent denied - return error result
+                            self._emit_tool_event(
+                                "ToolUsageBlocked",
+                                {
+                                    "tool_call_id": tool_call_id,
+                                    "tool_name": tool_name,
+                                    "reason": "consent_denied",
+                                },
+                            )
+                            error_result = self._build_tool_result(
+                                {
+                                    "error": "consent_denied",
+                                    "message": f"User denied consent for tool '{tool_name}'",
+                                },
+                                call_id=tool_call_id,
+                                metadata={"tool_name": tool_name, "policy_blocked": True},
+                            )
+                            trace_entry = {
+                                "tool_name": tool_name,
+                                "requested_tool_name": requested_tool_name,
+                                "tool_call_id": tool_call_id,
+                                "args": args,
+                                "result": error_result,
+                                "policy_blocked": True,
+                                "block_reason": "consent_denied",
+                            }
+                            tool_message = {
+                                "role": "tool",
+                                "tool_call_id": tool_call_id,
+                                "name": tool_name,
+                                "content": self._format_tool_result(error_result),
+                            }
+                            return index, trace_entry, tool_message, 0.0
+
+                    if not decision.allowed:
+                        # Policy denied - return error result
+                        self._emit_tool_event(
+                            "ToolUsageBlocked",
+                            {
+                                "tool_call_id": tool_call_id,
+                                "tool_name": tool_name,
+                                "reason": decision.reason or "policy_denied",
+                            },
+                        )
+                        error_result = self._build_tool_result(
+                            {
+                                "error": "policy_denied",
+                                "message": decision.reason or f"Policy denied invocation of tool '{tool_name}'",
+                            },
+                            call_id=tool_call_id,
+                            metadata={"tool_name": tool_name, "policy_blocked": True},
+                        )
+                        trace_entry = {
+                            "tool_name": tool_name,
+                            "requested_tool_name": requested_tool_name,
+                            "tool_call_id": tool_call_id,
+                            "args": args,
+                            "result": error_result,
+                            "policy_blocked": True,
+                            "block_reason": decision.reason,
+                        }
+                        tool_message = {
+                            "role": "tool",
+                            "tool_call_id": tool_call_id,
+                            "name": tool_name,
+                            "content": self._format_tool_result(error_result),
+                        }
+                        return index, trace_entry, tool_message, 0.0
+
                 hook_context = {
                     "tool_name": tool_name,
                     "args": args,
                     "skill": skill,
                     "tool_call_id": tool_call_id,
                 }
+
+                # Trigger SimpleSkill PreToolUse hooks
+                skill_hook_output: str | None = None
+                if self.skill_hooks_manager and tool_name:
+                    from houyi.core.skill.hooks import HookContext, HookEvent
+
+                    skill_hook_ctx = HookContext(
+                        tool_name=tool_name,
+                        tool_args=args,
+                        skill=skill,
+                        skill_name=skill.name if skill else None,
+                        cwd=Path.cwd(),
+                        skill_dir=skill.skill_dir if skill else None,
+                    )
+                    hook_result = await self.skill_hooks_manager.trigger_hook(
+                        HookEvent.PRE_TOOL_USE, skill_hook_ctx, tool_name=tool_name
+                    )
+                    if hook_result.output:
+                        skill_hook_output = hook_result.output
+                        logger.debug(
+                            "[ToolCallRunner] PreToolUse hook output: %s",
+                            skill_hook_output[:100] if skill_hook_output else None,
+                        )
 
                 for hook in tool_hooks:
                     before_hook = getattr(hook, "before_tool_call", None)
@@ -312,6 +454,28 @@ class ToolCallRunner:
                         after_hook = getattr(hook, "after_tool_call", None)
                         if after_hook is not None:
                             await self._invoke_hook(after_hook, hook_context, result)
+
+                # Trigger SimpleSkill PostToolUse hooks
+                if self.skill_hooks_manager and tool_name:
+                    from houyi.core.skill.hooks import HookContext, HookEvent
+
+                    skill_hook_ctx = HookContext(
+                        tool_name=tool_name,
+                        tool_args=args,
+                        tool_result=result.get("raw"),
+                        skill=skill,
+                        skill_name=skill.name if skill else None,
+                        cwd=Path.cwd(),
+                        skill_dir=skill.skill_dir if skill else None,
+                    )
+                    post_hook_result = await self.skill_hooks_manager.trigger_hook(
+                        HookEvent.POST_TOOL_USE, skill_hook_ctx, tool_name=tool_name
+                    )
+                    if post_hook_result.output:
+                        logger.debug(
+                            "[ToolCallRunner] PostToolUse hook output: %s",
+                            post_hook_result.output[:100] if post_hook_result.output else None,
+                        )
 
                 trace_entry = {
                     "tool_name": tool_name,
