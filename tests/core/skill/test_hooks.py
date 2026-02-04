@@ -183,6 +183,7 @@ class TestSkillHooksManagerExtended:
     @pytest.mark.asyncio
     async def test_command_hook_with_env_vars(self) -> None:
         """Test command hook with environment variables."""
+        import sys
         import tempfile
         from unittest.mock import MagicMock
 
@@ -191,11 +192,12 @@ class TestSkillHooksManagerExtended:
         with tempfile.TemporaryDirectory() as tmpdir:
             skill = MagicMock()
             skill.name = "env-skill"
+            # Use Python to print env var (cross-platform)
             skill.hooks = [
                 SkillHook(
                     event=HookEvent.PRE_TOOL_USE,
                     hook_type=HookType.COMMAND,
-                    command="echo $SKILL_DIR",
+                    command=f'{sys.executable} -c "import os; print(os.environ.get(\'SKILL_DIR\', \'\'))"',
                 ),
             ]
 
