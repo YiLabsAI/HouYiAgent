@@ -1,9 +1,22 @@
 """Shared test fixtures and utilities."""
 
 import pytest
+import pytest_asyncio
 from pydantic import BaseModel
 
 from houyi.core.skill import SkillSpec
+
+
+@pytest_asyncio.fixture
+async def graph_store(tmp_path):
+    """Loaded GraphStore backed by a temp directory.
+
+    Ensures SQLite handles are closed even on Windows.
+    """
+    from houyi.rag.indexed.graph.store import GraphStore
+
+    async with GraphStore(knowledge_dir=str(tmp_path)) as store:
+        yield store
 
 
 # Common test schemas
