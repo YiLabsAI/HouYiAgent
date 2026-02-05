@@ -1,8 +1,138 @@
 # HouYi Development Guidelines
 
-This document defines development standards, coding conventions, version management, and best practices for the HouYi project.
+This document defines architectural principles, development standards, and best practices for the HouYi project.
 
-## Repo Layout (Monorepo)
+## Table of Contents
+
+1. [Architectural Principles](#architectural-principles)
+2. [Repository Layout](#repository-layout)
+3. [Development Environment](#development-environment)
+4. [Development Workflow](#development-workflow)
+5. [Coding Standards](#coding-standards)
+6. [Testing](#testing)
+7. [Collaboration](#collaboration)
+8. [Version Management](#version-management)
+9. [Best Practices](#best-practices)
+
+---
+
+## Architectural Principles
+
+These are non-negotiable design principles for HouYi. Violating them requires explicit approval and migration plan.
+
+### 1. Plan First
+
+Industrial-grade distributed system design: always plan before implementation.
+
+- **Design docs required** for features touching multiple modules
+- **Non-functional requirements** must have measurable targets:
+
+| Metric | Target |
+|--------|--------|
+| API Latency (P99) | < 500ms |
+| Test Coverage (Core) | ≥ 85% |
+| Test Coverage (Overall) | ≥ 80% |
+| Pylint Score | 10.00/10 |
+
+- **Deterministic execution**: LLM produces plans or formal artifacts (code/SQL), not execute business logic directly
+
+### 2. Schema First
+
+All public boundaries must be explicitly modeled and validated.
+
+- Inputs/outputs defined with Pydantic v2 schemas
+- No untyped `dict`/`Any` across module boundaries
+- API contracts versioned and backward-compatible
+
+### 3. Data-Driven & Self-Evolving
+
+Data is the primary driver of system evolution.
+
+- **Metrics-driven decisions**: features backed by observability data
+- **Evaluation-first**: new capabilities require measurable evaluation criteria
+- **Feedback loops**: runtime metrics inform optimization priorities
+
+### 4. Immutable State
+
+Prefer immutable state snapshots over in-place mutation.
+
+- State transitions produce new versions, not modify existing
+- Enables time-travel debugging and reliable replay
+- Critical for distributed consistency and checkpoint/restore
+
+### 5. Full-Stack Observability
+
+Every critical path must be traceable end-to-end.
+
+- **Tracing**: OpenTelemetry-compatible spans for all operations
+- **Logging**: Structured logs with correlation IDs
+- **Metrics**: Latency, throughput, error rates exported
+- **No silent failures**: tool execution errors must surface with context
+
+### 6. Security by Default
+
+- No `eval()` / `exec()` / `pickle` on user-controlled input
+- Explicit filesystem/network side effects
+- Resource cleanup guaranteed (files, sockets, subprocesses)
+- Permission boundaries enforced for skill/tool execution
+
+### 7. Documentation as Code
+
+Public APIs must be self-documenting for external developers.
+
+- **Docstrings required** for all public classes, methods, and functions
+- **Type hints** are mandatory (enforced by mypy)
+- **`__init__.py` exports** define the public surface; document each export
+- **Examples** in docstrings for complex APIs
+- **CHANGELOG** updated for any public API changes
+
+### 8. Architecture Artifacts
+
+Major features must include design documentation with visual artifacts:
+
+| Artifact | When Required |
+|----------|---------------|
+| **Class Diagram** | New module or significant refactor |
+| **Sequence Diagram** | Cross-module workflows, async flows |
+| **Component Diagram** | System integration, service boundaries |
+| **ER Diagram** | Database schema changes |
+| **Dependency Graph** | New external dependencies |
+
+Location: `docs/design/<feature>_design.md` (Mermaid preferred for version control)
+
+### 9. Dependency Governance
+
+Treat dependencies as critical infrastructure to avoid "dependency hell".
+
+- **Minimal dependencies**: prefer stdlib over external packages
+- **Version pinning**: use `>=x.y,<x+1` ranges, never `*`
+- **Review required**: all `pyproject.toml` changes require explicit approval
+- **Justification**: new dependencies must document:
+  - Why needed (no stdlib alternative?)
+  - License compatibility (MIT/Apache preferred)
+  - Maintenance status (active, security updates?)
+  - Transitive dependency impact
+- **Optional extras**: heavy dependencies (ML frameworks, DB drivers) as optional extras
+- **Audit**: periodic `uv tree` review for transitive bloat
+
+### 10. Bug-Driven Testing
+
+While full TDD is not mandated, bug fixes follow the red-green-refactor cycle:
+
+1. **Run tests** → Identify failure (red)
+2. **Fix the bug** → Tests pass (green)
+3. **Refactor** → Clean up with confidence
+
+When a bug is found without test coverage:
+- **Analyze**: Should this case have been covered?
+- **Add test**: Write a failing test that reproduces the bug first
+- **Then fix**: Proceed with the fix
+
+Tests enable safe refactoring; prioritize coverage for code that changes frequently.
+
+---
+
+## Repository Layout
 
 HouYi is a monorepo with multiple subsystems.
 
@@ -11,8 +141,10 @@ HouYi is a monorepo with multiple subsystems.
 - **Automation / CI**: `scripts/`, `.github/`
 
 **Policy**:
-- Changes MUST respect subsystem boundaries.
-- Cross-subsystem changes SHOULD be split into small, reviewable commits and include regression coverage across impacted subsystems.
+- Changes MUST respect subsystem boundaries
+- Cross-subsystem changes SHOULD be split into small, reviewable commits with regression coverage
+
+---
 
 ## Development Environment
 
@@ -21,9 +153,8 @@ HouYi is a monorepo with multiple subsystems.
 HouYi uses `uv` + a local virtual environment at `.venv/` for isolated and reproducible development.
 
 **Policy**:
-- Development MUST run inside `.venv`.
-- Dependency resolution MUST use `pyproject.toml` + `uv.lock` as the single source of truth.
-
+- Development MUST run inside `.venv`
+- Dependency resolution MUST use `pyproject.toml` + `uv.lock` as the single source of truth
 
 ```bash
 # Install uv (see https://docs.astral.sh/uv/)
@@ -31,28 +162,30 @@ HouYi uses `uv` + a local virtual environment at `.venv/` for isolated and repro
 # Use Python 3.11 by default
 uv python install 3.11
 
-# Create/sync the virtualenv in .venv and install dev dependencies
+# Create/sync the virtualenv and install dev dependencies
 uv sync --extra dev
 ```
 
 ### Development Tools
 
-- **Python**: 3.11+
-- **Environment**: `.venv` (required)
-- **Package manager**: `uv`
-- **Dependency management**: `pyproject.toml` + `uv.lock`
-- **Lint/format**: `ruff` for code formatting
-- **Code quality**: `pylint` for comprehensive code quality checks
-- **Type checking**: `mypy`
-- **Tests**: `pytest` with `pytest-asyncio` and `pytest-cov`
+| Tool | Purpose |
+|------|---------|
+| Python | 3.11+ |
+| Environment | `.venv` (required) |
+| Package manager | `uv` |
+| Dependencies | `pyproject.toml` + `uv.lock` |
+| Lint/format | `ruff` |
+| Code quality | `pylint` |
+| Type checking | `mypy` |
+| Tests | `pytest` + `pytest-asyncio` + `pytest-cov` |
 
 ### Frontend Tools (Console UI)
 
-HouYi Console UI lives in `houyi-studio/ui/`.
+Console UI lives in `houyi-studio/ui/`.
 
 **Policy**:
-- The UI package manager MUST be `pnpm@9` (via `corepack`).
-- The repository MUST NOT use `npm` (including `npm run ...`) in scripts, docs, or CI.
+- Package manager MUST be `pnpm@9` (via `corepack`)
+- MUST NOT use `npm` in scripts, docs, or CI
 
 ```bash
 # In houyi-studio/ui/
@@ -61,27 +194,22 @@ corepack prepare pnpm@9 --activate
 pnpm install
 ```
 
-## Common Commands
+---
+
+## Development Workflow
 
 All commands MUST be run inside `.venv` via `uv run` (or through Makefile targets).
 
-```bash
-# Create/sync environment
-uv sync --extra dev
-```
-
-### Using Makefile (Recommended)
-
-The project includes a Makefile for common development tasks:
+### Makefile Commands (Recommended)
 
 ```bash
 # Setup
 make install-dev      # Install all development dependencies
 make setup-hooks      # Setup pre-commit hooks
 
-# Code Quality (use these before committing!)
-make quick-check      # Fast checks (ruff + quick tests) - use frequently
-make check            # Full checks (ruff + pylint + tests + coverage) - before commit
+# Code Quality (use before committing!)
+make quick-check      # Fast checks (ruff + quick tests)
+make check            # Full checks (ruff + pylint + tests + coverage)
 make format           # Auto-format code
 make lint             # Run all linters
 make lint-fix         # Run linters with auto-fix
@@ -93,21 +221,17 @@ make test-fast        # Run tests (fail fast)
 
 # Cleanup
 make clean            # Remove cache and build files
-
-# Help
 make help             # Show all available commands
 ```
 
 ### Manual Commands
-
-If you prefer to run commands manually:
 
 ```bash
 # Lint / format
 uv run ruff check houyi/
 uv run ruff check houyi/ --fix
 
-# Code quality check
+# Code quality
 uv run pylint houyi/ --rcfile=.pylintrc
 
 # Type check
@@ -123,17 +247,15 @@ uv run pytest tests/test_core.py -v
 uv run python examples/quickstart.py
 ```
 
-### Frontend (Console UI) Commands
+### Frontend Commands
 
 All UI commands MUST be run from `houyi-studio/ui/`.
 
 ```bash
 # Install deps
-corepack enable
-corepack prepare pnpm@9 --activate
 pnpm install
 
-# One-time: install Playwright browser binaries
+# Install Playwright browsers (one-time)
 pnpm run e2e:install-browsers
 
 # Lint / typecheck / unit tests
@@ -141,259 +263,163 @@ pnpm lint
 pnpm type-check
 pnpm test
 
-# E2E (Playwright)
+# E2E tests
 pnpm test:e2e
 
-# If Playwright browser download is blocked, you can use system Chrome:
+# If browser download blocked, use system Chrome:
 HOUYI_USE_SYSTEM_CHROME=1 pnpm test:e2e
 ```
 
-## Pre-commit Workflow
+### Pre-commit Hooks
 
-### Recommended Development Flow
-
-**One-time setup (recommended): install pre-commit hooks first.**
+**One-time setup:**
 
 ```bash
 make setup-hooks
 ```
 
-**Day-to-day commands:**
+Hooks automatically run on `git commit`:
+- Ruff formatting and linting
+- Trailing whitespace removal
+- File encoding checks
+- YAML/JSON validation
+- Large file detection
 
-```bash
-# During development (fast)
-make quick-check
+**Skip hooks (emergency only):**
 
-# Before commit (comprehensive)
-make check
-```
-
-### Automated Pre-commit Hooks (Recommended)
-
-Once installed, hooks will automatically run on `git commit`:
-- ✅ Ruff formatting and linting
-- ✅ Trailing whitespace removal
-- ✅ File encoding checks
-- ✅ YAML/JSON validation
-- ✅ Large file detection
-
-**Skip hooks (emergency only)**:
 ```bash
 git commit --no-verify -m "emergency fix"
 ```
 
-### Manual Pre-commit Checklist
-
-If you cannot use automated hooks, run `make check` before committing.
-
-If hooks are installed, you do not need to run the manual checklist by default; `make check` is the source of truth before commit.
-
-If you need to run individual steps (debugging or CI triage), use:
-
-1. **Format code**: `make format`
-2. **Run linters**: `make lint`
-3. **Run tests**: `make test-fast`
-4. **Check coverage**: `make test-cov` (ensure ≥80)
+---
 
 ## Coding Standards
 
 ### Code Quality Tools
 
-HouYi uses a two-tier approach for code quality:
+HouYi uses a two-tier approach:
 
-#### 1. Ruff (Fast Linting & Formatting)
+#### Ruff (Fast Linting & Formatting)
+
 - **Purpose**: Fast code formatting and common error detection
 - **Usage**: `ruff check houyi/` or `ruff check houyi/ --fix`
-- **Checks**:
-  - Code formatting (PEP 8)
-  - Import sorting
-  - Unused variables
-  - Common anti-patterns
-- **Speed**: Very fast, runs in milliseconds
+- **Checks**: PEP 8, import sorting, unused variables, anti-patterns
+- **Speed**: Milliseconds
 
-#### 2. Pylint (Comprehensive Code Quality)
-- **Purpose**: Deep code quality analysis and best practices enforcement
+#### Pylint (Comprehensive)
+
+- **Purpose**: Deep code quality analysis
 - **Usage**: `pylint houyi/ --rcfile=.pylintrc`
-- **Configuration**: `.pylintrc` in project root
-- **Target Score**: **10.00/10** (current score)
-- **Checks**:
-  - Code complexity and maintainability
-  - Naming conventions
-  - Design issues
-  - Potential bugs
-  - Documentation completeness
-- **CI/CD**: Both ruff and pylint run in GitHub Actions
+- **Target Score**: 10.00/10
+- **Checks**: Complexity, naming, design issues, documentation
 
-**Best Practice**: Run both tools before committing:
+**Run both before committing:**
+
 ```bash
-# Quick check with ruff (auto-fix)
 ruff check houyi/ --fix
-
-# Comprehensive check with pylint
 pylint houyi/ --rcfile=.pylintrc
 ```
 
-### API Stability (Critical)
+### API Stability
 
-- **Preserve public interfaces**.
-  - Do not change function signatures, argument order, or parameter names for public APIs without explicit migration guidance.
-  - When adding new parameters, prefer keyword-only parameters: `def f(a: int, *, new_param: str = "default") -> ...`.
-- **Determine what is public**.
-  - Treat items exported from `__init__.py` as public.
-  - Also treat anything documented as part of the framework API as public.
-
-### Typing and Schemas
-
-- Use type hints everywhere for non-trivial code paths.
-- Keep boundaries **schema-first**:
-  - Inputs/outputs should be explicitly modeled and validated (Pydantic v2).
-  - Avoid passing around untyped `dict`/`Any` across module boundaries.
+- **Preserve public interfaces**: No signature changes without migration guidance
+- **New parameters**: Use keyword-only: `def f(a: int, *, new_param: str = "default")`
+- **Public surface**: Items exported from `__init__.py` and documented APIs
 
 ### Error Handling
 
-- Validate early at boundaries.
-- Raise structured, actionable errors.
-- Avoid bare `except:`.
-- Do not swallow tool execution failures; rethrow with context.
+- Validate early at boundaries
+- Raise structured, actionable errors
+- No bare `except:`
+- Rethrow tool execution failures with context
 
-### Security Guidelines
+---
 
-- No `eval()` / `exec()` / `pickle` on user-controlled input.
-- Be explicit about any filesystem/network side effects.
-- Ensure proper resource cleanup (files, sockets, subprocesses, threads).
+## Testing
 
-## End-to-End Testing (Playwright)
+### Test Categories
 
-HouYi Console UI uses Playwright for E2E testing.
+| Category | Description |
+|----------|-------------|
+| **Unit** | Fast, deterministic, no network |
+| **Integration** | May include network/external services |
+| **E2E (Playwright)** | Full UI workflow testing |
 
-**Policy**:
-- E2E tests MUST be categorized as `smoke` or `full`.
-- Pull requests MUST run `smoke` by default.
-- `full` is triggered by one of:
-  - PR label: `e2e-full`
-  - scheduled (nightly)
-  - manual dispatch
+### Test Location
 
-**Smoke scope (current baseline)**:
-- UI startup
-- Home page render
-- Run the `position_test` workflow end-to-end
+- **All tests in `tests/` directory** (never in project root)
+- Mirror source layout: `houyi/core/agent.py` → `tests/core/test_agent.py`
 
-**Playwright browser install policy**:
-- Default is no proxy.
-- If browser downloads fail, use the optional scripts in `houyi-studio/ui/package.json`:
-  - `pnpm run e2e:install-browsers:proxy`
-  - `pnpm run e2e:install-browsers:host`
+### Naming Convention
 
-## Testing Requirements
+✅ **Correct**: `test_<class_or_module>.py`
+- `tests/evaluation/test_evaluators.py`
+- `tests/execution/test_skill_executor.py`
+- `tests/observability/test_observability.py`
 
-Every new feature or bugfix must be covered by tests.
-
-- **Framework**: `pytest`
-- **Test categories**:
-  - **Unit tests**: fast, deterministic, no network calls.
-  - **Integration tests**: can include network calls and external services (when explicitly configured).
-- **Test location**:
-  - **All tests must be in `tests/` directory**
-  - **Never place test files in project root**
-  - Mirror the source layout under `tests/`: `houyi/core/agent.py` → `tests/core/test_agent.py`
-
-### Test Naming Convention (CRITICAL)
-
-**Follow the `test_<class_or_module_name>.py` pattern:**
-
-✅ **Correct naming**:
-- `tests/evaluation/test_evaluators.py` - tests all Evaluator classes
-- `tests/execution/test_skill_executor.py` - tests SkillExecutor class
-- `tests/observability/test_observability.py` - tests TraceManager, Span, Exporters
-- `tests/evaluation/test_dataset.py` - tests Dataset class
-- `tests/llm/test_llm.py` - tests LLM adapters (OpenAI, Anthropic)
-- `tests/orchestration/test_orchestration.py` - tests orchestration classes (Plan, Planner, State)
-
-❌ **Incorrect naming** (DO NOT USE):
-- `tests/test_phase3_evaluators.py` - phase-based naming
-- `tests/test_advanced_features.py` - vague feature-based naming
-- `tests/test_v0_2_0.py` - version-based naming
-- `tests/test_new_stuff.py` - non-descriptive naming
-
-**Rationale**:
-- Test files should be named after **what they test**, not when they were created
-- Makes it easy to find tests for a specific class/module
-- Avoids confusion when phases/versions change
-- Maintains long-term clarity and maintainability
+❌ **Incorrect**:
+- `test_phase3_evaluators.py` (phase-based)
+- `test_advanced_features.py` (vague)
+- `test_v0_2_0.py` (version-based)
 
 ### Test Structure
 
-- **Prefer fixtures/mocks** for external dependencies
-- **Use `pytest.mark`** for categorization (e.g., `@pytest.mark.integration`)
-- **Group tests by class**: Use `class Test<ClassName>:` for organizing related tests
-  ```python
-  class TestAccuracyEvaluator:
-      def test_exact_match(self):
-          ...
+```python
+class TestAccuracyEvaluator:
+    def test_exact_match(self):
+        ...
 
-      def test_similar_match(self):
-          ...
-  ```
+    def test_similar_match(self):
+        ...
+```
 
-### Test Quality Checklist
+- Use fixtures/mocks for external dependencies
+- Use `pytest.mark` for categorization
+- Group tests by class
 
-- Tests fail when the new logic is broken
-- Happy path is covered
-- Edge cases and error conditions are covered
-- Tests are deterministic (no flakes)
-- **Test coverage target: 80%+**
+### Coverage Requirements
 
-### Release Requirements (CRITICAL)
+| Scope | Target |
+|-------|--------|
+| Overall project | ≥ 80% |
+| Core business logic | ≥ 85% |
 
-**Before any version release (x.y.z), the following requirements MUST be met:**
+Core modules: `core/`, `evaluation/`, `execution/`, `orchestration/`, `observability/`
 
-1. **Test Coverage Requirements**
-   - **Overall project coverage: ≥ 80%**
-   - **Core business logic modules: ≥ 85%**
-   - Run: `uv run pytest tests/ -v --cov=houyi --cov-report=term`
-   - Core modules include: core/, evaluation/, execution/, orchestration/, observability/
+### E2E Testing (Playwright)
 
-2. **All Tests Passing**
-   - 100% test pass rate required
-   - No skipped tests without explicit justification
+**Policy**:
+- Tests categorized as `smoke` or `full`
+- PRs run `smoke` by default
+- `full` triggered by: PR label `e2e-full`, nightly schedule, or manual dispatch
 
-3. **Code Quality**
-   - `ruff check houyi/` passes with no errors
-   - `mypy houyi/` passes with no type errors
+**Smoke scope**: UI startup, home page render, `position_test` workflow
 
-4. **Documentation**
-   - CHANGELOG.md updated with all changes
-   - README.md reflects current features
-   - API changes documented
+---
 
-## Architectural Invariants (Do Not Break)
+## Collaboration
 
-- **Schema-first**: public boundaries should be defined with explicit schemas.
-- **Deterministic execution**: LLM should produce plans or formal artifacts (e.g., code/SQL), not execute business logic directly.
-- **Immutable state**: prefer immutable state snapshots (versioned) over in-place mutation.
-- **Observability**: critical steps should emit trace/log/metric events (OpenTelemetry-compatible).
+### PR Checklist
 
-## PR Checklist
+- [ ] Schemas/types updated; validations added
+- [ ] No breaking public API changes (or migration notes provided)
+- [ ] `make check` passes (ruff, pylint, pytest)
+- [ ] New critical paths include tracing/logging
+- [ ] Tool execution respects sandbox/permission boundaries
 
-- **Correctness**: schemas/types updated; validations added where needed.
-- **Compatibility**: no breaking public API changes without migration notes.
-- **Quality**: `ruff`, `mypy`, and `pytest` pass.
-- **Observability**: new critical paths include tracing/logging.
-- **Security**: tool execution respects sandbox/permission boundaries.
+### GitHub Rules
 
-## GitHub Collaboration Rules
+- **Issues**: Use GitHub Issue Forms for reproducible bug reports
+- **PRs**: Follow repository PR template
+- **Stale management**: Automated workflow labels/closes inactive issues
 
-**Issue / PR templates**:
-- Issues SHOULD be opened via GitHub Issue Forms (YAML) to ensure reproducible bug reports and structured feature requests.
-- Pull requests SHOULD follow the repository PR template.
+### Translator Workflow
 
-**Stale issue management**:
-- The repository uses a scheduled workflow to label/close inactive issues.
+- Automated translator normalizes issue titles to English
+- Includes anti-abuse measures (idempotency, rate limiting)
+- Ignores bot activity
 
-**Translator workflow (issues/comments)**:
-- The repository MAY run an automated translator to normalize issue titles to English and append an English translation to bodies/comments.
-- Translator MUST include anti-abuse measures (idempotency, concurrency control, rate limiting) and MUST ignore bot activity.
+---
 
 ## Version Management
 
@@ -401,20 +427,92 @@ HouYi follows [Semantic Versioning 2.0.0](https://semver.org/): `MAJOR.MINOR.PAT
 
 ### When to Increment
 
-- **MAJOR**: Breaking changes to public APIs
-- **MINOR**: New features (backward-compatible)
-- **PATCH**: Bug fixes, no API changes
+| Type | When |
+|------|------|
+| **MAJOR** | Breaking changes to public APIs |
+| **MINOR** | New features (backward-compatible) |
+| **PATCH** | Bug fixes, no API changes |
+
+### Release Requirements
+
+Before any release:
+
+1. **Coverage**: Overall ≥ 80%, Core ≥ 85%
+2. **Tests**: 100% pass rate
+3. **Quality**: `ruff` and `mypy` pass
+4. **Docs**: CHANGELOG.md updated, README.md current
 
 ### Release Process
 
-1. Update `CHANGELOG.md` with changes (Added/Changed/Fixed/Removed)
+1. Update `CHANGELOG.md`
 2. Update `pyproject.toml` version
-3. Run full test suite: `uv run pytest tests/ -v --cov=houyi`
+3. Run full test suite: `make test-cov`
 4. Create git tag: `git tag -a vX.Y.Z -m "Release vX.Y.Z"`
 5. Update `README.md` if major/minor release
 
-See [CHANGELOG.md](https://github.com/your-repo/CHANGELOG.md) for version history and release notes.
+---
 
-## Design Alignment
+## Best Practices
+
+### Linear Commit Workflow
+
+Maintain linear commit history in multi-contributor environments.
+
+**Standard Workflow:**
+
+```bash
+# 1. Stash local changes (tracked files only)
+git stash push -m "WIP: description"
+
+# 2. Pull with rebase (keeps linear history)
+git pull --rebase origin main
+
+# 3. Restore local changes
+git stash pop
+
+# 4. Squash local commits into one (if needed)
+git reset --soft origin/main
+
+# 5. Stage and commit
+git add .
+git commit -m "feat: description"
+
+# 6. Push
+git push origin main
+```
+
+**Handling Untracked Files:**
+
+```bash
+# Include untracked files (use with caution)
+git stash push -u -m "WIP: including untracked"
+```
+
+**Caution with `-u` flag:**
+- Build artifacts may be accidentally stashed
+- Large binaries could bloat stash
+- Files intended to stay untracked may be removed
+
+**Best Practice for Untracked Files:**
+1. **Preferred**: Add to `.gitignore` or explicitly stage before stash
+2. **If using `-u`**: Review `git status` first
+3. **Alternative**: Commit WIP to a temporary branch instead
+
+**When Conflicts Occur:**
+
+```bash
+git stash pop
+# Resolve conflicts manually
+git add <resolved-files>
+```
+
+### Key Development Principles
+
+- **Always `make check` before commit**: Never commit code that fails local checks
+- **Confirm before push**: Get approval in collaborative workflows
+- **One logical change per commit**: Keep commits atomic
+- **Meaningful commit messages**: Follow conventional commits (feat/fix/docs/refactor/test)
+
+### Design Alignment
 
 If you add or rename major abstractions, update this guide and the README accordingly.

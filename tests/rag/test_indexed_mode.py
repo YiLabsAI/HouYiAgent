@@ -244,9 +244,7 @@ class TestIndexedModeSearch:
             from houyi.rag.indexed.graph.store import GraphStore
             from houyi.rag.types import Entity, Relation
 
-            graph_store = GraphStore(knowledge_dir=tmpdir)
-            try:
-                await graph_store.load()
+            async with GraphStore(knowledge_dir=tmpdir) as graph_store:
                 await graph_store.add_entities([
                     Entity(entity_id="e1", name="Python", entity_type="language"),
                     Entity(entity_id="e2", name="Django", entity_type="framework"),
@@ -266,8 +264,6 @@ class TestIndexedModeSearch:
 
                 assert result.mode_used == RAGMode.INDEXED
                 assert len(result.search_results) > 0
-            finally:
-                graph_store.close()
 
 
 class TestBuildAnswerSimple:
