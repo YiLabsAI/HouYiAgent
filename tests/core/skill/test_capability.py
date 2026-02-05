@@ -3,13 +3,12 @@
 Reference: SimpleSkill Specification v0.1 Section 5.1 (Capability Negotiation)
 """
 
-import pytest
 
 from houyi.core.skill.capability import (
+    DEFAULT_HOUYI_CAPABILITIES,
     CapabilityMatchResult,
     CapabilityNegotiator,
     ConsentModel,
-    DEFAULT_HOUYI_CAPABILITIES,
     ExecutionForm,
     ExtensionRequirements,
     HookHandler,
@@ -90,7 +89,7 @@ class TestCapabilityMatchResult:
     def test_bool_conversion(self):
         result = CapabilityMatchResult(compatible=True)
         assert bool(result)
-        
+
         result = CapabilityMatchResult(compatible=False)
         assert not bool(result)
 
@@ -109,20 +108,20 @@ class TestCapabilityNegotiator:
     def test_check_compatibility_basic(self):
         caps = HostCapabilities()
         negotiator = CapabilityNegotiator(caps)
-        
+
         reqs = ExtensionRequirements()
         result = negotiator.check_compatibility(reqs)
-        
+
         assert result.compatible
         assert len(result.missing_capabilities) == 0
 
     def test_check_compatibility_version_mismatch(self):
         caps = HostCapabilities(manifest_version="0.1")
         negotiator = CapabilityNegotiator(caps)
-        
+
         reqs = ExtensionRequirements(min_manifest_version="0.5")
         result = negotiator.check_compatibility(reqs)
-        
+
         assert not result.compatible
         assert any("version" in m.lower() for m in result.missing_capabilities)
 
@@ -131,56 +130,56 @@ class TestCapabilityNegotiator:
             execution_forms=[ExecutionForm.IN_PROCESS]
         )
         negotiator = CapabilityNegotiator(caps)
-        
+
         reqs = ExtensionRequirements(
             required_execution_forms=[ExecutionForm.MCP]
         )
         result = negotiator.check_compatibility(reqs)
-        
+
         assert not result.compatible
         assert any("execution" in m.lower() for m in result.missing_capabilities)
 
     def test_check_compatibility_hook_events_mismatch(self):
         caps = HostCapabilities(hook_events=["PreToolUse"])
         negotiator = CapabilityNegotiator(caps)
-        
+
         reqs = ExtensionRequirements(
             required_hook_events=["PreToolUse", "CustomEvent"]
         )
         result = negotiator.check_compatibility(reqs)
-        
+
         assert not result.compatible
         assert any("hook events" in m.lower() for m in result.missing_capabilities)
 
     def test_check_compatibility_hook_handlers_mismatch(self):
         caps = HostCapabilities(hook_handlers=[HookHandler.COMMAND])
         negotiator = CapabilityNegotiator(caps)
-        
+
         reqs = ExtensionRequirements(
             required_hook_handlers=[HookHandler.AGENT]
         )
         result = negotiator.check_compatibility(reqs)
-        
+
         assert not result.compatible
         assert any("handler" in m.lower() for m in result.missing_capabilities)
 
     def test_check_compatibility_consent_required(self):
         caps = HostCapabilities(consent_model=ConsentModel.NONE)
         negotiator = CapabilityNegotiator(caps)
-        
+
         reqs = ExtensionRequirements(requires_consent=True)
         result = negotiator.check_compatibility(reqs)
-        
+
         assert not result.compatible
         assert any("consent" in m.lower() for m in result.missing_capabilities)
 
     def test_check_compatibility_evaluation_warning(self):
         caps = HostCapabilities(evaluation_support=False)
         negotiator = CapabilityNegotiator(caps)
-        
+
         reqs = ExtensionRequirements(requires_evaluation=True)
         result = negotiator.check_compatibility(reqs)
-        
+
         # Evaluation is a warning, not a hard requirement
         assert result.compatible
         assert len(result.warnings) > 0
@@ -191,12 +190,12 @@ class TestCapabilityNegotiator:
             hook_events=["PreToolUse", "PostToolUse", "Stop"],
         )
         negotiator = CapabilityNegotiator(caps)
-        
+
         reqs = ExtensionRequirements(
             required_execution_forms=[ExecutionForm.MCP],
             required_hook_events=["PreToolUse"],
         )
-        
+
         effective = negotiator.get_effective_capabilities(reqs)
         assert "mcp" in effective["executionForms"]
         assert "PreToolUse" in effective["hookEvents"]

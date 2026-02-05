@@ -7,9 +7,10 @@ Tests the planning skill's core functionality:
 - Subtask updates
 """
 
-import pytest
-from pathlib import Path
 import tempfile
+from pathlib import Path
+
+import pytest
 
 from houyi.skills.planning import (
     PlanningSkill,
@@ -202,7 +203,7 @@ class TestFindPlanFile:
             tmpdir = Path(tmpdir)
             plan_path = tmpdir / "PLAN.md"
             plan_path.write_text("# Task: Test")
-            
+
             found = find_plan_file(tmpdir)
             assert found == plan_path
 
@@ -213,7 +214,7 @@ class TestFindPlanFile:
             plan_dir.mkdir()
             plan_path = plan_dir / "PLAN.md"
             plan_path.write_text("# Task: Test")
-            
+
             found = find_plan_file(tmpdir)
             assert found == plan_path
 
@@ -232,19 +233,19 @@ class TestPlanningSkill:
         with tempfile.TemporaryDirectory() as tmpdir:
             tmpdir = Path(tmpdir)
             skill = PlanningSkill(workspace=tmpdir)
-            
+
             result = await skill.execute(
                 "create",
                 task="Test Task",
                 subtasks=["Step 1", "Step 2"],
             )
-            
+
             assert result["success"]
             assert "plan_path" in result
-            
+
             plan_path = Path(result["plan_path"])
             assert plan_path.exists()
-            
+
             content = plan_path.read_text()
             assert "Test Task" in content
             assert "Step 1" in content
@@ -254,17 +255,17 @@ class TestPlanningSkill:
         with tempfile.TemporaryDirectory() as tmpdir:
             tmpdir = Path(tmpdir)
             skill = PlanningSkill(workspace=tmpdir)
-            
+
             # Create plan first
             await skill.execute(
                 "create",
                 task="Test Task",
                 subtasks=["Step 1", "Step 2"],
             )
-            
+
             # Get status
             result = await skill.execute("status")
-            
+
             assert result["success"]
             assert result["task"] == "Test Task"
             assert result["status"] == "in_progress"
@@ -276,21 +277,21 @@ class TestPlanningSkill:
         with tempfile.TemporaryDirectory() as tmpdir:
             tmpdir = Path(tmpdir)
             skill = PlanningSkill(workspace=tmpdir)
-            
+
             # Create plan
             await skill.execute(
                 "create",
                 task="Test Task",
                 subtasks=["Step 1", "Step 2"],
             )
-            
+
             # Update subtask
             result = await skill.execute(
                 "update",
                 subtask_index=0,
                 completed=True,
             )
-            
+
             assert result["success"]
             assert result["progress"]["completed"] == 1
 
@@ -299,21 +300,21 @@ class TestPlanningSkill:
         with tempfile.TemporaryDirectory() as tmpdir:
             tmpdir = Path(tmpdir)
             skill = PlanningSkill(workspace=tmpdir)
-            
+
             # Create plan
             await skill.execute(
                 "create",
                 task="Test Task",
                 subtasks=["Step 1"],
             )
-            
+
             # Try to complete (should fail - subtasks incomplete)
             result = await skill.execute("complete")
             assert not result["success"]
-            
+
             # Complete subtask
             await skill.execute("update", subtask_index=0, completed=True)
-            
+
             # Now complete should work
             result = await skill.execute("complete")
             assert result["success"]
@@ -324,7 +325,7 @@ class TestPlanningSkill:
         with tempfile.TemporaryDirectory() as tmpdir:
             tmpdir = Path(tmpdir)
             skill = PlanningSkill(workspace=tmpdir)
-            
+
             result = await skill.execute("status")
             assert not result["success"]
             assert "No plan file" in result["message"]
@@ -332,7 +333,7 @@ class TestPlanningSkill:
     def test_to_spec(self):
         skill = PlanningSkill()
         spec = skill.to_spec()
-        
+
         assert spec.name == "planning-with-files"
         assert spec.version == "1.0.0"
         assert spec.user_invocable is True
@@ -350,7 +351,7 @@ class TestPreWriteHook:
         with tempfile.TemporaryDirectory() as tmpdir:
             context = HookContext(cwd=Path(tmpdir), tool_name="Write")
             result = await pre_write_hook(context)
-            
+
             assert result.success
             assert result.output is None
 
@@ -374,7 +375,7 @@ class TestPreWriteHook:
 """)
             context = HookContext(cwd=tmpdir, tool_name="Write")
             result = await pre_write_hook(context)
-            
+
             assert result.success
             assert result.output is not None
             assert "Test Task" in result.output
@@ -402,13 +403,12 @@ class TestPreWriteHook:
 """)
             context = HookContext(cwd=tmpdir, tool_name="Write")
             result = await pre_write_hook(context)
-            
+
             assert result.success
             assert "... and" in (result.output or "")
 
     @pytest.mark.asyncio
     async def test_handles_exception(self):
-        from unittest.mock import patch
         from houyi.core.skill.hooks import HookContext
         from houyi.skills.planning.hooks import pre_write_hook
 
@@ -416,9 +416,9 @@ class TestPreWriteHook:
             tmpdir = Path(tmpdir)
             plan_path = tmpdir / "PLAN.md"
             plan_path.write_text("invalid plan content")
-            
+
             context = HookContext(cwd=tmpdir, tool_name="Write")
-            
+
             # Even if parsing fails, should not crash
             result = await pre_write_hook(context)
             assert result.success
@@ -435,7 +435,7 @@ class TestPostToolHook:
         with tempfile.TemporaryDirectory() as tmpdir:
             context = HookContext(cwd=Path(tmpdir), tool_name="Write")
             result = await post_tool_hook(context)
-            
+
             assert result.success
 
     @pytest.mark.asyncio
@@ -456,18 +456,19 @@ class TestPostToolHook:
 - [x] Task 2
 """)
             context = HookContext(
-                cwd=tmpdir, 
+                cwd=tmpdir,
                 tool_name="Write",
                 tool_result={"success": True}
             )
             result = await post_tool_hook(context)
-            
+
             assert result.success
             assert "Progress:" in (result.output or "")
 
     @pytest.mark.asyncio
     async def test_handles_exception(self):
         from unittest.mock import patch
+
         from houyi.core.skill.hooks import HookContext
         from houyi.skills.planning.hooks import post_tool_hook
 
@@ -475,12 +476,12 @@ class TestPostToolHook:
             tmpdir = Path(tmpdir)
             plan_path = tmpdir / "PLAN.md"
             plan_path.write_text("# Task: Test")
-            
+
             context = HookContext(cwd=tmpdir)
-            
+
             with patch("houyi.skills.planning.hooks.parse_plan", side_effect=Exception("Parse error")):
                 result = await post_tool_hook(context)
-            
+
             assert result.success
 
 
@@ -495,7 +496,7 @@ class TestStopHook:
         with tempfile.TemporaryDirectory() as tmpdir:
             context = HookContext(cwd=Path(tmpdir))
             result = await stop_hook(context)
-            
+
             assert result.success
 
     @pytest.mark.asyncio
@@ -517,7 +518,7 @@ class TestStopHook:
 """)
             context = HookContext(cwd=tmpdir)
             result = await stop_hook(context)
-            
+
             assert result.success
             assert "complete" in (result.output or "").lower()
 
@@ -541,7 +542,7 @@ class TestStopHook:
 """)
             context = HookContext(cwd=tmpdir)
             result = await stop_hook(context)
-            
+
             assert result.success  # Doesn't hard block
             assert "WARNING" in (result.output or "")
             assert "incomplete" in (result.output or "").lower()
@@ -570,12 +571,13 @@ class TestStopHook:
 """)
             context = HookContext(cwd=tmpdir)
             result = await stop_hook(context)
-            
+
             assert "... and" in (result.output or "")
 
     @pytest.mark.asyncio
     async def test_handles_exception(self):
         from unittest.mock import patch
+
         from houyi.core.skill.hooks import HookContext
         from houyi.skills.planning.hooks import stop_hook
 
@@ -583,12 +585,12 @@ class TestStopHook:
             tmpdir = Path(tmpdir)
             plan_path = tmpdir / "PLAN.md"
             plan_path.write_text("# Task: Test")
-            
+
             context = HookContext(cwd=tmpdir)
-            
+
             with patch("houyi.skills.planning.hooks.parse_plan", side_effect=Exception("Parse error")):
                 result = await stop_hook(context)
-            
+
             assert result.success
 
 
@@ -600,10 +602,10 @@ class TestFindPlanFileExtended:
             tmpdir = Path(tmpdir)
             plan_path = tmpdir / "PLAN.md"
             plan_path.write_text("# Task: Test")
-            
+
             subdir = tmpdir / "sub" / "dir"
             subdir.mkdir(parents=True)
-            
+
             found = find_plan_file(subdir)
             assert found == plan_path
 

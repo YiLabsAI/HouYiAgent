@@ -3,9 +3,7 @@
 Reference: SimpleSkill Specification v0.1 Section 3 (SKILL.md Format)
 """
 
-import json
 
-import pytest
 
 from houyi.core.skill.hooks import HookEvent, HookType, SkillHook
 from houyi.core.skill.schema import (

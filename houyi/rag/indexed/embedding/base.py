@@ -15,11 +15,11 @@ class Embedder(Protocol):
 
     async def embed(self, text: str) -> list[float]:
         """Embed a single text."""
-        ...
+        raise NotImplementedError
 
     async def embed_batch(self, texts: list[str]) -> list[list[float]]:
         """Embed multiple texts."""
-        ...
+        raise NotImplementedError
 
 
 class BaseEmbedder(ABC):
@@ -31,7 +31,7 @@ class BaseEmbedder(ABC):
     @abstractmethod
     async def embed(self, text: str) -> list[float]:
         """Embed a single text."""
-        ...
+        raise NotImplementedError
 
     async def embed_batch(self, texts: list[str]) -> list[list[float]]:
         """Embed multiple texts (default: sequential)."""

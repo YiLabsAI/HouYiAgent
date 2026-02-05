@@ -24,22 +24,22 @@ logger = logging.getLogger(__name__)
 @dataclass
 class QualityMetrics:
     """Quality metrics for skill evaluation."""
-    
+
     accuracy: float | None = None
     """Accuracy score (0-1)."""
-    
+
     precision: float | None = None
     """Precision score (0-1)."""
-    
+
     recall: float | None = None
     """Recall score (0-1)."""
-    
+
     f1: float | None = None
     """F1 score (0-1)."""
-    
+
     custom: dict[str, float] = field(default_factory=dict)
     """Custom quality metrics."""
-    
+
     def to_dict(self) -> dict[str, float | None]:
         result = {}
         if self.accuracy is not None:
@@ -57,31 +57,31 @@ class QualityMetrics:
 @dataclass
 class LatencyMetrics:
     """Latency metrics for skill execution."""
-    
+
     avg_ms: float = 0.0
     """Average latency in milliseconds."""
-    
+
     min_ms: float = 0.0
     """Minimum latency in milliseconds."""
-    
+
     max_ms: float = 0.0
     """Maximum latency in milliseconds."""
-    
+
     p50_ms: float = 0.0
     """50th percentile latency."""
-    
+
     p90_ms: float = 0.0
     """90th percentile latency."""
-    
+
     p95_ms: float = 0.0
     """95th percentile latency."""
-    
+
     p99_ms: float = 0.0
     """99th percentile latency."""
-    
+
     samples: int = 0
     """Number of samples."""
-    
+
     def to_dict(self) -> dict[str, float]:
         return {
             "avg": self.avg_ms,
@@ -98,22 +98,22 @@ class LatencyMetrics:
 @dataclass
 class CostMetrics:
     """Cost metrics for skill execution."""
-    
+
     tokens_input: int = 0
     """Input tokens consumed."""
-    
+
     tokens_output: int = 0
     """Output tokens generated."""
-    
+
     tokens_total: int = 0
     """Total tokens."""
-    
+
     usd_estimate: float | None = None
     """Estimated cost in USD."""
-    
+
     api_calls: int = 0
     """Number of API calls made."""
-    
+
     def to_dict(self) -> dict[str, Any]:
         result = {
             "tokens_input": self.tokens_input,
@@ -129,40 +129,40 @@ class CostMetrics:
 @dataclass
 class ReliabilityMetrics:
     """Reliability metrics for skill execution."""
-    
+
     success_count: int = 0
     """Number of successful executions."""
-    
+
     error_count: int = 0
     """Number of errors."""
-    
+
     timeout_count: int = 0
     """Number of timeouts."""
-    
+
     retry_count: int = 0
     """Number of retries."""
-    
+
     total_count: int = 0
     """Total execution count."""
-    
+
     @property
     def success_rate(self) -> float:
         if self.total_count == 0:
             return 0.0
         return self.success_count / self.total_count
-    
+
     @property
     def error_rate(self) -> float:
         if self.total_count == 0:
             return 0.0
         return self.error_count / self.total_count
-    
+
     @property
     def timeout_rate(self) -> float:
         if self.total_count == 0:
             return 0.0
         return self.timeout_count / self.total_count
-    
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "success_count": self.success_count,
@@ -179,19 +179,19 @@ class ReliabilityMetrics:
 @dataclass
 class PrivacyMetrics:
     """Privacy-related metrics."""
-    
+
     local_only: bool = True
     """Whether all processing is local."""
-    
+
     data_egress: bool = False
     """Whether data is sent externally."""
-    
+
     pii_detected: bool = False
     """Whether PII was detected in processing."""
-    
+
     encryption_used: bool = False
     """Whether encryption was used."""
-    
+
     def to_dict(self) -> dict[str, bool]:
         return {
             "local_only": self.local_only,
@@ -204,22 +204,22 @@ class PrivacyMetrics:
 @dataclass
 class ConformanceMetrics:
     """Conformance test results."""
-    
+
     passed: bool = True
     """Whether all conformance tests passed."""
-    
+
     tests_run: int = 0
     """Number of tests run."""
-    
+
     tests_passed: int = 0
     """Number of tests passed."""
-    
+
     tests_failed: int = 0
     """Number of tests failed."""
-    
+
     details: list[dict[str, Any]] = field(default_factory=list)
     """Detailed test results."""
-    
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "passed": self.passed,
@@ -233,37 +233,37 @@ class ConformanceMetrics:
 @dataclass
 class SkillMetrics:
     """Complete metrics for a skill.
-    
+
     Reference: SimpleSkill Specification v0.1 Section 7 (Evaluation / Selection)
     """
-    
+
     skill_name: str
     """Name of the skill being measured."""
-    
+
     quality: QualityMetrics = field(default_factory=QualityMetrics)
     """Quality metrics (accuracy, F1, etc.)."""
-    
+
     latency: LatencyMetrics = field(default_factory=LatencyMetrics)
     """Latency metrics."""
-    
+
     cost: CostMetrics = field(default_factory=CostMetrics)
     """Cost metrics."""
-    
+
     reliability: ReliabilityMetrics = field(default_factory=ReliabilityMetrics)
     """Reliability metrics."""
-    
+
     privacy: PrivacyMetrics = field(default_factory=PrivacyMetrics)
     """Privacy metrics."""
-    
+
     conformance: ConformanceMetrics = field(default_factory=ConformanceMetrics)
     """Conformance test results."""
-    
+
     collected_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     """When metrics were collected."""
-    
+
     metadata: dict[str, Any] = field(default_factory=dict)
     """Additional metadata."""
-    
+
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization."""
         return {
@@ -277,12 +277,12 @@ class SkillMetrics:
             "collected_at": self.collected_at.isoformat(),
             "metadata": self.metadata,
         }
-    
+
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "SkillMetrics":
+    def from_dict(cls, data: dict[str, Any]) -> SkillMetrics:
         """Create from dictionary."""
         metrics = cls(skill_name=data.get("skill_name", "unknown"))
-        
+
         if "quality" in data:
             q = data["quality"]
             metrics.quality = QualityMetrics(
@@ -291,20 +291,20 @@ class SkillMetrics:
                 recall=q.get("recall"),
                 f1=q.get("f1"),
             )
-        
+
         if "latency" in data:
-            l = data["latency"]
+            lat = data["latency"]
             metrics.latency = LatencyMetrics(
-                avg_ms=l.get("avg", 0),
-                min_ms=l.get("min", 0),
-                max_ms=l.get("max", 0),
-                p50_ms=l.get("p50", 0),
-                p90_ms=l.get("p90", 0),
-                p95_ms=l.get("p95", 0),
-                p99_ms=l.get("p99", 0),
-                samples=l.get("samples", 0),
+                avg_ms=lat.get("avg", 0),
+                min_ms=lat.get("min", 0),
+                max_ms=lat.get("max", 0),
+                p50_ms=lat.get("p50", 0),
+                p90_ms=lat.get("p90", 0),
+                p95_ms=lat.get("p95", 0),
+                p99_ms=lat.get("p99", 0),
+                samples=lat.get("samples", 0),
             )
-        
+
         if "reliability" in data:
             r = data["reliability"]
             metrics.reliability = ReliabilityMetrics(
@@ -314,17 +314,17 @@ class SkillMetrics:
                 retry_count=r.get("retry_count", 0),
                 total_count=r.get("total_count", 0),
             )
-        
+
         if "collected_at" in data:
             metrics.collected_at = datetime.fromisoformat(data["collected_at"])
-        
+
         metrics.metadata = data.get("metadata", {})
         return metrics
 
 
 class MetricsCollector:
     """Collects metrics during skill execution.
-    
+
     Usage:
         collector = MetricsCollector("my_skill")
         with collector.measure_execution():
@@ -333,41 +333,41 @@ class MetricsCollector:
         collector.record_success()
         metrics = collector.get_metrics()
     """
-    
+
     def __init__(self, skill_name: str) -> None:
         self.skill_name = skill_name
         self._latencies: list[float] = []
         self._metrics = SkillMetrics(skill_name=skill_name)
         self._current_start: float | None = None
-    
-    def measure_execution(self) -> "_ExecutionContext":
+
+    def measure_execution(self) -> _ExecutionContext:
         """Context manager for measuring execution time."""
         return _ExecutionContext(self)
-    
+
     def record_latency(self, latency_ms: float) -> None:
         """Record a latency measurement."""
         self._latencies.append(latency_ms)
         self._update_latency_stats()
-    
+
     def record_success(self) -> None:
         """Record a successful execution."""
         self._metrics.reliability.success_count += 1
         self._metrics.reliability.total_count += 1
-    
+
     def record_error(self) -> None:
         """Record an error."""
         self._metrics.reliability.error_count += 1
         self._metrics.reliability.total_count += 1
-    
+
     def record_timeout(self) -> None:
         """Record a timeout."""
         self._metrics.reliability.timeout_count += 1
         self._metrics.reliability.total_count += 1
-    
+
     def record_retry(self) -> None:
         """Record a retry."""
         self._metrics.reliability.retry_count += 1
-    
+
     def record_tokens(
         self,
         input_tokens: int = 0,
@@ -377,11 +377,11 @@ class MetricsCollector:
         self._metrics.cost.tokens_input += input_tokens
         self._metrics.cost.tokens_output += output_tokens
         self._metrics.cost.tokens_total += input_tokens + output_tokens
-    
+
     def record_api_call(self) -> None:
         """Record an API call."""
         self._metrics.cost.api_calls += 1
-    
+
     def set_quality(
         self,
         accuracy: float | None = None,
@@ -400,7 +400,7 @@ class MetricsCollector:
         if f1 is not None:
             self._metrics.quality.f1 = f1
         self._metrics.quality.custom.update(custom)
-    
+
     def set_privacy(
         self,
         local_only: bool | None = None,
@@ -417,25 +417,25 @@ class MetricsCollector:
             self._metrics.privacy.pii_detected = pii_detected
         if encryption_used is not None:
             self._metrics.privacy.encryption_used = encryption_used
-    
+
     def get_metrics(self) -> SkillMetrics:
         """Get collected metrics."""
         self._metrics.collected_at = datetime.now(timezone.utc)
         return self._metrics
-    
+
     def reset(self) -> None:
         """Reset all metrics."""
         self._latencies = []
         self._metrics = SkillMetrics(skill_name=self.skill_name)
-    
+
     def _update_latency_stats(self) -> None:
         """Update latency statistics from samples."""
         if not self._latencies:
             return
-        
+
         sorted_latencies = sorted(self._latencies)
         n = len(sorted_latencies)
-        
+
         self._metrics.latency.samples = n
         self._metrics.latency.avg_ms = sum(sorted_latencies) / n
         self._metrics.latency.min_ms = sorted_latencies[0]
@@ -444,7 +444,7 @@ class MetricsCollector:
         self._metrics.latency.p90_ms = self._percentile(sorted_latencies, 90)
         self._metrics.latency.p95_ms = self._percentile(sorted_latencies, 95)
         self._metrics.latency.p99_ms = self._percentile(sorted_latencies, 99)
-    
+
     @staticmethod
     def _percentile(sorted_values: list[float], p: int) -> float:
         """Calculate percentile from sorted values."""
@@ -460,15 +460,15 @@ class MetricsCollector:
 
 class _ExecutionContext:
     """Context manager for measuring execution time."""
-    
+
     def __init__(self, collector: MetricsCollector) -> None:
         self._collector = collector
         self._start: float = 0.0
-    
-    def __enter__(self) -> "_ExecutionContext":
+
+    def __enter__(self) -> _ExecutionContext:
         self._start = time.perf_counter()
         return self
-    
+
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         elapsed_ms = (time.perf_counter() - self._start) * 1000
         self._collector.record_latency(elapsed_ms)
@@ -476,7 +476,7 @@ class _ExecutionContext:
 
 class MetricsExporter:
     """Exports metrics to various formats."""
-    
+
     @staticmethod
     def to_json(metrics: SkillMetrics, path: Path | str) -> None:
         """Export metrics to JSON file."""
@@ -484,8 +484,8 @@ class MetricsExporter:
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "w") as f:
             json.dump(metrics.to_dict(), f, indent=2)
-        logger.info(f"Exported metrics to {path}")
-    
+        logger.info("Exported metrics to %s", path)
+
     @staticmethod
     def to_json_lines(
         metrics_list: list[SkillMetrics],
@@ -499,12 +499,16 @@ class MetricsExporter:
         with open(path, mode) as f:
             for metrics in metrics_list:
                 f.write(json.dumps(metrics.to_dict()) + "\n")
-        logger.info(f"Exported {len(metrics_list)} metrics entries to {path}")
-    
+        logger.info(
+            "Exported %s metrics entries to %s",
+            len(metrics_list),
+            path,
+        )
+
     @staticmethod
     def to_opentelemetry_attributes(metrics: SkillMetrics) -> dict[str, Any]:
         """Convert metrics to OpenTelemetry span attributes.
-        
+
         Can be used with trace_manager.current_span.set_attributes().
         """
         attrs = {
@@ -516,63 +520,63 @@ class MetricsExporter:
             "skill.cost.tokens_total": metrics.cost.tokens_total,
             "skill.cost.api_calls": metrics.cost.api_calls,
         }
-        
+
         # Add quality metrics if available
         if metrics.quality.accuracy is not None:
             attrs["skill.quality.accuracy"] = metrics.quality.accuracy
         if metrics.quality.f1 is not None:
             attrs["skill.quality.f1"] = metrics.quality.f1
-        
+
         return attrs
 
 
 class MetricsStore:
     """In-memory store for skill metrics with aggregation."""
-    
+
     def __init__(self) -> None:
         self._metrics: dict[str, list[SkillMetrics]] = {}
-    
+
     def store(self, metrics: SkillMetrics) -> None:
         """Store metrics for a skill."""
         if metrics.skill_name not in self._metrics:
             self._metrics[metrics.skill_name] = []
         self._metrics[metrics.skill_name].append(metrics)
-    
+
     def get_latest(self, skill_name: str) -> SkillMetrics | None:
         """Get most recent metrics for a skill."""
         entries = self._metrics.get(skill_name, [])
         return entries[-1] if entries else None
-    
+
     def get_all(self, skill_name: str) -> list[SkillMetrics]:
         """Get all metrics for a skill."""
         return list(self._metrics.get(skill_name, []))
-    
+
     def list_skills(self) -> list[str]:
         """List all skills with stored metrics."""
         return list(self._metrics.keys())
-    
+
     def aggregate(self, skill_name: str) -> SkillMetrics | None:
         """Aggregate all metrics for a skill into a summary."""
         entries = self._metrics.get(skill_name, [])
         if not entries:
             return None
-        
+
         # Create aggregated metrics
         aggregated = SkillMetrics(skill_name=skill_name)
-        
+
         # Aggregate latencies
         all_latencies = []
         for m in entries:
             if m.latency.samples > 0:
                 # Approximate by using avg * samples
                 all_latencies.extend([m.latency.avg_ms] * m.latency.samples)
-        
+
         if all_latencies:
             collector = MetricsCollector(skill_name)
             for lat in all_latencies:
                 collector.record_latency(lat)
             aggregated.latency = collector.get_metrics().latency
-        
+
         # Aggregate reliability
         for m in entries:
             aggregated.reliability.success_count += m.reliability.success_count
@@ -580,34 +584,34 @@ class MetricsStore:
             aggregated.reliability.timeout_count += m.reliability.timeout_count
             aggregated.reliability.retry_count += m.reliability.retry_count
             aggregated.reliability.total_count += m.reliability.total_count
-        
+
         # Aggregate cost
         for m in entries:
             aggregated.cost.tokens_input += m.cost.tokens_input
             aggregated.cost.tokens_output += m.cost.tokens_output
             aggregated.cost.tokens_total += m.cost.tokens_total
             aggregated.cost.api_calls += m.cost.api_calls
-        
+
         # Use latest quality (quality metrics are typically per-evaluation)
         if entries[-1].quality:
             aggregated.quality = entries[-1].quality
-        
+
         aggregated.metadata["aggregated_from"] = len(entries)
         aggregated.metadata["period_start"] = entries[0].collected_at.isoformat()
         aggregated.metadata["period_end"] = entries[-1].collected_at.isoformat()
-        
+
         return aggregated
-    
+
     def export_all(self, path: Path | str) -> None:
         """Export all metrics to JSON file."""
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        
+
         data = {}
         for skill_name, entries in self._metrics.items():
             data[skill_name] = [m.to_dict() for m in entries]
-        
+
         with open(path, "w") as f:
             json.dump(data, f, indent=2)
-        
-        logger.info(f"Exported metrics for {len(data)} skills to {path}")
+
+        logger.info("Exported metrics for %s skills to %s", len(data), path)

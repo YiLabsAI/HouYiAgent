@@ -18,6 +18,7 @@ from houyi.execution.skill_executor import SkillExecutionError
 if TYPE_CHECKING:
     from houyi.core.skill.consent import ConsentManager
     from houyi.core.skill.hooks import SkillHooksManager
+    from houyi.core.skill.metrics import MetricsStore
     from houyi.core.skill.policy import PolicyEnforcer
 
 logger = logging.getLogger(__name__)
@@ -32,12 +33,60 @@ class ToolCallRunner:
         skill_hooks_manager: SkillHooksManager | None = None,
         policy_enforcer: PolicyEnforcer | None = None,
         consent_manager: ConsentManager | None = None,
+        metrics_store: MetricsStore | None = None,
     ) -> None:
         self.trace_manager = trace_manager
         self.skill_hooks_manager = skill_hooks_manager
         self.policy_enforcer = policy_enforcer
         self.consent_manager = consent_manager
+        self.metrics_store = metrics_store
         self._consent_cache: dict[str, bool] = {}  # skill_name -> consent_granted
+        self._metrics_collectors: dict[str, Any] = {}  # skill_name -> MetricsCollector
+
+    def get_skill_metrics(self, skill_name: str) -> Any:
+        """Get aggregated metrics for a skill.
+
+        Returns None if no metrics have been collected or no metrics_store is configured.
+        """
+        if not self.metrics_store:
+            return None
+        return self.metrics_store.aggregate(skill_name)
+
+    def get_all_skill_metrics(self) -> dict[str, Any]:
+        """Get aggregated metrics for all skills.
+
+        Returns empty dict if no metrics_store is configured.
+        """
+        if not self.metrics_store:
+            return {}
+        return {
+            skill_name: self.metrics_store.aggregate(skill_name)
+            for skill_name in self.metrics_store.list_skills()
+        }
+
+    def export_metrics_to_trace(self) -> None:
+        """Export aggregated metrics to current trace span as OpenTelemetry attributes.
+
+        This should be called at the end of an execution to attach metrics summary
+        to the trace for observability.
+        """
+        if not self.trace_manager or not self.metrics_store:
+            return
+        span = getattr(self.trace_manager, "current_span", None)
+        if span is None:
+            return
+
+        from houyi.core.skill.metrics import MetricsExporter
+
+        for skill_name in self.metrics_store.list_skills():
+            metrics = self.metrics_store.aggregate(skill_name)
+            if metrics:
+                attrs = MetricsExporter.to_opentelemetry_attributes(metrics)
+                for key, value in attrs.items():
+                    try:
+                        span.set_attribute(f"{skill_name}.{key}", value)
+                    except Exception:
+                        pass
 
     async def run(
         self,
@@ -194,7 +243,6 @@ class ToolCallRunner:
                     if decision.requires_consent and self.consent_manager:
                         # Request consent asynchronously
                         from houyi.core.skill.consent import ConsentRequest, ConsentType
-                        from houyi.core.skill.policy import Permissions
 
                         policy = self.policy_enforcer.get_policy(tool_name)
                         consent_request = ConsentRequest(
@@ -338,12 +386,15 @@ class ToolCallRunner:
                 if tool_cache is not None and cache_key:
                     cached_result = tool_cache.get(cache_key)
                 cache_hit = cached_result is not None
+                # Include skill version per SimpleSkill spec §5.4
+                skill_version = getattr(skill, "version", None) if skill else None
                 self._emit_tool_event(
                     "ToolUsageStarted",
                     {
                         "tool_call_id": tool_call_id,
                         "tool_name": tool_name,
                         "requested_tool_name": requested_tool_name,
+                        "skill_version": skill_version,
                         "args": args,
                         "cache_hit": cache_hit,
                         "cache_key": cache_key,
@@ -424,6 +475,10 @@ class ToolCallRunner:
                         resolved_outputs[tool_call_id] = resolved_value
                     call_index_key = str(index + 1)
                     resolved_outputs[call_index_key] = resolved_value
+                # Extract latency from result metadata
+                result_metadata = result.get("metadata", {})
+                latency_ms = result_metadata.get("latency_ms") if isinstance(result_metadata, dict) else None
+
                 if self._is_tool_error(result):
                     self._emit_tool_event(
                         "ToolUsageError",
@@ -432,6 +487,7 @@ class ToolCallRunner:
                             "tool_name": tool_name,
                             "requested_tool_name": requested_tool_name,
                             "error": result.get("raw"),
+                            "latency_ms": latency_ms,
                         },
                     )
                     for hook in tool_hooks:
@@ -448,6 +504,7 @@ class ToolCallRunner:
                             "result": result.get("raw"),
                             "cache_hit": cache_hit_for_reporting,
                             "cache_key": cache_key,
+                            "latency_ms": latency_ms,
                         },
                     )
                     for hook in tool_hooks:
@@ -671,6 +728,34 @@ class ToolCallRunner:
         raw = result.get("raw")
         return isinstance(raw, dict) and "error" in raw
 
+    def _get_metrics_collector(self, skill_name: str) -> Any:
+        """Get or create a MetricsCollector for a skill."""
+        if skill_name not in self._metrics_collectors:
+            from houyi.core.skill.metrics import MetricsCollector
+            self._metrics_collectors[skill_name] = MetricsCollector(skill_name)
+        return self._metrics_collectors[skill_name]
+
+    def _record_metrics(
+        self,
+        skill_name: str,
+        latency_ms: float,
+        success: bool,
+        is_timeout: bool = False,
+    ) -> None:
+        """Record execution metrics for a skill."""
+        if not self.metrics_store:
+            return
+        collector = self._get_metrics_collector(skill_name)
+        collector.record_latency(latency_ms)
+        if success:
+            collector.record_success()
+        elif is_timeout:
+            collector.record_timeout()
+        else:
+            collector.record_error()
+        # Store metrics snapshot
+        self.metrics_store.store(collector.get_metrics())
+
     async def _execute_tool_call(
         self,
         tool_name: str | None,
@@ -695,19 +780,21 @@ class ToolCallRunner:
                 metadata={"tool_name": tool_name},
             )
 
+        start_time = time.time()
         try:
             raw_result = await executor.execute(skill, args)
+            latency_ms = (time.time() - start_time) * 1000
+            self._record_metrics(tool_name, latency_ms, success=True)
             return self._build_tool_result(
                 raw_result,
                 call_id=tool_call_id,
-                metadata={"tool_name": tool_name},
+                metadata={"tool_name": tool_name, "latency_ms": latency_ms},
             )
         except SkillExecutionError as exc:
-            error_type = (
-                "timeout"
-                if isinstance(exc.original_error, asyncio.TimeoutError)
-                else "execution_error"
-            )
+            latency_ms = (time.time() - start_time) * 1000
+            is_timeout = isinstance(exc.original_error, asyncio.TimeoutError)
+            self._record_metrics(tool_name, latency_ms, success=False, is_timeout=is_timeout)
+            error_type = "timeout" if is_timeout else "execution_error"
             return self._build_tool_result(
                 {
                     "error": "tool_execution_failed",
@@ -719,9 +806,12 @@ class ToolCallRunner:
                     "timeout": getattr(executor, "timeout", None),
                 },
                 call_id=tool_call_id,
-                metadata={"tool_name": tool_name},
+                metadata={"tool_name": tool_name, "latency_ms": latency_ms},
             )
         except Exception as exc:
+            latency_ms = (time.time() - start_time) * 1000
+            if tool_name:
+                self._record_metrics(tool_name, latency_ms, success=False)
             return self._build_tool_result(
                 {
                     "error": "tool_execution_failed",
@@ -731,7 +821,7 @@ class ToolCallRunner:
                     "timeout": getattr(executor, "timeout", None),
                 },
                 call_id=tool_call_id,
-                metadata={"tool_name": tool_name},
+                metadata={"tool_name": tool_name, "latency_ms": latency_ms},
             )
 
     def _parse_tool_arguments(self, raw_args: Any) -> dict[str, Any]:

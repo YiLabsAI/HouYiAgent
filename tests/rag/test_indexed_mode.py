@@ -141,6 +141,7 @@ class TestIndexedModeSearch:
     @pytest.mark.asyncio
     async def test_search_bm25_only(self) -> None:
         """Test search using only BM25 strategy."""
+        pytest.importorskip("bm25s")
         from houyi.rag.indexed.mode import IndexedMode
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -172,6 +173,7 @@ class TestIndexedModeSearch:
     @pytest.mark.asyncio
     async def test_search_with_llm_answer(self) -> None:
         """Test search with LLM answer generation."""
+        pytest.importorskip("bm25s")
         from houyi.rag.indexed.mode import IndexedMode
 
         adapter = FakeLLMAdapter([
@@ -205,6 +207,7 @@ class TestIndexedModeSearch:
     @pytest.mark.asyncio
     async def test_search_empty_results(self) -> None:
         """Test search that returns no results."""
+        pytest.importorskip("bm25s")
         from houyi.rag.indexed.mode import IndexedMode
 
         with tempfile.TemporaryDirectory() as tmpdir:

@@ -18,9 +18,8 @@ from houyi.core.skill.manifest import (
     SkillContribution,
     SkillManifest,
     ToolContribution,
-    Trust,
 )
-from houyi.core.skill.policy import InvocationPolicy, ModelAutoInvoke, SideEffect
+from houyi.core.skill.policy import ModelAutoInvoke, SideEffect
 
 
 class TestActivationEvent:
@@ -157,7 +156,7 @@ class TestSkillManifest:
             "main": "index.py",
         }
         manifest = SkillManifest.from_dict(data)
-        
+
         assert manifest.id == "houyi.planning"
         assert len(manifest.activation_events) == 2
         assert manifest.activation_events[0].event_type == ActivationEventType.ON_COMMAND
@@ -178,7 +177,7 @@ class TestSkillManifest:
             }
             with open(manifest_path, "w") as f:
                 json.dump(data, f)
-            
+
             manifest = SkillManifest.from_file(manifest_path)
             assert manifest.id == "houyi.test"
             assert manifest.manifest_path == manifest_path
@@ -254,7 +253,7 @@ class TestSkillManifest:
         tool = manifest.get_tool("tool1")
         assert tool is not None
         assert tool.id == "tool1"
-        
+
         assert manifest.get_tool("nonexistent") is None
 
     def test_get_skill(self):
@@ -323,7 +322,7 @@ class TestManifestRegistry:
             description="Test",
         )
         registry.register(manifest)
-        
+
         retrieved = registry.get_manifest("houyi.test")
         assert retrieved is not None
         assert retrieved.id == "houyi.test"
@@ -337,7 +336,7 @@ class TestManifestRegistry:
             description="Test",
         )
         registry.register(manifest)
-        
+
         with pytest.raises(ValueError, match="already registered"):
             registry.register(manifest)
 
@@ -351,7 +350,7 @@ class TestManifestRegistry:
         )
         registry.register(manifest)
         registry.unregister("houyi.test")
-        
+
         assert registry.get_manifest("houyi.test") is None
 
     def test_get_manifest_for_tool(self):
@@ -366,7 +365,7 @@ class TestManifestRegistry:
             ),
         )
         registry.register(manifest)
-        
+
         found = registry.get_manifest_for_tool("my_tool")
         assert found is not None
         assert found.id == "houyi.test"
@@ -381,13 +380,13 @@ class TestManifestRegistry:
                 description="Test",
             )
             registry.register(manifest)
-        
+
         manifests = registry.list_manifests()
         assert len(manifests) == 3
 
     def test_find_by_activation(self):
         registry = ManifestRegistry()
-        
+
         # Manifest that activates on command
         m1 = SkillManifest(
             id="houyi.cmd",
@@ -399,7 +398,7 @@ class TestManifestRegistry:
             ],
         )
         registry.register(m1)
-        
+
         # Manifest that always activates
         m2 = SkillManifest(
             id="houyi.always",
@@ -411,10 +410,10 @@ class TestManifestRegistry:
             ],
         )
         registry.register(m2)
-        
+
         # Find by command
         found = registry.find_by_activation(ActivationEventType.ON_COMMAND, "test")
         assert len(found) == 2  # Both match (always matches everything)
-        
+
         found = registry.find_by_activation(ActivationEventType.ON_COMMAND, "other")
         assert len(found) == 1  # Only always matches

@@ -28,6 +28,34 @@ if [ ! -d ".venv" ]; then
     exit 1
 fi
 
+# Check dev dependencies are installed
+check_dev_deps() {
+    local missing=()
+    
+    echo -e "${YELLOW}▶ Verifying dev dependencies...${NC}"
+    
+    # Check critical dev tools via uv run
+    if ! uv run python -c "import pylint" 2>/dev/null; then
+        missing+=("pylint")
+    fi
+    if ! uv run python -c "import pytest" 2>/dev/null; then
+        missing+=("pytest")
+    fi
+    if ! uv run python -c "import pytest_cov" 2>/dev/null; then
+        missing+=("pytest-cov")
+    fi
+    
+    if [ ${#missing[@]} -gt 0 ]; then
+        echo -e "${RED}✗ Missing dev dependencies: ${missing[*]}${NC}"
+        echo -e "${YELLOW}Run: uv sync --extra dev${NC}"
+        exit 1
+    fi
+    echo -e "${GREEN}✓ Dev dependencies verified${NC}"
+    echo ""
+}
+
+check_dev_deps
+
 # Function to run a check
 run_check() {
     local name=$1

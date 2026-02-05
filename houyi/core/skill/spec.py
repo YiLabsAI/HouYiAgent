@@ -15,7 +15,7 @@ from urllib.parse import urlparse
 from pydantic import BaseModel, ConfigDict, Field, create_model
 
 if TYPE_CHECKING:
-    from houyi.core.skill.hooks import SkillHook
+    pass
 
 
 class ExecutionMode(str, Enum):
@@ -98,7 +98,7 @@ class SkillSpec(BaseModel):
         self.executor = executor
 
     @classmethod
-    def from_file(cls, path: str, skill_dir: str | None = None) -> "SkillSpec":
+    def from_file(cls, path: str, skill_dir: str | None = None) -> SkillSpec:
         """Load skill from skill.md or SKILL.md file.
 
         Supports both:
@@ -148,7 +148,7 @@ class SkillSpec(BaseModel):
         )
 
     @classmethod
-    def from_url(cls, url: str, cache: bool = True) -> "SkillSpec":
+    def from_url(cls, url: str, cache: bool = True) -> SkillSpec:
         """Load skill from URL (AgentSkills.io standard).
 
         Args:
@@ -213,7 +213,7 @@ class SkillSpec(BaseModel):
     @classmethod
     def from_registry(
         cls, skill_name: str, version: str | None = None, cache: bool = True
-    ) -> "SkillSpec":
+    ) -> SkillSpec:
         """Load skill from AgentSkills.io registry.
 
         Args:

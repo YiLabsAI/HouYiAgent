@@ -3,7 +3,6 @@
 Reference: SimpleSkill Specification v0.1 Section 5.2-5.3
 """
 
-import pytest
 
 from houyi.core.skill.policy import (
     ExecPerm,

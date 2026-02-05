@@ -1,12 +1,10 @@
 """Tests for skill hooks system."""
 
-import asyncio
 from pathlib import Path
 
 import pytest
 
 from houyi.core.skill.hooks import (
-    DEFAULT_HOOKS_MANAGER,
     HookContext,
     HookEvent,
     HookResult,
@@ -48,7 +46,7 @@ class TestSkillHooksManager:
         from unittest.mock import MagicMock
 
         manager = SkillHooksManager()
-        
+
         # Create mock skill with hooks
         skill = MagicMock()
         skill.name = "test-skill"
@@ -72,9 +70,9 @@ class TestSkillHooksManager:
         """Trigger with no hooks returns empty result."""
         manager = SkillHooksManager()
         context = HookContext(tool_name="Write")
-        
+
         result = await manager.trigger_hook(HookEvent.PRE_TOOL_USE, context)
-        
+
         assert result.success
         assert result.output is None
 
@@ -84,7 +82,7 @@ class TestSkillHooksManager:
         from unittest.mock import MagicMock
 
         manager = SkillHooksManager()
-        
+
         # Create a test handler
         called = []
         def test_handler(ctx: HookContext) -> str:
@@ -103,9 +101,9 @@ class TestSkillHooksManager:
 
         manager.register_hooks(skill)
         context = HookContext(tool_name="Write")
-        
+
         result = await manager.trigger_hook(HookEvent.PRE_TOOL_USE, context)
-        
+
         assert result.success
         assert result.output == "hook output"
         assert called == ["Write"]
@@ -116,7 +114,7 @@ class TestSkillHooksManager:
         from unittest.mock import MagicMock
 
         manager = SkillHooksManager()
-        
+
         called = []
         def test_handler(ctx: HookContext) -> None:
             called.append(ctx.tool_name)
@@ -136,7 +134,7 @@ class TestSkillHooksManager:
 
         # Should trigger for Write
         await manager.trigger_hook(
-            HookEvent.PRE_TOOL_USE, 
+            HookEvent.PRE_TOOL_USE,
             HookContext(tool_name="Write"),
             tool_name="Write"
         )
@@ -604,7 +602,7 @@ allowed-tools: [Read, Write, Edit]
 This is the skill body.
 '''
         result = parse_skill_md(content)
-        
+
         assert result["name"] == "test-skill"
         assert result["version"] == "1.0.0"
         assert result["description"] == "A test skill"
@@ -627,9 +625,9 @@ hooks:
 '''
         result = parse_skill_md(content)
         hooks = result.get("hooks", [])
-        
+
         assert len(hooks) == 2
-        
+
         pre_hook = hooks[0]
         assert pre_hook.event == HookEvent.PRE_TOOL_USE
         assert pre_hook.matcher == "Write|Edit"
@@ -670,7 +668,7 @@ A simple calculator skill.
 ```
 '''
         result = parse_skill_md(content)
-        
+
         assert result["name"] == "Calculator"
         assert "calculator" in result["description"].lower()
         assert "input_schema" in result
@@ -688,9 +686,9 @@ A simple calculator skill.
                 }
             ]
         }
-        
+
         hooks = parse_hooks_config(config)
-        
+
         assert len(hooks) == 1
         assert hooks[0].event == HookEvent.PRE_TOOL_USE
         assert hooks[0].matcher == "Write|Edit"

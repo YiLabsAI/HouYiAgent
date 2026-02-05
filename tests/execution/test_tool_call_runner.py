@@ -298,3 +298,236 @@ class TestToolCallRunner:
         assert len(tool_trace) == 2
         # Placeholder should be resolved to 1.
         assert tool_trace[1]["args"]["x"] == 1
+
+
+class _EmptyInput(BaseModel):
+    """Empty input schema for testing."""
+    pass
+
+
+class _SimpleOutput(BaseModel):
+    """Simple output schema for testing."""
+    ok: bool = True
+
+
+class TestToolCallRunnerMetrics:
+    """Tests for ToolCallRunner metrics integration."""
+
+    @pytest.mark.asyncio
+    async def test_metrics_recorded_on_success(self) -> None:
+        """Test that metrics are recorded on successful tool execution."""
+        from houyi.core.skill.metrics import MetricsStore
+
+        skill = SkillSpec(
+            name="test_tool",
+            description="test",
+            input_schema=_EmptyInput,
+            output_schema=_SimpleOutput,
+            executor=lambda _: _SimpleOutput(ok=True),
+        )
+        adapter = _FakeAdapter(
+            [
+                _FakeResponse(
+                    content="",
+                    tool_calls=[
+                        {"id": "c1", "type": "function", "function": {"name": "test_tool", "arguments": "{}"}}
+                    ],
+                )
+            ]
+        )
+
+        metrics_store = MetricsStore()
+        runner = ToolCallRunner(metrics_store=metrics_store)
+
+        await runner.run(
+            adapter=adapter,
+            messages=[{"role": "user", "content": "hi"}],
+            tools=[skill.to_tool_schema()],
+            skills=[skill],
+            executor=_DummyExecutor(),
+            max_rounds=1,
+        )
+
+        # Check metrics were recorded
+        metrics = metrics_store.aggregate("test_tool")
+        assert metrics is not None
+        assert metrics.reliability.success_count >= 1
+        assert metrics.reliability.error_count == 0
+        assert metrics.latency.samples >= 1
+
+    @pytest.mark.asyncio
+    async def test_metrics_recorded_on_failure(self) -> None:
+        """Test that metrics are recorded on failed tool execution."""
+        from houyi.core.skill.metrics import MetricsStore
+
+        skill = SkillSpec(
+            name="fail_tool",
+            description="test",
+            input_schema=_EmptyInput,
+            output_schema=_SimpleOutput,
+            executor=lambda _: _SimpleOutput(ok=True),
+        )
+        adapter = _FakeAdapter(
+            [
+                _FakeResponse(
+                    content="",
+                    tool_calls=[
+                        {"id": "c1", "type": "function", "function": {"name": "fail_tool", "arguments": "{}"}}
+                    ],
+                )
+            ]
+        )
+
+        metrics_store = MetricsStore()
+        runner = ToolCallRunner(metrics_store=metrics_store)
+
+        await runner.run(
+            adapter=adapter,
+            messages=[{"role": "user", "content": "hi"}],
+            tools=[skill.to_tool_schema()],
+            skills=[skill],
+            executor=_DummyExecutor(fail=True),
+            max_rounds=1,
+        )
+
+        # Check error metrics were recorded
+        metrics = metrics_store.aggregate("fail_tool")
+        assert metrics is not None
+        assert metrics.reliability.error_count >= 1
+        assert metrics.reliability.success_count == 0
+
+    @pytest.mark.asyncio
+    async def test_metrics_recorded_on_timeout(self) -> None:
+        """Test that timeout metrics are recorded correctly."""
+        from houyi.core.skill.metrics import MetricsStore
+
+        skill = SkillSpec(
+            name="timeout_tool",
+            description="test",
+            input_schema=_EmptyInput,
+            output_schema=_SimpleOutput,
+            executor=lambda _: _SimpleOutput(ok=True),
+        )
+        adapter = _FakeAdapter(
+            [
+                _FakeResponse(
+                    content="",
+                    tool_calls=[
+                        {"id": "c1", "type": "function", "function": {"name": "timeout_tool", "arguments": "{}"}}
+                    ],
+                )
+            ]
+        )
+
+        metrics_store = MetricsStore()
+        runner = ToolCallRunner(metrics_store=metrics_store)
+
+        await runner.run(
+            adapter=adapter,
+            messages=[{"role": "user", "content": "hi"}],
+            tools=[skill.to_tool_schema()],
+            skills=[skill],
+            executor=_DummyExecutor(timeout=True),
+            max_rounds=1,
+        )
+
+        # Check timeout metrics were recorded
+        metrics = metrics_store.aggregate("timeout_tool")
+        assert metrics is not None
+        assert metrics.reliability.timeout_count >= 1
+
+    @pytest.mark.asyncio
+    async def test_get_skill_metrics(self) -> None:
+        """Test getting aggregated metrics for a skill."""
+        from houyi.core.skill.metrics import MetricsStore
+
+        skill = SkillSpec(
+            name="get_metrics_tool",
+            description="test",
+            input_schema=_EmptyInput,
+            output_schema=_SimpleOutput,
+            executor=lambda _: _SimpleOutput(ok=True),
+        )
+        adapter = _FakeAdapter(
+            [
+                _FakeResponse(
+                    content="",
+                    tool_calls=[
+                        {"id": "c1", "type": "function", "function": {"name": "get_metrics_tool", "arguments": "{}"}}
+                    ],
+                )
+            ]
+        )
+
+        metrics_store = MetricsStore()
+        runner = ToolCallRunner(metrics_store=metrics_store)
+
+        await runner.run(
+            adapter=adapter,
+            messages=[{"role": "user", "content": "hi"}],
+            tools=[skill.to_tool_schema()],
+            skills=[skill],
+            executor=_DummyExecutor(),
+            max_rounds=1,
+        )
+
+        # Use runner's public API to get metrics
+        metrics = runner.get_skill_metrics("get_metrics_tool")
+        assert metrics is not None
+        assert metrics.skill_name == "get_metrics_tool"
+
+    @pytest.mark.asyncio
+    async def test_get_all_skill_metrics(self) -> None:
+        """Test getting metrics for all skills."""
+        from houyi.core.skill.metrics import MetricsStore
+
+        class Output1(BaseModel):
+            value: int
+
+        skill1 = SkillSpec(
+            name="tool1",
+            description="test",
+            input_schema=_EmptyInput,
+            output_schema=Output1,
+            executor=lambda _: Output1(value=1),
+        )
+        skill2 = SkillSpec(
+            name="tool2",
+            description="test",
+            input_schema=_EmptyInput,
+            output_schema=_SimpleOutput,
+            executor=lambda _: _SimpleOutput(ok=True),
+        )
+        adapter = _FakeAdapter(
+            [
+                _FakeResponse(
+                    content="",
+                    tool_calls=[
+                        {"id": "c1", "type": "function", "function": {"name": "tool1", "arguments": "{}"}},
+                        {"id": "c2", "type": "function", "function": {"name": "tool2", "arguments": "{}"}},
+                    ],
+                )
+            ]
+        )
+
+        metrics_store = MetricsStore()
+        runner = ToolCallRunner(metrics_store=metrics_store)
+
+        await runner.run(
+            adapter=adapter,
+            messages=[{"role": "user", "content": "hi"}],
+            tools=[skill1.to_tool_schema(), skill2.to_tool_schema()],
+            skills=[skill1, skill2],
+            executor=_DummyExecutor(),
+            max_rounds=1,
+        )
+
+        all_metrics = runner.get_all_skill_metrics()
+        assert "tool1" in all_metrics
+        assert "tool2" in all_metrics
+
+    def test_no_metrics_store_returns_none(self) -> None:
+        """Test that methods return None/empty when no metrics_store is configured."""
+        runner = ToolCallRunner()
+        assert runner.get_skill_metrics("any_tool") is None
+        assert runner.get_all_skill_metrics() == {}

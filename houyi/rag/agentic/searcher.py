@@ -128,6 +128,7 @@ class AgenticSearcher:
                 capture_output=True,
                 text=True,
                 timeout=10,
+                check=False,
             )
 
             for line in result.stdout.strip().split("\n"):
@@ -210,7 +211,7 @@ class AgenticSearcher:
             lines = []
             with open(path, encoding="utf-8", errors="ignore") as f:
                 for line_num, line in enumerate(f, 1):
-                    if line_num >= start_line and line_num <= end_line:
+                    if start_line <= line_num <= end_line:
                         lines.append(line)
                     if line_num > end_line:
                         break

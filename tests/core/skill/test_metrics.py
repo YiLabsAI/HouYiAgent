@@ -7,8 +7,6 @@ import json
 import tempfile
 from pathlib import Path
 
-import pytest
-
 from houyi.core.skill.metrics import (
     CostMetrics,
     LatencyMetrics,
@@ -162,7 +160,7 @@ class TestSkillMetrics:
         metrics.quality.accuracy = 0.95
         metrics.reliability.success_count = 100
         metrics.reliability.total_count = 100
-        
+
         data = metrics.to_dict()
         assert data["skill_name"] == "test_skill"
         assert data["quality"]["accuracy"] == 0.95
@@ -191,7 +189,7 @@ class TestMetricsCollector:
         collector.record_latency(100.0)
         collector.record_latency(200.0)
         collector.record_latency(150.0)
-        
+
         metrics = collector.get_metrics()
         assert metrics.latency.samples == 3
         assert metrics.latency.avg_ms == 150.0
@@ -203,7 +201,7 @@ class TestMetricsCollector:
         collector.record_success()
         collector.record_success()
         collector.record_error()
-        
+
         metrics = collector.get_metrics()
         assert metrics.reliability.success_count == 2
         assert metrics.reliability.error_count == 1
@@ -212,7 +210,7 @@ class TestMetricsCollector:
     def test_record_timeout(self):
         collector = MetricsCollector("test_skill")
         collector.record_timeout()
-        
+
         metrics = collector.get_metrics()
         assert metrics.reliability.timeout_count == 1
         assert metrics.reliability.total_count == 1
@@ -221,7 +219,7 @@ class TestMetricsCollector:
         collector = MetricsCollector("test_skill")
         collector.record_retry()
         collector.record_retry()
-        
+
         metrics = collector.get_metrics()
         assert metrics.reliability.retry_count == 2
 
@@ -229,7 +227,7 @@ class TestMetricsCollector:
         collector = MetricsCollector("test_skill")
         collector.record_tokens(input_tokens=100, output_tokens=50)
         collector.record_tokens(input_tokens=200, output_tokens=100)
-        
+
         metrics = collector.get_metrics()
         assert metrics.cost.tokens_input == 300
         assert metrics.cost.tokens_output == 150
@@ -239,14 +237,14 @@ class TestMetricsCollector:
         collector = MetricsCollector("test_skill")
         collector.record_api_call()
         collector.record_api_call()
-        
+
         metrics = collector.get_metrics()
         assert metrics.cost.api_calls == 2
 
     def test_set_quality(self):
         collector = MetricsCollector("test_skill")
         collector.set_quality(accuracy=0.95, f1=0.88, custom_metric=0.75)
-        
+
         metrics = collector.get_metrics()
         assert metrics.quality.accuracy == 0.95
         assert metrics.quality.f1 == 0.88
@@ -255,18 +253,18 @@ class TestMetricsCollector:
     def test_set_privacy(self):
         collector = MetricsCollector("test_skill")
         collector.set_privacy(local_only=False, data_egress=True)
-        
+
         metrics = collector.get_metrics()
         assert metrics.privacy.local_only is False
         assert metrics.privacy.data_egress is True
 
     def test_measure_execution(self):
         collector = MetricsCollector("test_skill")
-        
+
         with collector.measure_execution():
             # Simulate some work
             _ = sum(range(1000))
-        
+
         metrics = collector.get_metrics()
         assert metrics.latency.samples == 1
         assert metrics.latency.avg_ms > 0  # Should have recorded some time
@@ -275,9 +273,9 @@ class TestMetricsCollector:
         collector = MetricsCollector("test_skill")
         collector.record_success()
         collector.record_latency(100.0)
-        
+
         collector.reset()
-        
+
         metrics = collector.get_metrics()
         assert metrics.reliability.total_count == 0
         assert metrics.latency.samples == 0
@@ -291,9 +289,9 @@ class TestMetricsExporter:
             path = Path(tmpdir) / "metrics.json"
             metrics = SkillMetrics(skill_name="test_skill")
             metrics.quality.accuracy = 0.95
-            
+
             MetricsExporter.to_json(metrics, path)
-            
+
             assert path.exists()
             with open(path) as f:
                 data = json.load(f)
@@ -307,9 +305,9 @@ class TestMetricsExporter:
                 SkillMetrics(skill_name="skill1"),
                 SkillMetrics(skill_name="skill2"),
             ]
-            
+
             MetricsExporter.to_json_lines(metrics_list, path)
-            
+
             assert path.exists()
             with open(path) as f:
                 lines = f.readlines()
@@ -319,10 +317,10 @@ class TestMetricsExporter:
     def test_to_json_lines_append(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir) / "metrics.jsonl"
-            
+
             MetricsExporter.to_json_lines([SkillMetrics(skill_name="skill1")], path)
             MetricsExporter.to_json_lines([SkillMetrics(skill_name="skill2")], path, append=True)
-            
+
             with open(path) as f:
                 lines = f.readlines()
             assert len(lines) == 2
@@ -335,9 +333,9 @@ class TestMetricsExporter:
         metrics.reliability.total_count = 100
         metrics.cost.tokens_total = 1500
         metrics.quality.accuracy = 0.95
-        
+
         attrs = MetricsExporter.to_opentelemetry_attributes(metrics)
-        
+
         assert attrs["skill.name"] == "test_skill"
         assert attrs["skill.latency.avg_ms"] == 100.0
         assert attrs["skill.latency.p95_ms"] == 200.0
@@ -351,15 +349,15 @@ class TestMetricsStore:
 
     def test_store_and_get_latest(self):
         store = MetricsStore()
-        
+
         m1 = SkillMetrics(skill_name="test_skill")
         m1.quality.accuracy = 0.9
         store.store(m1)
-        
+
         m2 = SkillMetrics(skill_name="test_skill")
         m2.quality.accuracy = 0.95
         store.store(m2)
-        
+
         latest = store.get_latest("test_skill")
         assert latest is not None
         assert latest.quality.accuracy == 0.95
@@ -374,7 +372,7 @@ class TestMetricsStore:
             m = SkillMetrics(skill_name="test_skill")
             m.quality.accuracy = 0.9 + i * 0.01
             store.store(m)
-        
+
         all_metrics = store.get_all("test_skill")
         assert len(all_metrics) == 3
 
@@ -383,15 +381,15 @@ class TestMetricsStore:
         store.store(SkillMetrics(skill_name="skill1"))
         store.store(SkillMetrics(skill_name="skill2"))
         store.store(SkillMetrics(skill_name="skill1"))
-        
+
         skills = store.list_skills()
         assert set(skills) == {"skill1", "skill2"}
 
     def test_aggregate(self):
         store = MetricsStore()
-        
+
         # Store multiple metrics entries
-        for i in range(3):
+        for _i in range(3):
             m = SkillMetrics(skill_name="test_skill")
             m.reliability.success_count = 10
             m.reliability.error_count = 1
@@ -401,7 +399,7 @@ class TestMetricsStore:
             m.cost.tokens_total = 150
             m.cost.api_calls = 1
             store.store(m)
-        
+
         aggregated = store.aggregate("test_skill")
         assert aggregated is not None
         assert aggregated.reliability.success_count == 30
@@ -420,9 +418,9 @@ class TestMetricsStore:
             store = MetricsStore()
             store.store(SkillMetrics(skill_name="skill1"))
             store.store(SkillMetrics(skill_name="skill2"))
-            
+
             store.export_all(path)
-            
+
             assert path.exists()
             with open(path) as f:
                 data = json.load(f)

@@ -117,6 +117,7 @@ def test_vertex_gemini_from_env_requires_project(monkeypatch) -> None:
 @pytest.mark.asyncio
 async def test_vertex_gemini_chat_builds_config() -> None:
     """chat should build config and pass tools/tool_choice to generate_content."""
+    pytest.importorskip("google.genai")
 
     class _FunctionCall:
         def __init__(self) -> None:
@@ -178,6 +179,7 @@ async def test_vertex_gemini_chat_builds_config() -> None:
 @pytest.mark.asyncio
 async def test_vertex_gemini_stream_chat() -> None:
     """stream_chat should yield content from streaming response."""
+    pytest.importorskip("google.genai")
 
     adapter = _build_adapter()
 

@@ -3,7 +3,6 @@
 Reference: SimpleSkill Specification v0.1 Section 2 (Skill Definition)
 """
 
-import json
 import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch

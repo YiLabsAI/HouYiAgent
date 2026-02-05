@@ -7,7 +7,7 @@ import json
 import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -24,7 +24,6 @@ from houyi.core.skill.consent import (
 )
 from houyi.core.skill.policy import (
     InvocationPolicy,
-    ModelAutoInvoke,
     Permissions,
     SideEffect,
 )
@@ -72,16 +71,16 @@ class TestConsentResponse:
             consent_type=ConsentType.INVOKE_CONFIRM,
             skill_name="test",
         )
-        
+
         response = ConsentResponse(result=ConsentResult.GRANTED, request=request)
         assert response.is_granted()
-        
+
         response = ConsentResponse(result=ConsentResult.REMEMBERED, request=request)
         assert response.is_granted()
-        
+
         response = ConsentResponse(result=ConsentResult.DENIED, request=request)
         assert not response.is_granted()
-        
+
         response = ConsentResponse(result=ConsentResult.TIMEOUT, request=request)
         assert not response.is_granted()
 
@@ -115,9 +114,9 @@ class TestInMemoryConsentStore:
             result=ConsentResult.GRANTED,
             request=request,
         )
-        
+
         store.save(response)
-        
+
         loaded = store.load("test_skill", ConsentType.PERMISSION_GRANT)
         assert loaded is not None
         assert loaded.result == ConsentResult.REMEMBERED  # Loaded consents are "remembered"
@@ -133,9 +132,9 @@ class TestInMemoryConsentStore:
             result=ConsentResult.DENIED,
             request=request,
         )
-        
+
         store.save(response)
-        
+
         loaded = store.load("test_skill", ConsentType.PERMISSION_GRANT)
         assert loaded is None
 
@@ -150,9 +149,9 @@ class TestInMemoryConsentStore:
             result=ConsentResult.GRANTED,
             request=request,
         )
-        
+
         store.save(response)
-        
+
         loaded = store.load("test_skill", ConsentType.PERMISSION_GRANT)
         assert loaded is None
 
@@ -168,15 +167,15 @@ class TestInMemoryConsentStore:
             request=request,
         )
         store.save(response)
-        
+
         store.revoke("test_skill", ConsentType.PERMISSION_GRANT)
-        
+
         loaded = store.load("test_skill", ConsentType.PERMISSION_GRANT)
         assert loaded is None
 
     def test_revoke_all(self):
         store = InMemoryConsentStore()
-        
+
         # Save multiple consent types
         for consent_type in [ConsentType.PERMISSION_GRANT, ConsentType.INVOKE_CONFIRM]:
             request = ConsentRequest(
@@ -189,9 +188,9 @@ class TestInMemoryConsentStore:
                 request=request,
             )
             store.save(response)
-        
+
         store.revoke("test_skill")  # Revoke all
-        
+
         assert store.load("test_skill", ConsentType.PERMISSION_GRANT) is None
         assert store.load("test_skill", ConsentType.INVOKE_CONFIRM) is None
 
@@ -208,7 +207,7 @@ class TestPolicyBasedConsentHandler:
             consent_type=ConsentType.INVOKE_CONFIRM,
             skill_name="trusted_skill",
         )
-        
+
         response = await handler.request_consent(request)
         assert response.is_granted()
         assert "policy" in (response.reason or "").lower()
@@ -222,7 +221,7 @@ class TestPolicyBasedConsentHandler:
             consent_type=ConsentType.INVOKE_CONFIRM,
             skill_name="dangerous_skill",
         )
-        
+
         response = await handler.request_consent(request)
         assert not response.is_granted()
         assert "denied" in (response.reason or "").lower()
@@ -236,7 +235,7 @@ class TestPolicyBasedConsentHandler:
             consent_type=ConsentType.INVOKE_CONFIRM,
             skill_name="unknown_skill",
         )
-        
+
         response = await handler.request_consent(request)
         assert not response.is_granted()
 
@@ -249,7 +248,7 @@ class TestPolicyBasedConsentHandler:
             consent_type=ConsentType.INVOKE_CONFIRM,
             skill_name="unknown_skill",
         )
-        
+
         response = await handler.request_consent(request)
         assert response.is_granted()
 
@@ -264,14 +263,14 @@ class TestConsentManager:
             consent_type=ConsentType.INVOKE_CONFIRM,
             skill_name="test_skill",
         )
-        
+
         response = await manager.request_consent(request)
         assert response.result == ConsentResult.NOT_INTERACTIVE
 
     @pytest.mark.asyncio
     async def test_check_remembered_consent(self):
         store = InMemoryConsentStore()
-        
+
         # Pre-populate store
         request = ConsentRequest(
             consent_type=ConsentType.PERMISSION_GRANT,
@@ -283,9 +282,9 @@ class TestConsentManager:
             request=request,
         )
         store.save(initial_response)
-        
+
         manager = ConsentManager(store=store, interactive=False)
-        
+
         # Should return remembered consent
         new_request = ConsentRequest(
             consent_type=ConsentType.PERMISSION_GRANT,
@@ -300,18 +299,18 @@ class TestConsentManager:
             auto_grant_skills={"trusted_skill"},
         )
         manager = ConsentManager(handler=handler)
-        
+
         request = ConsentRequest(
             consent_type=ConsentType.INVOKE_CONFIRM,
             skill_name="trusted_skill",
         )
-        
+
         response = await manager.request_consent(request)
         assert response.is_granted()
 
     def test_check_permission(self):
         store = InMemoryConsentStore()
-        
+
         # Pre-populate store
         request = ConsentRequest(
             consent_type=ConsentType.PERMISSION_GRANT,
@@ -323,9 +322,9 @@ class TestConsentManager:
             request=request,
         )
         store.save(response)
-        
+
         manager = ConsentManager(store=store)
-        
+
         assert manager.check_permission("test_skill")
         assert not manager.check_permission("other_skill")
 
@@ -333,21 +332,21 @@ class TestConsentManager:
     async def test_audit_log(self):
         handler = PolicyBasedConsentHandler(default_grant=True)
         manager = ConsentManager(handler=handler)
-        
+
         request = ConsentRequest(
             consent_type=ConsentType.INVOKE_CONFIRM,
             skill_name="test_skill",
         )
-        
+
         await manager.request_consent(request)
-        
+
         audit_log = manager.get_audit_log()
         assert len(audit_log) == 1
         assert audit_log[0].request.skill_name == "test_skill"
 
     def test_revoke_consent(self):
         store = InMemoryConsentStore()
-        
+
         # Pre-populate store
         request = ConsentRequest(
             consent_type=ConsentType.PERMISSION_GRANT,
@@ -359,9 +358,9 @@ class TestConsentManager:
             request=request,
         )
         store.save(response)
-        
+
         manager = ConsentManager(store=store)
-        
+
         assert manager.check_permission("test_skill")
         manager.revoke_consent("test_skill")
         assert not manager.check_permission("test_skill")
@@ -374,7 +373,7 @@ class TestConsentManager:
             consent_type=ConsentType.INVOKE_CONFIRM,
             skill_name="test_skill",
         )
-        
+
         response = await manager.request_consent(request)
         assert response.result == ConsentResult.DENIED
         assert "no consent handler" in (response.reason or "").lower()
@@ -385,15 +384,15 @@ class TestConsentManager:
         handler = PolicyBasedConsentHandler(default_grant=True)
         store = InMemoryConsentStore()
         manager = ConsentManager(handler=handler, store=store)
-        
+
         request = ConsentRequest(
             consent_type=ConsentType.PERMISSION_GRANT,
             skill_name="test_skill",
             remember=True,
         )
-        
+
         await manager.request_consent(request)
-        
+
         # Verify it was stored
         loaded = store.load("test_skill", ConsentType.PERMISSION_GRANT)
         assert loaded is not None
@@ -402,7 +401,7 @@ class TestConsentManager:
     def test_export_audit_log(self):
         """Test exporting audit log to file."""
         manager = ConsentManager()
-        
+
         # Add some entries to audit log
         request = ConsentRequest(
             consent_type=ConsentType.INVOKE_CONFIRM,
@@ -413,15 +412,15 @@ class TestConsentManager:
             request=request,
         )
         manager._audit(response)
-        
+
         with tempfile.TemporaryDirectory() as tmpdir:
             export_path = Path(tmpdir) / "nested" / "audit.json"
             manager.export_audit_log(export_path)
-            
+
             assert export_path.exists()
             with open(export_path) as f:
                 data = json.load(f)
-            
+
             assert len(data) == 1
             assert data[0]["skill_name"] == "test_skill"
 
@@ -432,7 +431,7 @@ class TestInMemoryConsentStoreExpiration:
     def test_expired_consent_is_removed(self):
         """Test that expired consent is removed on load."""
         store = InMemoryConsentStore()
-        
+
         request = ConsentRequest(
             consent_type=ConsentType.PERMISSION_GRANT,
             skill_name="test_skill",
@@ -443,22 +442,22 @@ class TestInMemoryConsentStoreExpiration:
             request=request,
             expires_at=datetime.now(timezone.utc) - timedelta(hours=1),  # Already expired
         )
-        
+
         # Force save by directly setting in store
         key = (request.skill_name, request.consent_type.value)
         store._consents[key] = response
-        
+
         # Load should return None for expired
         loaded = store.load("test_skill", ConsentType.PERMISSION_GRANT)
         assert loaded is None
-        
+
         # Verify it was removed
         assert key not in store._consents
 
     def test_valid_consent_not_expired(self):
         """Test that non-expired consent is returned."""
         store = InMemoryConsentStore()
-        
+
         request = ConsentRequest(
             consent_type=ConsentType.PERMISSION_GRANT,
             skill_name="test_skill",
@@ -469,11 +468,11 @@ class TestInMemoryConsentStoreExpiration:
             request=request,
             expires_at=datetime.now(timezone.utc) + timedelta(hours=1),  # Future expiration
         )
-        
+
         # Force save
         key = (request.skill_name, request.consent_type.value)
         store._consents[key] = response
-        
+
         loaded = store.load("test_skill", ConsentType.PERMISSION_GRANT)
         assert loaded is not None
         assert loaded.result == ConsentResult.REMEMBERED
@@ -487,7 +486,7 @@ class TestFileConsentStore:
         with tempfile.TemporaryDirectory() as tmpdir:
             store_path = Path(tmpdir) / "consent.json"
             store = FileConsentStore(store_path)
-            
+
             request = ConsentRequest(
                 consent_type=ConsentType.PERMISSION_GRANT,
                 skill_name="file_test_skill",
@@ -497,12 +496,12 @@ class TestFileConsentStore:
                 result=ConsentResult.GRANTED,
                 request=request,
             )
-            
+
             store.save(response)
-            
+
             # Verify file was created
             assert store_path.exists()
-            
+
             # Load should return the consent
             loaded = store.load("file_test_skill", ConsentType.PERMISSION_GRANT)
             assert loaded is not None
@@ -512,7 +511,7 @@ class TestFileConsentStore:
         """Test that consent persists across store instances."""
         with tempfile.TemporaryDirectory() as tmpdir:
             store_path = Path(tmpdir) / "consent.json"
-            
+
             # First instance saves
             store1 = FileConsentStore(store_path)
             request = ConsentRequest(
@@ -525,7 +524,7 @@ class TestFileConsentStore:
                 request=request,
             )
             store1.save(response)
-            
+
             # Second instance loads
             store2 = FileConsentStore(store_path)
             loaded = store2.load("persistent_skill", ConsentType.PERMISSION_GRANT)
@@ -536,7 +535,7 @@ class TestFileConsentStore:
         """Test that expired consent is removed from file on load."""
         with tempfile.TemporaryDirectory() as tmpdir:
             store_path = Path(tmpdir) / "consent.json"
-            
+
             # Create expired consent directly in file
             expired_data = {
                 "persistent_skill:permission_grant": {
@@ -551,10 +550,10 @@ class TestFileConsentStore:
             store_path.parent.mkdir(parents=True, exist_ok=True)
             with open(store_path, "w") as f:
                 json.dump(expired_data, f)
-            
+
             store = FileConsentStore(store_path)
             loaded = store.load("persistent_skill", ConsentType.PERMISSION_GRANT)
-            
+
             assert loaded is None
 
     def test_revoke_specific_type(self):
@@ -562,7 +561,7 @@ class TestFileConsentStore:
         with tempfile.TemporaryDirectory() as tmpdir:
             store_path = Path(tmpdir) / "consent.json"
             store = FileConsentStore(store_path)
-            
+
             # Save two different consent types
             for ct in [ConsentType.PERMISSION_GRANT, ConsentType.INVOKE_CONFIRM]:
                 request = ConsentRequest(
@@ -575,10 +574,10 @@ class TestFileConsentStore:
                     request=request,
                 )
                 store.save(response)
-            
+
             # Revoke only one type
             store.revoke("multi_consent_skill", ConsentType.PERMISSION_GRANT)
-            
+
             assert store.load("multi_consent_skill", ConsentType.PERMISSION_GRANT) is None
             assert store.load("multi_consent_skill", ConsentType.INVOKE_CONFIRM) is not None
 
@@ -587,7 +586,7 @@ class TestFileConsentStore:
         with tempfile.TemporaryDirectory() as tmpdir:
             store_path = Path(tmpdir) / "consent.json"
             store = FileConsentStore(store_path)
-            
+
             # Save two different consent types
             for ct in [ConsentType.PERMISSION_GRANT, ConsentType.INVOKE_CONFIRM]:
                 request = ConsentRequest(
@@ -600,10 +599,10 @@ class TestFileConsentStore:
                     request=request,
                 )
                 store.save(response)
-            
+
             # Revoke all
             store.revoke("all_revoke_skill")
-            
+
             assert store.load("all_revoke_skill", ConsentType.PERMISSION_GRANT) is None
             assert store.load("all_revoke_skill", ConsentType.INVOKE_CONFIRM) is None
 
@@ -613,7 +612,7 @@ class TestFileConsentStore:
             store_path = Path(tmpdir) / "consent.json"
             store_path.parent.mkdir(parents=True, exist_ok=True)
             store_path.write_text("{ invalid json }")
-            
+
             # Should not crash, just have empty consents
             store = FileConsentStore(store_path)
             assert store.load("any_skill", ConsentType.PERMISSION_GRANT) is None
@@ -638,10 +637,10 @@ class TestCLIConsentHandler:
             consent_type=ConsentType.INVOKE_CONFIRM,
             skill_name="cli_skill",
         )
-        
+
         with patch("builtins.input", return_value="y"):
             response = await handler.request_consent(request)
-        
+
         assert response.result == ConsentResult.GRANTED
 
     @pytest.mark.asyncio
@@ -652,10 +651,10 @@ class TestCLIConsentHandler:
             consent_type=ConsentType.INVOKE_CONFIRM,
             skill_name="cli_skill",
         )
-        
+
         with patch("builtins.input", return_value="yes"):
             response = await handler.request_consent(request)
-        
+
         assert response.result == ConsentResult.GRANTED
 
     @pytest.mark.asyncio
@@ -666,10 +665,10 @@ class TestCLIConsentHandler:
             consent_type=ConsentType.INVOKE_CONFIRM,
             skill_name="cli_skill",
         )
-        
+
         with patch("builtins.input", return_value="r"):
             response = await handler.request_consent(request)
-        
+
         assert response.result == ConsentResult.GRANTED
         assert request.remember is True
 
@@ -681,10 +680,10 @@ class TestCLIConsentHandler:
             consent_type=ConsentType.INVOKE_CONFIRM,
             skill_name="cli_skill",
         )
-        
+
         with patch("builtins.input", return_value="remember"):
             response = await handler.request_consent(request)
-        
+
         assert response.result == ConsentResult.GRANTED
         assert request.remember is True
 
@@ -696,10 +695,10 @@ class TestCLIConsentHandler:
             consent_type=ConsentType.INVOKE_CONFIRM,
             skill_name="cli_skill",
         )
-        
+
         with patch("builtins.input", return_value="n"):
             response = await handler.request_consent(request)
-        
+
         assert response.result == ConsentResult.DENIED
 
     @pytest.mark.asyncio
@@ -710,10 +709,10 @@ class TestCLIConsentHandler:
             consent_type=ConsentType.INVOKE_CONFIRM,
             skill_name="cli_skill",
         )
-        
+
         with patch("builtins.input", side_effect=EOFError):
             response = await handler.request_consent(request)
-        
+
         assert response.result == ConsentResult.DENIED
         assert "cancelled" in (response.reason or "").lower()
 
@@ -725,10 +724,10 @@ class TestCLIConsentHandler:
             consent_type=ConsentType.INVOKE_CONFIRM,
             skill_name="cli_skill",
         )
-        
+
         with patch("builtins.input", side_effect=KeyboardInterrupt):
             response = await handler.request_consent(request)
-        
+
         assert response.result == ConsentResult.DENIED
 
     def test_check_remembered_returns_none(self):
@@ -738,7 +737,7 @@ class TestCLIConsentHandler:
             consent_type=ConsentType.INVOKE_CONFIRM,
             skill_name="cli_skill",
         )
-        
+
         result = handler.check_remembered(request)
         assert result is None
 
@@ -753,7 +752,7 @@ class TestPolicyBasedConsentHandlerExtended:
             consent_type=ConsentType.INVOKE_CONFIRM,
             skill_name="test_skill",
         )
-        
+
         result = handler.check_remembered(request)
         assert result is None
 

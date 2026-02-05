@@ -243,63 +243,69 @@ def parse_hooks_config(config: dict[str, Any]) -> list[SkillHook]:
     Returns:
         List of SkillHook objects
     """
+    def _hook_type_from(value: str | None) -> HookType:
+        if not value:
+            return HookType.HANDLER
+        try:
+            return HookType(value)
+        except ValueError:
+            return HookType.HANDLER
+
+    def _append_hook(
+        *,
+        event: HookEvent,
+        matcher: str | None,
+        hook_dict: dict[str, Any],
+        default_type: HookType,
+    ) -> SkillHook | None:
+        hook_type = _hook_type_from(hook_dict.get("type")) or default_type
+        return SkillHook(
+            event=event,
+            matcher=matcher,
+            hook_type=hook_type,
+            command=hook_dict.get("command"),
+            handler_path=hook_dict.get("handler") or hook_dict.get("handler_path"),
+        )
+
     hooks: list[SkillHook] = []
 
     for event_name, hook_list in config.items():
-        # Map event name to HookEvent enum
         try:
             event = HookEvent(event_name)
         except ValueError:
             logger.warning("Unknown hook event: %s", event_name)
             continue
 
-        # Handle both list and single hook
-        if not isinstance(hook_list, list):
-            hook_list = [hook_list]
-
-        for hook_config in hook_list:
+        hook_items = hook_list if isinstance(hook_list, list) else [hook_list]
+        for hook_config in hook_items:
             if not isinstance(hook_config, dict):
                 continue
 
-            # Determine hook type
-            hook_type_str = hook_config.get("type", "handler")
-            try:
-                hook_type = HookType(hook_type_str)
-            except ValueError:
-                hook_type = HookType.HANDLER
+            default_type = _hook_type_from(hook_config.get("type", "handler"))
+            nested_hooks = hook_config.get("hooks")
 
-            # Handle nested 'hooks' structure (Claude format)
-            nested_hooks = hook_config.get("hooks", [])
-            if nested_hooks and isinstance(nested_hooks, list):
-                # Claude format: {"matcher": "...", "hooks": [{"type": "command", ...}]}
+            if isinstance(nested_hooks, list) and nested_hooks:
                 matcher = hook_config.get("matcher")
                 for nested in nested_hooks:
-                    if isinstance(nested, dict):
-                        nested_type_str = nested.get("type", "handler")
-                        try:
-                            nested_type = HookType(nested_type_str)
-                        except ValueError:
-                            nested_type = HookType.HANDLER
-
-                        hooks.append(
-                            SkillHook(
-                                event=event,
-                                matcher=matcher,
-                                hook_type=nested_type,
-                                command=nested.get("command"),
-                                handler_path=nested.get("handler") or nested.get("handler_path"),
-                            )
-                        )
-            else:
-                # Simple format: {"matcher": "...", "type": "command", "command": "..."}
-                hooks.append(
-                    SkillHook(
+                    if not isinstance(nested, dict):
+                        continue
+                    hook = _append_hook(
                         event=event,
-                        matcher=hook_config.get("matcher"),
-                        hook_type=hook_type,
-                        command=hook_config.get("command"),
-                        handler_path=hook_config.get("handler") or hook_config.get("handler_path"),
+                        matcher=matcher,
+                        hook_dict=nested,
+                        default_type=default_type,
                     )
-                )
+                    if hook:
+                        hooks.append(hook)
+                continue
+
+            hook = _append_hook(
+                event=event,
+                matcher=hook_config.get("matcher"),
+                hook_dict=hook_config,
+                default_type=default_type,
+            )
+            if hook:
+                hooks.append(hook)
 
     return hooks

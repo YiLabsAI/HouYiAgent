@@ -3,17 +3,21 @@
 This module provides the central registry for skills, automatically handling:
 - Hooks registration with SkillHooksManager
 - Policy enforcement setup
+- Loading skills from manifest files (simpleskill.json)
+- Loading skills from SKILL.md files
 """
 
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from houyi.core.skill.spec import SkillSpec
 
 if TYPE_CHECKING:
     from houyi.core.skill.hooks import SkillHooksManager
+    from houyi.core.skill.manifest import SkillManifest
     from houyi.core.skill.policy import PolicyEnforcer
 
 logger = logging.getLogger(__name__)
@@ -117,6 +121,144 @@ class SkillRegistry:
             self._hooks_manager.clear()
         self._skills.clear()
         logger.info("Cleared all skills")
+
+    def register_from_manifest(
+        self,
+        manifest_path: str | Path,
+        *,
+        overwrite: bool = False,
+    ) -> list[str]:
+        """Load and register all skills from a simpleskill.json manifest.
+
+        This method implements Layer A (Manifest) integration by:
+        1. Parsing the manifest file
+        2. Loading each skill definition from the contributions
+        3. Registering skills with their hooks and policies
+
+        Args:
+            manifest_path: Path to simpleskill.json manifest file
+            overwrite: Whether to overwrite existing skills
+
+        Returns:
+            List of registered skill names
+
+        Raises:
+            FileNotFoundError: If manifest file doesn't exist
+            ValueError: If manifest parsing fails
+        """
+        from houyi.core.skill.manifest import SkillManifest
+
+        manifest_path = Path(manifest_path)
+        manifest = SkillManifest.from_file(manifest_path)
+        registered: list[str] = []
+
+        # Get base directory for resolving relative paths
+        base_dir = manifest_path.parent
+
+        # Register skills from contributions
+        if manifest.contributions and manifest.contributions.skills:
+            for skill_contrib in manifest.contributions.skills:
+                skill_path = base_dir / skill_contrib.path
+                try:
+                    skill = SkillSpec.from_file(str(skill_path))
+                    self.register(skill, overwrite=overwrite)
+                    registered.append(skill.name)
+                except Exception as e:
+                    logger.warning(
+                        "Failed to load skill from %s: %s",
+                        skill_path,
+                        e,
+                    )
+
+        logger.info(
+            "Loaded %d skills from manifest: %s",
+            len(registered),
+            manifest_path,
+        )
+        return registered
+
+    def register_from_skill_file(
+        self,
+        skill_path: str | Path,
+        *,
+        overwrite: bool = False,
+    ) -> str:
+        """Load and register a skill from a SKILL.md file.
+
+        Args:
+            skill_path: Path to SKILL.md file
+            overwrite: Whether to overwrite existing skill
+
+        Returns:
+            Name of registered skill
+
+        Raises:
+            FileNotFoundError: If skill file doesn't exist
+            ValueError: If skill parsing fails
+        """
+        skill = SkillSpec.from_file(str(skill_path))
+        self.register(skill, overwrite=overwrite)
+        return skill.name
+
+    def register_from_directory(
+        self,
+        directory: str | Path,
+        *,
+        pattern: str = "SKILL.md",
+        recursive: bool = True,
+        overwrite: bool = False,
+    ) -> list[str]:
+        """Discover and register skills from a directory.
+
+        Searches for SKILL.md files and registers each skill found.
+
+        Args:
+            directory: Directory to search
+            pattern: Filename pattern to match (default: SKILL.md)
+            recursive: Whether to search subdirectories
+            overwrite: Whether to overwrite existing skills
+
+        Returns:
+            List of registered skill names
+        """
+        directory = Path(directory)
+        registered: list[str] = []
+
+        glob_pattern = f"**/{pattern}" if recursive else pattern
+        for skill_path in directory.glob(glob_pattern):
+            try:
+                skill_name = self.register_from_skill_file(
+                    skill_path,
+                    overwrite=overwrite,
+                )
+                registered.append(skill_name)
+            except Exception as e:
+                logger.warning(
+                    "Failed to load skill from %s: %s",
+                    skill_path,
+                    e,
+                )
+
+        logger.info(
+            "Discovered and registered %d skills from: %s",
+            len(registered),
+            directory,
+        )
+        return registered
+
+    def get_manifest(self, manifest_path: str | Path) -> SkillManifest:
+        """Load a manifest without registering its skills.
+
+        Useful for inspecting manifest contents before registration.
+
+        Args:
+            manifest_path: Path to simpleskill.json
+
+        Returns:
+            Parsed SkillManifest
+        """
+        from houyi.core.skill.manifest import SkillManifest
+        return SkillManifest.from_file(manifest_path)
 
 
 def create_default_registry() -> SkillRegistry:
