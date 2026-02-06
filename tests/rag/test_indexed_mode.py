@@ -112,9 +112,7 @@ class TestRRFFusion:
             SearchResult(chunk_id="c3", content="Go programming", score=0.6),
         ]
 
-        fused = mode._rrf_fusion(
-            [("vector", vector_results), ("bm25", bm25_results)], k=10
-        )
+        fused = mode._rrf_fusion([("vector", vector_results), ("bm25", bm25_results)], k=10)
 
         # c1 appears in both, should rank highest
         assert fused[0].chunk_id == "c1"
@@ -158,10 +156,12 @@ class TestIndexedModeSearch:
 
             sparse_index = SparseIndex(knowledge_dir=tmpdir)
             await sparse_index.load()
-            await sparse_index.add_batch([
-                Chunk(chunk_id="c1", doc_id="d1", content="Python is great for data science"),
-                Chunk(chunk_id="c2", doc_id="d1", content="Java is used in enterprise"),
-            ])
+            await sparse_index.add_batch(
+                [
+                    Chunk(chunk_id="c1", doc_id="d1", content="Python is great for data science"),
+                    Chunk(chunk_id="c2", doc_id="d1", content="Java is used in enterprise"),
+                ]
+            )
             mode._sparse_index = sparse_index
 
             result = await mode.search("Python data science")
@@ -176,9 +176,11 @@ class TestIndexedModeSearch:
         pytest.importorskip("bm25s")
         from houyi.rag.indexed.mode import IndexedMode
 
-        adapter = FakeLLMAdapter([
-            "Python is excellent for data science because of libraries like NumPy and Pandas.",
-        ])
+        adapter = FakeLLMAdapter(
+            [
+                "Python is excellent for data science because of libraries like NumPy and Pandas.",
+            ]
+        )
 
         with tempfile.TemporaryDirectory() as tmpdir:
             mode = IndexedMode(
@@ -194,9 +196,11 @@ class TestIndexedModeSearch:
 
             sparse_index = SparseIndex(knowledge_dir=tmpdir)
             await sparse_index.load()
-            await sparse_index.add_batch([
-                Chunk(chunk_id="c1", doc_id="d1", content="Python has NumPy and Pandas"),
-            ])
+            await sparse_index.add_batch(
+                [
+                    Chunk(chunk_id="c1", doc_id="d1", content="Python has NumPy and Pandas"),
+                ]
+            )
             mode._sparse_index = sparse_index
 
             result = await mode.search("Why Python for data science?")
@@ -245,19 +249,23 @@ class TestIndexedModeSearch:
             from houyi.rag.types import Entity, Relation
 
             async with GraphStore(knowledge_dir=tmpdir) as graph_store:
-                await graph_store.add_entities([
-                    Entity(entity_id="e1", name="Python", entity_type="language"),
-                    Entity(entity_id="e2", name="Django", entity_type="framework"),
-                ])
-                await graph_store.add_relations([
-                    Relation(
-                        rel_id="r1",
-                        source_id="e1",
-                        target_id="e2",
-                        rel_type="has_framework",
-                        weight=1.0,
-                    ),
-                ])
+                await graph_store.add_entities(
+                    [
+                        Entity(entity_id="e1", name="Python", entity_type="language"),
+                        Entity(entity_id="e2", name="Django", entity_type="framework"),
+                    ]
+                )
+                await graph_store.add_relations(
+                    [
+                        Relation(
+                            rel_id="r1",
+                            source_id="e1",
+                            target_id="e2",
+                            rel_type="has_framework",
+                            weight=1.0,
+                        ),
+                    ]
+                )
                 mode._graph_store = graph_store
 
                 result = await mode.search("Python")

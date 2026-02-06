@@ -132,7 +132,9 @@ class SkillConfig:
                 export_path=os.getenv("HOUYI_METRICS_EXPORT_PATH"),
             ),
             policy=PolicyConfig(
-                default_model_auto_invoke=os.getenv("HOUYI_POLICY_DEFAULT_AUTO_INVOKE", "allow_with_consent"),
+                default_model_auto_invoke=os.getenv(
+                    "HOUYI_POLICY_DEFAULT_AUTO_INVOKE", "allow_with_consent"
+                ),
                 strict_mode=_get_bool_env("HOUYI_POLICY_STRICT_MODE", False),
                 allow_unknown_skills=_get_bool_env("HOUYI_POLICY_ALLOW_UNKNOWN", True),
             ),

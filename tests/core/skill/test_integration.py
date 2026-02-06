@@ -40,17 +40,20 @@ from houyi.execution.tool_call_runner import ToolCallRunner
 
 class EmptyInput(BaseModel):
     """Empty input for testing."""
+
     pass
 
 
 class SimpleOutput(BaseModel):
     """Simple output for testing."""
+
     result: str = "success"
 
 
 @dataclass
 class FakeResponse:
     """Fake LLM response for testing."""
+
     content: str = ""
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -65,13 +68,16 @@ class FakeResponse:
 
 class FakeAdapter:
     """Fake LLM adapter for testing."""
+
     def __init__(self, responses: list[FakeResponse]) -> None:
         self._responses = list(responses)
         self.calls: int = 0
         self.model = "fake-model"
         self.base_url = "http://fake.local"
 
-    async def chat(self, _messages: list[Any], tools: list[dict[str, Any]] | None = None, **_kwargs: Any) -> FakeResponse:
+    async def chat(
+        self, _messages: list[Any], tools: list[dict[str, Any]] | None = None, **_kwargs: Any
+    ) -> FakeResponse:
         self.calls += 1
         if self._responses:
             return self._responses.pop(0)
@@ -80,6 +86,7 @@ class FakeAdapter:
 
 class FakeExecutor:
     """Fake skill executor for testing."""
+
     def __init__(self, results: dict[str, Any] | None = None) -> None:
         self.results = results or {}
         self.max_retries = 1
@@ -165,19 +172,23 @@ class TestSimpleSkillIntegration:
         )
 
         # Create fake adapter with tool call
-        adapter = FakeAdapter([
-            FakeResponse(
-                content="",
-                tool_calls=[{
-                    "id": "call_1",
-                    "type": "function",
-                    "function": {
-                        "name": "test-skill",
-                        "arguments": "{}",
-                    },
-                }],
-            ),
-        ])
+        adapter = FakeAdapter(
+            [
+                FakeResponse(
+                    content="",
+                    tool_calls=[
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {
+                                "name": "test-skill",
+                                "arguments": "{}",
+                            },
+                        }
+                    ],
+                ),
+            ]
+        )
 
         # Execute
         response, tool_trace = await runner.run(
@@ -231,19 +242,23 @@ class TestSimpleSkillIntegration:
             metrics_store=metrics_store,
         )
 
-        adapter = FakeAdapter([
-            FakeResponse(
-                content="",
-                tool_calls=[{
-                    "id": "call_1",
-                    "type": "function",
-                    "function": {
-                        "name": "blocked-skill",
-                        "arguments": "{}",
-                    },
-                }],
-            ),
-        ])
+        adapter = FakeAdapter(
+            [
+                FakeResponse(
+                    content="",
+                    tool_calls=[
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {
+                                "name": "blocked-skill",
+                                "arguments": "{}",
+                            },
+                        }
+                    ],
+                ),
+            ]
+        )
 
         # Execute - should be blocked
         executor = FakeExecutor()
@@ -283,19 +298,23 @@ class TestSimpleSkillIntegration:
             metrics_store=metrics_store,
         )
 
-        adapter = FakeAdapter([
-            FakeResponse(
-                content="",
-                tool_calls=[{
-                    "id": "call_1",
-                    "type": "function",
-                    "function": {
-                        "name": "traced-skill",
-                        "arguments": "{}",
-                    },
-                }],
-            ),
-        ])
+        adapter = FakeAdapter(
+            [
+                FakeResponse(
+                    content="",
+                    tool_calls=[
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {
+                                "name": "traced-skill",
+                                "arguments": "{}",
+                            },
+                        }
+                    ],
+                ),
+            ]
+        )
 
         # Execute
         await runner.run(
@@ -352,19 +371,23 @@ This skill tests registry integration.
             metrics_store=metrics_store,
         )
 
-        adapter = FakeAdapter([
-            FakeResponse(
-                content="",
-                tool_calls=[{
-                    "id": "call_1",
-                    "type": "function",
-                    "function": {
-                        "name": "registry-test-skill",
-                        "arguments": "{}",
-                    },
-                }],
-            ),
-        ])
+        adapter = FakeAdapter(
+            [
+                FakeResponse(
+                    content="",
+                    tool_calls=[
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {
+                                "name": "registry-test-skill",
+                                "arguments": "{}",
+                            },
+                        }
+                    ],
+                ),
+            ]
+        )
 
         # Execute with registered skills
         response, tool_trace = await runner.run(

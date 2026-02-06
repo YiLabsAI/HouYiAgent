@@ -258,6 +258,7 @@ class SkillRegistry:
             Parsed SkillManifest
         """
         from houyi.core.skill.manifest import SkillManifest
+
         return SkillManifest.from_file(manifest_path)
 
 

@@ -178,14 +178,8 @@ class DirectoryNavigator:
         scored_files.sort(key=lambda x: x[1], reverse=True)
 
         # Take top items (at least score > 0 or top 3)
-        relevant_subdirs = [
-            s[0] for s in scored_subdirs
-            if s[1] > 0 or scored_subdirs.index(s) < 3
-        ]
-        relevant_files = [
-            f[0] for f in scored_files
-            if f[1] > 0 or scored_files.index(f) < 5
-        ]
+        relevant_subdirs = [s[0] for s in scored_subdirs if s[1] > 0 or scored_subdirs.index(s) < 3]
+        relevant_files = [f[0] for f in scored_files if f[1] > 0 or scored_files.index(f) < 5]
 
         return {
             "subdirs": relevant_subdirs,
@@ -195,7 +189,19 @@ class DirectoryNavigator:
     def _is_searchable_file(self, path: Path) -> bool:
         """Check if file is searchable (text-based)."""
         searchable_extensions = {
-            ".md", ".txt", ".py", ".js", ".ts", ".json", ".yaml", ".yml",
-            ".html", ".css", ".xml", ".csv", ".rst", ".log",
+            ".md",
+            ".txt",
+            ".py",
+            ".js",
+            ".ts",
+            ".json",
+            ".yaml",
+            ".yml",
+            ".html",
+            ".css",
+            ".xml",
+            ".csv",
+            ".rst",
+            ".log",
         }
         return path.suffix.lower() in searchable_extensions

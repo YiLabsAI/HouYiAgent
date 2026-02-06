@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from houyi.protocol.ir import ExecutionIR, PlanIR
 
@@ -13,6 +13,9 @@ from .context_service import ContextService
 from .mcp_gateway import MCPGateway
 from .memory_service import MemoryService
 from .rag_service import RAGService
+
+if TYPE_CHECKING:
+    from houyi.observability import Span
 
 
 @dataclass(slots=True)
@@ -27,6 +30,7 @@ class ExecutionContext:
     mcp_gateway: MCPGateway | None = None
     agent_comm_service: AgentCommService | None = None
     context_bundle: ContextBundle | None = None
+    root_span: Span | None = None
 
     def update_plan(self, plan: PlanIR) -> None:
         self.plan = plan

@@ -1,4 +1,10 @@
-"""Trace manager for OpenTelemetry integration."""
+"""Trace manager for OpenTelemetry integration.
+
+Provides Span and TraceManager for AI/Agent observability with:
+- AI-native fields (model, tokens, cost, cache_hit)
+- Parallel execution tracking (group_id, lane_id)
+- Checkpoint/restore lineage
+"""
 
 from __future__ import annotations
 
@@ -8,14 +14,83 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any
 
+from pydantic import BaseModel, Field, PrivateAttr
+
 from houyi.observability.exporters import ExporterConfig, create_exporter
+from houyi.observability.types import (
+    CostInfo,
+    SpanEvent,
+    SpanType,
+    TokenUsage,
+)
 
 
-class Span:
-    """Lightweight span for tracing.
+class Span(BaseModel):
+    """Span for tracing with AI-native fields.
 
-    Represents a single operation in the trace.
+    Represents a single operation in the trace. Supports:
+    - Hierarchical span types (execution/node/llm/tool/retriever)
+    - AI-native fields (model, tokens, cost)
+    - Parallel execution tracking
+    - Checkpoint/restore lineage
     """
+
+    # Core identifiers
+    name: str
+    trace_id: str = Field(default_factory=lambda: uuid.uuid4().hex)
+    span_id: str = Field(default_factory=lambda: uuid.uuid4().hex[:16])
+    parent_id: str | None = None
+
+    # Timing
+    start_time: float = Field(default_factory=time.time)
+    end_time: float | None = None
+
+    # Status
+    status: str = "ok"
+    status_description: str | None = None
+
+    # Span type and hierarchy
+    span_type: SpanType = SpanType.NODE
+    node_id: str | None = None
+
+    # AI-native fields (LLM)
+    model: str | None = None
+    provider: str | None = None
+    tokens: TokenUsage | None = None
+    cost: CostInfo | None = None
+    cache_hit: bool | None = None
+
+    # AI-native fields (Tool)
+    tool_name: str | None = None
+
+    # AI-native fields (Retriever)
+    kb_name: str | None = None
+    docs_count: int | None = None
+    top_k: int | None = None
+
+    # Parallel execution fields
+    group_id: str | None = None
+    lane_id: int | None = None
+    seq: int | None = None
+
+    # Checkpoint/restore lineage
+    parent_trace_id: str | None = None
+    restore_checkpoint_id: str | None = None
+    replay_mode: bool = False
+
+    # Generic attributes (for extensibility)
+    attributes: dict[str, Any] = Field(default_factory=dict)
+
+    # Events within span
+    events: list[SpanEvent] = Field(default_factory=list)
+
+    # Children spans (for tree structure, not serialized by default)
+    children: list[Span] = Field(default_factory=list)
+
+    # Private: parent reference (not serialized)
+    _parent: Span | None = PrivateAttr(default=None)
+
+    model_config = {"arbitrary_types_allowed": True}
 
     def __init__(
         self,
@@ -23,25 +98,44 @@ class Span:
         parent: Span | None = None,
         attributes: dict[str, Any] | None = None,
         trace_id: str | None = None,
+        span_type: SpanType = SpanType.NODE,
+        **kwargs: Any,
     ):
-        self.name = name
-        self.parent = parent
-        self.attributes = attributes or {}
-        self.start_time = time.time()
-        self.end_time: float | None = None
-        self.status = "ok"
-        self.events: list[dict] = []
-        self.children: list[Span] = []
+        """Initialize span with backward-compatible signature.
 
-        # Generate IDs for production-grade observability
-        self.span_id = uuid.uuid4().hex[:16]  # 16-char hex
-        if parent:
-            self.trace_id = parent.trace_id
-            self.parent_id = parent.span_id
+        Args:
+            name: Span name
+            parent: Parent span (optional)
+            attributes: Initial attributes (optional)
+            trace_id: Trace ID (optional, inherited from parent or generated)
+            span_type: Span type (default: NODE)
+            **kwargs: Additional fields (model, tokens, etc.)
+        """
+        # Resolve trace_id and parent_id from parent
+        resolved_trace_id = trace_id
+        resolved_parent_id = None
+        if parent is not None:
+            resolved_trace_id = parent.trace_id
+            resolved_parent_id = parent.span_id
+
+        super().__init__(
+            name=name,
+            trace_id=resolved_trace_id or uuid.uuid4().hex,
+            parent_id=resolved_parent_id,
+            attributes=attributes or {},
+            span_type=span_type,
+            **kwargs,
+        )
+
+        # Set private parent reference and register as child
+        self._parent = parent
+        if parent is not None:
             parent.children.append(self)
-        else:
-            self.trace_id = trace_id or uuid.uuid4().hex  # 32-char hex
-            self.parent_id = None
+
+    @property
+    def parent(self) -> Span | None:
+        """Get parent span."""
+        return self._parent
 
     def set_attribute(self, key: str, value: Any) -> None:
         """Set span attribute."""
@@ -50,17 +144,18 @@ class Span:
     def add_event(self, name: str, attributes: dict[str, Any] | None = None) -> None:
         """Add event to span."""
         self.events.append(
-            {
-                "name": name,
-                "timestamp": time.time(),
-                "attributes": attributes or {},
-            }
+            SpanEvent(
+                name=name,
+                timestamp=time.time(),
+                attributes=attributes or {},
+            )
         )
 
     def set_status(self, status: str, description: str | None = None) -> None:
         """Set span status."""
         self.status = status
         if description:
+            self.status_description = description
             self.attributes["status_description"] = description
 
     def end(self) -> None:
@@ -68,28 +163,35 @@ class Span:
         if self.end_time is None:
             self.end_time = time.time()
 
+    def set_tokens(self, input_tokens: int, output_tokens: int) -> None:
+        """Set token usage for LLM spans."""
+        self.tokens = TokenUsage(
+            input=input_tokens,
+            output=output_tokens,
+            total=input_tokens + output_tokens,
+        )
+
+    def set_cost(self, usd: float) -> None:
+        """Set cost for LLM spans."""
+        self.cost = CostInfo(usd=usd)
+
     @property
     def duration(self) -> float:
         """Get span duration in seconds."""
-        if self.end_time:
+        if self.end_time is not None:
             return self.end_time - self.start_time
         return time.time() - self.start_time
 
     def to_dict(self) -> dict[str, Any]:
-        """Convert span to dictionary."""
-        return {
-            "name": self.name,
-            "trace_id": self.trace_id,
-            "span_id": self.span_id,
-            "parent_id": self.parent_id,
-            "start_time": self.start_time,
-            "end_time": self.end_time,
-            "duration": self.duration,
-            "status": self.status,
-            "attributes": self.attributes,
-            "events": self.events,
-            "children": [child.to_dict() for child in self.children],
-        }
+        """Convert span to dictionary for export."""
+        data = self.model_dump(
+            exclude={"children"},
+            exclude_none=True,
+            mode="json",
+        )
+        data["duration"] = self.duration
+        data["children"] = [child.to_dict() for child in self.children]
+        return data
 
 
 class TraceManager:

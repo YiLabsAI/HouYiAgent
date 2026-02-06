@@ -137,12 +137,8 @@ class TestSkillManifest:
             "engines": {"host": "houyi>=0.1"},
             "activationEvents": ["onCommand:planning.create", "*"],
             "contributions": {
-                "tools": [
-                    {"id": "plan_create", "description": "Create a plan"}
-                ],
-                "skills": [
-                    {"id": "planning", "description": "Planning skill"}
-                ],
+                "tools": [{"id": "plan_create", "description": "Create a plan"}],
+                "skills": [{"id": "planning", "description": "Planning skill"}],
                 "resources": [],
             },
             "permissions": {
@@ -306,8 +302,12 @@ class TestSkillManifest:
                 ActivationEvent(event_type=ActivationEventType.ON_FILE_SYSTEM, pattern="**/*.md")
             ],
         )
-        assert manifest.matches_activation_event(ActivationEventType.ON_FILE_SYSTEM, "docs/README.md")
-        assert not manifest.matches_activation_event(ActivationEventType.ON_FILE_SYSTEM, "script.py")
+        assert manifest.matches_activation_event(
+            ActivationEventType.ON_FILE_SYSTEM, "docs/README.md"
+        )
+        assert not manifest.matches_activation_event(
+            ActivationEventType.ON_FILE_SYSTEM, "script.py"
+        )
 
 
 class TestManifestRegistry:
@@ -405,9 +405,7 @@ class TestManifestRegistry:
             version="1.0.0",
             name="Always",
             description="Test",
-            activation_events=[
-                ActivationEvent(event_type=ActivationEventType.ALWAYS)
-            ],
+            activation_events=[ActivationEvent(event_type=ActivationEventType.ALWAYS)],
         )
         registry.register(m2)
 

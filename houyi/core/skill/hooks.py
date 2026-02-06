@@ -202,9 +202,7 @@ class SkillHooksManager:
         else:
             return HookResult(success=False, error=f"Unknown hook type: {hook.hook_type}")
 
-    async def _execute_command_hook(
-        self, hook: SkillHook, context: HookContext
-    ) -> HookResult:
+    async def _execute_command_hook(self, hook: SkillHook, context: HookContext) -> HookResult:
         """Execute command type hook (shell script)."""
         if not hook.command:
             return HookResult(success=False, error="No command specified")
@@ -251,9 +249,7 @@ class SkillHooksManager:
         except Exception as e:
             return HookResult(success=False, error=str(e))
 
-    async def _execute_handler_hook(
-        self, hook: SkillHook, context: HookContext
-    ) -> HookResult:
+    async def _execute_handler_hook(self, hook: SkillHook, context: HookContext) -> HookResult:
         """Execute handler type hook (Python function)."""
         handler = hook.handler
 

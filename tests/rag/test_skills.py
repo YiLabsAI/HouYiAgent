@@ -1,6 +1,5 @@
 """Tests for RAG skills."""
 
-
 from houyi.rag.skills.kb_search.skill import (
     KBSearchInput,
     KBSearchOutput,

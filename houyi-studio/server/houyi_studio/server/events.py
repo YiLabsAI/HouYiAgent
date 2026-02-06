@@ -4,13 +4,17 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any
+from typing import TYPE_CHECKING, Any
+from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
 from houyi.protocol.ir.checkpoint_ir import LLMCallLog
 from houyi.protocol.ir.execution_ir import ExecutionStatus, NodeStatus
 from houyi.protocol.ir.plan_ir import PlanIR
+
+if TYPE_CHECKING:
+    from houyi.observability import Span
 
 
 class EventType(str, Enum):
@@ -29,6 +33,7 @@ class EventType(str, Enum):
     WORKFLOW_LIST = "workflow_list"
     CONFLICT = "conflict"
     LOG_LEVEL = "log_level"
+    SPAN_UPDATE = "span_update"
 
 
 class ServerEvent(BaseModel):
@@ -220,3 +225,119 @@ class LogLevelEvent(ServerEvent):
         default=None,
         description="Requested log level (if provided by client)",
     )
+
+
+class SpanUpdateEvent(ServerEvent):
+    """Event for fine-grained span updates (llm/tool sub-spans).
+
+    Enables real-time timeline visualization with:
+    - Hierarchical span tree (execution -> node -> llm/tool)
+    - AI-native fields (tokens, cost, cache_hit)
+    - Checkpoint lineage tracking
+    """
+
+    event_type: EventType = Field(default=EventType.SPAN_UPDATE)
+    execution_id: str = Field(..., description="Execution identifier")
+    trace_id: str = Field(..., description="Trace identifier (= execution_id)")
+    span_id: str = Field(..., description="Unique span identifier")
+    parent_span_id: str | None = Field(
+        default=None,
+        description="Parent span ID (None for root execution span)",
+    )
+    span_type: str = Field(
+        ...,
+        description="Span type: execution/node/llm/tool/retriever",
+    )
+    name: str = Field(..., description="Span name (e.g., 'node.llm', 'llm.completion')")
+    status: str = Field(
+        default="ok",
+        description="Span status: ok/error",
+    )
+    start_time: float = Field(..., description="Start timestamp (epoch seconds)")
+    end_time: float | None = Field(
+        default=None,
+        description="End timestamp (None if still running)",
+    )
+
+    # AI-native fields
+    node_id: str | None = Field(default=None, description="IR node_id if applicable")
+    model: str | None = Field(default=None, description="LLM model name")
+    tokens_input: int | None = Field(default=None, description="Input token count")
+    tokens_output: int | None = Field(default=None, description="Output token count")
+    cost_usd: float | None = Field(default=None, description="Cost in USD")
+    cache_hit: bool | None = Field(default=None, description="Whether cache was hit")
+    tool_name: str | None = Field(default=None, description="Tool/skill name")
+
+    # Checkpoint lineage
+    parent_trace_id: str | None = Field(
+        default=None,
+        description="Original trace ID if restored from checkpoint",
+    )
+    restore_checkpoint_id: str | None = Field(
+        default=None,
+        description="Checkpoint ID restored from",
+    )
+    replay_mode: bool = Field(
+        default=False,
+        description="Whether this is a deterministic replay",
+    )
+
+    # Generic attributes
+    attributes: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Additional span attributes",
+    )
+
+    @classmethod
+    def from_span(
+        cls,
+        span: Span,
+        session_id: str,
+        execution_id: str,
+    ) -> SpanUpdateEvent:
+        """Create SpanUpdateEvent from a Span object.
+
+        Args:
+            span: Span object to convert
+            session_id: Session identifier
+            execution_id: Execution identifier
+
+        Returns:
+            SpanUpdateEvent instance
+        """
+        tokens_input = None
+        tokens_output = None
+        if span.tokens is not None:
+            tokens_input = span.tokens.input
+            tokens_output = span.tokens.output
+
+        cost_usd = None
+        if span.cost is not None:
+            cost_usd = span.cost.usd
+
+        return cls(
+            event_id=f"evt_{uuid4().hex[:8]}",
+            session_id=session_id,
+            execution_id=execution_id,
+            trace_id=span.trace_id,
+            span_id=span.span_id,
+            parent_span_id=span.parent_id,
+            span_type=span.span_type.value
+            if hasattr(span.span_type, "value")
+            else str(span.span_type),
+            name=span.name,
+            status=span.status,
+            start_time=span.start_time,
+            end_time=span.end_time,
+            node_id=span.node_id,
+            model=span.model,
+            tokens_input=tokens_input,
+            tokens_output=tokens_output,
+            cost_usd=cost_usd,
+            cache_hit=span.cache_hit,
+            tool_name=span.tool_name,
+            parent_trace_id=span.parent_trace_id,
+            restore_checkpoint_id=span.restore_checkpoint_id,
+            replay_mode=span.replay_mode,
+            attributes=span.attributes,
+        )

@@ -593,6 +593,5 @@ class ManifestRegistry:
     ) -> list[SkillManifest]:
         """Find manifests that should be activated for an event."""
         return [
-            m for m in self._manifests.values()
-            if m.matches_activation_event(event_type, context)
+            m for m in self._manifests.values() if m.matches_activation_event(event_type, context)
         ]

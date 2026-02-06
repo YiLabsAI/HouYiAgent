@@ -5,12 +5,13 @@ import json
 import tempfile
 from pathlib import Path
 
-from houyi.evaluation.dataset import Dataset, TestCase
+from houyi.evaluation.dataset import Dataset
+from houyi.evaluation.dataset import TestCase as EvalTestCase
 
 
 def test_testcase_creation():
     """Test TestCase creation."""
-    tc = TestCase(
+    tc = EvalTestCase(
         input="What is 2+2?", expected_output="4", metadata={"category": "math", "id": "test1"}
     )
 
@@ -22,7 +23,7 @@ def test_testcase_creation():
 
 def test_testcase_without_expected():
     """Test TestCase without expected output."""
-    tc = TestCase(input="Tell me a joke", metadata={"id": "test2"})
+    tc = EvalTestCase(input="Tell me a joke", metadata={"id": "test2"})
 
     assert tc.input == "Tell me a joke"
     assert tc.expected_output is None
@@ -31,8 +32,8 @@ def test_testcase_without_expected():
 def test_dataset_creation():
     """Test Dataset creation."""
     cases = [
-        TestCase(input="test1", metadata={"id": "1"}),
-        TestCase(input="test2", metadata={"id": "2"}),
+        EvalTestCase(input="test1", metadata={"id": "1"}),
+        EvalTestCase(input="test2", metadata={"id": "2"}),
     ]
 
     dataset = Dataset(name="Test Dataset", test_cases=cases, metadata={"version": "1.0"})
@@ -92,8 +93,8 @@ def test_dataset_to_json():
         dataset = Dataset(
             name="Output Dataset",
             test_cases=[
-                TestCase(input="test1", expected_output="output1"),
-                TestCase(input="test2"),
+                EvalTestCase(input="test1", expected_output="output1"),
+                EvalTestCase(input="test2"),
             ],
         )
 
@@ -116,8 +117,8 @@ def test_dataset_to_csv():
         dataset = Dataset(
             name="CSV Dataset",
             test_cases=[
-                TestCase(input="test1", expected_output="output1"),
-                TestCase(input="test2"),
+                EvalTestCase(input="test1", expected_output="output1"),
+                EvalTestCase(input="test2"),
             ],
         )
 
@@ -137,13 +138,17 @@ def test_dataset_iteration():
     """Test iterating over dataset."""
     dataset = Dataset(
         name="Iter Dataset",
-        test_cases=[TestCase(input="test1"), TestCase(input="test2"), TestCase(input="test3")],
+        test_cases=[
+            EvalTestCase(input="test1"),
+            EvalTestCase(input="test2"),
+            EvalTestCase(input="test3"),
+        ],
     )
 
     count = 0
     for case in dataset:
         count += 1
-        assert isinstance(case, TestCase)
+        assert isinstance(case, EvalTestCase)
 
     assert count == 3
 
@@ -151,7 +156,8 @@ def test_dataset_iteration():
 def test_dataset_length():
     """Test dataset length."""
     dataset = Dataset(
-        name="Length Dataset", test_cases=[TestCase(input="test1"), TestCase(input="test2")]
+        name="Length Dataset",
+        test_cases=[EvalTestCase(input="test1"), EvalTestCase(input="test2")],
     )
 
     assert len(dataset) == 2
@@ -162,8 +168,8 @@ def test_dataset_getitem():
     dataset = Dataset(
         name="Index Dataset",
         test_cases=[
-            TestCase(input="test1", metadata={"id": "1"}),
-            TestCase(input="test2", metadata={"id": "2"}),
+            EvalTestCase(input="test1", expected_output="output1", metadata={"id": "1"}),
+            EvalTestCase(input="test2", metadata={"id": "2"}),
         ],
     )
 
@@ -182,7 +188,7 @@ def test_dataset_empty():
 
 def test_testcase_with_context():
     """Test testcase with context."""
-    testcase = TestCase(
+    testcase = EvalTestCase(
         input={"query": "test"}, expected={"answer": "result"}, context={"source": "test_source"}
     )
 
@@ -192,7 +198,7 @@ def test_testcase_with_context():
 def test_dataset_add_testcase():
     """Test adding testcase to dataset."""
     dataset = Dataset(name="test", test_cases=[])
-    testcase = TestCase(input="What is 1+1?", expected_output="2")
+    testcase = EvalTestCase(input="What is 1+1?", expected_output="2")
 
     # Manually add to test_cases list
     dataset.test_cases.append(testcase)
@@ -206,9 +212,9 @@ def test_dataset_slice():
     dataset = Dataset(
         name="test",
         test_cases=[
-            TestCase(input="Question 1", expected_output="Answer 1"),
-            TestCase(input="Question 2", expected_output="Answer 2"),
-            TestCase(input="Question 3", expected_output="Answer 3"),
+            EvalTestCase(input="Question 1", expected_output="Answer 1"),
+            EvalTestCase(input="Question 2", expected_output="Answer 2"),
+            EvalTestCase(input="Question 3", expected_output="Answer 3"),
         ],
     )
 
@@ -228,9 +234,9 @@ def test_dataset_filter():
     dataset = Dataset(
         name="test",
         test_cases=[
-            TestCase(input="Q1", metadata={"category": "math"}),
-            TestCase(input="Q2", metadata={"category": "science"}),
-            TestCase(input="Q3", metadata={"category": "math"}),
+            EvalTestCase(input="Q1", metadata={"category": "math"}),
+            EvalTestCase(input="Q2", metadata={"category": "science"}),
+            EvalTestCase(input="Q3", metadata={"category": "math"}),
         ],
     )
 
@@ -245,7 +251,7 @@ def test_dataset_from_list():
         {"input": "Q2", "expected_output": "A2"},
     ]
 
-    cases = [TestCase(**item) for item in data]
+    cases = [EvalTestCase(**item) for item in data]
     dataset = Dataset(name="test", test_cases=cases)
 
     assert len(dataset) == 2
@@ -254,7 +260,7 @@ def test_dataset_from_list():
 
 def test_testcase_repr():
     """Test TestCase string representation."""
-    tc = TestCase(input="test input", expected_output="test output")
+    tc = EvalTestCase(input="test input", expected_output="test output")
 
     repr_str = repr(tc)
     assert "test input" in repr_str or "TestCase" in repr_str
@@ -265,9 +271,9 @@ def test_dataset_filter():
     dataset = Dataset(
         name="test",
         test_cases=[
-            TestCase(input="Q1", metadata={"category": "math"}),
-            TestCase(input="Q2", metadata={"category": "science"}),
-            TestCase(input="Q3", metadata={"category": "math"}),
+            EvalTestCase(input="Q1", metadata={"category": "math"}),
+            EvalTestCase(input="Q2", metadata={"category": "science"}),
+            EvalTestCase(input="Q3", metadata={"category": "math"}),
         ],
     )
 
@@ -282,7 +288,7 @@ def test_dataset_from_list():
         {"input": "Q2", "expected_output": "A2"},
     ]
 
-    cases = [TestCase(**item) for item in data]
+    cases = [EvalTestCase(**item) for item in data]
     dataset = Dataset(name="test", test_cases=cases)
 
     assert len(dataset) == 2
@@ -291,7 +297,7 @@ def test_dataset_from_list():
 
 def test_testcase_repr():
     """Test TestCase string representation."""
-    tc = TestCase(input="test input", expected_output="test output")
+    tc = EvalTestCase(input="test input", expected_output="test output")
 
     repr_str = repr(tc)
     assert "test input" in repr_str or "TestCase" in repr_str
@@ -299,7 +305,7 @@ def test_testcase_repr():
 
 def test_testcase_with_context():
     """Test TestCase with context."""
-    tc = TestCase(
+    tc = EvalTestCase(
         input="Question",
         expected_output="Answer",
         context="Background information",

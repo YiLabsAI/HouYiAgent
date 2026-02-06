@@ -302,11 +302,13 @@ class TestToolCallRunner:
 
 class _EmptyInput(BaseModel):
     """Empty input schema for testing."""
+
     pass
 
 
 class _SimpleOutput(BaseModel):
     """Simple output schema for testing."""
+
     ok: bool = True
 
 
@@ -330,7 +332,11 @@ class TestToolCallRunnerMetrics:
                 _FakeResponse(
                     content="",
                     tool_calls=[
-                        {"id": "c1", "type": "function", "function": {"name": "test_tool", "arguments": "{}"}}
+                        {
+                            "id": "c1",
+                            "type": "function",
+                            "function": {"name": "test_tool", "arguments": "{}"},
+                        }
                     ],
                 )
             ]
@@ -372,7 +378,11 @@ class TestToolCallRunnerMetrics:
                 _FakeResponse(
                     content="",
                     tool_calls=[
-                        {"id": "c1", "type": "function", "function": {"name": "fail_tool", "arguments": "{}"}}
+                        {
+                            "id": "c1",
+                            "type": "function",
+                            "function": {"name": "fail_tool", "arguments": "{}"},
+                        }
                     ],
                 )
             ]
@@ -413,7 +423,11 @@ class TestToolCallRunnerMetrics:
                 _FakeResponse(
                     content="",
                     tool_calls=[
-                        {"id": "c1", "type": "function", "function": {"name": "timeout_tool", "arguments": "{}"}}
+                        {
+                            "id": "c1",
+                            "type": "function",
+                            "function": {"name": "timeout_tool", "arguments": "{}"},
+                        }
                     ],
                 )
             ]
@@ -453,7 +467,11 @@ class TestToolCallRunnerMetrics:
                 _FakeResponse(
                     content="",
                     tool_calls=[
-                        {"id": "c1", "type": "function", "function": {"name": "get_metrics_tool", "arguments": "{}"}}
+                        {
+                            "id": "c1",
+                            "type": "function",
+                            "function": {"name": "get_metrics_tool", "arguments": "{}"},
+                        }
                     ],
                 )
             ]
@@ -503,8 +521,16 @@ class TestToolCallRunnerMetrics:
                 _FakeResponse(
                     content="",
                     tool_calls=[
-                        {"id": "c1", "type": "function", "function": {"name": "tool1", "arguments": "{}"}},
-                        {"id": "c2", "type": "function", "function": {"name": "tool2", "arguments": "{}"}},
+                        {
+                            "id": "c1",
+                            "type": "function",
+                            "function": {"name": "tool1", "arguments": "{}"},
+                        },
+                        {
+                            "id": "c2",
+                            "type": "function",
+                            "function": {"name": "tool2", "arguments": "{}"},
+                        },
                     ],
                 )
             ]

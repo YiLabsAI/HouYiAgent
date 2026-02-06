@@ -310,7 +310,8 @@ class ToolCallRunner:
                         error_result = self._build_tool_result(
                             {
                                 "error": "policy_denied",
-                                "message": decision.reason or f"Policy denied invocation of tool '{tool_name}'",
+                                "message": decision.reason
+                                or f"Policy denied invocation of tool '{tool_name}'",
                             },
                             call_id=tool_call_id,
                             metadata={"tool_name": tool_name, "policy_blocked": True},
@@ -477,7 +478,9 @@ class ToolCallRunner:
                     resolved_outputs[call_index_key] = resolved_value
                 # Extract latency from result metadata
                 result_metadata = result.get("metadata", {})
-                latency_ms = result_metadata.get("latency_ms") if isinstance(result_metadata, dict) else None
+                latency_ms = (
+                    result_metadata.get("latency_ms") if isinstance(result_metadata, dict) else None
+                )
 
                 if self._is_tool_error(result):
                     self._emit_tool_event(
@@ -732,6 +735,7 @@ class ToolCallRunner:
         """Get or create a MetricsCollector for a skill."""
         if skill_name not in self._metrics_collectors:
             from houyi.core.skill.metrics import MetricsCollector
+
             self._metrics_collectors[skill_name] = MetricsCollector(skill_name)
         return self._metrics_collectors[skill_name]
 

@@ -47,7 +47,9 @@ class GraphStore:
 
         # In-memory adjacency list for fast access
         self._entities: dict[str, Entity] = {}
-        self._adjacency: dict[str, list[tuple[str, str, float]]] = {}  # src -> [(dst, rel_type, weight)]
+        self._adjacency: dict[
+            str, list[tuple[str, str, float]]
+        ] = {}  # src -> [(dst, rel_type, weight)]
 
     async def load(self) -> None:
         """Load graph from SQLite database."""
@@ -119,11 +121,13 @@ class GraphStore:
             src = row["source_id"]
             if src not in self._adjacency:
                 self._adjacency[src] = []
-            self._adjacency[src].append((
-                row["target_id"],
-                row["rel_type"],
-                row["weight"],
-            ))
+            self._adjacency[src].append(
+                (
+                    row["target_id"],
+                    row["rel_type"],
+                    row["weight"],
+                )
+            )
 
     async def save(self) -> None:
         """Save graph to SQLite database."""
@@ -167,8 +171,7 @@ class GraphStore:
                 """INSERT OR REPLACE INTO entities
                    (entity_id, name, entity_type, embedding, metadata)
                    VALUES (?, ?, ?, ?, ?)""",
-                (entity.entity_id, entity.name, entity.entity_type,
-                 embedding_json, metadata_json),
+                (entity.entity_id, entity.name, entity.entity_type, embedding_json, metadata_json),
             )
             self._entities[entity.entity_id] = entity
 
@@ -186,18 +189,19 @@ class GraphStore:
                 """INSERT OR REPLACE INTO relations
                    (rel_id, source_id, target_id, rel_type, weight, metadata)
                    VALUES (?, ?, ?, ?, ?, ?)""",
-                (rel.rel_id, rel.source_id, rel.target_id,
-                 rel.rel_type, rel.weight, metadata_json),
+                (rel.rel_id, rel.source_id, rel.target_id, rel.rel_type, rel.weight, metadata_json),
             )
 
             # Update adjacency list
             if rel.source_id not in self._adjacency:
                 self._adjacency[rel.source_id] = []
-            self._adjacency[rel.source_id].append((
-                rel.target_id,
-                rel.rel_type,
-                rel.weight,
-            ))
+            self._adjacency[rel.source_id].append(
+                (
+                    rel.target_id,
+                    rel.rel_type,
+                    rel.weight,
+                )
+            )
 
         self._conn.commit()
 
@@ -238,18 +242,20 @@ class GraphStore:
         for entity_id, score in sorted_entities:
             entity = self._entities.get(entity_id)
             if entity:
-                results.append(SearchResult(
-                    chunk_id=entity.entity_id,
-                    content=entity.name,
-                    score=score,
-                    source=Source(
-                        file_path="graph",
-                        location=entity.entity_type,
-                        snippet=entity.name,
+                results.append(
+                    SearchResult(
+                        chunk_id=entity.entity_id,
+                        content=entity.name,
                         score=score,
-                    ),
-                    metadata={"entity_type": entity.entity_type},
-                ))
+                        source=Source(
+                            file_path="graph",
+                            location=entity.entity_type,
+                            snippet=entity.name,
+                            score=score,
+                        ),
+                        metadata={"entity_type": entity.entity_type},
+                    )
+                )
 
         return results
 

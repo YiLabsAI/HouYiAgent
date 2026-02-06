@@ -75,3 +75,5 @@ CODE_REVIEW*.md
 
 reports/
 datasets/
+
+.houyi/

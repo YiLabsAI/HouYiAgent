@@ -48,8 +48,7 @@ class SparseIndex:
             import bm25s
         except ImportError as err:
             raise ImportError(
-                "bm25s package required for sparse index. "
-                "Install with: pip install bm25s"
+                "bm25s package required for sparse index. Install with: pip install bm25s"
             ) from err
 
         # Create empty index
@@ -60,6 +59,7 @@ class SparseIndex:
         if self._index_path.exists():
             try:
                 import bm25s
+
                 self._index = bm25s.BM25.load(str(self._index_path))
 
                 # Load chunk metadata
@@ -105,6 +105,7 @@ class SparseIndex:
 
         try:
             import bm25s
+
             # Tokenize corpus
             corpus_tokens = bm25s.tokenize(corpus)
             # Build index
@@ -134,6 +135,7 @@ class SparseIndex:
 
         try:
             import bm25s
+
             # Tokenize query
             query_tokens = bm25s.tokenize([query])
             # Search
@@ -145,18 +147,20 @@ class SparseIndex:
         for idx, score in zip(results[0], scores[0], strict=False):
             if idx < len(self._chunks):
                 chunk = self._chunks[idx]
-                search_results.append(SearchResult(
-                    chunk_id=chunk.chunk_id,
-                    content=chunk.content,
-                    score=float(score),
-                    source=Source(
-                        file_path=chunk.metadata.get("source", ""),
-                        location=f"chunk {chunk.metadata.get('chunk_index', 0)}",
-                        snippet=chunk.content[:200],
+                search_results.append(
+                    SearchResult(
+                        chunk_id=chunk.chunk_id,
+                        content=chunk.content,
                         score=float(score),
-                    ),
-                    metadata=chunk.metadata,
-                ))
+                        source=Source(
+                            file_path=chunk.metadata.get("source", ""),
+                            location=f"chunk {chunk.metadata.get('chunk_index', 0)}",
+                            snippet=chunk.content[:200],
+                            score=float(score),
+                        ),
+                        metadata=chunk.metadata,
+                    )
+                )
 
         return search_results
 

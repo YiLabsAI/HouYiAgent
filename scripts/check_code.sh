@@ -31,9 +31,9 @@ fi
 # Check dev dependencies are installed
 check_dev_deps() {
     local missing=()
-    
+
     echo -e "${YELLOW}▶ Verifying dev dependencies...${NC}"
-    
+
     # Check critical dev tools via uv run
     if ! uv run python -c "import pylint" 2>/dev/null; then
         missing+=("pylint")
@@ -44,7 +44,7 @@ check_dev_deps() {
     if ! uv run python -c "import pytest_cov" 2>/dev/null; then
         missing+=("pytest-cov")
     fi
-    
+
     if [ ${#missing[@]} -gt 0 ]; then
         echo -e "${RED}✗ Missing dev dependencies: ${missing[*]}${NC}"
         echo -e "${YELLOW}Run: uv sync --extra dev${NC}"
@@ -72,8 +72,28 @@ run_check() {
     fi
 }
 
-# 1. Ruff - Format and lint all code
-run_check "Ruff" "uv run ruff check . --fix"
+# Determine changed Python files (staged + unstaged + untracked)
+get_changed_python_files() {
+    {
+        git diff --name-only --cached
+        git diff --name-only
+        git ls-files --others --exclude-standard
+    } 2>/dev/null | awk '
+        ($0 ~ /\.pyi?$/) { print $0 }
+    ' | sort -u
+}
+
+CHANGED_PY_FILES=$(get_changed_python_files)
+
+# 1-2. Ruff - Lint/format only changed Python files
+if [ -n "$CHANGED_PY_FILES" ]; then
+    CHANGED_PY_FILES_ONELINE=$(echo "$CHANGED_PY_FILES" | tr '\n' ' ')
+    run_check "Ruff (lint)" "uv run ruff check --fix $CHANGED_PY_FILES_ONELINE"
+    run_check "Ruff (format)" "uv run ruff format $CHANGED_PY_FILES_ONELINE"
+else
+    echo -e "${YELLOW}▶ Ruff (lint/format) skipped (no changed Python files)${NC}"
+    echo ""
+fi
 
 # 3. Pylint - Deep code quality check
 run_check "Pylint (source code)" "uv run pylint houyi/ --rcfile=.pylintrc"

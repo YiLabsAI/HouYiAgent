@@ -85,6 +85,7 @@ class TestSkillHooksManager:
 
         # Create a test handler
         called = []
+
         def test_handler(ctx: HookContext) -> str:
             called.append(ctx.tool_name)
             return "hook output"
@@ -116,6 +117,7 @@ class TestSkillHooksManager:
         manager = SkillHooksManager()
 
         called = []
+
         def test_handler(ctx: HookContext) -> None:
             called.append(ctx.tool_name)
 
@@ -134,18 +136,14 @@ class TestSkillHooksManager:
 
         # Should trigger for Write
         await manager.trigger_hook(
-            HookEvent.PRE_TOOL_USE,
-            HookContext(tool_name="Write"),
-            tool_name="Write"
+            HookEvent.PRE_TOOL_USE, HookContext(tool_name="Write"), tool_name="Write"
         )
         assert called == ["Write"]
 
         # Should not trigger for Read
         called.clear()
         await manager.trigger_hook(
-            HookEvent.PRE_TOOL_USE,
-            HookContext(tool_name="Read"),
-            tool_name="Read"
+            HookEvent.PRE_TOOL_USE, HookContext(tool_name="Read"), tool_name="Read"
         )
         assert called == []
 
@@ -195,7 +193,7 @@ class TestSkillHooksManagerExtended:
                 SkillHook(
                     event=HookEvent.PRE_TOOL_USE,
                     hook_type=HookType.COMMAND,
-                    command=f'{sys.executable} -c "import os; print(os.environ.get(\'SKILL_DIR\', \'\'))"',
+                    command=f"{sys.executable} -c \"import os; print(os.environ.get('SKILL_DIR', ''))\"",
                 ),
             ]
 
@@ -589,7 +587,7 @@ class TestParseSkillMd:
 
     def test_parse_yaml_frontmatter(self) -> None:
         """Test parsing YAML frontmatter."""
-        content = '''---
+        content = """---
 name: test-skill
 version: "1.0.0"
 description: A test skill
@@ -600,7 +598,7 @@ allowed-tools: [Read, Write, Edit]
 # Test Skill
 
 This is the skill body.
-'''
+"""
         result = parse_skill_md(content)
 
         assert result["name"] == "test-skill"
@@ -611,7 +609,7 @@ This is the skill body.
 
     def test_parse_hooks_config(self) -> None:
         """Test parsing hooks configuration."""
-        content = '''---
+        content = """---
 name: planning-skill
 hooks:
   PreToolUse:
@@ -622,7 +620,7 @@ hooks:
     - type: handler
       handler: module.function
 ---
-'''
+"""
         result = parse_skill_md(content)
         hooks = result.get("hooks", [])
 
@@ -641,7 +639,7 @@ hooks:
 
     def test_parse_legacy_format(self) -> None:
         """Test parsing legacy skill.md format without frontmatter."""
-        content = '''# Calculator
+        content = """# Calculator
 
 ## Description
 
@@ -666,7 +664,7 @@ A simple calculator skill.
   }
 }
 ```
-'''
+"""
         result = parse_skill_md(content)
 
         assert result["name"] == "Calculator"
@@ -678,12 +676,7 @@ A simple calculator skill.
         """Test parsing Claude's nested hooks format."""
         config = {
             "PreToolUse": [
-                {
-                    "matcher": "Write|Edit",
-                    "hooks": [
-                        {"type": "command", "command": "echo hello"}
-                    ]
-                }
+                {"matcher": "Write|Edit", "hooks": [{"type": "command", "command": "echo hello"}]}
             ]
         }
 

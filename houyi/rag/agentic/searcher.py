@@ -92,16 +92,18 @@ class AgenticSearcher:
             content = await self._read_context(path, line_num)
 
             if content:
-                results.append(SearchResult(
-                    content=content,
-                    score=match["score"],
-                    source=Source(
-                        file_path=path,
-                        location=f"line {line_num}",
-                        snippet=match["line"][:200],
+                results.append(
+                    SearchResult(
+                        content=content,
                         score=match["score"],
-                    ),
-                ))
+                        source=Source(
+                            file_path=path,
+                            location=f"line {line_num}",
+                            snippet=match["line"][:200],
+                            score=match["score"],
+                        ),
+                    )
+                )
 
         return results
 
@@ -144,15 +146,16 @@ class AgenticSearcher:
 
                         # Score based on keyword density
                         score = sum(
-                            1 for kw in keywords
-                            if kw.lower() in line_content.lower()
+                            1 for kw in keywords if kw.lower() in line_content.lower()
                         ) / len(keywords)
 
-                        matches.append({
-                            "line_num": line_num,
-                            "line": line_content,
-                            "score": score,
-                        })
+                        matches.append(
+                            {
+                                "line_num": line_num,
+                                "line": line_content,
+                                "score": score,
+                            }
+                        )
                     except ValueError:
                         continue
 
@@ -174,18 +177,17 @@ class AgenticSearcher:
             with open(path, encoding="utf-8", errors="ignore") as f:
                 for line_num, line in enumerate(f, 1):
                     line_lower = line.lower()
-                    matching_kws = [
-                        kw for kw in keywords
-                        if kw.lower() in line_lower
-                    ]
+                    matching_kws = [kw for kw in keywords if kw.lower() in line_lower]
 
                     if matching_kws:
                         score = len(matching_kws) / len(keywords)
-                        matches.append({
-                            "line_num": line_num,
-                            "line": line.strip(),
-                            "score": score,
-                        })
+                        matches.append(
+                            {
+                                "line_num": line_num,
+                                "line": line.strip(),
+                                "score": score,
+                            }
+                        )
         except (OSError, UnicodeDecodeError):
             pass
 

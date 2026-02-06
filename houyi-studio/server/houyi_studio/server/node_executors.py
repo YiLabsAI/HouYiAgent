@@ -19,6 +19,7 @@ from houyi.execution.tool_node_utils import (
     normalize_tool_name,
 )
 from houyi.execution.verify_node_utils import build_verification_rules
+from houyi.observability import Span, SpanType, TraceContext
 from houyi.protocol.ir import ToolNodeOutputIR
 from houyi.protocol.ir.execution_ir import NodeExecutionIR
 from houyi.protocol.ir.plan_ir import NodeIR
@@ -152,6 +153,26 @@ class ToolNodeExecutor(NodeExecutor):
     def _extract_schema_fields(input_schema: type | None) -> set[str]:
         return extract_schema_fields(input_schema)
 
+    @staticmethod
+    def _create_tool_span(tool_name: str) -> Span | None:
+        """Create tool span as child of current trace context.
+
+        Returns None if no active trace context (instrumentation disabled).
+        """
+        parent = TraceContext.current()
+        if parent is None:
+            return None
+
+        return Span(
+            name=f"tool.{tool_name}",
+            parent=parent,
+            span_type=SpanType.TOOL,
+            tool_name=tool_name,
+            attributes={
+                "tool.name": tool_name,
+            },
+        )
+
     def _build_inputs_from_context(
         self,
         context: ExecutionContext,
@@ -244,6 +265,9 @@ class ToolNodeExecutor(NodeExecutor):
             sorted(context.execution.context.keys()),
         )
 
+        # Create tool span as child of current trace context
+        tool_span = self._create_tool_span(normalized_tool)
+
         try:
             executor = SkillExecutor()
             result = await executor.execute(skill, node_exec.inputs)
@@ -287,13 +311,22 @@ class ToolNodeExecutor(NodeExecutor):
                 metadata={"tool_name": normalized_tool, **output_metadata},
             ).model_dump()
 
-            if output_metadata.get("cache_hit") is True:
+            # Update tool span with cache hit info
+            if tool_span and output_metadata.get("cache_hit") is True:
+                tool_span.cache_hit = True
+                tool_span.set_attribute("tool.cache_hit", True)
                 logger.info(
                     "[%s] Tool cache hit: tool=%s cache_key=%s",
                     node.node_id,
                     normalized_tool,
                     output_metadata.get("cache_key"),
                 )
+
+            # End tool span on success
+            if tool_span:
+                tool_span.set_status("ok")
+                tool_span.end()
+
         except Exception as e:
             node_exec.error = str(e)
             node_exec.outputs = ToolNodeOutputIR(
@@ -301,6 +334,11 @@ class ToolNodeExecutor(NodeExecutor):
                 is_error=True,
                 metadata={"tool_name": normalized_tool},
             ).model_dump()
+
+            # End tool span on error
+            if tool_span:
+                tool_span.set_status("error", str(e))
+                tool_span.end()
 
 
 class VerifyNodeExecutor(NodeExecutor):

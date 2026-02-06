@@ -22,6 +22,7 @@ from houyi.llm.replay import (
 from houyi.llm.replay import (
     record_llm_call as replay_record_llm_call,
 )
+from houyi.observability import Span, SpanType, TraceContext
 from houyi.protocol.ir import ExecutionIR, NodeExecutionIR
 from houyi.protocol.ir.checkpoint_ir import LLMCallLog
 from houyi.protocol.ir.tooling_ir import LLMToolCallOutputIR
@@ -59,6 +60,36 @@ class LLMExecutionFlow:
 
     def set_sleep_func(self, sleep_func: SleepFunc) -> None:
         self._sleep_func = sleep_func
+
+    def _create_llm_span(
+        self,
+        model: str | None,
+        provider: str | None = None,
+        cache_hit: bool = False,
+        replay_mode: str | None = None,
+    ) -> Span | None:
+        """Create LLM span as child of current trace context.
+
+        Returns None if no active trace context (instrumentation disabled).
+        """
+        parent = TraceContext.current()
+        if parent is None:
+            return None
+
+        return Span(
+            name="llm.completion",
+            parent=parent,
+            span_type=SpanType.LLM,
+            model=model,
+            provider=provider,
+            cache_hit=cache_hit,
+            attributes={
+                "llm.model": model,
+                "llm.provider": provider,
+                "llm.cache_hit": cache_hit,
+                "llm.replay_mode": replay_mode,
+            },
+        )
 
     async def execute_llm_real(
         self,
@@ -111,6 +142,11 @@ class LLMExecutionFlow:
         if decision.kind == ReplayDecisionKind.RECORDED_LLM_TEXT and decision.llm_text:
             logger.info("Using recorded response for node %s (deterministic replay)", node_id)
 
+            # Create LLM span for replay (cache_hit=True since we're using recorded response)
+            llm_span = self._create_llm_span(
+                model=model, cache_hit=True, replay_mode="deterministic"
+            )
+
             # Replay with streamed chunks to mimic original execution.
             words = decision.llm_text.split()
             for word in words:
@@ -145,6 +181,12 @@ class LLMExecutionFlow:
                     "replay_mode": "deterministic",
                 },
             }
+
+            # End LLM span
+            if llm_span:
+                llm_span.set_status("ok")
+                llm_span.end()
+
             logger.info("Deterministic replay completed for node %s", node_id)
             return
 
@@ -184,6 +226,10 @@ class LLMExecutionFlow:
                 node_id,
                 cache_key,
             )
+
+            # Create LLM span for cache hit
+            llm_span = self._create_llm_span(model=model, cache_hit=True)
+
             node_exec.streaming_output += cached_response
             node_exec.outputs = {
                 "result": node_exec.streaming_output,
@@ -213,9 +259,18 @@ class LLMExecutionFlow:
                 is_final=True,
             )
             await self._observation_service.emit(final_event)
+
+            # End LLM span
+            if llm_span:
+                llm_span.set_status("ok")
+                llm_span.end()
+
             return
 
         llm_adapter = self._adapter_factory()
+
+        # Create LLM span for real API call
+        llm_span = self._create_llm_span(model=model, cache_hit=False)
 
         try:
             logger.info("Creating LLM adapter and starting stream...")
@@ -409,6 +464,11 @@ class LLMExecutionFlow:
                 metadata_payload.setdefault("prompt_cache_key", prompt_cache_key)
                 node_exec.outputs["metadata"] = metadata_payload
 
+            # End LLM span on success
+            if llm_span:
+                llm_span.set_status("ok")
+                llm_span.end()
+
         except Exception as exc:
             logger.error("Error executing LLM node %s: %s", node_id, exc, exc_info=True)
             node_exec.error = str(exc)
@@ -437,6 +497,11 @@ class LLMExecutionFlow:
                 is_final=True,
             )
             await self._observation_service.emit(error_event)
+
+            # End LLM span on error
+            if llm_span:
+                llm_span.set_status("error", str(exc))
+                llm_span.end()
 
     async def execute_llm_tool_calls(
         self,

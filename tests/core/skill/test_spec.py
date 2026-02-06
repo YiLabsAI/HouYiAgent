@@ -140,9 +140,7 @@ allowed-tools: [Read, Write]
 
 This is the body content.
 """
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".md", delete=False
-        ) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
             f.write(content)
             f.flush()
 
@@ -183,9 +181,7 @@ A skill in the legacy markdown format.
 }
 ```
 """
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".md", delete=False
-        ) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
             f.write(content)
             f.flush()
 
@@ -250,9 +246,7 @@ version: "2.0.0"
 
         with tempfile.TemporaryDirectory() as tmpdir:
             with patch.object(Path, "home", return_value=Path(tmpdir)):
-                spec = SkillSpec.from_url(
-                    "https://example.com/skills/test/skill.md", cache=True
-                )
+                spec = SkillSpec.from_url("https://example.com/skills/test/skill.md", cache=True)
 
                 assert spec.name == "remote-skill"
                 assert spec.version == "2.0.0"
@@ -271,9 +265,7 @@ description: Not cached
         mock_response.__exit__ = MagicMock(return_value=False)
         mock_urlopen.return_value = mock_response
 
-        spec = SkillSpec.from_url(
-            "https://example.com/skill.md", cache=False
-        )
+        spec = SkillSpec.from_url("https://example.com/skill.md", cache=False)
 
         assert spec.name == "no-cache-skill"
         assert spec.skill_md_path == "https://example.com/skill.md"

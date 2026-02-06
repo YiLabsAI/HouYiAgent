@@ -142,10 +142,7 @@ class AgenticMode:
                     logger.debug("Keyword expansion failed: %s", e)
 
         # Step 4: Build response
-        sources = [
-            r.source for r in all_results
-            if r.source is not None
-        ]
+        sources = [r.source for r in all_results if r.source is not None]
 
         # Generate answer using LLM if available, otherwise concatenate
         answer, confidence = await self._generate_answer(query, all_results)

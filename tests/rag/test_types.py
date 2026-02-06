@@ -1,6 +1,5 @@
 """Tests for RAG types and configuration."""
 
-
 from houyi.rag.config import AgenticConfig, IndexedConfig, RAGConfig
 from houyi.rag.types import (
     Chunk,

@@ -243,6 +243,7 @@ def parse_hooks_config(config: dict[str, Any]) -> list[SkillHook]:
     Returns:
         List of SkillHook objects
     """
+
     def _hook_type_from(value: str | None) -> HookType:
         if not value:
             return HookType.HANDLER

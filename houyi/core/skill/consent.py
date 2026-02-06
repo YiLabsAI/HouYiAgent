@@ -93,10 +93,7 @@ class ConsentRequest:
 
         elif self.consent_type == ConsentType.INVOKE_CONFIRM:
             side_effect = self.policy.side_effect.value if self.policy else "unknown"
-            return (
-                f"Allow model to invoke '{self.skill_name}'?\n"
-                f"  Side effect: {side_effect}"
-            )
+            return f"Allow model to invoke '{self.skill_name}'?\n  Side effect: {side_effect}"
 
         return f"Consent requested for skill '{self.skill_name}'"
 

@@ -15,6 +15,7 @@ from houyi.execution.node_execution_utils import (
     resolve_inputs,
     resolve_value,
 )
+from houyi.observability import Span, SpanType, TraceContext
 from houyi.protocol.ir import ExecutionIR, NodeExecutionIR, NodeStatus, PlanIR
 from houyi.protocol.ir.plan_ir import NodeType
 
@@ -191,15 +192,37 @@ class NodeExecutionFlow:
             sorted(context.execution.context.keys()),
         )
 
-        # NOTE(core): Minimal observability envelope (OTel-aligned placeholder).
-        # We use execution_id as a stable trace_id surrogate for now.
-        # Later phases will generate true trace/span IDs and attach llm/tool spans with cost/cache fields.
-        trace_id = execution.execution_id
-        node_span_id = f"span_{uuid4().hex[:16]}"
-        execution_span_id = f"span_{uuid4().hex[:16]}"
-        start_time_iso = (
-            node_exec.started_at.isoformat() if node_exec.started_at else datetime.now().isoformat()
+        # Create or reuse execution root span (stable across all nodes in this execution)
+        if context.root_span is None:
+            # Extract checkpoint/restore lineage from execution metadata
+            exec_metadata = execution.metadata or {}
+            parent_trace_id = exec_metadata.get("parent_execution_id")
+            restore_checkpoint_id = exec_metadata.get("parent_checkpoint_id")
+            replay_mode = exec_metadata.get("replay_mode") == "deterministic"
+
+            context.root_span = Span(
+                name="execution",
+                span_type=SpanType.EXECUTION,
+                trace_id=execution.execution_id,
+                parent_trace_id=parent_trace_id,
+                restore_checkpoint_id=restore_checkpoint_id,
+                replay_mode=replay_mode,
+                attributes={"session_id": session_id},
+            )
+
+        # Create node span as child of root span
+        node_span = Span(
+            name=f"node.{node.node_type.value if node else 'unknown'}",
+            parent=context.root_span,
+            span_type=SpanType.NODE,
+            node_id=node_id,
+            attributes={
+                "node.type": node.node_type.value if node else "unknown",
+            },
         )
+
+        # Activate node span in TraceContext so child spans (llm/tool) auto-parent to it
+        span_token = TraceContext.push(node_span)
 
         start_event = NodeStatusEvent(
             event_id=f"evt_{uuid4().hex[:8]}",
@@ -209,15 +232,7 @@ class NodeExecutionFlow:
             status=NodeStatus.RUNNING,
             inputs=node_exec.inputs or {},
             execution_metadata=execution.metadata or {},
-            observation={
-                "trace_id": trace_id,
-                "span_id": node_span_id,
-                "parent_span_id": execution_span_id,
-                "span_type": "node",
-                "start_time": start_time_iso,
-                "end_time": None,
-                "status": "running",
-            },
+            observation=node_span.to_dict(),
         )
         await self._observation_service.emit(start_event)
         await self._notify_lifecycle("before_node", context, node_id, node_exec)
@@ -245,11 +260,8 @@ class NodeExecutionFlow:
                 node_exec.status = NodeStatus.FAILED
                 node_exec.completed_at = datetime.now()
 
-                end_time_iso = (
-                    node_exec.completed_at.isoformat()
-                    if node_exec.completed_at
-                    else datetime.now().isoformat()
-                )
+                node_span.set_status("error", node_exec.error)
+                node_span.end()
 
                 fail_event = NodeStatusEvent(
                     event_id=f"evt_{uuid4().hex[:8]}",
@@ -261,15 +273,7 @@ class NodeExecutionFlow:
                     outputs=node_exec.outputs,
                     error=node_exec.error,
                     execution_metadata=execution.metadata or {},
-                    observation={
-                        "trace_id": trace_id,
-                        "span_id": node_span_id,
-                        "parent_span_id": execution_span_id,
-                        "span_type": "node",
-                        "start_time": start_time_iso,
-                        "end_time": end_time_iso,
-                        "status": "failed",
-                    },
+                    observation=node_span.to_dict(),
                 )
                 await self._observation_service.emit(fail_event)
                 raise RuntimeError(f"Node {node_id} failed: {node_exec.error}")
@@ -282,11 +286,7 @@ class NodeExecutionFlow:
                 }
             self._apply_outputs_to_context(node, node_exec, context)
 
-            end_time_iso = (
-                node_exec.completed_at.isoformat()
-                if node_exec.completed_at
-                else datetime.now().isoformat()
-            )
+            node_span.end()
 
             complete_event = NodeStatusEvent(
                 event_id=f"evt_{uuid4().hex[:8]}",
@@ -297,16 +297,10 @@ class NodeExecutionFlow:
                 inputs=node_exec.inputs or {},
                 outputs=node_exec.outputs,
                 execution_metadata=execution.metadata or {},
-                observation={
-                    "trace_id": trace_id,
-                    "span_id": node_span_id,
-                    "parent_span_id": execution_span_id,
-                    "span_type": "node",
-                    "start_time": start_time_iso,
-                    "end_time": end_time_iso,
-                    "status": "completed",
-                },
+                observation=node_span.to_dict(),
             )
             await self._observation_service.emit(complete_event)
         finally:
+            # Always pop span from context to avoid leaking
+            TraceContext.pop(span_token)
             await self._notify_lifecycle("after_node", context, node_id, node_exec)

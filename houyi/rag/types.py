@@ -55,9 +55,7 @@ class Chunk(BaseModel):
     )
     start_idx: int = Field(default=0, description="Start position in document")
     end_idx: int = Field(default=0, description="End position in document")
-    embedding: list[float] | None = Field(
-        default=None, description="Vector embedding"
-    )
+    embedding: list[float] | None = Field(default=None, description="Vector embedding")
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -67,9 +65,7 @@ class Entity(BaseModel):
     entity_id: str = Field(..., description="Unique entity identifier")
     name: str = Field(..., description="Entity name")
     entity_type: str = Field(default="unknown", description="Entity type")
-    embedding: list[float] | None = Field(
-        default=None, description="Entity embedding"
-    )
+    embedding: list[float] | None = Field(default=None, description="Entity embedding")
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -88,9 +84,7 @@ class Source(BaseModel):
     """A citation source reference."""
 
     file_path: str = Field(..., description="Source file path")
-    location: str = Field(
-        default="", description="Location within file (line number, page, etc.)"
-    )
+    location: str = Field(default="", description="Location within file (line number, page, etc.)")
     snippet: str = Field(default="", description="Relevant text snippet")
     score: float = Field(default=0.0, description="Relevance score")
 
@@ -110,15 +104,11 @@ class RetrievalResult(BaseModel):
 
     answer: str = Field(..., description="Generated answer")
     sources: list[Source] = Field(default_factory=list, description="Citation sources")
-    confidence: float = Field(
-        default=0.0, description="Answer confidence score (0-1)"
-    )
+    confidence: float = Field(default=0.0, description="Answer confidence score (0-1)")
     search_results: list[SearchResult] = Field(
         default_factory=list, description="Raw search results"
     )
-    mode_used: RAGMode = Field(
-        default=RAGMode.AUTO, description="Which mode was used"
-    )
+    mode_used: RAGMode = Field(default=RAGMode.AUTO, description="Which mode was used")
     strategies_used: list[RetrievalStrategy] = Field(
         default_factory=list, description="Which strategies were used"
     )

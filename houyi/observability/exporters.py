@@ -302,6 +302,40 @@ class DatadogExporter(Exporter):
             self.trace_batch = []
 
 
+class StorageExporter(Exporter):
+    """Export spans to persistent storage (SQLite).
+
+    Automatically persists spans to the configured storage backend.
+    """
+
+    def __init__(self, storage: Any | None = None):
+        """Initialize storage exporter.
+
+        Args:
+            storage: SpanStorage instance (uses global if None)
+        """
+        self._storage = storage
+
+    @property
+    def storage(self) -> Any:
+        """Get storage instance (lazy initialization)."""
+        if self._storage is None:
+            from houyi.observability.storage import get_storage
+
+            self._storage = get_storage()
+        return self._storage
+
+    def export(self, span_data: dict[str, Any]) -> None:
+        """Export span to storage."""
+        from houyi.observability.types import SpanSchema
+
+        try:
+            span = SpanSchema(**span_data)
+            self.storage.save(span)
+        except Exception as e:
+            print(f"⚠️  Storage export error: {e}")
+
+
 def create_exporter(config: dict | ExporterConfig) -> Exporter:
     """Create exporter from configuration.
 
@@ -326,5 +360,7 @@ def create_exporter(config: dict | ExporterConfig) -> Exporter:
         return JaegerExporter(**kwargs)
     elif exporter_type == "datadog":
         return DatadogExporter(**kwargs)
+    elif exporter_type == "storage":
+        return StorageExporter(**kwargs)
     else:
         raise ValueError(f"Unknown exporter type: {exporter_type}")

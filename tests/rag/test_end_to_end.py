@@ -82,14 +82,14 @@ class TestEndToEndAgentic:
             kb_dir = Path(tmpdir) / "knowledge"
             kb_dir.mkdir()
 
-            (kb_dir / "doc.md").write_text(
-                "RAG is a powerful technique for AI systems."
-            )
+            (kb_dir / "doc.md").write_text("RAG is a powerful technique for AI systems.")
 
-            fake_adapter = FakeAdapter([
-                '{"keywords": ["RAG", "technique"], "synonyms": {}}',
-                "RAG is a technique that combines retrieval with generation. [1]",
-            ])
+            fake_adapter = FakeAdapter(
+                [
+                    '{"keywords": ["RAG", "technique"], "synonyms": {}}',
+                    "RAG is a technique that combines retrieval with generation. [1]",
+                ]
+            )
 
             service = RAGService(
                 mode="agentic",
@@ -241,10 +241,12 @@ class TestLLMProviderIntegration:
 
             (kb_dir / "doc.md").write_text("Test content about AI")
 
-            fake_adapter = FakeAdapter([
-                '{"keywords": ["AI"], "synonyms": {}}',
-                "AI stands for Artificial Intelligence.",
-            ])
+            fake_adapter = FakeAdapter(
+                [
+                    '{"keywords": ["AI"], "synonyms": {}}',
+                    "AI stands for Artificial Intelligence.",
+                ]
+            )
 
             service = RAGService(
                 mode="agentic",

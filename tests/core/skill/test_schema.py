@@ -3,8 +3,6 @@
 Reference: SimpleSkill Specification v0.1 Section 3 (SKILL.md Format)
 """
 
-
-
 from houyi.core.skill.hooks import HookEvent, HookType, SkillHook
 from houyi.core.skill.schema import (
     _parse_constraints,
@@ -490,11 +488,7 @@ class TestParseHooksConfig:
 
     def test_parse_unknown_event(self) -> None:
         """Test handling unknown hook event."""
-        config = {
-            "UnknownEvent": [
-                {"type": "command", "command": "echo test"}
-            ]
-        }
+        config = {"UnknownEvent": [{"type": "command", "command": "echo test"}]}
 
         hooks = parse_hooks_config(config)
 

@@ -56,8 +56,7 @@ class VectorIndex:
             import hnswlib
         except ImportError as err:
             raise ImportError(
-                "hnswlib package required for vector index. "
-                "Install with: pip install hnswlib"
+                "hnswlib package required for vector index. Install with: pip install hnswlib"
             ) from err
 
         self._index = hnswlib.Index(space="cosine", dim=self.dimension)
@@ -90,10 +89,7 @@ class VectorIndex:
 
         meta = {
             "next_id": self._next_id,
-            "chunks": {
-                str(id_): chunk.model_dump()
-                for id_, chunk in self._id_to_chunk.items()
-            },
+            "chunks": {str(id_): chunk.model_dump() for id_, chunk in self._id_to_chunk.items()},
         }
         with open(self._meta_path, "w", encoding="utf-8") as f:
             json.dump(meta, f, ensure_ascii=False, indent=2)
@@ -162,7 +158,9 @@ class VectorIndex:
         if self._index.get_current_count() == 0:
             return []
 
-        labels, distances = self._index.knn_query([query_embedding], k=min(k, self._index.get_current_count()))
+        labels, distances = self._index.knn_query(
+            [query_embedding], k=min(k, self._index.get_current_count())
+        )
 
         results = []
         for label, distance in zip(labels[0], distances[0], strict=True):
@@ -171,18 +169,20 @@ class VectorIndex:
                 # Convert cosine distance to similarity score
                 score = 1.0 - distance
 
-                results.append(SearchResult(
-                    chunk_id=chunk.chunk_id,
-                    content=chunk.content,
-                    score=score,
-                    source=Source(
-                        file_path=chunk.metadata.get("source", ""),
-                        location=f"chunk {chunk.metadata.get('chunk_index', 0)}",
-                        snippet=chunk.content[:200],
+                results.append(
+                    SearchResult(
+                        chunk_id=chunk.chunk_id,
+                        content=chunk.content,
                         score=score,
-                    ),
-                    metadata=chunk.metadata,
-                ))
+                        source=Source(
+                            file_path=chunk.metadata.get("source", ""),
+                            location=f"chunk {chunk.metadata.get('chunk_index', 0)}",
+                            snippet=chunk.content[:200],
+                            score=score,
+                        ),
+                        metadata=chunk.metadata,
+                    )
+                )
 
         return results
 

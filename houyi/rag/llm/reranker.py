@@ -168,9 +168,7 @@ Return JSON: {{"scores": [score1, score2, ...]}}"""
             content = content.strip()
             if content.startswith("```"):
                 lines = content.split("\n")
-                content = "\n".join(
-                    line for line in lines if not line.startswith("```")
-                )
+                content = "\n".join(line for line in lines if not line.startswith("```"))
 
             data = json.loads(content)
             scores = data.get("scores", [])

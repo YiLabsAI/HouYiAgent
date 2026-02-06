@@ -186,9 +186,7 @@ class IndexedMode:
             if self._entity_extractor:
                 # Use LLM for entity extraction
                 try:
-                    entities, relations = await self._entity_extractor.extract_batch(
-                        chunks
-                    )
+                    entities, relations = await self._entity_extractor.extract_batch(chunks)
                     stats["entities"] = len(entities)
                     stats["relations"] = len(relations)
 

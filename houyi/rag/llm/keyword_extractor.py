@@ -128,10 +128,7 @@ Return ONLY a JSON array: ["term1", "term2", ...]"""
             if content.startswith("```"):
                 # Remove markdown code blocks
                 lines = content.split("\n")
-                content = "\n".join(
-                    line for line in lines
-                    if not line.startswith("```")
-                )
+                content = "\n".join(line for line in lines if not line.startswith("```"))
 
             data = json.loads(content)
 
@@ -153,10 +150,7 @@ Return ONLY a JSON array: ["term1", "term2", ...]"""
             content = content.strip()
             if content.startswith("```"):
                 lines = content.split("\n")
-                content = "\n".join(
-                    line for line in lines
-                    if not line.startswith("```")
-                )
+                content = "\n".join(line for line in lines if not line.startswith("```"))
             data = json.loads(content)
             if isinstance(data, list):
                 return [str(item) for item in data]
@@ -168,18 +162,54 @@ Return ONLY a JSON array: ["term1", "term2", ...]"""
         """Simple rule-based keyword extraction as fallback."""
         # Remove common stop words and split
         stop_words = {
-            "的", "是", "在", "了", "和", "与", "或", "a", "an", "the", "is",
-            "are", "was", "were", "be", "been", "being", "have", "has", "had",
-            "do", "does", "did", "will", "would", "could", "should", "may",
-            "might", "must", "what", "how", "why", "when", "where", "which",
-            "who", "whom", "this", "that", "these", "those", "it", "its",
+            "的",
+            "是",
+            "在",
+            "了",
+            "和",
+            "与",
+            "或",
+            "a",
+            "an",
+            "the",
+            "is",
+            "are",
+            "was",
+            "were",
+            "be",
+            "been",
+            "being",
+            "have",
+            "has",
+            "had",
+            "do",
+            "does",
+            "did",
+            "will",
+            "would",
+            "could",
+            "should",
+            "may",
+            "might",
+            "must",
+            "what",
+            "how",
+            "why",
+            "when",
+            "where",
+            "which",
+            "who",
+            "whom",
+            "this",
+            "that",
+            "these",
+            "those",
+            "it",
+            "its",
         }
 
         words = text.replace("?", " ").replace("？", " ").replace(",", " ").split()
-        keywords = [
-            w for w in words
-            if w.lower() not in stop_words and len(w) > 1
-        ]
+        keywords = [w for w in words if w.lower() not in stop_words and len(w) > 1]
 
         return {
             "keywords": keywords[: self._max_keywords],

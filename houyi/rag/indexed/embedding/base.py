@@ -65,6 +65,7 @@ class APIEmbedder(BaseEmbedder):
         """Embed using OpenAI API."""
         try:
             import openai
+
             client = openai.AsyncOpenAI()
             response = await client.embeddings.create(
                 model=self.model,
@@ -79,6 +80,7 @@ class APIEmbedder(BaseEmbedder):
         if self.provider == "openai":
             try:
                 import openai
+
                 client = openai.AsyncOpenAI()
                 response = await client.embeddings.create(
                     model=self.model,
@@ -104,6 +106,7 @@ class LocalEmbedder(BaseEmbedder):
         if self._encoder is None:
             try:
                 from fastembed import TextEmbedding
+
                 self._encoder = TextEmbedding(model_name=self.model)
             except ImportError as err:
                 raise ImportError(

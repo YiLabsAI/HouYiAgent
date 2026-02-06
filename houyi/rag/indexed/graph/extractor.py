@@ -36,25 +36,29 @@ async def extract_entities(
             if name not in entity_map:
                 entity_id = str(uuid.uuid4())
                 entity_map[name] = entity_id
-                entities.append(Entity(
-                    entity_id=entity_id,
-                    name=name,
-                    entity_type=entity_type,
-                    metadata={"source_chunk": chunk.chunk_id},
-                ))
+                entities.append(
+                    Entity(
+                        entity_id=entity_id,
+                        name=name,
+                        entity_type=entity_type,
+                        metadata={"source_chunk": chunk.chunk_id},
+                    )
+                )
 
         # Extract simple co-occurrence relations
         entity_list = list(chunk_entities)
         for i, (name1, _) in enumerate(entity_list):
-            for name2, _ in entity_list[i + 1:]:
-                relations.append(Relation(
-                    rel_id=str(uuid.uuid4()),
-                    source_id=entity_map[name1],
-                    target_id=entity_map[name2],
-                    rel_type="co_occurs",
-                    weight=1.0,
-                    metadata={"source_chunk": chunk.chunk_id},
-                ))
+            for name2, _ in entity_list[i + 1 :]:
+                relations.append(
+                    Relation(
+                        rel_id=str(uuid.uuid4()),
+                        source_id=entity_map[name1],
+                        target_id=entity_map[name2],
+                        rel_type="co_occurs",
+                        weight=1.0,
+                        metadata={"source_chunk": chunk.chunk_id},
+                    )
+                )
 
     return entities, relations
 
@@ -70,16 +74,30 @@ def _simple_entity_extraction(text: str) -> list[tuple[str, str]]:
 
     # Extract capitalized phrases (simple NER)
     # Pattern: 2-4 capitalized words
-    pattern = r'\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,3})\b'
+    pattern = r"\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,3})\b"
     matches = re.findall(pattern, text)
 
     for match in matches:
         # Simple type classification
         if any(kw in match.lower() for kw in ["company", "inc", "corp", "ltd"]):
             entity_type = "organization"
-        elif any(kw in match.lower() for kw in ["january", "february", "march", "april",
-                                                  "may", "june", "july", "august",
-                                                  "september", "october", "november", "december"]):
+        elif any(
+            kw in match.lower()
+            for kw in [
+                "january",
+                "february",
+                "march",
+                "april",
+                "may",
+                "june",
+                "july",
+                "august",
+                "september",
+                "october",
+                "november",
+                "december",
+            ]
+        ):
             entity_type = "date"
         else:
             entity_type = "concept"

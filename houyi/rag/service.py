@@ -84,9 +84,7 @@ class RAGService:
                     knowledge_dir, strategies=strategies, **config_kwargs
                 )
             else:
-                self._config = RAGConfig(
-                    mode=mode, knowledge_dir=knowledge_dir, **config_kwargs
-                )
+                self._config = RAGConfig(mode=mode, knowledge_dir=knowledge_dir, **config_kwargs)
 
         self._agent = agent
         self._llm_adapter = llm_adapter
@@ -97,9 +95,7 @@ class RAGService:
         if llm_adapter is None and llm_provider:
             self._llm_adapter = self._create_llm_adapter(llm_provider, llm_model)
 
-    def _create_llm_adapter(
-        self, provider: str, model: str | None
-    ) -> LLMAdapter | None:
+    def _create_llm_adapter(self, provider: str, model: str | None) -> LLMAdapter | None:
         """Create LLM adapter from provider name.
 
         Args:
@@ -153,9 +149,7 @@ class RAGService:
         if not os.path.exists(kb_path):
             return RAGMode.AGENTIC
 
-        file_count = sum(
-            1 for _ in _iter_files(kb_path)
-        )
+        file_count = sum(1 for _ in _iter_files(kb_path))
 
         # Simple heuristic: small KB uses Agentic, large uses Indexed
         if file_count < 100:

@@ -106,6 +106,7 @@ def _load_html_file(path: Path) -> Document:
 
     # Simple HTML tag removal
     import re
+
     text = re.sub(r"<script[^>]*>.*?</script>", "", content, flags=re.DOTALL)
     text = re.sub(r"<style[^>]*>.*?</style>", "", text, flags=re.DOTALL)
     text = re.sub(r"<[^>]+>", " ", text)

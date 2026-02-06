@@ -91,10 +91,12 @@ def parse_plan(content: str) -> dict[str, Any]:
     for match in re.finditer(subtask_pattern, content, re.MULTILINE):
         completed = match.group(1).lower() == "x"
         description = match.group(2).strip()
-        result["subtasks"].append({
-            "description": description,
-            "completed": completed,
-        })
+        result["subtasks"].append(
+            {
+                "description": description,
+                "completed": completed,
+            }
+        )
 
     # Extract notes section
     notes_match = re.search(r"^##\s*Notes\s*\n(.+?)(?=^##|\Z)", content, re.MULTILINE | re.DOTALL)
@@ -221,8 +223,7 @@ async def post_tool_hook(context: HookContext) -> HookResult:
             pass
 
         return HookResult(
-            success=True,
-            output=f"[Planning] Progress: {progress['completed']}/{progress['total']}"
+            success=True, output=f"[Planning] Progress: {progress['completed']}/{progress['total']}"
         )
 
     except Exception as e:
@@ -258,7 +259,7 @@ async def stop_hook(context: HookContext) -> HookResult:
         if is_plan_complete(plan):
             return HookResult(
                 success=True,
-                output=f"[Planning] All {progress['total']} subtasks complete. Task finished!"
+                output=f"[Planning] All {progress['total']} subtasks complete. Task finished!",
             )
 
         # Incomplete - return failure to potentially block stop

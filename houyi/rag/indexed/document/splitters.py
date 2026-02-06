@@ -54,7 +54,9 @@ def _recursive_split(
         sep = separators[sep_idx]
         if not sep:
             # Final fallback: split by char count
-            return [text[i:i + chunk_size] for i in range(0, len(text), chunk_size - chunk_overlap)]
+            return [
+                text[i : i + chunk_size] for i in range(0, len(text), chunk_size - chunk_overlap)
+            ]
 
         parts = text.split(sep)
         result = []
@@ -106,7 +108,7 @@ def _sentence_split(
 ) -> list[Chunk]:
     """Split document by sentences."""
     # Simple sentence splitting
-    sentences = re.split(r'(?<=[.!?])\s+', doc.content)
+    sentences = re.split(r"(?<=[.!?])\s+", doc.content)
 
     chunks = []
     current_text = ""

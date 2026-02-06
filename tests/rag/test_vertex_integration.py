@@ -34,7 +34,7 @@ VERTEX_SDK_INSTALLED = importlib.util.find_spec("vertexai") is not None
 skip_if_no_vertex = pytest.mark.skipif(
     not (VERTEX_AVAILABLE and VERTEX_SDK_INSTALLED),
     reason="Vertex AI not configured or SDK not installed. "
-           "Set VERTEX_PROJECT and install google-cloud-aiplatform"
+    "Set VERTEX_PROJECT and install google-cloud-aiplatform",
 )
 
 
@@ -51,9 +51,7 @@ class TestVertexAIAdapter:
 
         from houyi.llm.base import LLMMessage, MessageRole
 
-        messages = [
-            LLMMessage(role=MessageRole.USER, content="Say 'Hello' and nothing else.")
-        ]
+        messages = [LLMMessage(role=MessageRole.USER, content="Say 'Hello' and nothing else.")]
 
         response = await adapter.chat(messages, temperature=0.1, max_tokens=50)
 
@@ -98,14 +96,14 @@ class TestVertexAIWithRAG:
             SearchResult(
                 chunk_id="chunk-1",
                 content="RAG (Retrieval-Augmented Generation) is a technique that combines "
-                        "retrieval of relevant documents with language model generation.",
+                "retrieval of relevant documents with language model generation.",
                 score=0.95,
                 source=Source(file_path="rag_overview.md"),
             ),
             SearchResult(
                 chunk_id="chunk-2",
                 content="RAG systems first retrieve relevant passages from a knowledge base, "
-                        "then use these passages as context for the language model.",
+                "then use these passages as context for the language model.",
                 score=0.90,
                 source=Source(file_path="rag_details.md"),
             ),
@@ -259,7 +257,9 @@ It runs in web browsers and enables interactive web pages.
 
         print("\nExtracted relations:")
         for r in relations:
-            print(f"  - {r.metadata.get('source_name')} -> {r.metadata.get('target_name')} ({r.rel_type})")
+            print(
+                f"  - {r.metadata.get('source_name')} -> {r.metadata.get('target_name')} ({r.rel_type})"
+            )
 
         assert len(entities) >= 2
         # Should extract company and product entities
@@ -280,9 +280,7 @@ class TestVertexAIStreaming:
 
         adapter = GoogleVertexGeminiAdapter.from_env()
 
-        messages = [
-            LLMMessage(role=MessageRole.USER, content="Count from 1 to 5.")
-        ]
+        messages = [LLMMessage(role=MessageRole.USER, content="Count from 1 to 5.")]
 
         chunks = []
         async for chunk in adapter.stream_chat(messages, temperature=0.1, max_tokens=100):
@@ -313,9 +311,11 @@ if __name__ == "__main__":
 
         try:
             from houyi.llm.vertex_gemini_adapter import GoogleVertexGeminiAdapter
+
             adapter = GoogleVertexGeminiAdapter.from_env()
 
             from houyi.llm.base import LLMMessage, MessageRole
+
             messages = [LLMMessage(role=MessageRole.USER, content="Say 'OK' if you can hear me.")]
 
             response = await adapter.chat(messages, max_tokens=10)

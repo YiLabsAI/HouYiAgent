@@ -57,6 +57,7 @@ class TestEmbedding:
         )
         with pytest.raises(ValueError, match="Unknown provider"):
             import asyncio
+
             asyncio.run(embedder.embed("test"))
 
 
@@ -344,23 +345,27 @@ class TestSparseIndex:
             await index.load()
 
             # First batch
-            await index.add_batch([
-                Chunk(
-                    chunk_id="chunk-1",
-                    doc_id="doc-1",
-                    content="First document",
-                    metadata={},
-                ),
-            ])
+            await index.add_batch(
+                [
+                    Chunk(
+                        chunk_id="chunk-1",
+                        doc_id="doc-1",
+                        content="First document",
+                        metadata={},
+                    ),
+                ]
+            )
             assert index.count() == 1
 
             # Second batch
-            await index.add_batch([
-                Chunk(
-                    chunk_id="chunk-2",
-                    doc_id="doc-2",
-                    content="Second document",
-                    metadata={},
-                ),
-            ])
+            await index.add_batch(
+                [
+                    Chunk(
+                        chunk_id="chunk-2",
+                        doc_id="doc-2",
+                        content="Second document",
+                        metadata={},
+                    ),
+                ]
+            )
             assert index.count() == 2

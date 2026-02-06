@@ -58,9 +58,9 @@ class TestSpan:
         span.add_event("error", {"message": "failed"})
 
         assert len(span.events) == 2
-        assert span.events[0]["name"] == "checkpoint"
-        assert span.events[0]["attributes"]["step"] == 1
-        assert span.events[1]["name"] == "error"
+        assert span.events[0].name == "checkpoint"
+        assert span.events[0].attributes["step"] == 1
+        assert span.events[1].name == "error"
 
     def test_set_status(self):
         """Test setting span status."""
@@ -143,8 +143,8 @@ class TestSpan:
         span.end()
 
         assert len(span.events) == 1
-        assert span.events[0]["name"] == "checkpoint"
-        assert span.events[0]["attributes"]["step"] == 1
+        assert span.events[0].name == "checkpoint"
+        assert span.events[0].attributes["step"] == 1
 
     def test_span_duration_before_end(self):
         """Test span duration calculation before ending."""

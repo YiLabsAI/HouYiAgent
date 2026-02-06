@@ -27,9 +27,7 @@ class TestDocumentLoaders:
     @pytest.mark.asyncio
     async def test_load_text_file(self) -> None:
         """Test loading a text file."""
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".txt", delete=False
-        ) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
             f.write("Hello, World!")
             f.flush()
             path = Path(f.name)
@@ -45,9 +43,7 @@ class TestDocumentLoaders:
     @pytest.mark.asyncio
     async def test_load_markdown_file(self) -> None:
         """Test loading a markdown file."""
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".md", delete=False
-        ) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
             f.write("# Title\n\nContent here")
             f.flush()
             path = Path(f.name)
@@ -63,9 +59,7 @@ class TestDocumentLoaders:
     @pytest.mark.asyncio
     async def test_load_html_file(self) -> None:
         """Test loading and parsing HTML file."""
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".html", delete=False
-        ) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".html", delete=False) as f:
             f.write("<html><body><h1>Title</h1><p>Content</p></body></html>")
             f.flush()
             path = Path(f.name)
@@ -82,13 +76,8 @@ class TestDocumentLoaders:
     @pytest.mark.asyncio
     async def test_load_html_with_script(self) -> None:
         """Test that script tags are removed from HTML."""
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".html", delete=False
-        ) as f:
-            f.write(
-                "<html><script>alert('bad')</script>"
-                "<body>Safe content</body></html>"
-            )
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".html", delete=False) as f:
+            f.write("<html><script>alert('bad')</script><body>Safe content</body></html>")
             f.flush()
             path = Path(f.name)
 
@@ -142,9 +131,7 @@ class TestDocumentLoaders:
     @pytest.mark.asyncio
     async def test_load_unsupported_file_type(self) -> None:
         """Test that unsupported file types return None."""
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".xyz", delete=False
-        ) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".xyz", delete=False) as f:
             f.write("Unknown format")
             f.flush()
             path = Path(f.name)

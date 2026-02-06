@@ -176,10 +176,7 @@ class PlanningSkill:
             }
 
         # Update status to completed
-        updated_content = content.replace(
-            "## Status: in_progress",
-            "## Status: completed"
-        )
+        updated_content = content.replace("## Status: in_progress", "## Status: completed")
         plan_path.write_text(updated_content)
 
         return {

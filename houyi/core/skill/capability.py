@@ -92,37 +92,45 @@ class HostCapabilities:
     """
 
     # Manifest support
-    manifest_formats: list[ManifestFormat] = field(default_factory=lambda: [
-        ManifestFormat.SIMPLESKILL_JSON,
-        ManifestFormat.SKILL_MD,
-    ])
+    manifest_formats: list[ManifestFormat] = field(
+        default_factory=lambda: [
+            ManifestFormat.SIMPLESKILL_JSON,
+            ManifestFormat.SKILL_MD,
+        ]
+    )
     """Supported manifest formats."""
 
     manifest_version: str = "0.1"
     """Supported SimpleSkill specification version."""
 
     # Execution support
-    execution_forms: list[ExecutionForm] = field(default_factory=lambda: [
-        ExecutionForm.IN_PROCESS,
-        ExecutionForm.SUBPROCESS,
-    ])
+    execution_forms: list[ExecutionForm] = field(
+        default_factory=lambda: [
+            ExecutionForm.IN_PROCESS,
+            ExecutionForm.SUBPROCESS,
+        ]
+    )
     """Supported execution forms."""
 
     # Hooks support
-    hook_handlers: list[HookHandler] = field(default_factory=lambda: [
-        HookHandler.COMMAND,
-        HookHandler.HANDLER,
-    ])
+    hook_handlers: list[HookHandler] = field(
+        default_factory=lambda: [
+            HookHandler.COMMAND,
+            HookHandler.HANDLER,
+        ]
+    )
     """Supported hook handler types."""
 
-    hook_events: list[str] = field(default_factory=lambda: [
-        "PreToolUse",
-        "PostToolUse",
-        "Stop",
-        "SessionStart",
-        "PreExecution",
-        "PostExecution",
-    ])
+    hook_events: list[str] = field(
+        default_factory=lambda: [
+            "PreToolUse",
+            "PostToolUse",
+            "Stop",
+            "SessionStart",
+            "PreExecution",
+            "PostExecution",
+        ]
+    )
     """Supported hook events."""
 
     # Governance
@@ -133,10 +141,12 @@ class HostCapabilities:
     """Whether invocation policy is enforced."""
 
     # Observability
-    observability: list[ObservabilityFeature] = field(default_factory=lambda: [
-        ObservabilityFeature.TRACE,
-        ObservabilityFeature.EVENTS,
-    ])
+    observability: list[ObservabilityFeature] = field(
+        default_factory=lambda: [
+            ObservabilityFeature.TRACE,
+            ObservabilityFeature.EVENTS,
+        ]
+    )
     """Supported observability features."""
 
     # Evaluation
@@ -179,22 +189,17 @@ class HostCapabilities:
     def from_dict(cls, data: dict[str, Any]) -> HostCapabilities:
         """Create from dictionary."""
         return cls(
-            manifest_formats=[
-                ManifestFormat(f) for f in data.get("manifestFormats", [])
-            ] or [ManifestFormat.SIMPLESKILL_JSON, ManifestFormat.SKILL_MD],
+            manifest_formats=[ManifestFormat(f) for f in data.get("manifestFormats", [])]
+            or [ManifestFormat.SIMPLESKILL_JSON, ManifestFormat.SKILL_MD],
             manifest_version=data.get("manifestVersion", "0.1"),
-            execution_forms=[
-                ExecutionForm(f) for f in data.get("executionForms", [])
-            ] or [ExecutionForm.IN_PROCESS, ExecutionForm.SUBPROCESS],
-            hook_handlers=[
-                HookHandler(h) for h in data.get("hookHandlers", [])
-            ] or [HookHandler.COMMAND, HookHandler.HANDLER],
+            execution_forms=[ExecutionForm(f) for f in data.get("executionForms", [])]
+            or [ExecutionForm.IN_PROCESS, ExecutionForm.SUBPROCESS],
+            hook_handlers=[HookHandler(h) for h in data.get("hookHandlers", [])]
+            or [HookHandler.COMMAND, HookHandler.HANDLER],
             hook_events=data.get("hookEvents", []),
             consent_model=ConsentModel(data.get("consentModel", "interactive")),
             policy_enforcement=data.get("policyEnforcement", True),
-            observability=[
-                ObservabilityFeature(o) for o in data.get("observability", [])
-            ],
+            observability=[ObservabilityFeature(o) for o in data.get("observability", [])],
             evaluation_support=data.get("evaluationSupport", True),
             max_tool_timeout_ms=data.get("maxToolTimeoutMs", 300000),
             max_concurrent_tools=data.get("maxConcurrentTools", 10),
@@ -237,9 +242,7 @@ class ExtensionRequirements:
                 ExecutionForm(f) for f in data.get("requiredExecutionForms", [])
             ],
             required_hook_events=data.get("requiredHookEvents", []),
-            required_hook_handlers=[
-                HookHandler(h) for h in data.get("requiredHookHandlers", [])
-            ],
+            required_hook_handlers=[HookHandler(h) for h in data.get("requiredHookHandlers", [])],
             requires_consent=data.get("requiresConsent", False),
             requires_evaluation=data.get("requiresEvaluation", False),
         )
@@ -331,9 +334,7 @@ class CapabilityNegotiator:
             required_handlers = set(requirements.required_hook_handlers)
             missing_handlers = required_handlers - supported_handlers
             if missing_handlers:
-                missing.append(
-                    f"Missing hook handlers: {[h.value for h in missing_handlers]}"
-                )
+                missing.append(f"Missing hook handlers: {[h.value for h in missing_handlers]}")
 
         # Check consent
         if requirements.requires_consent:
@@ -361,17 +362,19 @@ class CapabilityNegotiator:
         """
         return {
             "executionForms": [
-                f.value for f in self._capabilities.execution_forms
+                f.value
+                for f in self._capabilities.execution_forms
                 if not requirements.required_execution_forms
                 or f in requirements.required_execution_forms
             ],
             "hookEvents": [
-                e for e in self._capabilities.hook_events
-                if not requirements.required_hook_events
-                or e in requirements.required_hook_events
+                e
+                for e in self._capabilities.hook_events
+                if not requirements.required_hook_events or e in requirements.required_hook_events
             ],
             "hookHandlers": [
-                h.value for h in self._capabilities.hook_handlers
+                h.value
+                for h in self._capabilities.hook_handlers
                 if not requirements.required_hook_handlers
                 or h in requirements.required_hook_handlers
             ],
@@ -386,6 +389,7 @@ class CapabilityNegotiator:
         Simple comparison for now - could be extended to support
         semver ranges like ">=0.1.0".
         """
+
         def parse_version(v: str) -> tuple[int, ...]:
             parts = v.lstrip(">=<").split(".")
             return tuple(int(p) for p in parts if p.isdigit())

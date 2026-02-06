@@ -3,7 +3,8 @@
 from pydantic import BaseModel
 
 from houyi import AgentSpec, SkillSpec
-from houyi.evaluation.dataset import Dataset, TestCase
+from houyi.evaluation.dataset import Dataset
+from houyi.evaluation.dataset import TestCase as EvalTestCase
 from houyi.evaluation.evaluators import AccuracyEvaluator, LatencyEvaluator
 from houyi.evaluation.runner import evaluate
 
@@ -220,8 +221,8 @@ def test_evaluate_with_dataset():
     dataset = Dataset(
         name="Test Dataset",
         test_cases=[
-            TestCase(input="test1", expected_output="output1"),
-            TestCase(input="test2", expected_output="output2"),
+            EvalTestCase(input="test1", expected_output="output1"),
+            EvalTestCase(input="test2", expected_output="output2"),
         ],
     )
 

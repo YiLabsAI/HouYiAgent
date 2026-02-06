@@ -46,7 +46,11 @@ class TestKeywordExtractor:
     @pytest.mark.asyncio
     async def test_extract_success(self) -> None:
         """Test successful keyword extraction."""
-        adapter = FakeAdapter(['{"keywords": ["RAG", "retrieval", "generation"], "synonyms": {"RAG": ["Retrieval-Augmented Generation"]}}'])
+        adapter = FakeAdapter(
+            [
+                '{"keywords": ["RAG", "retrieval", "generation"], "synonyms": {"RAG": ["Retrieval-Augmented Generation"]}}'
+            ]
+        )
         extractor = KeywordExtractor(adapter)
 
         result = await extractor.extract("What is RAG?")
@@ -89,9 +93,11 @@ class TestAnswerGenerator:
     @pytest.mark.asyncio
     async def test_generate_success(self) -> None:
         """Test successful answer generation."""
-        adapter = FakeAdapter([
-            "RAG (Retrieval-Augmented Generation) combines retrieval with generation. [1] It uses vector search to find relevant documents. [2]\n\nSources:\n[1] document.md\n[2] overview.md"
-        ])
+        adapter = FakeAdapter(
+            [
+                "RAG (Retrieval-Augmented Generation) combines retrieval with generation. [1] It uses vector search to find relevant documents. [2]\n\nSources:\n[1] document.md\n[2] overview.md"
+            ]
+        )
         generator = AnswerGenerator(adapter)
 
         results = [
@@ -130,9 +136,7 @@ class TestAnswerGenerator:
     async def test_confidence_estimation(self) -> None:
         """Test confidence estimation based on citations."""
         # Answer with multiple citations should have higher confidence
-        adapter = FakeAdapter([
-            "The answer is clear [1][2][3] based on the documents."
-        ])
+        adapter = FakeAdapter(["The answer is clear [1][2][3] based on the documents."])
         generator = AnswerGenerator(adapter)
 
         results = [
@@ -205,9 +209,11 @@ class TestLLMEntityExtractor:
     @pytest.mark.asyncio
     async def test_extract_success(self) -> None:
         """Test successful entity extraction."""
-        adapter = FakeAdapter([
-            '{"entities": [{"name": "RAG", "type": "concept", "description": "Retrieval-Augmented Generation"}, {"name": "Vector Search", "type": "technology", "description": "Search using embeddings"}], "relations": [{"source": "RAG", "target": "Vector Search", "type": "uses", "description": "RAG uses vector search for retrieval"}]}'
-        ])
+        adapter = FakeAdapter(
+            [
+                '{"entities": [{"name": "RAG", "type": "concept", "description": "Retrieval-Augmented Generation"}, {"name": "Vector Search", "type": "technology", "description": "Search using embeddings"}], "relations": [{"source": "RAG", "target": "Vector Search", "type": "uses", "description": "RAG uses vector search for retrieval"}]}'
+            ]
+        )
         extractor = LLMEntityExtractor(adapter)
 
         chunk = Chunk(
@@ -228,10 +234,12 @@ class TestLLMEntityExtractor:
     @pytest.mark.asyncio
     async def test_extract_batch_deduplication(self) -> None:
         """Test batch extraction with entity deduplication."""
-        adapter = FakeAdapter([
-            '{"entities": [{"name": "RAG", "type": "concept", "description": "First"}], "relations": []}',
-            '{"entities": [{"name": "RAG", "type": "concept", "description": "Duplicate"}, {"name": "LLM", "type": "technology", "description": "Large Language Model"}], "relations": []}',
-        ])
+        adapter = FakeAdapter(
+            [
+                '{"entities": [{"name": "RAG", "type": "concept", "description": "First"}], "relations": []}',
+                '{"entities": [{"name": "RAG", "type": "concept", "description": "Duplicate"}, {"name": "LLM", "type": "technology", "description": "Large Language Model"}], "relations": []}',
+            ]
+        )
         extractor = LLMEntityExtractor(adapter)
 
         chunks = [
