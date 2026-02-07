@@ -200,6 +200,33 @@ pnpm install
 
 All commands MUST be run inside `.venv` via `uv run` (or through Makefile targets).
 
+### HouYi Studio Server
+
+**Policy**:
+- MUST install the Studio server as an installed package into `.venv`.
+- MUST NOT start the server by injecting `PYTHONPATH` (this bypasses dependency governance
+  and can hide missing dependencies).
+
+**Install (one-time)**:
+
+```bash
+# From repo root
+uv sync --extra dev
+
+# Install the Studio server package into the same venv (editable is recommended for development)
+uv pip install -e houyi-studio/server
+
+# Optional: enable and validate LLM model adapters (e.g. OpenAI SDK)
+uv pip install -e "houyi-studio/server[llm]"
+```
+
+**Start server (standard)**:
+
+```bash
+# From repo root
+uv run python -m houyi_studio.server.app
+```
+
 ### Makefile Commands (Recommended)
 
 ```bash

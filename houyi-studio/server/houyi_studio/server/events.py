@@ -126,6 +126,10 @@ class CheckpointCreatedEvent(ServerEvent):
         default_factory=list,
         description="LLM call logs captured at this checkpoint",
     )
+    metadata: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Checkpoint metadata (e.g. trigger_node_id)",
+    )
 
 
 class ExecutionStatusEvent(ServerEvent):

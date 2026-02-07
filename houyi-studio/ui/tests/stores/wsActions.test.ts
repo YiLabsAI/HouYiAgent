@@ -645,7 +645,7 @@ describe('wsActions.handleEvent', () => {
 });
 
 describe('wsActions.connect status handling', () => {
-  it('should mark running execution as aborted on websocket disconnected and show toast once', () => {
+  it('should keep execution running on transient disconnect and show toast once', () => {
     let state: any = {
       viewMode: 'live',
       connectionStatus: 'disconnected',
@@ -686,11 +686,12 @@ describe('wsActions.connect status handling', () => {
     lastWsInstance.emitStatus('disconnected');
 
     expect(state.connectionStatus).toBe('disconnected');
-    expect(state.currentExecution.status).toBe('aborted');
-    expect(state.currentExecution.completed_at).toBeTruthy();
-    expect(state.currentExecution.error).toBe('Backend disconnected during execution.');
+    // Transient disconnect should NOT abort execution (ReconnectingWebSocket will retry)
+    expect(state.currentExecution.status).toBe('running');
+    expect(state.currentExecution.completed_at).toBeNull();
     expect(Object.keys(state.toastKeys)).toContain('backend-connection');
 
+    // Duplicate disconnect should not add duplicate toast
     lastWsInstance.emitStatus('disconnected');
     expect(Object.keys(state.toastKeys).filter((k) => k === 'backend-connection')).toHaveLength(1);
   });

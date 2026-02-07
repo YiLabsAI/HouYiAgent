@@ -19,7 +19,8 @@ export type EventType =
   | 'retry_failed'
   | 'workflow_list'
   | 'conflict'
-  | 'log_level';
+  | 'log_level'
+  | 'span_update';
 
 export interface ServerEvent {
   event_type: EventType;
@@ -68,6 +69,7 @@ export interface CheckpointCreatedEvent extends ServerEvent {
   sequence_number: number;
   trigger: string;
   llm_call_logs?: any[];
+  metadata?: Record<string, any>;
 }
 
 export interface RestoreCheckpointResultEvent extends ServerEvent {
@@ -124,6 +126,39 @@ export interface LogLevelEvent extends ServerEvent {
   requested_level?: string | null;
 }
 
+// Span types for timeline visualization
+export type SpanType = 'execution' | 'node' | 'llm' | 'tool' | 'retriever' | 'retry' | 'internal';
+
+export interface SpanUpdateEvent extends ServerEvent {
+  event_type: 'span_update';
+  execution_id: string;
+  trace_id: string;
+  span_id: string;
+  parent_span_id?: string | null;
+  span_type: SpanType;
+  name: string;
+  status: 'ok' | 'error';
+  start_time: number;
+  end_time?: number | null;
+
+  // AI-native fields
+  node_id?: string | null;
+  model?: string | null;
+  tokens_input?: number | null;
+  tokens_output?: number | null;
+  cost_usd?: number | null;
+  cache_hit?: boolean | null;
+  tool_name?: string | null;
+
+  // Checkpoint lineage
+  parent_trace_id?: string | null;
+  restore_checkpoint_id?: string | null;
+  replay_mode?: boolean;
+
+  // Generic attributes
+  attributes?: Record<string, any>;
+}
+
 export interface WorkflowListEvent extends ServerEvent {
   event_type: 'workflow_list';
   workflows: Array<{
@@ -148,7 +183,8 @@ export type AnyServerEvent =
   | RetryFailedEvent
   | WorkflowListEvent
   | ConflictEvent
-  | LogLevelEvent;
+  | LogLevelEvent
+  | SpanUpdateEvent;
 
 // Command types (client -> server)
 export type CommandType =

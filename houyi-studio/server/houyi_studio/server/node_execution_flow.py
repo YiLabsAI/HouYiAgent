@@ -19,7 +19,7 @@ from houyi.observability import Span, SpanType, TraceContext
 from houyi.protocol.ir import ExecutionIR, NodeExecutionIR, NodeStatus, PlanIR
 from houyi.protocol.ir.plan_ir import NodeType
 
-from .events import NodeStatusEvent
+from .events import NodeStatusEvent, SpanUpdateEvent
 from .execution_context import ExecutionContext
 from .node_executor_registry import NodeExecutorRegistry
 from .observation_service import ObservationService
@@ -64,6 +64,50 @@ class NodeExecutionFlow:
     def _extract_output_payload(outputs: dict[str, Any]) -> dict[str, Any]:
         return extract_output_payload(outputs)
 
+    @staticmethod
+    def _merge_tool_call_into_context(call: Any, ctx: dict[str, Any]) -> None:
+        """Extract context values from a single LLM tool call result.
+
+        Merges tool call args and result payload into the execution context,
+        with special handling for get_date tool.
+        """
+        if not isinstance(call, dict):
+            return
+
+        tool_name = call.get("tool_name")
+
+        # Merge tool call args into context (non-overwriting)
+        args = call.get("args")
+        if isinstance(args, dict):
+            for key, value in args.items():
+                ctx.setdefault(key, value)
+
+        # Extract raw result payload
+        result = call.get("result")
+        raw = result.get("raw") if isinstance(result, dict) else None
+        if raw is None:
+            return
+
+        # Dict raw: merge payload keys into context
+        if isinstance(raw, dict):
+            payload = raw.get("result", raw)
+            if isinstance(payload, dict):
+                for key, value in payload.items():
+                    ctx.setdefault(key, value)
+                return
+            # Non-dict payload inside dict raw: store under tool_name
+            if tool_name and tool_name not in ctx:
+                ctx[tool_name] = payload
+            if tool_name == "get_date":
+                ctx["date"] = payload
+            return
+
+        # Non-dict raw: store under tool_name
+        if tool_name and tool_name not in ctx:
+            ctx[tool_name] = raw
+        if tool_name == "get_date":
+            ctx["date"] = raw
+
     def _apply_outputs_to_context(
         self, node: Any, node_exec: NodeExecutionIR, context: ExecutionContext
     ) -> None:
@@ -73,31 +117,7 @@ class NodeExecutionFlow:
             tool_calls = (node_exec.outputs or {}).get("tool_calls")
             if isinstance(tool_calls, list):
                 for call in tool_calls:
-                    tool_name = call.get("tool_name") if isinstance(call, dict) else None
-                    args = call.get("args") if isinstance(call, dict) else None
-                    if isinstance(args, dict):
-                        for key, value in args.items():
-                            if key not in context.execution.context:
-                                context.execution.context[key] = value
-                    result = call.get("result") if isinstance(call, dict) else None
-                    raw = result.get("raw") if isinstance(result, dict) else None
-                    if isinstance(raw, dict):
-                        payload = raw.get("result", raw)
-                        if isinstance(payload, dict):
-                            for key, value in payload.items():
-                                if key not in context.execution.context:
-                                    context.execution.context[key] = value
-                        else:
-                            if tool_name and tool_name not in context.execution.context:
-                                context.execution.context[tool_name] = payload
-                            if tool_name == "get_date":
-                                context.execution.context["date"] = payload
-                    elif (
-                        raw is not None and tool_name and tool_name not in context.execution.context
-                    ):
-                        context.execution.context[tool_name] = raw
-                        if tool_name == "get_date":
-                            context.execution.context["date"] = raw
+                    self._merge_tool_call_into_context(call, context.execution.context)
         output_payload = self._extract_output_payload(node_exec.outputs or {})
         if not node.outputs:
             if isinstance(output_payload, dict):
@@ -210,7 +230,18 @@ class NodeExecutionFlow:
                 attributes={"session_id": session_id},
             )
 
+            # Emit root span so the frontend Timeline has a tree root
+            await self._observation_service.emit(
+                SpanUpdateEvent.from_span(
+                    context.root_span,
+                    session_id=session_id,
+                    execution_id=execution.execution_id,
+                )
+            )
+
         # Create node span as child of root span
+        node_metadata = node.metadata if node and isinstance(node.metadata, dict) else {}
+        node_label = node_metadata.get("label") or node_id
         node_span = Span(
             name=f"node.{node.node_type.value if node else 'unknown'}",
             parent=context.root_span,
@@ -218,11 +249,20 @@ class NodeExecutionFlow:
             node_id=node_id,
             attributes={
                 "node.type": node.node_type.value if node else "unknown",
+                "node.label": node_label,
             },
         )
 
         # Activate node span in TraceContext so child spans (llm/tool) auto-parent to it
         span_token = TraceContext.push(node_span)
+
+        await self._observation_service.emit(
+            SpanUpdateEvent.from_span(
+                node_span,
+                session_id=session_id,
+                execution_id=execution.execution_id,
+            )
+        )
 
         start_event = NodeStatusEvent(
             event_id=f"evt_{uuid4().hex[:8]}",
@@ -263,6 +303,14 @@ class NodeExecutionFlow:
                 node_span.set_status("error", node_exec.error)
                 node_span.end()
 
+                await self._observation_service.emit(
+                    SpanUpdateEvent.from_span(
+                        node_span,
+                        session_id=session_id,
+                        execution_id=execution.execution_id,
+                    )
+                )
+
                 fail_event = NodeStatusEvent(
                     event_id=f"evt_{uuid4().hex[:8]}",
                     session_id=session_id,
@@ -286,7 +334,24 @@ class NodeExecutionFlow:
                 }
             self._apply_outputs_to_context(node, node_exec, context)
 
+            # Propagate cache_hit from outputs metadata to node span so the
+            # observation (NodeStatusEvent) includes it for the frontend.
+            if isinstance(node_exec.outputs, dict):
+                out_meta = node_exec.outputs.get("metadata")
+                if isinstance(out_meta, dict):
+                    if out_meta.get("cache_hit") is True or out_meta.get("llm_cache_hit") is True:
+                        node_span.cache_hit = True
+                        node_span.set_attribute("node.cache_hit", True)
+
             node_span.end()
+
+            await self._observation_service.emit(
+                SpanUpdateEvent.from_span(
+                    node_span,
+                    session_id=session_id,
+                    execution_id=execution.execution_id,
+                )
+            )
 
             complete_event = NodeStatusEvent(
                 event_id=f"evt_{uuid4().hex[:8]}",

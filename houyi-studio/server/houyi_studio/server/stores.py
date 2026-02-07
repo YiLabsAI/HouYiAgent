@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import json
 import logging
-import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -38,20 +36,24 @@ class CheckpointStore:
         self.checkpoints.setdefault(execution_id, []).append(checkpoint)
 
 
+# Plan state is in-memory only.  HouYi Studio is a single-user local IDE;
+# server restart triggers a frontend reload (via boot_id detection), which
+# generates a new session_id and starts with an empty canvas.  File-based
+# persistence was removed because it caused stale plans to reappear after
+# restart/refresh.
+
+
 @dataclass(slots=True)
 class PlanStore:
     plans_dir: Path
     plans: dict[str, PlanIR] = field(default_factory=dict)
     session_plans: dict[str, str] = field(default_factory=dict)
 
+    def __post_init__(self) -> None:
+        self._cleanup_legacy_files()
+
     def get(self, session_id: str) -> PlanIR | None:
-        if session_id in self.plans:
-            return self.plans[session_id]
-        plan = self.load_from_file(session_id)
-        if plan:
-            self.plans[session_id] = plan
-            logger.info("Loaded plan from file for session: %s", session_id)
-        return plan
+        return self.plans.get(session_id)
 
     def get_cached(self, session_id: str) -> PlanIR | None:
         """Return cached plan without loading from disk."""
@@ -60,49 +62,22 @@ class PlanStore:
     def set(self, session_id: str, plan: PlanIR, persist: bool = True) -> None:
         self.plans[session_id] = plan
         self.session_plans[session_id] = plan.plan_id
-        if persist:
-            self.save_to_file(session_id, plan)
 
     def save_to_file(self, session_id: str, plan: PlanIR) -> None:
-        if os.getenv("HOUYI_DISABLE_PLAN_PERSISTENCE") == "1":
-            logger.info("Plan persistence disabled for E2E.")
-            return
-        try:
-            plan_file = self.plans_dir / f"{session_id}.json"
-            # Backward compatibility: legacy callers may mutate node.position directly.
-            # PlanLayoutIR is the authoritative storage for layout, so we sync positions
-            # from nodes before serialization to avoid losing layout during persistence.
-            for node in plan.nodes:
-                if not isinstance(getattr(node, "position", None), dict):
-                    continue
-                plan.set_node_position(node.node_id, node.position)
-            plan_dict = plan.model_dump(mode="json")
-            with open(plan_file, "w", encoding="utf-8") as f:
-                json.dump(plan_dict, f, indent=2, ensure_ascii=False)
-            logger.info(
-                "Saved plan to file: %s (%d nodes, %d edges)",
-                plan_file,
-                len(plan.nodes),
-                len(plan.edges),
-            )
-        except Exception as exc:
-            logger.error("Failed to save plan to file: %s", exc, exc_info=True)
+        """No-op: plan persistence removed (in-memory only)."""
 
     def load_from_file(self, session_id: str) -> PlanIR | None:
+        """No-op: plan persistence removed (in-memory only)."""
+        return None
+
+    # -- internal helpers --
+
+    def _cleanup_legacy_files(self) -> None:
+        """Remove stale plan files from previous versions."""
         try:
-            plan_file = self.plans_dir / f"{session_id}.json"
-            if not plan_file.exists():
-                return None
-            with open(plan_file, encoding="utf-8") as f:
-                plan_dict = json.load(f)
-            plan = PlanIR.model_validate(plan_dict)
-            logger.info(
-                "Loaded plan from file: %s (%d nodes, %d edges)",
-                plan_file,
-                len(plan.nodes),
-                len(plan.edges),
-            )
-            return plan
+            for pattern in ("session_*.json", "current_plan.json"):
+                for f in self.plans_dir.glob(pattern):
+                    f.unlink()
+                    logger.info("Cleaned up legacy plan file: %s", f.name)
         except Exception as exc:
-            logger.error("Failed to load plan from file: %s", exc, exc_info=True)
-            return None
+            logger.warning("Failed to clean up legacy plan files: %s", exc)

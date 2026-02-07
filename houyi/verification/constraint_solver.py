@@ -192,8 +192,38 @@ class ConstraintSolver:
         # 2. Problem is too complex to decide
         # 3. Incomplete theory (rare for our use cases)
         if result == unknown:
-            logging.warning("Z3 solver timeout after %dms", self.timeout_ms)
-            return False, {"timeout": True, "message": f"Solver timeout after {self.timeout_ms}ms"}
+            # NOTE: Z3 can return unknown for timeouts or undecidable queries.
+            # Even for "simple" constraints, the solver may occasionally exceed
+            # a small timeout due to resource contention, OS scheduling jitter,
+            # or internal heuristic choices. Retry once with a higher timeout to
+            # reduce false negatives.
+            retry_timeout_ms = max(self.timeout_ms, 2000)
+            if retry_timeout_ms > self.timeout_ms:
+                logging.warning(
+                    "Z3 solver timeout after %dms; retrying once with %dms",
+                    self.timeout_ms,
+                    retry_timeout_ms,
+                )
+                self.solver.set("timeout", retry_timeout_ms)
+                try:
+                    result = self.solver.check()
+                finally:
+                    self.solver.set("timeout", self.timeout_ms)
+            else:
+                logging.warning("Z3 solver returned unknown after %dms", self.timeout_ms)
+
+            if result == unknown:
+                return False, {
+                    "timeout": True,
+                    "message": (
+                        f"Solver timeout after {self.timeout_ms}ms"
+                        + (
+                            f" (retried {retry_timeout_ms}ms)"
+                            if retry_timeout_ms > self.timeout_ms
+                            else ""
+                        )
+                    ),
+                }
 
         if result == sat:
             model = self.solver.model()

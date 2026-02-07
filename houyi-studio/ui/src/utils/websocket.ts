@@ -14,8 +14,8 @@ export class ConsoleWebSocket {
   private statusHandlers: Set<StatusHandler> = new Set();
   private sessionId: string;
   private pendingCommands: AnyClientCommand[] = [];
-  private reconnectTimer: number | null = null;
-  private shouldReconnect = true;
+  private visibilityHandler: (() => void) | null = null;
+  private lastServerBootId: string | null = null;
 
   constructor(sessionId: string) {
     this.sessionId = sessionId;
@@ -25,7 +25,6 @@ export class ConsoleWebSocket {
     if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) {
       return;
     }
-    this.shouldReconnect = true;
     // Use environment variable or default to localhost:8000
     const wsHost = (import.meta as any).env?.VITE_WS_HOST || 'localhost:8000';
     const wsUrl = `ws://${wsHost}/ws/session/${this.sessionId}`;
@@ -33,10 +32,10 @@ export class ConsoleWebSocket {
     console.log('[WebSocket] Attempting to connect to:', wsUrl);
 
     this.ws = new ReconnectingWebSocket(wsUrl, [], {
-      maxRetries: 3,
-      reconnectionDelayGrowFactor: 1.3,
-      maxReconnectionDelay: 10000,
-      minReconnectionDelay: 1000,
+      maxRetries: Infinity,
+      reconnectionDelayGrowFactor: 1.5,
+      maxReconnectionDelay: 15000,
+      minReconnectionDelay: 500,
     });
 
     this.ws.addEventListener('open', () => {
@@ -52,7 +51,29 @@ export class ConsoleWebSocket {
 
     this.ws.addEventListener('message', (event) => {
       try {
-        const data = JSON.parse(event.data) as AnyServerEvent;
+        const raw = JSON.parse(event.data);
+        const eventType = raw?.event_type;
+
+        // Reply to server heartbeat pings with pong (bidirectional keepalive)
+        if (eventType === 'ping') {
+          this.ws?.send(JSON.stringify({ command_type: 'pong' }));
+          return;
+        }
+
+        // Detect server restart via boot_id change
+        if (eventType === 'server_info') {
+          const bootId = raw?.server_boot_id;
+          if (bootId && this.lastServerBootId && bootId !== this.lastServerBootId) {
+            console.log('[WebSocket] Server restarted (boot_id changed), reloading for fresh session');
+            // Reload page — module-level _currentSessionId in App.tsx resets on reload
+            window.location.reload();
+            return;
+          }
+          this.lastServerBootId = bootId || null;
+          return;
+        }
+
+        const data = raw as AnyServerEvent;
 
         // Special logging for streaming_output
         if (data.event_type === 'streaming_output') {
@@ -64,50 +85,41 @@ export class ConsoleWebSocket {
         this.handleEvent(data);
       } catch (error) {
         console.error('[WebSocket] Failed to parse message:', error);
-        // Don't crash, just log the error
       }
     });
 
     this.ws.addEventListener('close', (event) => {
       console.log('[WebSocket] ❌ Disconnected, code:', event.code, 'reason:', event.reason);
       this.statusHandlers.forEach((handler) => handler('disconnected'));
-      this.scheduleReconnect();
+      // ReconnectingWebSocket handles reconnection automatically
     });
 
     this.ws.addEventListener('error', (error) => {
       console.error('[WebSocket] ❌ Connection error:', error);
       this.statusHandlers.forEach((handler) => handler('error'));
-      this.scheduleReconnect();
     });
+
+    // When tab becomes visible after being backgrounded, immediately
+    // send pong to reset the server's liveness timer. Browsers throttle
+    // background-tab timers to ~60s, so server pings may not be replied
+    // to promptly. This proactive pong prevents false timeout detection.
+    this.visibilityHandler = () => {
+      if (document.visibilityState === 'visible' && this.ws?.readyState === WebSocket.OPEN) {
+        this.ws.send(JSON.stringify({ command_type: 'pong' }));
+      }
+    };
+    document.addEventListener('visibilitychange', this.visibilityHandler);
   }
 
   disconnect(): void {
-    this.shouldReconnect = false;
-    if (this.reconnectTimer) {
-      window.clearTimeout(this.reconnectTimer);
-      this.reconnectTimer = null;
+    if (this.visibilityHandler) {
+      document.removeEventListener('visibilitychange', this.visibilityHandler);
+      this.visibilityHandler = null;
     }
     if (this.ws) {
       this.ws.close();
       this.ws = null;
     }
-  }
-
-  private scheduleReconnect(): void {
-    if (!this.shouldReconnect) return;
-    if (this.reconnectTimer) return;
-    this.reconnectTimer = window.setTimeout(() => {
-      this.reconnectTimer = null;
-      if (!this.shouldReconnect) return;
-      if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) {
-        return;
-      }
-      if (this.ws) {
-        this.ws.close();
-        this.ws = null;
-      }
-      this.connect();
-    }, 1500);
   }
 
   sendCommand(command: AnyClientCommand): void {

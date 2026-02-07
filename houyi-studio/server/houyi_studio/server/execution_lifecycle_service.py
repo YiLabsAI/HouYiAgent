@@ -114,7 +114,14 @@ class ExecutionLifecycleService:
         """Abort an execution and emit status updates."""
         outcome = await self._manager.abort_execution(execution_id=execution_id)
         if outcome.status_event is None:
+            logger.warning("abort_execution: no status_event returned for %s", execution_id)
             return
+        logger.info(
+            "abort_execution: emitting status=%s session=%s exec=%s",
+            outcome.status_event.status,
+            outcome.status_event.session_id,
+            outcome.status_event.execution_id,
+        )
         await self._observation_service.emit(
             ExecutionStatusEvent(
                 event_id=outcome.status_event.event_id,

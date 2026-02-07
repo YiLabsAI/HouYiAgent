@@ -1,12 +1,31 @@
-import type { AnyServerEvent } from '@/types/websocket';
 import type { ExecutionIR } from '@/types/ir';
 import { ConsoleWebSocket } from '@/utils/websocket';
 
 type StoreSet = (partial: any) => void;
 type StoreGet = () => any;
 
+const normalizeEventType = (eventType: any): string | null => {
+  if (typeof eventType === 'string') return eventType;
+  if (eventType && typeof eventType === 'object' && typeof eventType.value === 'string') {
+    return eventType.value;
+  }
+  return null;
+};
+
 export const createWsActions = (set: StoreSet, get: StoreGet) => ({
   connect: (sessionId: string) => {
+    // Guard: if already connected with the same session, skip re-creation
+    // (happens during HMR re-mounts)
+    const existing = get().ws;
+    if (existing && get().sessionId === sessionId && existing.isConnected()) {
+      console.log('[wsActions] Already connected with session', sessionId, '— skipping');
+      return;
+    }
+    // Clean up any stale connection before creating a new one
+    if (existing) {
+      existing.disconnect();
+    }
+
     const ws = new ConsoleWebSocket(sessionId);
 
     set({ connectionStatus: 'connecting' });
@@ -24,24 +43,10 @@ export const createWsActions = (set: StoreSet, get: StoreGet) => ({
       }
 
       if (status === 'disconnected') {
+        // ReconnectingWebSocket will auto-reconnect; don't abort execution
+        // on transient disconnects. Only show toast as a warning.
         set({ connectionStatus: 'disconnected' });
         get().showToastOnce(toastKey, 'Backend not connected. Please start the server.', 'error');
-        const { currentExecution, viewMode, liveExecution } = get();
-        const target = viewMode === 'checkpoint' ? liveExecution : currentExecution;
-        if (target && target.status === 'running') {
-          const completedAt = new Date().toISOString();
-          const updated = {
-            ...target,
-            status: 'aborted',
-            completed_at: completedAt,
-            error: 'Backend disconnected during execution.',
-          } as ExecutionIR;
-          if (viewMode === 'checkpoint') {
-            set({ liveExecution: updated, executionId: updated.execution_id });
-          } else {
-            set({ currentExecution: updated, executionId: updated.execution_id });
-          }
-        }
         return;
       }
 
@@ -62,24 +67,25 @@ export const createWsActions = (set: StoreSet, get: StoreGet) => ({
     set({ ws: null, connectionStatus: 'disconnected' });
   },
 
-  handleEvent: (event: AnyServerEvent) => {
-    console.log('[Store] Received event:', event.event_type, event);
+  handleEvent: (event: any) => {
+    const eventType = normalizeEventType(event?.event_type);
+    console.log('[Store] Received event:', eventType ?? event?.event_type, event);
 
-    switch (event.event_type) {
+    switch (eventType) {
       case 'plan_created':
       case 'plan_updated':
-        console.log('[Store] Received plan event:', event.event_type, event.plan);
+        console.log('[Store] Received plan event:', eventType, event.plan);
         const previousPlanId = get().currentPlan?.plan_id;
         const nextPlanId = event.plan?.plan_id;
         const planChanged = Boolean(nextPlanId && previousPlanId && nextPlanId !== previousPlanId);
         {
           const planId = event.plan?.plan_id ? `plan_id=${event.plan.plan_id}` : undefined;
-          const changes = event.event_type === 'plan_updated' && event.changes?.length
+          const changes = eventType === 'plan_updated' && event.changes?.length
             ? `changes: ${event.changes.join(', ')}`
             : undefined;
           const detail = [planId, changes].filter(Boolean).join(' · ');
           get().addActivityLog({
-            message: event.event_type === 'plan_created' ? 'Plan created' : 'Plan updated',
+            message: eventType === 'plan_created' ? 'Plan created' : 'Plan updated',
             detail: detail || undefined,
           });
 
@@ -148,7 +154,7 @@ export const createWsActions = (set: StoreSet, get: StoreGet) => ({
           console.log('[Store] Restored nodes:', nodes.length, 'backend edges:', backendEdges.length, 'merged edges:', mergedEdges.length);
           set({ nodes, edges: mergedEdges });
 
-          if (event.event_type === 'plan_updated' && get().loadingWorkflowName) {
+          if (eventType === 'plan_updated' && get().loadingWorkflowName) {
             if (nodes.length === 0) {
               get().showToast(
                 `Workflow "${get().loadingWorkflowName}" loaded but has no nodes. Check the saved workflow file.`,
@@ -335,6 +341,19 @@ export const createWsActions = (set: StoreSet, get: StoreGet) => ({
                 set({ currentExecution: updatedExecution, executionId: updatedExecution.execution_id });
               }
             }
+            // Track execution lineage from execution_metadata
+            const parentExecId = event.execution_metadata?.parent_execution_id;
+            if (parentExecId && event.execution_id) {
+              const lineageMap = { ...get().executionLineageMap };
+              if (!lineageMap[event.execution_id]) {
+                lineageMap[event.execution_id] = {
+                  parentExecutionId: parentExecId,
+                  parentCheckpointId: event.execution_metadata?.parent_checkpoint_id,
+                  replayMode: event.execution_metadata?.replay_mode,
+                };
+                set({ executionLineageMap: lineageMap });
+              }
+            }
           }
           if (event.inputs !== undefined && event.inputs !== null) {
             statusUpdate.inputs = event.inputs;
@@ -439,7 +458,7 @@ export const createWsActions = (set: StoreSet, get: StoreGet) => ({
             llm_call_logs: event.llm_call_logs ?? [],
             parent_checkpoint_id: null,
             delta: null,
-            metadata: {},
+            metadata: event.metadata ?? {},
           };
 
           console.log('[checkpoint_created] Saved execution snapshot:', {
@@ -575,8 +594,16 @@ export const createWsActions = (set: StoreSet, get: StoreGet) => ({
         set({ serverLogLevel: event.level });
         break;
 
+      case 'span_update':
+        {
+          // Update span store for Timeline visualization
+          get().updateSpan(event);
+        }
+        break;
+
       default:
-        console.warn('Unknown event type:', (event as AnyServerEvent).event_type);
+        console.warn('Unknown event type:', event?.event_type);
+        break;
     }
   },
 });

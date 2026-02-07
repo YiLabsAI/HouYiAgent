@@ -8,6 +8,9 @@ from pydantic import BaseModel, ValidationError
 
 from houyi.core.skill import SkillSpec
 from houyi.execution.skill_executor import SkillExecutionError, SkillExecutor
+from houyi.observability.context import TraceContext
+from houyi.observability.trace_manager import Span
+from houyi.observability.types import SpanType
 
 
 class TestSkillExecutor:
@@ -289,3 +292,126 @@ class TestSkillExecutor:
         except SkillExecutionError as e:
             assert "debug_skill" in str(e)
             assert e.skill_name == "debug_skill"
+
+
+class TestSkillExecutorRetrySpans:
+    """Test that SkillExecutor emits retry spans (Phase 5c v2)."""
+
+    @pytest.mark.asyncio
+    async def test_retry_creates_retry_spans(self) -> None:
+        """Each failed attempt should create a RETRY span."""
+
+        class Input(BaseModel):
+            fail_count: int
+
+        class Output(BaseModel):
+            attempts: int
+
+        attempt_counter = {"count": 0}
+
+        def flaky(input_data: Input) -> Output:
+            attempt_counter["count"] += 1
+            if attempt_counter["count"] <= input_data.fail_count:
+                raise RuntimeError(f"Attempt {attempt_counter['count']} failed")
+            return Output(attempts=attempt_counter["count"])
+
+        skill = SkillSpec(
+            name="flaky_skill",
+            description="Flaky",
+            input_schema=Input,
+            output_schema=Output,
+            executor=flaky,
+        )
+
+        # Set up a trace context so retry spans have a parent
+        root = Span(name="execution", span_type=SpanType.EXECUTION)
+        token = TraceContext.push(root)
+
+        collected_spans: list[Span] = []
+        executor = SkillExecutor(max_retries=3)
+        executor._on_retry_span = collected_spans.append  # type: ignore[attr-defined]
+
+        try:
+            result = await executor.execute(skill, {"fail_count": 2})
+        finally:
+            TraceContext.pop(token)
+
+        assert result["attempts"] == 3
+        # 2 failed attempts → 2 retry spans
+        assert len(collected_spans) == 2
+        for span in collected_spans:
+            assert span.span_type == SpanType.RETRY
+            assert span.status == "error"
+            assert span.end_time is not None
+            assert "retry.attempt" in span.attributes
+            assert span.parent_id == root.span_id
+
+    @pytest.mark.asyncio
+    async def test_no_retry_spans_on_first_success(self) -> None:
+        """No retry spans when skill succeeds on first attempt."""
+
+        class Input(BaseModel):
+            value: int
+
+        class Output(BaseModel):
+            result: int
+
+        def ok_skill(input_data: Input) -> Output:
+            return Output(result=input_data.value)
+
+        skill = SkillSpec(
+            name="ok_skill",
+            description="OK",
+            input_schema=Input,
+            output_schema=Output,
+            executor=ok_skill,
+        )
+
+        root = Span(name="execution", span_type=SpanType.EXECUTION)
+        token = TraceContext.push(root)
+
+        collected: list[Span] = []
+        executor = SkillExecutor(max_retries=3)
+        executor._on_retry_span = collected.append  # type: ignore[attr-defined]
+
+        try:
+            await executor.execute(skill, {"value": 42})
+        finally:
+            TraceContext.pop(token)
+
+        assert len(collected) == 0
+
+    @pytest.mark.asyncio
+    async def test_retry_spans_without_trace_context(self) -> None:
+        """Retry spans are skipped when no TraceContext is active."""
+
+        class Input(BaseModel):
+            fail_count: int
+
+        class Output(BaseModel):
+            attempts: int
+
+        counter = {"n": 0}
+
+        def flaky(input_data: Input) -> Output:
+            counter["n"] += 1
+            if counter["n"] <= input_data.fail_count:
+                raise RuntimeError("fail")
+            return Output(attempts=counter["n"])
+
+        skill = SkillSpec(
+            name="flaky_no_ctx",
+            description="Flaky without context",
+            input_schema=Input,
+            output_schema=Output,
+            executor=flaky,
+        )
+
+        collected: list[Span] = []
+        executor = SkillExecutor(max_retries=3)
+        executor._on_retry_span = collected.append  # type: ignore[attr-defined]
+
+        result = await executor.execute(skill, {"fail_count": 1})
+        assert result["attempts"] == 2
+        # No trace context → no retry spans created
+        assert len(collected) == 0

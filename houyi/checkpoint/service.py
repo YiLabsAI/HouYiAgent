@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Protocol
 from uuid import uuid4
@@ -52,6 +52,7 @@ class CheckpointCreatedPayload:
     sequence_number: int
     trigger: CheckpointTrigger
     llm_call_logs: list[Any]
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -147,9 +148,10 @@ class CheckpointManager:
             sequence_number=checkpoint.sequence_number,
             trigger=trigger,
             llm_call_logs=llm_logs,
+            metadata=checkpoint.metadata if isinstance(checkpoint.metadata, dict) else {},
         )
 
-        logger.info("Created checkpoint: %s", checkpoint_id)
+        logger.debug("Created checkpoint: %s", checkpoint_id)
         return checkpoint, payload
 
     async def restore_checkpoint(
@@ -293,11 +295,28 @@ class CheckpointManager:
 
         node_order = list(self._get_execution_order(plan))
         if trigger_node_id and trigger_node_id in node_order:
+            # Reset nodes AFTER the trigger node (exclusive). The checkpoint captures
+            # state after trigger_node completed, so trigger_node stays COMPLETED and
+            # execution resumes from the next node.
             reset_from_index = node_order.index(trigger_node_id) + 1
         else:
             reset_from_index = 0
 
-        for node_id in node_order[reset_from_index:]:
+        # Terminal checkpoint: if trigger node is the last node, reset ALL nodes
+        # (replay-all semantics). This avoids creating a useless forked execution.
+        nodes_to_reset = node_order[reset_from_index:]
+        if not nodes_to_reset and trigger_node_id:
+            logger.info(
+                "Terminal checkpoint detected: checkpoint=%s trigger_node=%s — "
+                "applying replay-all (resetting all %d nodes)",
+                checkpoint_id,
+                trigger_node_id,
+                len(node_order),
+            )
+            nodes_to_reset = node_order
+            execution.metadata["replay_all"] = True
+
+        for node_id in nodes_to_reset:
             node_exec = (execution.node_executions or {}).get(node_id)
             if node_exec is None:
                 continue

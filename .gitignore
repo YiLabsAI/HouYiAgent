@@ -59,12 +59,13 @@ service-account-key.json
 .stash-archive/
 data/
 docs/console/
-
-
-docs/design/archive/
 docs/design/
-docs/verification/
 docs/progress/
+docs/verification/
+
+# !docs/progress/*
+# !docs/design/*
+
 RELEASE_*.md
 Design.md
 ROADMAP.md

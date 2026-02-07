@@ -23,11 +23,12 @@ from houyi.llm.replay import (
     record_llm_call as replay_record_llm_call,
 )
 from houyi.observability import Span, SpanType, TraceContext
+from houyi.observability.types import TokenUsage
 from houyi.protocol.ir import ExecutionIR, NodeExecutionIR
 from houyi.protocol.ir.checkpoint_ir import LLMCallLog
 from houyi.protocol.ir.tooling_ir import LLMToolCallOutputIR
 
-from .events import StreamingOutputEvent
+from .events import SpanUpdateEvent, StreamingOutputEvent
 from .observation_service import ObservationService
 from .tool_call_service import ToolCallService
 
@@ -147,6 +148,16 @@ class LLMExecutionFlow:
                 model=model, cache_hit=True, replay_mode="deterministic"
             )
 
+            # Emit start span so the frontend Timeline can show it
+            if llm_span:
+                await self._observation_service.emit(
+                    SpanUpdateEvent.from_span(
+                        llm_span,
+                        session_id=session_id,
+                        execution_id=execution.execution_id,
+                    )
+                )
+
             # Replay with streamed chunks to mimic original execution.
             words = decision.llm_text.split()
             for word in words:
@@ -179,13 +190,21 @@ class LLMExecutionFlow:
                 "result": node_exec.streaming_output,
                 "metadata": {
                     "replay_mode": "deterministic",
+                    "llm_cache_hit": True,
                 },
             }
 
-            # End LLM span
+            # End LLM span and emit completion event
             if llm_span:
                 llm_span.set_status("ok")
                 llm_span.end()
+                await self._observation_service.emit(
+                    SpanUpdateEvent.from_span(
+                        llm_span,
+                        session_id=session_id,
+                        execution_id=execution.execution_id,
+                    )
+                )
 
             logger.info("Deterministic replay completed for node %s", node_id)
             return
@@ -230,6 +249,16 @@ class LLMExecutionFlow:
             # Create LLM span for cache hit
             llm_span = self._create_llm_span(model=model, cache_hit=True)
 
+            # Emit start span event so the frontend Timeline can show it
+            if llm_span:
+                await self._observation_service.emit(
+                    SpanUpdateEvent.from_span(
+                        llm_span,
+                        session_id=session_id,
+                        execution_id=execution.execution_id,
+                    )
+                )
+
             node_exec.streaming_output += cached_response
             node_exec.outputs = {
                 "result": node_exec.streaming_output,
@@ -260,10 +289,17 @@ class LLMExecutionFlow:
             )
             await self._observation_service.emit(final_event)
 
-            # End LLM span
+            # End LLM span and emit completion event
             if llm_span:
                 llm_span.set_status("ok")
                 llm_span.end()
+                await self._observation_service.emit(
+                    SpanUpdateEvent.from_span(
+                        llm_span,
+                        session_id=session_id,
+                        execution_id=execution.execution_id,
+                    )
+                )
 
             return
 
@@ -271,6 +307,15 @@ class LLMExecutionFlow:
 
         # Create LLM span for real API call
         llm_span = self._create_llm_span(model=model, cache_hit=False)
+
+        if llm_span:
+            await self._observation_service.emit(
+                SpanUpdateEvent.from_span(
+                    llm_span,
+                    session_id=session_id,
+                    execution_id=execution.execution_id,
+                )
+            )
 
         try:
             logger.info("Creating LLM adapter and starting stream...")
@@ -464,10 +509,27 @@ class LLMExecutionFlow:
                 metadata_payload.setdefault("prompt_cache_key", prompt_cache_key)
                 node_exec.outputs["metadata"] = metadata_payload
 
+            # Populate token usage from adapter if available
+            adapter_usage = getattr(llm_adapter, "last_usage", None)
+            if llm_span and isinstance(adapter_usage, dict):
+                llm_span.tokens = TokenUsage(
+                    input=adapter_usage.get("prompt_tokens", 0),
+                    output=adapter_usage.get("completion_tokens", 0),
+                    total=adapter_usage.get("total_tokens", 0),
+                )
+
             # End LLM span on success
             if llm_span:
                 llm_span.set_status("ok")
                 llm_span.end()
+
+                await self._observation_service.emit(
+                    SpanUpdateEvent.from_span(
+                        llm_span,
+                        session_id=session_id,
+                        execution_id=execution.execution_id,
+                    )
+                )
 
         except Exception as exc:
             logger.error("Error executing LLM node %s: %s", node_id, exc, exc_info=True)
@@ -502,6 +564,14 @@ class LLMExecutionFlow:
             if llm_span:
                 llm_span.set_status("error", str(exc))
                 llm_span.end()
+
+                await self._observation_service.emit(
+                    SpanUpdateEvent.from_span(
+                        llm_span,
+                        session_id=session_id,
+                        execution_id=execution.execution_id,
+                    )
+                )
 
     async def execute_llm_tool_calls(
         self,
@@ -626,6 +696,14 @@ class LLMExecutionFlow:
             output_payload = recorded_output.model_dump(by_alias=True)
 
         node_exec.outputs = dict(output_payload)
+        # Mark as cache-hit for deterministic replay so frontend Activity log detects it
+        if isinstance(node_exec.outputs, dict):
+            meta = node_exec.outputs.get("metadata")
+            if not isinstance(meta, dict):
+                meta = {}
+            meta["llm_cache_hit"] = True
+            meta["replay_mode"] = "deterministic"
+            node_exec.outputs["metadata"] = meta
         content = ""
         if isinstance(output_payload, dict):
             content = output_payload.get("content") or ""

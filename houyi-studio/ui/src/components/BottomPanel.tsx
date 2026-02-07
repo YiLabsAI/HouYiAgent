@@ -1,28 +1,219 @@
 import React from 'react';
-import { ComparePanel } from './panels/ComparePanel';
 import { LogsPanel } from './panels/LogsPanel';
+import { MetricsPanel } from './panels/MetricsPanel';
+import { ObsFullView } from './panels/ObsFullView';
+import { TimelineWaterfall } from './panels/TimelineWaterfall';
 import { useConsoleStore } from '../stores/useConsoleStore';
-import type { ExecutionIR } from '@/types/ir';
 import { diffExecutions } from '@/utils/diff';
+
+interface ExecTreeNode {
+  execId: string;
+  checkpoints: any[];
+  parentExecId: string | undefined;
+  replayMode: string | undefined;
+  parentCheckpointId: string | undefined;
+  children: ExecTreeNode[];
+}
+
+interface ExecTreeNodeViewProps {
+  node: ExecTreeNode;
+  depth: number;
+  isCheckpointGroupExpanded: (execId: string) => boolean;
+  setExpandedCheckpointExecutions: React.Dispatch<React.SetStateAction<Record<string, boolean>>>;
+  effectiveSelectedKey: { checkpoint_id: string; execution_id?: string } | null;
+  loadCheckpoint: (checkpointId: string, executionId?: string) => void;
+  handleRestoreCheckpoint: (checkpointId: string, executionId?: string) => void;
+  getCheckpointNodeChips: (cp: any) => string[];
+  /** Set of node IDs that are the last node in the plan — used to detect terminal checkpoints */
+  lastNodeIds: Set<string>;
+}
+
+const ExecTreeNodeView: React.FC<ExecTreeNodeViewProps> = ({
+  node,
+  depth,
+  isCheckpointGroupExpanded,
+  setExpandedCheckpointExecutions,
+  effectiveSelectedKey,
+  loadCheckpoint,
+  handleRestoreCheckpoint,
+  getCheckpointNodeChips,
+  lastNodeIds,
+}) => {
+  const expanded = isCheckpointGroupExpanded(node.execId);
+  const { parentExecId, replayMode, parentCheckpointId } = node;
+  const execCps = node.checkpoints;
+
+  return (
+    <div className={`space-y-1 ${depth > 0 ? 'ml-4 border-l-2 border-blue-500/30 pl-2' : ''}`}>
+      <button
+        type="button"
+        onClick={() => {
+          setExpandedCheckpointExecutions((prev) => ({
+            ...prev,
+            [node.execId]: !expanded,
+          }));
+        }}
+        className="w-full flex items-center justify-between px-2 py-1 bg-gray-800 border border-gray-700/50 rounded text-xs text-gray-300 transition-colors hover:bg-gray-700"
+        title={node.execId}
+      >
+        <span className="min-w-0 flex-1 text-[11px] font-mono truncate text-left">
+          {expanded ? '▼' : '▶'}{' '}
+          {parentExecId ? '↳ fork' : 'execution'}: {node.execId.slice(0, 16)}...
+          {replayMode && (
+            <span className="ml-1 text-[10px] text-purple-400">
+              ({replayMode})
+            </span>
+          )}
+        </span>
+        <span className="ml-2 shrink-0 text-gray-400">{execCps.length}</span>
+      </button>
+      {parentExecId && parentCheckpointId && (
+        <div className="px-2 text-[10px] text-gray-500">
+          from <span className="font-mono">{parentExecId.slice(0, 12)}...</span>
+          {' '}cp <span className="font-mono">{parentCheckpointId.slice(0, 12)}...</span>
+        </div>
+      )}
+
+      {expanded && (
+        <>
+          {execCps.map((cp: any) => {
+            const isActive = effectiveSelectedKey
+              ? cp.checkpoint_id === effectiveSelectedKey.checkpoint_id &&
+                (!effectiveSelectedKey.execution_id || cp.execution_id === effectiveSelectedKey.execution_id)
+              : false;
+            const triggerNodeId = cp.metadata?.trigger_node_id as string | undefined;
+            const isTerminal = Boolean(triggerNodeId && lastNodeIds.has(triggerNodeId));
+            return (
+              <div
+                key={`${cp.execution_id}:${cp.checkpoint_id}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  loadCheckpoint(cp.checkpoint_id, cp.execution_id);
+                }}
+                className={`p-3 rounded cursor-pointer transition-colors ${
+                  isActive
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-gray-700 hover:bg-gray-600 text-gray-200'
+                }`}
+              >
+                <div className="flex justify-between items-center gap-3">
+                  <span className="text-sm font-medium">
+                    Checkpoint #{cp.sequence_number || '?'}
+                    {isTerminal && <span className="ml-1 text-[10px] text-amber-400">(terminal)</span>}
+                  </span>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleRestoreCheckpoint(cp.checkpoint_id, cp.execution_id);
+                      }}
+                      className={`px-2 py-1 text-xs rounded transition-colors ${
+                        isTerminal
+                          ? (isActive ? 'bg-amber-500 hover:bg-amber-400 text-white' : 'bg-amber-600 hover:bg-amber-500 text-white')
+                          : (isActive ? 'bg-blue-500 hover:bg-blue-400 text-white' : 'bg-green-600 hover:bg-green-500 text-white')
+                      }`}
+                      title={isTerminal ? "Replay all nodes from the beginning" : "Restore execution from this checkpoint"}
+                    >
+                      {isTerminal ? 'Replay All' : 'Restore'}
+                    </button>
+                    <span className={isActive ? 'text-blue-200' : 'text-gray-400'}>
+                      {new Date(cp.created_at).toLocaleString()}
+                    </span>
+                  </div>
+                </div>
+                <div className={`text-xs mt-1 ${isActive ? 'text-blue-200' : 'text-gray-400'}`}>
+                  Trigger: {cp.trigger}
+                </div>
+
+                {(() => {
+                  const nodeIds = getCheckpointNodeChips(cp);
+                  if (nodeIds.length === 0) return null;
+                  const visible = nodeIds.slice(0, 10);
+                  const overflow = nodeIds.length - visible.length;
+                  return (
+                    <div className="mt-2 flex flex-wrap gap-1">
+                      {visible.map((nodeId: string) => (
+                        <span
+                          key={nodeId}
+                          className={`px-2 py-0.5 rounded text-[10px] border ${
+                            isActive
+                              ? 'border-blue-300/40 bg-blue-500/20 text-blue-100'
+                              : 'border-gray-500/40 bg-gray-800/40 text-gray-200'
+                          }`}
+                          title={nodeId}
+                        >
+                          {nodeId}
+                        </span>
+                      ))}
+                      {overflow > 0 ? (
+                        <span
+                          className={`px-2 py-0.5 rounded text-[10px] border ${
+                            isActive
+                              ? 'border-blue-300/40 bg-blue-500/20 text-blue-100'
+                              : 'border-gray-500/40 bg-gray-800/40 text-gray-200'
+                          }`}
+                          title={`${overflow} more nodes`}
+                        >
+                          +{overflow}
+                        </span>
+                      ) : null}
+                    </div>
+                  );
+                })()}
+                <div className={`text-xs mt-1 font-mono ${isActive ? 'text-blue-300' : 'text-gray-500'}`}>
+                  ID: {cp.checkpoint_id}
+                </div>
+              </div>
+            );
+          })}
+        </>
+      )}
+
+      {/* Recursively render children (forked executions) */}
+      {node.children.length > 0 && (
+        <div className="space-y-1">
+          {node.children.map((child) => (
+            <ExecTreeNodeView
+              key={child.execId}
+              node={child}
+              depth={depth + 1}
+              isCheckpointGroupExpanded={isCheckpointGroupExpanded}
+              setExpandedCheckpointExecutions={setExpandedCheckpointExecutions}
+              effectiveSelectedKey={effectiveSelectedKey}
+              loadCheckpoint={loadCheckpoint}
+              handleRestoreCheckpoint={handleRestoreCheckpoint}
+              getCheckpointNodeChips={getCheckpointNodeChips}
+              lastNodeIds={lastNodeIds}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
 
 interface BottomPanelProps {
   isCollapsed: boolean;
   onToggleCollapse: () => void;
-  activeTab?: 'timeline' | 'checkpoints' | 'context' | 'logs' | 'verification' | 'compare';
+  activeTab?: 'observability' | 'checkpoints' | 'logs' | 'context';
   onTabChange?: (
-    tab: 'timeline' | 'checkpoints' | 'context' | 'logs' | 'verification' | 'compare',
+    tab: 'observability' | 'checkpoints' | 'logs' | 'context',
   ) => void;
+  height?: number;
 }
 
-type TabType = 'timeline' | 'checkpoints' | 'context' | 'logs' | 'verification' | 'compare';
+type TabType = 'observability' | 'checkpoints' | 'logs' | 'context';
 
 export const BottomPanel: React.FC<BottomPanelProps> = ({
   isCollapsed,
   onToggleCollapse,
   activeTab: controlledActiveTab,
   onTabChange,
+  height = 280,
 }) => {
-  const [uncontrolledActiveTab, setUncontrolledActiveTab] = React.useState<TabType>('timeline');
+  const [uncontrolledActiveTab, setUncontrolledActiveTab] = React.useState<TabType>('observability');
+  const [showObsFullView, setShowObsFullView] = React.useState(false);
   const activeTab = controlledActiveTab ?? uncontrolledActiveTab;
   const setActiveTab = (tab: TabType) => {
     if (onTabChange) {
@@ -49,6 +240,7 @@ export const BottomPanel: React.FC<BottomPanelProps> = ({
     currentPlan,
     prepareRestoreFromCheckpoint,
     clearCurrentExecutionOutputsForFreshReplay,
+    executionLineageMap,
   } = useConsoleStore();
 
   const viewExecution = React.useMemo(() => {
@@ -57,12 +249,8 @@ export const BottomPanel: React.FC<BottomPanelProps> = ({
 
   const effectiveSelectedKey = selectedCheckpointKey;
 
-  const executionScopedCheckpoints = React.useMemo(() => {
-    if (!viewExecution?.execution_id) return checkpoints;
-    return checkpoints.filter((cp) => cp.execution_id === viewExecution.execution_id);
-  }, [checkpoints, viewExecution?.execution_id]);
-
-  const groupedCheckpoints = React.useMemo(() => {
+  const checkpointTree = React.useMemo((): ExecTreeNode[] => {
+    // 1. Group checkpoints by execution_id
     const byExec = new Map<string, any[]>();
     checkpoints.forEach((cp) => {
       const execId = cp.execution_id || 'unknown';
@@ -71,7 +259,9 @@ export const BottomPanel: React.FC<BottomPanelProps> = ({
       byExec.set(execId, list);
     });
 
-    const result = Array.from(byExec.entries()).map(([execId, list]) => {
+    // 2. Build flat nodes with sorted checkpoints and resolved lineage
+    const nodeMap = new Map<string, ExecTreeNode>();
+    for (const [execId, list] of byExec) {
       const sorted = [...list].sort((a, b) => {
         const aSeq = typeof a.sequence_number === 'number' ? a.sequence_number : 0;
         const bSeq = typeof b.sequence_number === 'number' ? b.sequence_number : 0;
@@ -80,28 +270,49 @@ export const BottomPanel: React.FC<BottomPanelProps> = ({
         const bTime = b.created_at ? new Date(b.created_at).getTime() : 0;
         return bTime - aTime;
       });
-      return { execId, checkpoints: sorted };
-    });
 
-    // Sort execution groups by the most recent checkpoint first, but prefer current execution on top.
-    const currentExecId = viewExecution?.execution_id;
-    result.sort((a, b) => {
-      if (currentExecId) {
-        if (a.execId === currentExecId && b.execId !== currentExecId) return -1;
-        if (b.execId === currentExecId && a.execId !== currentExecId) return 1;
+      // Resolve parent from executionLineageMap first, fallback to snapshot metadata
+      const lineage = executionLineageMap[execId];
+      const snapshotMeta = sorted[0]?.execution_snapshot?.metadata;
+      const parentExecId = (lineage?.parentExecutionId ?? snapshotMeta?.parent_execution_id) as string | undefined;
+      const replayMode = (lineage?.replayMode ?? snapshotMeta?.replay_mode) as string | undefined;
+      const parentCheckpointId = (lineage?.parentCheckpointId ?? snapshotMeta?.parent_checkpoint_id) as string | undefined;
+
+      nodeMap.set(execId, {
+        execId,
+        checkpoints: sorted,
+        parentExecId,
+        replayMode,
+        parentCheckpointId,
+        children: [],
+      });
+    }
+
+    // 3. Build tree: attach children to parents
+    const roots: ExecTreeNode[] = [];
+    for (const node of nodeMap.values()) {
+      if (node.parentExecId && nodeMap.has(node.parentExecId)) {
+        nodeMap.get(node.parentExecId)!.children.push(node);
+      } else {
+        roots.push(node);
       }
-      const aTop = a.checkpoints?.[0];
-      const bTop = b.checkpoints?.[0];
-      const aSeq = typeof aTop?.sequence_number === 'number' ? aTop.sequence_number : 0;
-      const bSeq = typeof bTop?.sequence_number === 'number' ? bTop.sequence_number : 0;
-      if (aSeq !== bSeq) return bSeq - aSeq;
-      const aTime = aTop?.created_at ? new Date(aTop.created_at).getTime() : 0;
-      const bTime = bTop?.created_at ? new Date(bTop.created_at).getTime() : 0;
-      return bTime - aTime;
-    });
+    }
 
-    return result;
-  }, [checkpoints, viewExecution?.execution_id]);
+    return roots;
+  }, [checkpoints, executionLineageMap]);
+
+  // Keep groupedCheckpoints as a flat list for backward compat (isCheckpointGroupExpanded)
+  const groupedCheckpoints = React.useMemo(() => {
+    const flat: Array<{ execId: string; checkpoints: any[] }> = [];
+    const walk = (nodes: ExecTreeNode[]) => {
+      for (const n of nodes) {
+        flat.push({ execId: n.execId, checkpoints: n.checkpoints });
+        walk(n.children);
+      }
+    };
+    walk(checkpointTree);
+    return flat;
+  }, [checkpointTree]);
 
   const isCheckpointGroupExpanded = React.useCallback(
     (execId: string) => {
@@ -115,66 +326,10 @@ export const BottomPanel: React.FC<BottomPanelProps> = ({
     [expandedCheckpointExecutions, groupedCheckpoints, viewExecution?.execution_id],
   );
 
-  const timelineCheckpoints = React.useMemo(() => {
-    if (checkpoints.length === 0) return [] as typeof checkpoints;
-    if (viewExecution?.execution_id) {
-      const scoped = checkpoints.filter((cp) => cp.execution_id === viewExecution.execution_id);
-      if (scoped.length > 1) return scoped;
-    }
-    return checkpoints;
-  }, [checkpoints, viewExecution?.execution_id]);
-
-  const orderedTimelineCheckpoints = React.useMemo(() => {
-    return [...timelineCheckpoints].sort((a, b) => {
-      const aTime = a.created_at ? new Date(a.created_at).getTime() : 0;
-      const bTime = b.created_at ? new Date(b.created_at).getTime() : 0;
-      if (aTime !== bTime) return aTime - bTime;
-      const aSeq = typeof a.sequence_number === 'number' ? a.sequence_number : 0;
-      const bSeq = typeof b.sequence_number === 'number' ? b.sequence_number : 0;
-      return aSeq - bSeq;
-    });
-  }, [timelineCheckpoints]);
-
-  const timelineSelectedCheckpoint = React.useMemo(() => {
-    if (!effectiveSelectedKey) return null;
-    return orderedTimelineCheckpoints.find((cp) =>
-      cp.checkpoint_id === effectiveSelectedKey.checkpoint_id &&
-      (!effectiveSelectedKey.execution_id || cp.execution_id === effectiveSelectedKey.execution_id),
-    ) || null;
-  }, [effectiveSelectedKey, orderedTimelineCheckpoints]);
-
-  const timelineSelectedSnapshot = React.useMemo(() => {
-    return timelineSelectedCheckpoint?.execution_snapshot as ExecutionIR | undefined;
-  }, [timelineSelectedCheckpoint]);
-
-  const previewNodes = React.useMemo(() => {
-    if (!timelineSelectedSnapshot?.node_executions) return [] as Array<[string, any]>;
-    return Object.entries(timelineSelectedSnapshot.node_executions)
-      .filter(([_nodeId, nodeExec]) => {
-        const status = (nodeExec as any)?.status;
-        return status && status !== 'pending';
-      })
-      .sort(([_aId, aExec], [_bId, bExec]) => {
-        const aTime = (aExec as any)?.completed_at || (aExec as any)?.started_at;
-        const bTime = (bExec as any)?.completed_at || (bExec as any)?.started_at;
-        const aMs = aTime ? new Date(aTime).getTime() : 0;
-        const bMs = bTime ? new Date(bTime).getTime() : 0;
-        if (aMs !== bMs) return bMs - aMs;
-        return String(_aId).localeCompare(String(_bId));
-      })
-      .slice(0, 5);
-  }, [timelineSelectedSnapshot]);
-
   const contextDiff = React.useMemo(() => {
     if (viewMode !== 'checkpoint' || !liveExecution || !checkpointExecution) return null;
     return diffExecutions(liveExecution, checkpointExecution);
   }, [viewMode, liveExecution, checkpointExecution]);
-
-  const getCacheHitCount = React.useCallback((nodeExec: any): number => {
-    const outputs = nodeExec?.outputs ?? {};
-    const toolCalls = outputs?.tool_calls ?? [];
-    return toolCalls.filter((call: any) => Boolean(call?.result?.metadata?.cache_hit)).length;
-  }, []);
 
   const getCheckpointNodeChips = React.useCallback((checkpoint: any): string[] => {
     const snapshot = checkpoint?.execution_snapshot as any;
@@ -190,6 +345,38 @@ export const BottomPanel: React.FC<BottomPanelProps> = ({
     items.sort((a, b) => (order[a.status] ?? 99) - (order[b.status] ?? 99) || a.nodeId.localeCompare(b.nodeId));
     return items.map((item) => item.nodeId);
   }, []);
+
+  // Compute the set of "last node IDs" (DAG sink nodes) from the plan to detect
+  // terminal checkpoints. A sink node has no outgoing edges in the plan DAG.
+  // A checkpoint is terminal if its trigger_node_id is a sink node.
+  const lastNodeIds = React.useMemo(() => {
+    const nodes = currentPlan?.nodes;
+    const edges = currentPlan?.edges;
+    if (!Array.isArray(nodes) || nodes.length === 0) return new Set<string>();
+
+    const allNodeIds = new Set<string>(
+      nodes.map((n: any) => n.node_id).filter(Boolean)
+    );
+    // Nodes that are a source of at least one edge are NOT sinks
+    const sourcesWithOutEdges = new Set<string>();
+    if (Array.isArray(edges)) {
+      for (const e of edges) {
+        const src = e.source_node_id;
+        if (src) sourcesWithOutEdges.add(src);
+      }
+    }
+    // Sink nodes = all nodes minus those with outgoing edges
+    const sinks = new Set<string>();
+    for (const id of allNodeIds) {
+      if (!sourcesWithOutEdges.has(id)) sinks.add(id);
+    }
+    // Fallback: if no sinks found (e.g. cyclic graph), use last node in array
+    if (sinks.size === 0 && nodes.length > 0) {
+      const last = nodes[nodes.length - 1];
+      if (last?.node_id) sinks.add(last.node_id);
+    }
+    return sinks;
+  }, [currentPlan?.nodes, currentPlan?.edges]);
 
   const handleRestoreCheckpoint = React.useCallback((checkpointId: string, executionId?: string) => {
     setRestoreCheckpointId(checkpointId);
@@ -250,18 +437,17 @@ export const BottomPanel: React.FC<BottomPanelProps> = ({
   );
 
   const tabs: { id: TabType; label: string }[] = [
-    { id: 'timeline', label: 'Timeline' },
+    { id: 'observability', label: 'Observability' },
     { id: 'checkpoints', label: 'Checkpoints' },
-    { id: 'context', label: 'Context' },
     { id: 'logs', label: 'Logs' },
-    { id: 'verification', label: 'Verification' },
-    { id: 'compare', label: 'Compare' },
+    { id: 'context', label: 'Context' },
   ];
 
   return (
-    <div className={`bg-gray-800 border-t border-gray-700 flex flex-col transition-all duration-300 ease-in-out ${
-      isCollapsed ? 'h-8' : 'h-64'
-    }`}>
+    <div
+      className="bg-gray-800 border-t border-gray-700 flex flex-col"
+      style={{ height: isCollapsed ? 32 : height }}
+    >
       {isCollapsed ? (
         <div className="h-full flex items-center justify-between px-4">
           <div className="flex gap-2 text-xs text-gray-400">
@@ -298,6 +484,14 @@ export const BottomPanel: React.FC<BottomPanelProps> = ({
               ))}
             </div>
             <div className="flex items-center gap-2 pr-2">
+              <button
+                onClick={() => setShowObsFullView(true)}
+                className="px-2 py-1 text-[11px] rounded border border-gray-600 text-gray-200 hover:bg-gray-700 hover:text-white"
+                title="Open full observability view (waterfall + metrics)"
+                type="button"
+              >
+                Obs
+              </button>
               {viewMode === 'checkpoint' && (
                 <button
                   onClick={exitCheckpointView}
@@ -320,245 +514,38 @@ export const BottomPanel: React.FC<BottomPanelProps> = ({
           </div>
 
           <div className="flex-1 overflow-y-auto p-4">
-            {activeTab === 'timeline' && (
-              <div className="space-y-4">
-                {checkpoints.length === 0 ? (
-                  <div className="text-center text-gray-400 py-8">
-                    No timeline available - start execution to create checkpoints
-                  </div>
-                ) : (
-                  <>
-                    <div className="relative">
-                      <input
-                        type="range"
-                        min="0"
-                        max={Math.max(executionScopedCheckpoints.length - 1, 0)}
-                        value={Math.max(
-                          executionScopedCheckpoints.findIndex(
-                            (cp) =>
-                              effectiveSelectedKey
-                                ? cp.checkpoint_id === effectiveSelectedKey.checkpoint_id &&
-                                  (!effectiveSelectedKey.execution_id ||
-                                    cp.execution_id === effectiveSelectedKey.execution_id)
-                                : false,
-                          ),
-                          0,
-                        )}
-                        onChange={(e) => {
-                          const index = parseInt(e.target.value);
-                          if (executionScopedCheckpoints[index]) {
-                            loadCheckpoint(
-                              executionScopedCheckpoints[index].checkpoint_id,
-                              executionScopedCheckpoints[index].execution_id,
-                            );
-                          }
-                        }}
-                        className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
-                      />
-                      <div className="flex justify-between text-xs text-gray-400 mt-2">
-                        <span>Start</span>
-                        <span className="text-blue-400 font-medium">
-                          {effectiveSelectedKey
-                            ? `Checkpoint #${executionScopedCheckpoints.find((cp) => (
-                                cp.checkpoint_id === effectiveSelectedKey.checkpoint_id &&
-                                (!effectiveSelectedKey.execution_id || cp.execution_id === effectiveSelectedKey.execution_id)
-                              ))?.sequence_number || '?'}`
-                            : 'No checkpoint selected'
-                          }
-                        </span>
-                        <span>Latest</span>
-                      </div>
-                    </div>
-
-                    <div className="flex items-center gap-2 text-xs text-gray-400">
-                      <span>Total: {executionScopedCheckpoints.length}</span>
-                      <span>•</span>
-                      <span>
-                        {effectiveSelectedKey && executionScopedCheckpoints.find((cp) => (
-                          cp.checkpoint_id === effectiveSelectedKey.checkpoint_id &&
-                          (!effectiveSelectedKey.execution_id || cp.execution_id === effectiveSelectedKey.execution_id)
-                        ))
-                          ? new Date(executionScopedCheckpoints.find((cp) => (
-                              cp.checkpoint_id === effectiveSelectedKey.checkpoint_id &&
-                              (!effectiveSelectedKey.execution_id || cp.execution_id === effectiveSelectedKey.execution_id)
-                            ))!.created_at).toLocaleString()
-                          : 'N/A'
-                        }
-                      </span>
-                    </div>
-
-                    <div className="bg-gray-900/70 border border-gray-700 rounded p-3 text-xs text-gray-300">
-                      <div className="text-gray-400 font-semibold mb-2">Snapshot Preview</div>
-                      {timelineSelectedCheckpoint && timelineSelectedSnapshot ? (
-                        <div className="space-y-2">
-                          <div className="flex items-center justify-between">
-                            <span className="text-gray-400">Status</span>
-                            <span className="text-gray-200">{timelineSelectedSnapshot.status}</span>
-                          </div>
-                          <div className="flex items-center justify-between">
-                            <span className="text-gray-400">Nodes</span>
-                            <span className="text-gray-200">
-                              {Object.keys(timelineSelectedSnapshot.node_executions || {}).length}
-                            </span>
-                          </div>
-                          <div className="flex items-center justify-between">
-                            <span className="text-gray-400">Context keys</span>
-                            <span className="text-gray-200">
-                              {Object.keys(timelineSelectedSnapshot.context || {}).length}
-                            </span>
-                          </div>
-                          <div className="space-y-1">
-                            <div className="text-gray-400">Recent nodes</div>
-                            {previewNodes.length === 0 ? (
-                              <div className="text-gray-500">No node executions</div>
-                            ) : (
-                              previewNodes.map(([nodeId, nodeExec]) => {
-                                const cacheHits = getCacheHitCount(nodeExec);
-                                return (
-                                  <div key={nodeId} className="flex items-center justify-between">
-                                    <span className="text-gray-300 truncate">
-                                      {nodeId}
-                                      {cacheHits > 0 ? (
-                                        <span className="ml-2 text-amber-300">⚡</span>
-                                      ) : null}
-                                    </span>
-                                    <span className="text-gray-400">{nodeExec.status}</span>
-                                  </div>
-                                );
-                              })
-                            )}
-                          </div>
-                        </div>
-                      ) : (
-                        <div className="text-gray-500">Select a checkpoint to preview</div>
-                      )}
-                    </div>
-                  </>
-                )}
+            {activeTab === 'observability' && (
+              <div className="flex gap-3 h-full min-h-0">
+                <div className="flex-1 min-w-0 min-h-0">
+                  <TimelineWaterfall executionId={viewExecution?.execution_id} />
+                </div>
+                <div className="w-72 flex-shrink-0 min-h-0 overflow-y-auto">
+                  <MetricsPanel executionId={viewExecution?.execution_id} />
+                </div>
               </div>
             )}
 
             {activeTab === 'checkpoints' && (
               <div className="space-y-2">
-                {groupedCheckpoints.length === 0 ? (
+                {checkpointTree.length === 0 ? (
                   <div className="text-center text-gray-400 py-8">
                     No checkpoints created yet
                   </div>
                 ) : (
-                  groupedCheckpoints.map(({ execId, checkpoints: execCps }) => {
-                    const expanded = isCheckpointGroupExpanded(execId);
-                    return (
-                      <div key={execId} className="space-y-2">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setExpandedCheckpointExecutions((prev) => ({
-                              ...prev,
-                              [execId]: !expanded,
-                            }));
-                          }}
-                          className="w-full flex items-center justify-between px-2 py-1 bg-gray-800 border border-gray-700/50 rounded text-xs text-gray-300 transition-colors hover:bg-gray-700"
-                          title={execId}
-                        >
-                          <span className="min-w-0 flex-1 text-[11px] font-mono truncate text-left">
-                            {expanded ? '▼' : '▶'} execution: {execId}
-                          </span>
-                          <span className="ml-2 shrink-0 text-gray-400">{execCps.length}</span>
-                        </button>
-
-                        {expanded ? (
-                          execCps.map((cp) => {
-                            const isActive = effectiveSelectedKey
-                              ? cp.checkpoint_id === effectiveSelectedKey.checkpoint_id &&
-                                (!effectiveSelectedKey.execution_id || cp.execution_id === effectiveSelectedKey.execution_id)
-                              : false;
-                            return (
-                              <div
-                                key={`${cp.execution_id}:${cp.checkpoint_id}`}
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  loadCheckpoint(cp.checkpoint_id, cp.execution_id);
-                                }}
-                                className={`p-3 rounded cursor-pointer transition-colors ${
-                                  isActive
-                                    ? 'bg-blue-600 text-white'
-                                    : 'bg-gray-700 hover:bg-gray-600 text-gray-200'
-                                }`}
-                              >
-                                <div className="flex justify-between items-center gap-3">
-                                  <span className="text-sm font-medium">
-                                    Checkpoint #{cp.sequence_number || '?'}
-                                  </span>
-                                  <div className="flex items-center gap-2 shrink-0">
-                                    <button
-                                      type="button"
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        handleRestoreCheckpoint(cp.checkpoint_id, cp.execution_id);
-                                      }}
-                                      className={`px-2 py-1 text-xs rounded transition-colors ${
-                                        isActive
-                                          ? 'bg-blue-500 hover:bg-blue-400 text-white'
-                                          : 'bg-green-600 hover:bg-green-500 text-white'
-                                      }`}
-                                      title="Restore execution from this checkpoint"
-                                    >
-                                      Restore
-                                    </button>
-                                    <span className={isActive ? 'text-blue-200' : 'text-gray-400'}>
-                                      {new Date(cp.created_at).toLocaleString()}
-                                    </span>
-                                  </div>
-                                </div>
-                                <div className={`text-xs mt-1 ${isActive ? 'text-blue-200' : 'text-gray-400'}`}>
-                                  Trigger: {cp.trigger}
-                                </div>
-
-                                {(() => {
-                                  const nodeIds = getCheckpointNodeChips(cp);
-                                  if (nodeIds.length === 0) return null;
-                                  const visible = nodeIds.slice(0, 10);
-                                  const overflow = nodeIds.length - visible.length;
-                                  return (
-                                    <div className="mt-2 flex flex-wrap gap-1">
-                                      {visible.map((nodeId) => (
-                                        <span
-                                          key={nodeId}
-                                          className={`px-2 py-0.5 rounded text-[10px] border ${
-                                            isActive
-                                              ? 'border-blue-300/40 bg-blue-500/20 text-blue-100'
-                                              : 'border-gray-500/40 bg-gray-800/40 text-gray-200'
-                                          }`}
-                                          title={nodeId}
-                                        >
-                                          {nodeId}
-                                        </span>
-                                      ))}
-                                      {overflow > 0 ? (
-                                        <span
-                                          className={`px-2 py-0.5 rounded text-[10px] border ${
-                                            isActive
-                                              ? 'border-blue-300/40 bg-blue-500/20 text-blue-100'
-                                              : 'border-gray-500/40 bg-gray-800/40 text-gray-200'
-                                          }`}
-                                          title={`${overflow} more nodes`}
-                                        >
-                                          +{overflow}
-                                        </span>
-                                      ) : null}
-                                    </div>
-                                  );
-                                })()}
-                                <div className={`text-xs mt-1 font-mono ${isActive ? 'text-blue-300' : 'text-gray-500'}`}>
-                                  ID: {cp.checkpoint_id}
-                                </div>
-                              </div>
-                            );
-                          })
-                        ) : null}
-                      </div>
-                    );
-                  })
+                  checkpointTree.map((rootNode) => (
+                    <ExecTreeNodeView
+                      key={rootNode.execId}
+                      node={rootNode}
+                      depth={0}
+                      isCheckpointGroupExpanded={isCheckpointGroupExpanded}
+                      setExpandedCheckpointExecutions={setExpandedCheckpointExecutions}
+                      effectiveSelectedKey={effectiveSelectedKey}
+                      loadCheckpoint={loadCheckpoint}
+                      handleRestoreCheckpoint={handleRestoreCheckpoint}
+                      getCheckpointNodeChips={getCheckpointNodeChips}
+                      lastNodeIds={lastNodeIds}
+                    />
+                  ))
                 )}
               </div>
             )}
@@ -678,65 +665,11 @@ export const BottomPanel: React.FC<BottomPanelProps> = ({
             )}
 
             {activeTab === 'logs' && <LogsPanel viewExecution={viewExecution} />}
-
-            {activeTab === 'verification' && (
-              <div className="space-y-3">
-                {viewExecution && Object.keys(viewExecution.node_executions || {}).length > 0 ? (
-                  Object.entries(viewExecution.node_executions || {}).map(([nodeId, nodeExec]) => {
-                    const hasPassed = nodeExec.status === 'completed';
-                    const hasFailed = nodeExec.status === 'failed';
-
-                    return (
-                      <div key={nodeId} className="p-3 bg-gray-900 rounded">
-                        <div className="flex items-center justify-between mb-2">
-                          <span className="text-sm font-semibold text-gray-200">{nodeId}</span>
-                          {hasPassed && <span className="text-green-500">✓ Passed</span>}
-                          {hasFailed && <span className="text-red-500">✗ Failed</span>}
-                          {!hasPassed && !hasFailed && <span className="text-gray-400">⏸ Pending</span>}
-                        </div>
-                        <div className="space-y-1 text-xs">
-                          <div className="flex items-center gap-2">
-                            <span className={hasPassed ? "text-green-500" : "text-gray-500"}>
-                              {hasPassed ? "✓" : "○"}
-                            </span>
-                            <span className="text-gray-300">Status: {nodeExec.status}</span>
-                          </div>
-                          {nodeExec.started_at && (
-                            <div className="flex items-center gap-2">
-                              <span className="text-gray-500">○</span>
-                              <span className="text-gray-300">
-                                Started: {new Date(nodeExec.started_at).toLocaleTimeString()}
-                              </span>
-                            </div>
-                          )}
-                          {nodeExec.completed_at && (
-                            <div className="flex items-center gap-2">
-                              <span className="text-gray-500">○</span>
-                              <span className="text-gray-300">
-                                Completed: {new Date(nodeExec.completed_at).toLocaleTimeString()}
-                              </span>
-                            </div>
-                          )}
-                          {nodeExec.error && (
-                            <div className="flex items-center gap-2">
-                              <span className="text-red-500">✗</span>
-                              <span className="text-red-300">Error: {nodeExec.error}</span>
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })
-                ) : (
-                  <div className="text-center text-gray-400 py-8">
-                    No verification data available - start execution to see results
-                  </div>
-                )}
-              </div>
-            )}
-
-            {activeTab === 'compare' && <ComparePanel />}
           </div>
+
+          {showObsFullView && (
+            <ObsFullView onClose={() => setShowObsFullView(false)} />
+          )}
 
           {showRestoreDialog && (
             <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">

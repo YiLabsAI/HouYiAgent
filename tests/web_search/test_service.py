@@ -351,6 +351,102 @@ async def test_web_search_service_retry_exhausted() -> None:
 
 
 @pytest.mark.asyncio
+async def test_query_provider_creates_internal_spans_when_trace_active() -> None:
+    """_query_provider should create INTERNAL sub-spans when TraceContext has a parent."""
+    from houyi.observability import Span, SpanType, TraceContext
+
+    parent = Span(name="tool.web_search", span_type=SpanType.TOOL)
+    token = TraceContext.push(parent)
+
+    try:
+        provider = _Provider(results=[{"title": "t", "url": "u"}])
+        service = WebSearchService(provider=provider)
+        await service.search("q", max_results=1)
+    finally:
+        TraceContext.pop(token)
+
+    # Parent should have at least one child (provider.tavily)
+    assert len(parent.children) >= 1
+    provider_span = parent.children[0]
+    assert provider_span.span_type == SpanType.INTERNAL
+    assert "provider.tavily" in provider_span.name
+    assert provider_span.end_time is not None
+    assert provider_span.status == "ok"
+
+
+@pytest.mark.asyncio
+async def test_query_provider_no_spans_without_trace_context() -> None:
+    """No spans should be created when TraceContext has no active parent."""
+    from houyi.observability import TraceContext
+
+    # Ensure no active context
+    assert TraceContext.current() is None
+
+    provider = _Provider(results=[{"title": "t", "url": "u"}])
+    service = WebSearchService(provider=provider)
+    response = await service.search("q", max_results=1)
+    # Should still work normally
+    assert response.results[0].title == "t"
+
+
+@pytest.mark.asyncio
+async def test_query_provider_error_span_on_failure() -> None:
+    """Provider failure should create an error span."""
+    from houyi.observability import Span, SpanType, TraceContext
+
+    parent = Span(name="tool.web_search", span_type=SpanType.TOOL)
+    token = TraceContext.push(parent)
+
+    try:
+        provider = _Provider(error=ProviderTimeoutError("timeout"))
+        service = WebSearchService(provider=provider)
+        await service.search("q", max_results=1)
+    finally:
+        TraceContext.pop(token)
+
+    assert len(parent.children) >= 1
+    error_span = parent.children[0]
+    assert error_span.span_type == SpanType.INTERNAL
+    assert error_span.status == "error"
+    assert error_span.end_time is not None
+
+
+@pytest.mark.asyncio
+async def test_content_fetch_creates_sub_spans(monkeypatch) -> None:
+    """include_content should create content.fetch and fetch.jina sub-spans."""
+    from houyi.observability import Span, SpanType, TraceContext
+
+    parent = Span(name="tool.web_search", span_type=SpanType.TOOL)
+    token = TraceContext.push(parent)
+
+    provider = _Provider(results=[{"title": "t", "url": "u"}])
+
+    async def _fetch(self, urls):
+        return {"u": "content text"}
+
+    monkeypatch.setattr("houyi.web_search.service.JinaContentFetcher.fetch", _fetch)
+
+    try:
+        service = WebSearchService(provider=provider)
+        response = await service.search("q", max_results=1, include_content=True)
+    finally:
+        TraceContext.pop(token)
+
+    assert response.results[0].content == "content text"
+
+    # Should have provider span + content.fetch span (with fetch.jina child)
+    span_names = [c.name for c in parent.children]
+    assert any("provider." in n for n in span_names)
+    assert any("content.fetch" in n for n in span_names)
+
+    # content.fetch should have a fetch.jina child
+    fetch_span = next(c for c in parent.children if "content.fetch" in c.name)
+    jina_children = [c for c in fetch_span.children if "fetch.jina" in c.name]
+    assert len(jina_children) == 1
+    assert jina_children[0].status == "ok"
+
+
+@pytest.mark.asyncio
 async def test_ddg_provider_remote_disconnected_translates_to_timeout(monkeypatch) -> None:
     """DDG network disconnects should raise ProviderTimeoutError (so retries/fallback can engage)."""
 

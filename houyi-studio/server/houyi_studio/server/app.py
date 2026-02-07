@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
+import time as _time
 from contextlib import asynccontextmanager
 from datetime import datetime
 from uuid import uuid4
@@ -47,6 +49,9 @@ LOG_LEVEL = configure_logging()
 logger = logging.getLogger(__name__)
 
 execution_engine: ExecutionEngine | None = None
+
+# Unique ID generated at server startup; sent to frontend so it can detect restarts
+SERVER_BOOT_ID = uuid4().hex[:12]
 
 
 def _sanitize_plan_payload(plan_payload: dict) -> dict:
@@ -297,56 +302,133 @@ async def list_tools() -> dict[str, list[dict[str, str]]]:
     }
 
 
+## Heartbeat / session constants
+# How often the server sends a ping to the client (seconds).
+# 30s is the industry standard, well within typical proxy idle timeouts (60-120s).
+_HEARTBEAT_INTERVAL_S = 30
+# If no pong is received within this window, the client is considered dead.
+# 3 × heartbeat interval = 90s, tolerates up to 2 missed pings.
+# The client sends a pong on visibilitychange (tab foreground), so background
+# tabs won't cause false positives within this window.
+_CLIENT_TIMEOUT_S = 90
+# Grace period after disconnect before aborting executions.
+# ReconnectingWebSocket reconnects within 500ms-2s on first attempt;
+# 15s covers several retry cycles with exponential back-off.
+_DISCONNECT_GRACE_S = 15
+
+
 @app.websocket("/ws/session/{session_id}")
 async def websocket_endpoint(websocket: WebSocket, session_id: str) -> None:
     """WebSocket endpoint for console sessions.
 
-    Args:
-        websocket: WebSocket connection
-        session_id: Session identifier
+    Session lifecycle within a single page load:
+      1. Client opens WS with a fresh session_id (generated per page load).
+      2. Server sends existing plan + log level + buffered spans (for reconnect).
+      3. Server-driven heartbeat keeps the connection alive:
+         - Server → Client: ping every 30s
+         - Client → Server: pong reply (automatic on ping, plus on tab foreground)
+         - Server tracks last pong; closes if 90s exceeded (3 missed pings).
+      4. On disconnect, server waits 15s for reconnect before aborting executions.
     """
-    # Ensure execution engine is initialized before handling session state.
     engine = get_execution_engine()
     logger.info("WebSocket connection attempt: session=%s", session_id)
     await connection_manager.connect(websocket, session_id)
-    logger.info("WebSocket connected successfully: session=%s", session_id)
+    logger.info("WebSocket connected: session=%s", session_id)
 
-    # Send existing plan to frontend if available (for page refresh)
-    existing_plan = engine.plan_service.get_current_plan(session_id)
-    if existing_plan:
-        logger.info(
-            "Sending existing plan to frontend: %d nodes, %d edges",
-            len(existing_plan.nodes),
-            len(existing_plan.edges),
-        )
-        from .events import PlanUpdatedEvent
+    # --- Restore session state for reconnecting clients ---
+    # Wrap in try/except: the client may disconnect during this phase (e.g. during
+    # hot-reload the frontend opens multiple connections rapidly and closes stale ones
+    # before the server finishes sending initial state).
+    try:
+        # Send existing plan if available (same session reconnect)
+        existing_plan = engine.plan_service.get_current_plan(session_id)
+        if existing_plan:
+            logger.info(
+                "Restoring plan for session=%s: %d nodes, %d edges",
+                session_id,
+                len(existing_plan.nodes),
+                len(existing_plan.edges),
+            )
+            from .events import PlanUpdatedEvent
 
-        plan_event = PlanUpdatedEvent(
+            plan_event = PlanUpdatedEvent(
+                event_id=f"evt_{uuid4().hex[:8]}",
+                session_id=session_id,
+                plan=existing_plan,
+            )
+            await connection_manager.send_event(session_id, plan_event)
+
+        # Send server info (informational, no session logic depends on it)
+        await websocket.send_json({"event_type": "server_info", "server_boot_id": SERVER_BOOT_ID})
+
+        log_level_event = LogLevelEvent(
             event_id=f"evt_{uuid4().hex[:8]}",
             session_id=session_id,
-            plan=existing_plan,
+            level=get_log_level().lower(),
         )
-        await connection_manager.send_event(session_id, plan_event)
+        await connection_manager.send_event(session_id, log_level_event)
 
-    log_level_event = LogLevelEvent(
-        event_id=f"evt_{uuid4().hex[:8]}",
-        session_id=session_id,
-        level=get_log_level().lower(),
-    )
-    await connection_manager.send_event(session_id, log_level_event)
+        # Replay buffered span events so reconnecting clients recover timeline data
+        buffered_spans = engine.observation_service.get_buffered_spans(session_id)
+        if buffered_spans:
+            logger.info(
+                "Replaying %d buffered span events for session=%s",
+                len(buffered_spans),
+                session_id,
+            )
+            for span_event in buffered_spans:
+                await connection_manager.send_event(session_id, span_event)
+    except (RuntimeError, WebSocketDisconnect):
+        # Client already gone — clean up and exit (heartbeat not started yet)
+        logger.info("Client disconnected during session restore: session=%s", session_id)
+        connection_manager.disconnect(websocket)
+        return
 
-    try:
+    # --- Bidirectional heartbeat ---
+
+    last_pong = _time.monotonic()
+
+    async def _heartbeat() -> None:
+        """Server→client ping + client liveness check."""
+        nonlocal last_pong
         while True:
-            # Receive command from client
-            command_data = await connection_manager.receive_command(websocket)
-
-            logger.debug("Received command data: %s", truncate_payload(command_data))
-
-            if command_data is None:
-                # Connection closed
+            await asyncio.sleep(_HEARTBEAT_INTERVAL_S)
+            # Check client liveness
+            elapsed = _time.monotonic() - last_pong
+            if elapsed > _CLIENT_TIMEOUT_S:
+                logger.warning(
+                    "Client timeout (no pong for %.0fs): session=%s",
+                    elapsed,
+                    session_id,
+                )
+                # Close the connection; the finally block handles cleanup
+                try:
+                    await websocket.close(code=4000, reason="client_timeout")
+                except Exception:
+                    pass
+                break
+            try:
+                await websocket.send_json({"event_type": "ping"})
+            except Exception:
                 break
 
-            # Parse command
+    heartbeat_task = asyncio.create_task(_heartbeat())
+
+    # --- Command receive loop ---
+    try:
+        while True:
+            command_data = await connection_manager.receive_command(websocket)
+
+            if command_data is None:
+                break
+
+            # Handle pong from client (heartbeat reply, not a real command)
+            if isinstance(command_data, dict) and command_data.get("command_type") == "pong":
+                last_pong = _time.monotonic()
+                continue
+
+            logger.debug("Received command: %s", truncate_payload(command_data))
+
             try:
                 command = parse_command(command_data)
                 if command:
@@ -355,15 +437,30 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str) -> None:
                     logger.warning("Failed to parse command: %s", command_data)
             except Exception as e:
                 logger.error("Error handling command: %s", e, exc_info=True)
-                # TODO: Send error event to client
 
     except WebSocketDisconnect:
         logger.info("WebSocket disconnected: session=%s", session_id)
 
     finally:
+        heartbeat_task.cancel()
         connection_manager.disconnect(websocket)
         if connection_manager.get_session_count(session_id) == 0:
-            await execution_engine.abort_session_executions(session_id)
+            # Grace period: allow ReconnectingWebSocket to reconnect with same session ID
+            logger.info(
+                "No active connections for session=%s, waiting %ds for reconnect",
+                session_id,
+                _DISCONNECT_GRACE_S,
+            )
+            await asyncio.sleep(_DISCONNECT_GRACE_S)
+            if connection_manager.get_session_count(session_id) == 0:
+                logger.info(
+                    "No reconnection after grace period, aborting executions: session=%s",
+                    session_id,
+                )
+                await execution_engine.abort_session_executions(session_id)
+                engine.observation_service.clear_session_buffer(session_id)
+            else:
+                logger.info("Client reconnected during grace period: session=%s", session_id)
 
 
 def parse_command(data: dict) -> ClientCommand | None:
@@ -712,7 +809,7 @@ if __name__ == "__main__":
     uvicorn.run(
         "houyi_studio.server.app:app",
         host="0.0.0.0",
-        port=8000,
+        port=int(os.environ.get("HOUYI_PORT", "8000")),
         reload=True,
         log_level=LOG_LEVEL.lower(),
         log_config=log_config,

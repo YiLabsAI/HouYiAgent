@@ -20,6 +20,9 @@ from houyi.execution.retry_policy import (
     get_num_retries_from_policy,
 )
 from houyi.llm.llm_adapter import LLMAdapterFactory
+from houyi.observability.context import TraceContext
+from houyi.observability.trace_manager import Span
+from houyi.observability.types import SpanType
 from houyi.protocol.ir import (
     CheckpointTrigger,
     ExecutionIR,
@@ -33,7 +36,7 @@ from .agent_comm_service import AgentCommService
 from .checkpoint_service import CheckpointService
 from .context_service import ContextService
 from .event_bus import EventBus
-from .events import RetryFailedEvent, RetryStatusEvent, RetrySuccessEvent
+from .events import RetryFailedEvent, RetryStatusEvent, RetrySuccessEvent, SpanUpdateEvent
 from .execution_context import ExecutionContext
 from .execution_context_factory import ExecutionContextFactory
 from .execution_lifecycle_service import ExecutionLifecycleService
@@ -100,6 +103,8 @@ class ExecutionEngine:
             rag_service=self.rag_service,
             mcp_gateway=self.mcp_gateway,
             agent_comm_service=self.agent_comm_service,
+            observation_service=self.observation_service,
+            tool_cache=self.tool_call_coordinator.tool_call_cache,
         )
         self.execution_backend: ExecutionBackend = ExecutionBackendResolver().resolve()
         self.lifecycle_hooks: list[LifecycleHook] = []
@@ -324,6 +329,34 @@ class ExecutionEngine:
                 max_retries = max(max_retries, policy_retries)
                 if attempt >= max_retries:
                     break
+
+                # Emit retry span so the attempt is visible in the waterfall
+                retry_span = Span(
+                    name=f"retry.{node_id}",
+                    span_type=SpanType.RETRY,
+                    trace_id=execution.execution_id,
+                    node_id=node_id,
+                    attributes={
+                        "retry.attempt": attempt + 1,
+                        "retry.max_retries": max_retries,
+                        "retry.error": str(exc),
+                    },
+                )
+                # Attach to current trace context if available
+                parent = TraceContext.current()
+                if parent:
+                    retry_span.parent_id = parent.span_id
+                    retry_span.trace_id = parent.trace_id
+                retry_span.set_status("error", str(exc))
+                retry_span.end()
+                await self.observation_service.emit(
+                    SpanUpdateEvent.from_span(
+                        retry_span,
+                        session_id=session_id,
+                        execution_id=execution.execution_id,
+                    )
+                )
+
                 await self.observation_service.emit(
                     RetryStatusEvent(
                         event_id=f"evt_{uuid4().hex[:8]}",

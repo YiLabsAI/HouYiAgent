@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from houyi.core.errors import DependencyMissingError as _CoreDependencyMissingError
+
 
 class WebSearchError(Exception):
     pass
@@ -25,7 +27,7 @@ class ProviderRateLimitError(ProviderError):
     pass
 
 
-class DependencyMissingError(WebSearchError):
+class DependencyMissingError(WebSearchError, _CoreDependencyMissingError):
     pass
 
 

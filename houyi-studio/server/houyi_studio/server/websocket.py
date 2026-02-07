@@ -11,6 +11,8 @@ from fastapi import WebSocket, WebSocketDisconnect
 from .events import ServerEvent
 from .logging_config import truncate_payload
 
+logger = logging.getLogger(__name__)
+
 
 class ConnectionManager:
     """Manages WebSocket connections for console sessions.
@@ -29,6 +31,9 @@ class ConnectionManager:
         # Map connection -> session_id for cleanup
         self.connection_sessions: dict[WebSocket, str] = {}
 
+        # Per-session counter for dropped events (rate-limit log spam)
+        self._drop_counts: dict[str, int] = {}
+
     async def connect(self, websocket: WebSocket, session_id: str) -> None:
         """Accept a new WebSocket connection.
 
@@ -40,6 +45,15 @@ class ConnectionManager:
 
         if session_id not in self.active_connections:
             self.active_connections[session_id] = []
+
+        # Log summary of events dropped while disconnected
+        dropped = self._drop_counts.pop(session_id, 0)
+        if dropped:
+            logger.info(
+                "[WebSocket] Session %s reconnected, %d events were dropped while disconnected",
+                session_id,
+                dropped,
+            )
 
         self.active_connections[session_id].append(websocket)
         self.connection_sessions[websocket] = session_id
@@ -73,10 +87,24 @@ class ConnectionManager:
             event: Event to send
         """
         if session_id not in self.active_connections:
+            count = self._drop_counts.get(session_id, 0)
+            if count == 0:
+                logger.warning(
+                    "[WebSocket] No active connections for session %s, dropping event %s (further drops will be silent)",
+                    session_id,
+                    getattr(event, "event_type", "?"),
+                )
+            self._drop_counts[session_id] = count + 1
             return
 
         # Serialize event
         event_json = event.model_dump_json()
+        logger.debug(
+            "[WebSocket] Sending event type=%s to session=%s (%d connections)",
+            getattr(event, "event_type", "?"),
+            session_id,
+            len(self.active_connections[session_id]),
+        )
 
         # Send to all connections in session
         disconnected = []

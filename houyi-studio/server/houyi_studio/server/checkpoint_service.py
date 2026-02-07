@@ -78,10 +78,11 @@ class CheckpointService:
             sequence_number=payload.sequence_number,
             trigger=payload.trigger,
             llm_call_logs=payload.llm_call_logs,
+            metadata=payload.metadata,
         )
         await self._observation_service.emit(event)
 
-        logger.info("Created checkpoint: %s", checkpoint.checkpoint_id)
+        logger.debug("Created checkpoint: %s", checkpoint.checkpoint_id)
 
     async def restore_checkpoint(
         self,
@@ -122,6 +123,11 @@ class CheckpointService:
                     return dumped
             return {"value": value}
 
+        # Include execution metadata so the frontend can track lineage (parent_execution_id)
+        # even before the first real node execution fires.
+        restore_exec = getattr(outcome, "execution", None)
+        restore_exec_metadata = getattr(restore_exec, "metadata", None) if restore_exec else None
+
         for node_payload in outcome.node_statuses:
             await self._observation_service.emit(
                 NodeStatusEvent(
@@ -133,6 +139,7 @@ class CheckpointService:
                     inputs=_normalize_payload(node_payload.inputs),
                     outputs=_normalize_payload(node_payload.outputs),
                     error=node_payload.error,
+                    execution_metadata=restore_exec_metadata,
                 )
             )
 

@@ -17,6 +17,8 @@ from .rag_service import RAGService
 if TYPE_CHECKING:
     from houyi.observability import Span
 
+    from .observation_service import ObservationService
+
 
 @dataclass(slots=True)
 class ExecutionContext:
@@ -31,6 +33,8 @@ class ExecutionContext:
     agent_comm_service: AgentCommService | None = None
     context_bundle: ContextBundle | None = None
     root_span: Span | None = None
+    observation_service: ObservationService | None = None
+    tool_cache: dict[str, dict[str, Any]] | None = None
 
     def update_plan(self, plan: PlanIR) -> None:
         self.plan = plan

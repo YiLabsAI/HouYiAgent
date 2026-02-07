@@ -20,6 +20,8 @@ class SpanType(str, Enum):
     - llm: LLM call within a node
     - tool: Tool/skill invocation
     - retriever: RAG retrieval operation
+    - retry: Failed retry attempt
+    - internal: Tool-internal sub-operation (provider query, content fetch, etc.)
     """
 
     EXECUTION = "execution"
@@ -27,6 +29,8 @@ class SpanType(str, Enum):
     LLM = "llm"
     TOOL = "tool"
     RETRIEVER = "retriever"
+    RETRY = "retry"
+    INTERNAL = "internal"
 
 
 class SpanStatus(str, Enum):

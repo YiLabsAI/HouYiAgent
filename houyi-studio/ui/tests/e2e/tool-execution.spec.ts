@@ -839,3 +839,164 @@ test('workflow load dialog shows saved workflows', async () => {
   await expect(page.getByText('3n / 0e')).toBeVisible();
   logTiming('test_total', testStart);
 });
+
+test('Timeline tab shows spans after execution with span_update events', async () => {
+  const page = sharedPage;
+  const testStart = nowMs();
+
+  await page.evaluate(() => {
+    const store = (window as any).__consoleStore;
+    store.getState().resetRunSettings();
+    store.getState().addNode('LLM', { x: 200, y: 100 });
+  });
+
+  await measure('node_count', () => waitForNodeCount(page, 1));
+  await ensurePlanInStore(page);
+
+  // Install a custom mock that also emits span_update events
+  await page.evaluate(() => {
+    const store = (window as any).__consoleStore;
+    if (!store) return;
+    const existingOriginal = (window as any).__e2eOriginalSendCommand;
+    const originalSendCommand = existingOriginal || store.getState().sendCommand;
+    if (!existingOriginal) {
+      (window as any).__e2eOriginalSendCommand = originalSendCommand;
+    }
+
+    store.setState({
+      sendCommand: (command: any) => {
+        if (command?.command_type !== 'start_execution') {
+          originalSendCommand(command);
+          return;
+        }
+
+        const state = store.getState();
+        const sessionId = state.sessionId;
+        const executionId = `e2e_exec_timeline_${Date.now()}`;
+        const timestamp = new Date().toISOString();
+        const now = Date.now() / 1000;
+        const handleEvent = state.handleEvent;
+        const llmNode = state.nodes.find((n: any) => n.type === 'llm');
+        if (!llmNode) return;
+
+        handleEvent({
+          event_type: 'execution_status',
+          event_id: `evt_${Date.now()}_start`,
+          timestamp,
+          session_id: sessionId,
+          execution_id: executionId,
+          status: 'running',
+        });
+
+        // Emit span_update for node start
+        handleEvent({
+          event_type: 'span_update',
+          event_id: `evt_span_${Date.now()}_1`,
+          session_id: sessionId,
+          execution_id: executionId,
+          trace_id: executionId,
+          span_id: `span_node_${llmNode.id}`,
+          parent_span_id: null,
+          span_type: 'node',
+          name: `node.${llmNode.id}`,
+          status: 'ok',
+          start_time: now,
+          end_time: null,
+          node_id: llmNode.id,
+          attributes: {},
+        });
+
+        // Emit span_update for llm sub-span
+        handleEvent({
+          event_type: 'span_update',
+          event_id: `evt_span_${Date.now()}_2`,
+          session_id: sessionId,
+          execution_id: executionId,
+          trace_id: executionId,
+          span_id: `span_llm_${llmNode.id}`,
+          parent_span_id: `span_node_${llmNode.id}`,
+          span_type: 'llm',
+          name: 'llm.completion',
+          status: 'ok',
+          start_time: now,
+          end_time: now + 1.5,
+          node_id: llmNode.id,
+          model: 'deepseek-ai/DeepSeek-V3',
+          tokens_input: 100,
+          tokens_output: 50,
+          attributes: {},
+        });
+
+        // Complete node span
+        handleEvent({
+          event_type: 'span_update',
+          event_id: `evt_span_${Date.now()}_3`,
+          session_id: sessionId,
+          execution_id: executionId,
+          trace_id: executionId,
+          span_id: `span_node_${llmNode.id}`,
+          parent_span_id: null,
+          span_type: 'node',
+          name: `node.${llmNode.id}`,
+          status: 'ok',
+          start_time: now,
+          end_time: now + 2.0,
+          node_id: llmNode.id,
+          attributes: {},
+        });
+
+        handleEvent({
+          event_type: 'node_status',
+          event_id: `evt_${Date.now()}_done`,
+          timestamp,
+          session_id: sessionId,
+          execution_id: executionId,
+          node_id: llmNode.id,
+          status: 'completed',
+          outputs: { result: 'Timeline test output' },
+        });
+
+        handleEvent({
+          event_type: 'execution_status',
+          event_id: `evt_${Date.now()}_end`,
+          timestamp,
+          session_id: sessionId,
+          execution_id: executionId,
+          status: 'completed',
+        });
+      },
+    });
+  });
+
+  await waitForPlanReady(page);
+  await startExecutionFromStore(page);
+
+  // Dismiss any open modals/overlays from previous tests
+  await page.keyboard.press('Escape');
+
+  // Force-flush pending spans (they are buffered with a 100ms timer)
+  await page.evaluate(() => {
+    const store = (window as any).__consoleStore;
+    store?.getState()?.flushPendingSpans?.();
+  });
+
+  // Verify spans landed in the store before checking UI
+  await expect.poll(async () => {
+    return page.evaluate(() => {
+      const store = (window as any).__consoleStore;
+      const state = store?.getState();
+      const execId = state?.executionId;
+      if (!execId || !state?.spanStore?.[execId]) return 0;
+      return Object.keys(state.spanStore[execId]).length;
+    });
+  }, { timeout: 5000 }).toBeGreaterThanOrEqual(2);
+
+  // Switch to Logs panel > Timeline tab (use the tab bar inside LogsPanel)
+  await page.getByRole('button', { name: 'Logs' }).click();
+  await page.locator('.bg-gray-700.rounded button', { hasText: 'Timeline' }).click();
+
+  // Assert Timeline is NOT empty (the "No span data available" message should be gone)
+  await expect(page.getByText('No span data available')).not.toBeVisible({ timeout: 5000 });
+
+  logTiming('test_total', testStart);
+});

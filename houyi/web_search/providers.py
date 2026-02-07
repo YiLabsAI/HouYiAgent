@@ -22,6 +22,8 @@ from houyi.web_search.errors import (
 )
 from houyi.web_search.types import WebSearchResult
 
+DEFAULT_PROVIDER_TIMEOUT: float = 5.0
+
 
 class WebSearchProvider(Protocol):
     """Provider interface for web search."""
@@ -56,6 +58,7 @@ class TavilyWebSearchProvider:
 
     name: str = "tavily"
     api_key: str | None = None
+    timeout: float = DEFAULT_PROVIDER_TIMEOUT
     _client: object = field(init=False, repr=False)
     last_raw_payload: dict[str, Any] | None = field(default=None, init=False, repr=False)
 
@@ -113,6 +116,7 @@ class SearxNGWebSearchProvider:
 
     name: str = "searxng"
     base_url: str | None = None
+    timeout: float = DEFAULT_PROVIDER_TIMEOUT
     last_raw_payload: dict[str, Any] | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -133,7 +137,7 @@ class SearxNGWebSearchProvider:
             }
             req = request.Request(url, headers=headers, method="GET")
             try:
-                with request.urlopen(req, timeout=30) as response:
+                with request.urlopen(req, timeout=self.timeout) as response:
                     return json.loads(response.read().decode("utf-8"))
             except HTTPError as exc:
                 if exc.code == 429:
@@ -182,6 +186,7 @@ class DuckDuckGoWebSearchProvider:
 
     name: str = "ddg"
     endpoint: str = "https://api.duckduckgo.com/"
+    timeout: float = DEFAULT_PROVIDER_TIMEOUT
     last_raw_payload: dict[str, Any] | None = field(default=None, init=False, repr=False)
 
     async def search(self, query: str, *, max_results: int) -> list[WebSearchResult]:
@@ -212,7 +217,7 @@ class DuckDuckGoWebSearchProvider:
             }
             req = request.Request(url, headers=headers, method="GET")
             try:
-                with request.urlopen(req, timeout=30) as response:
+                with request.urlopen(req, timeout=self.timeout) as response:
                     return json.loads(response.read().decode("utf-8"))
             except HTTPError as exc:
                 if exc.code == 429:
@@ -282,6 +287,7 @@ class SerperWebSearchProvider:
     name: str = "serper"
     api_key: str | None = None
     endpoint: str = "https://google.serper.dev/search"
+    timeout: float = DEFAULT_PROVIDER_TIMEOUT
     last_raw_payload: dict[str, Any] | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -302,7 +308,7 @@ class SerperWebSearchProvider:
         def _request() -> dict:
             req = request.Request(self.endpoint, data=payload, headers=headers, method="POST")
             try:
-                with request.urlopen(req, timeout=30) as response:
+                with request.urlopen(req, timeout=self.timeout) as response:
                     return json.loads(response.read().decode("utf-8"))
             except HTTPError as exc:
                 if exc.code == 429:

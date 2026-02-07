@@ -9,15 +9,17 @@ type ViewMode = 'graph' | 'chat';
 // Agent / Observability will be wired up in later phases; we keep the entry points visible but disabled for now.
 
 interface HeaderProps {
-  onOpenBottomPanel?: (tab: 'timeline' | 'checkpoints') => void;
+  onOpenBottomPanel?: (tab: 'observability' | 'checkpoints' | 'logs' | 'context') => void;
   onSelectLeftTab?: (tab: 'workflow' | 'chat' | 'knowledge' | 'skills') => void;
   activeLeftTab?: 'workflow' | 'chat' | 'knowledge' | 'skills';
+  onOpenObs?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
   onOpenBottomPanel,
   onSelectLeftTab,
   activeLeftTab,
+  onOpenObs,
 }) => {
   const { connectionStatus, setRunSettingsOpen } = useConsoleStore();
   const [theme, setTheme] = React.useState<'light' | 'dark'>('dark');
@@ -90,10 +92,10 @@ export const Header: React.FC<HeaderProps> = ({
 
           <button
             type="button"
-            disabled
-            className="px-4 py-1.5 rounded-md text-sm font-medium transition-all text-gray-500 cursor-not-allowed"
-            title="Observability (Coming soon): for now, use BottomPanel Logs / Verification / Context as the temporary entry"
-            aria-label="Observability (Coming soon)"
+            onClick={() => onOpenObs?.()}
+            className="px-4 py-1.5 rounded-md text-sm font-medium transition-all text-gray-400 hover:text-gray-200"
+            title="Observability: open full trace waterfall + metrics view"
+            aria-label="Observability"
           >
             <span className="flex items-center gap-2">
               <span>📊</span>
@@ -126,7 +128,7 @@ export const Header: React.FC<HeaderProps> = ({
         <div className="flex items-center gap-1 rounded-lg bg-gray-800 p-1 border border-gray-700/50">
           <button
             type="button"
-            onClick={() => onOpenBottomPanel?.('timeline')}
+            onClick={() => onOpenBottomPanel?.('observability')}
             disabled={!onOpenBottomPanel}
             className="h-9 w-9 rounded-md hover:bg-gray-700 text-gray-400 hover:text-gray-200 transition-colors disabled:cursor-not-allowed disabled:opacity-50 flex items-center justify-center"
             title="Timeline"

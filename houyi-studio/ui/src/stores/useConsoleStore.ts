@@ -18,6 +18,7 @@ import {
 import { createToastActions } from './storeActions/toastActions';
 import { createCommandActions } from './storeActions/commandActions';
 import { createToolStatsActions } from './storeActions/toolStatsActions';
+import { createSpanActions, type SpanStore } from './storeActions/spanActions';
 
 interface Toast {
   id: string;
@@ -91,6 +92,8 @@ interface ConsoleState {
   toastKeys: Record<string, string>;
   activityLogs: ActivityLog[];
   nodeObservations: Record<string, Record<string, Record<string, any>>>;
+  spanStore: SpanStore;
+  executionLineageMap: Record<string, { parentExecutionId: string; parentCheckpointId?: string; replayMode?: string }>;
   serverLogLevel: 'debug' | 'info' | 'warning' | 'error';
   loadingWorkflowName: string | null; // Track which workflow is being loaded
   workflows: WorkflowSummary[];
@@ -161,6 +164,11 @@ interface ConsoleState {
 
   // Tool statistics
   getToolStatistics: () => ToolStatistics;
+
+  // Span actions for timeline
+  updateSpan: (event: any) => void;
+  getSpanTree: (executionId: string) => any;
+  clearSpans: (executionId?: string) => void;
 }
 
 export const useConsoleStore = create<ConsoleState>((set, get) => ({
@@ -190,6 +198,8 @@ export const useConsoleStore = create<ConsoleState>((set, get) => ({
   toastKeys: {},
   activityLogs: [],
   nodeObservations: {},
+  spanStore: {},
+  executionLineageMap: {},
   serverLogLevel: 'info',
   loadingWorkflowName: null,
   workflows: [],
@@ -238,4 +248,7 @@ export const useConsoleStore = create<ConsoleState>((set, get) => ({
 
   // Tool statistics
   ...createToolStatsActions(set, get),
+
+  // Span actions for timeline
+  ...createSpanActions(set, get),
 }));

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from collections.abc import Awaitable, Callable
@@ -26,6 +27,7 @@ from houyi.protocol.ir.plan_ir import NodeIR
 from houyi.verification import ConstraintChecker, PythonVerifier, SQLVerifier
 from houyi.verification.verifier import VerificationResult
 
+from .events import SpanUpdateEvent
 from .execution_context import ExecutionContext
 from .node_executor_registry import NodeExecutor
 
@@ -173,6 +175,45 @@ class ToolNodeExecutor(NodeExecutor):
             },
         )
 
+    @staticmethod
+    async def _emit_child_spans(
+        parent_span: Any,
+        obs: Any,
+        session_id: str,
+        execution_id: str,
+    ) -> None:
+        """Recursively emit all child spans (internal sub-spans) to the observation service.
+
+        Tool instrumentation (e.g. WebSearchService) creates child spans on the
+        tool span. These need to be emitted separately so they appear in the
+        frontend Timeline waterfall.
+        """
+        children = getattr(parent_span, "children", None)
+        if not children:
+            return
+        for child in children:
+            try:
+                await obs.emit(
+                    SpanUpdateEvent.from_span(
+                        child,
+                        session_id=session_id,
+                        execution_id=execution_id,
+                    )
+                )
+            except Exception:
+                logger.debug("Failed to emit child span %s", getattr(child, "span_id", "?"))
+            # Recurse into grandchildren
+            await ToolNodeExecutor._emit_child_spans(child, obs, session_id, execution_id)
+
+    @staticmethod
+    def _build_tool_cache_key(tool_name: str, args: dict[str, Any]) -> str | None:
+        """Build a cache key matching ToolCallRunner's format for cross-path consistency."""
+        payload = {"tool": tool_name, "args": args, "version": None}
+        try:
+            return json.dumps(payload, ensure_ascii=True, sort_keys=True)
+        except TypeError:
+            return None
+
     def _build_inputs_from_context(
         self,
         context: ExecutionContext,
@@ -268,9 +309,65 @@ class ToolNodeExecutor(NodeExecutor):
         # Create tool span as child of current trace context
         tool_span = self._create_tool_span(normalized_tool)
 
+        # Emit start span event so the frontend Timeline can show it
+        obs = context.observation_service
+        if tool_span and obs:
+            await obs.emit(
+                SpanUpdateEvent.from_span(
+                    tool_span,
+                    session_id=context.session_id,
+                    execution_id=context.execution.execution_id,
+                )
+            )
+
+        # Push tool span onto TraceContext so internal sub-spans (e.g. from
+        # WebSearchService instrumentation) attach as children of the tool span.
+        _tc_token = None
+        if tool_span:
+            _tc_token = TraceContext.push(tool_span)
+
+        # Tool cache lookup: reuse results from prior executions within the same session.
+        # Uses the same key format as ToolCallRunner for consistency.
+        tool_cache = context.tool_cache
+        replay_mode = None
+        if isinstance(context.execution.metadata, dict):
+            replay_mode = context.execution.metadata.get("replay_mode")
+        allow_fresh_tool_cache = (
+            os.getenv("HOUYI_FRESH_REPLAY_USE_TOOL_CACHE") or ""
+        ).strip().lower() in {"1", "true", "yes", "on"}
+        if replay_mode == "fresh" and not allow_fresh_tool_cache:
+            tool_cache = None
+
+        cache_key = self._build_tool_cache_key(normalized_tool, node_exec.inputs or {})
+
         try:
-            executor = SkillExecutor()
-            result = await executor.execute(skill, node_exec.inputs)
+            # Check tool cache before executing
+            cached_result = None
+            if tool_cache is not None and cache_key:
+                cached_result = tool_cache.get(cache_key)
+
+            if cached_result is not None:
+                logger.info(
+                    "[%s] Tool cache hit: tool=%s cache_key=%s",
+                    node.node_id,
+                    normalized_tool,
+                    cache_key[:80] if cache_key else None,
+                )
+                result = dict(cached_result)
+                result_meta = dict(result.get("metadata") or {})
+                result_meta["cache_hit"] = True
+                result_meta["cache_key"] = cache_key
+                result["metadata"] = result_meta
+            else:
+                executor = SkillExecutor()
+                result = await executor.execute(skill, node_exec.inputs)
+                # Store in cache for future lookups
+                if (
+                    tool_cache is not None
+                    and cache_key
+                    and not (isinstance(result, dict) and result.get("error"))
+                ):
+                    tool_cache[cache_key] = result
 
             output_metadata: dict[str, Any] = {}
             if isinstance(result, dict):
@@ -322,10 +419,22 @@ class ToolNodeExecutor(NodeExecutor):
                     output_metadata.get("cache_key"),
                 )
 
-            # End tool span on success
+            # End tool span on success and emit completion event
             if tool_span:
                 tool_span.set_status("ok")
                 tool_span.end()
+                if obs:
+                    await obs.emit(
+                        SpanUpdateEvent.from_span(
+                            tool_span,
+                            session_id=context.session_id,
+                            execution_id=context.execution.execution_id,
+                        )
+                    )
+                    # Emit internal sub-spans created by tool instrumentation
+                    await self._emit_child_spans(
+                        tool_span, obs, context.session_id, context.execution.execution_id
+                    )
 
         except Exception as e:
             node_exec.error = str(e)
@@ -335,10 +444,27 @@ class ToolNodeExecutor(NodeExecutor):
                 metadata={"tool_name": normalized_tool},
             ).model_dump()
 
-            # End tool span on error
+            # End tool span on error and emit event
             if tool_span:
                 tool_span.set_status("error", str(e))
                 tool_span.end()
+                if obs:
+                    await obs.emit(
+                        SpanUpdateEvent.from_span(
+                            tool_span,
+                            session_id=context.session_id,
+                            execution_id=context.execution.execution_id,
+                        )
+                    )
+                    # Emit internal sub-spans even on error
+                    await self._emit_child_spans(
+                        tool_span, obs, context.session_id, context.execution.execution_id
+                    )
+
+        finally:
+            # Always pop the tool span from TraceContext to prevent context leaks
+            if _tc_token is not None:
+                TraceContext.pop(_tc_token)
 
 
 class VerifyNodeExecutor(NodeExecutor):

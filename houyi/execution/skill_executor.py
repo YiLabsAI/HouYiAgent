@@ -5,11 +5,25 @@ from __future__ import annotations
 import asyncio
 import functools
 import inspect
+import logging
+from collections.abc import Callable
 from typing import Any
 
 from pydantic import BaseModel, ValidationError
 
+from houyi.core.errors import DependencyMissingError
 from houyi.core.skill import SkillSpec
+
+try:
+    from houyi.observability.context import TraceContext as _TraceContext
+    from houyi.observability.trace_manager import Span as _Span
+    from houyi.observability.types import SpanType as _SpanType
+
+    _HAS_OBSERVABILITY = True
+except ImportError:
+    _HAS_OBSERVABILITY = False
+
+logger = logging.getLogger(__name__)
 
 
 class SkillExecutionError(Exception):
@@ -36,7 +50,7 @@ class SkillExecutor:
     def __init__(
         self,
         max_retries: int = 3,
-        timeout: float = 30.0,
+        timeout: float = 15.0,
     ):
         """Initialize skill executor.
 
@@ -46,6 +60,7 @@ class SkillExecutor:
         """
         self.max_retries = max_retries
         self.timeout = timeout
+        self._on_retry_span: Callable | None = None
 
     async def execute(
         self,
@@ -87,6 +102,27 @@ class SkillExecutor:
                 raise
             except Exception as e:
                 last_error = e
+                logger.warning(
+                    "[%s] attempt %d/%d failed: %s: %s",
+                    skill.name,
+                    attempt + 1,
+                    self.max_retries,
+                    type(e).__name__,
+                    e,
+                )
+                self._emit_retry_span(skill.name, attempt + 1, self.max_retries, e)
+                # Don't retry deterministic errors
+                if isinstance(
+                    e,
+                    (
+                        ImportError,
+                        ModuleNotFoundError,
+                        TypeError,
+                        ValueError,
+                        DependencyMissingError,
+                    ),
+                ):
+                    break
                 if attempt < self.max_retries - 1:
                     # Wait before retry (exponential backoff)
                     await asyncio.sleep(2**attempt)
@@ -96,6 +132,31 @@ class SkillExecutor:
         raise SkillExecutionError(
             skill.name, f"Execution failed after {self.max_retries} retries", last_error
         )
+
+    def _emit_retry_span(
+        self, skill_name: str, attempt: int, max_retries: int, exc: Exception
+    ) -> None:
+        """Create a RETRY span for a failed attempt (observability)."""
+        if not _HAS_OBSERVABILITY:
+            return
+        parent = _TraceContext.current()
+        if parent is None:
+            return
+        span = _Span(
+            name=f"retry.{skill_name}",
+            span_type=_SpanType.RETRY,
+            parent=parent,
+            attributes={
+                "retry.attempt": attempt,
+                "retry.max_retries": max_retries,
+                "retry.error": f"{type(exc).__name__}: {exc}",
+                "retry.skill": skill_name,
+            },
+        )
+        span.set_status("error", str(exc))
+        span.end()
+        if self._on_retry_span is not None:
+            self._on_retry_span(span)
 
     def _validate_and_merge_output(self, skill: SkillSpec, result: Any) -> dict[str, Any]:
         try:

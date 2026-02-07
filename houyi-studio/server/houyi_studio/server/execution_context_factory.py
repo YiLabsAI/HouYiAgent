@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from houyi.protocol.ir import ExecutionIR, PlanIR
 
 from .agent_comm_service import AgentCommService
@@ -9,6 +11,7 @@ from .context_service import ContextService
 from .execution_context import ExecutionContext
 from .mcp_gateway import MCPGateway
 from .memory_service import MemoryService
+from .observation_service import ObservationService
 from .rag_service import RAGService
 
 
@@ -23,12 +26,16 @@ class ExecutionContextFactory:
         rag_service: RAGService,
         mcp_gateway: MCPGateway,
         agent_comm_service: AgentCommService,
+        observation_service: ObservationService | None = None,
+        tool_cache: dict[str, dict[str, Any]] | None = None,
     ) -> None:
         self._context_service = context_service
         self._memory_service = memory_service
         self._rag_service = rag_service
         self._mcp_gateway = mcp_gateway
         self._agent_comm_service = agent_comm_service
+        self._observation_service = observation_service
+        self._tool_cache = tool_cache
 
     def build(self, session_id: str, execution: ExecutionIR, plan: PlanIR) -> ExecutionContext:
         """Build a shared execution context with all required services."""
@@ -42,4 +49,6 @@ class ExecutionContextFactory:
             rag_service=self._rag_service,
             mcp_gateway=self._mcp_gateway,
             agent_comm_service=self._agent_comm_service,
+            observation_service=self._observation_service,
+            tool_cache=self._tool_cache,
         )

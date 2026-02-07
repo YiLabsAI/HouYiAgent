@@ -276,7 +276,9 @@ def test_restore_checkpoint_forks_execution_resets_nodes_and_copies_checkpoints(
     # Status paused.
     assert forked.status == ExecutionStatus.PAUSED
 
-    # Only nodes after trigger should be reset (n2).
+    # Only nodes AFTER the trigger node should be reset (n2).
+    # The checkpoint captures state after trigger_node (n1) completed,
+    # so n1 stays COMPLETED and execution resumes from n2.
     assert forked.node_executions["n1"].status == NodeStatus.COMPLETED
     assert forked.node_executions["n2"].status == NodeStatus.PENDING
     assert forked.node_executions["n2"].outputs == {}
@@ -292,3 +294,68 @@ def test_restore_checkpoint_forks_execution_resets_nodes_and_copies_checkpoints(
     # LLM call logs copied for deterministic replay.
     assert llm_call_logs[forked.execution_id]
     assert getattr(llm_call_logs[forked.execution_id][0], "call_id", None) == "llm_0_n1"
+
+
+def test_restore_terminal_checkpoint_replays_all_nodes() -> None:
+    """Restoring from the last checkpoint (trigger_node is the last node)
+    should reset ALL nodes (replay-all semantics) instead of failing."""
+    checkpoint_store = _CheckpointStore()
+    execution_store = _ExecutionStore()
+    plan_store = _PlanStore()
+
+    plan = _build_plan()
+    plan_store.set("s1", plan, persist=False)
+
+    parent_execution = _build_execution(
+        execution_id="exec_parent", plan_id=plan.plan_id, session_id="s1"
+    )
+
+    # Checkpoint triggered by the LAST node (n2)
+    terminal_cp = CheckpointIR(
+        checkpoint_id="cp_terminal",
+        execution_id=parent_execution.execution_id,
+        plan_id=parent_execution.plan_id,
+        sequence_number=2,
+        trigger=CheckpointTrigger.NODE_COMPLETED,
+        created_at=datetime.now(),
+        execution_snapshot=parent_execution.model_dump(),
+        llm_call_logs=[],
+        parent_checkpoint_id=None,
+        delta=None,
+        metadata={"trigger_node_id": "n2"},
+    )
+    checkpoint_store.add(parent_execution.execution_id, terminal_cp)
+
+    task = _Task()
+    execution_tasks = {parent_execution.execution_id: task}
+    llm_call_logs: dict[str, list[Any]] = {}
+
+    manager = CheckpointManager(
+        checkpoint_store=checkpoint_store,
+        execution_store=execution_store,
+        plan_store=plan_store,
+        execution_tasks=execution_tasks,
+        llm_call_logs=llm_call_logs,
+        get_execution_order=lambda _plan: ["n1", "n2"],
+    )
+
+    outcome = asyncio.run(
+        manager.restore_checkpoint(
+            session_id="s1",
+            checkpoint_id="cp_terminal",
+            replay_mode="deterministic",
+            execution_id=parent_execution.execution_id,
+        )
+    )
+
+    # Should succeed (not reject)
+    assert outcome.result.success is True
+    assert outcome.execution is not None
+    forked = outcome.execution
+
+    # ALL nodes should be reset (replay-all)
+    assert forked.node_executions["n1"].status == NodeStatus.PENDING
+    assert forked.node_executions["n2"].status == NodeStatus.PENDING
+
+    # Metadata should indicate replay-all
+    assert forked.metadata.get("replay_all") is True
