@@ -228,8 +228,8 @@ class TestIndexDirSeparation:
 
     def test_rag_config_index_dir_default(self):
         """Test RAGConfig defaults index_dir to knowledge_dir/.houyi."""
-        import os
         from pathlib import Path
+
         from houyi.rag.config import RAGConfig
 
         # Use a platform-appropriate path
