@@ -180,10 +180,12 @@ class QualitySummary(BaseModel):
             else:
                 distribution["0-20"] += 1
 
-        # Assess relevance based on avg score
-        if avg_score >= 0.7:
+        # Assess relevance based on avg score (use tolerance for floating-point comparison)
+        # Adding small epsilon to handle floating-point precision issues
+        eps = 1e-9
+        if avg_score >= 0.7 - eps:
             relevance = "high"
-        elif avg_score >= 0.5:
+        elif avg_score >= 0.5 - eps:
             relevance = "medium"
         else:
             relevance = "low"
