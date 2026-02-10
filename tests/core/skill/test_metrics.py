@@ -389,7 +389,7 @@ class TestMetricsStore:
         store = MetricsStore()
 
         # Store multiple metrics entries
-        for _i in range(3):
+        for _ in range(3):
             m = SkillMetrics(skill_name="test_skill")
             m.reliability.success_count = 10
             m.reliability.error_count = 1

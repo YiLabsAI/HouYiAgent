@@ -75,7 +75,7 @@ class ActivationEvent:
             try:
                 event_type = ActivationEventType(event_type_str)
             except ValueError:
-                logger.warning("Unknown activation event type: %s", event_type_str)
+                logger.warning(f"Unknown activation event type: {event_type_str}")
                 event_type = ActivationEventType.ON_STARTUP
             return cls(event_type=event_type, pattern=pattern)
 
@@ -83,7 +83,7 @@ class ActivationEvent:
             event_type = ActivationEventType(event_str)
             return cls(event_type=event_type)
         except ValueError:
-            logger.warning("Unknown activation event: %s", event_str)
+            logger.warning(f"Unknown activation event: {event_str}")
             return cls(event_type=ActivationEventType.ON_STARTUP)
 
 
@@ -136,9 +136,6 @@ class SkillContribution:
     description: str
     """Human-readable description."""
 
-    path: str = ""
-    """Path to the skill definition file (SKILL.md) relative to manifest."""
-
     invocation_policy: InvocationPolicy = field(default_factory=InvocationPolicy)
     """Invocation policy for this skill."""
 
@@ -158,7 +155,6 @@ class SkillContribution:
         return cls(
             id=data.get("id", ""),
             description=data.get("description", ""),
-            path=data.get("path", ""),
             invocation_policy=policy,
             tool_refs=data.get("toolRefs", []),
             resources=data.get("resources", []),
@@ -543,11 +539,7 @@ class ManifestRegistry:
             self._skill_index[full_id] = manifest.id
             self._skill_index[skill.id] = manifest.id
 
-        logger.info(
-            "Registered manifest: %s (v%s)",
-            manifest.id,
-            manifest.version,
-        )
+        logger.info(f"Registered manifest: {manifest.id} (v{manifest.version})")
 
     def unregister(self, manifest_id: str) -> None:
         """Unregister a manifest."""

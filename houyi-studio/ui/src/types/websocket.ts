@@ -3,7 +3,7 @@
  * Matches backend event and command definitions
  */
 
-import type { PlanIR, NodeStatus, ExecutionStatus } from './ir';
+import type { PlanIR, NodeStatus, ExecutionStatus, KnowledgeLibrary, KnowledgeSearchResult, KnowledgeDocument, KnowledgeChunk, ChunkPreview, QualitySummary } from './ir';
 
 // Event types (server -> client)
 export type EventType =
@@ -20,7 +20,22 @@ export type EventType =
   | 'workflow_list'
   | 'conflict'
   | 'log_level'
-  | 'span_update';
+  // Knowledge Base events
+  | 'knowledge_library_list'
+  | 'knowledge_library_created'
+  | 'knowledge_library_updated'
+  | 'knowledge_library_deleted'
+  | 'knowledge_search_results'
+  | 'knowledge_ingest_progress'
+  | 'knowledge_ingest_complete'
+  | 'knowledge_error'
+  // Document management events
+  | 'document_list'
+  | 'document_detail'
+  | 'document_deleted'
+  | 'document_status_changed'
+  | 'chunk_list'
+  | 'chunk_preview';
 
 export interface ServerEvent {
   event_type: EventType;
@@ -69,7 +84,6 @@ export interface CheckpointCreatedEvent extends ServerEvent {
   sequence_number: number;
   trigger: string;
   llm_call_logs?: any[];
-  metadata?: Record<string, any>;
 }
 
 export interface RestoreCheckpointResultEvent extends ServerEvent {
@@ -126,39 +140,6 @@ export interface LogLevelEvent extends ServerEvent {
   requested_level?: string | null;
 }
 
-// Span types for timeline visualization
-export type SpanType = 'execution' | 'node' | 'llm' | 'tool' | 'retriever' | 'retry' | 'internal';
-
-export interface SpanUpdateEvent extends ServerEvent {
-  event_type: 'span_update';
-  execution_id: string;
-  trace_id: string;
-  span_id: string;
-  parent_span_id?: string | null;
-  span_type: SpanType;
-  name: string;
-  status: 'ok' | 'error';
-  start_time: number;
-  end_time?: number | null;
-
-  // AI-native fields
-  node_id?: string | null;
-  model?: string | null;
-  tokens_input?: number | null;
-  tokens_output?: number | null;
-  cost_usd?: number | null;
-  cache_hit?: boolean | null;
-  tool_name?: string | null;
-
-  // Checkpoint lineage
-  parent_trace_id?: string | null;
-  restore_checkpoint_id?: string | null;
-  replay_mode?: boolean;
-
-  // Generic attributes
-  attributes?: Record<string, any>;
-}
-
 export interface WorkflowListEvent extends ServerEvent {
   event_type: 'workflow_list';
   workflows: Array<{
@@ -168,6 +149,108 @@ export interface WorkflowListEvent extends ServerEvent {
     edge_count?: number;
     nodes_count?: number;
   }>;
+}
+
+// ============================================================================
+// Knowledge Base Events
+// ============================================================================
+
+export interface KnowledgeLibraryListEvent extends ServerEvent {
+  event_type: 'knowledge_library_list';
+  libraries: KnowledgeLibrary[];
+}
+
+export interface KnowledgeLibraryCreatedEvent extends ServerEvent {
+  event_type: 'knowledge_library_created';
+  library: KnowledgeLibrary;
+}
+
+export interface KnowledgeLibraryDeletedEvent extends ServerEvent {
+  event_type: 'knowledge_library_deleted';
+  library_id: string;
+}
+
+export interface KnowledgeSearchResultsEvent extends ServerEvent {
+  event_type: 'knowledge_search_results';
+  query: string;
+  library_id: string;
+  results: KnowledgeSearchResult[];
+  mode_used: string;
+  strategies_used?: string[]; 
+  total_results: number;
+  quality?: QualitySummary | null; 
+}
+
+export interface KnowledgeErrorEvent extends ServerEvent {
+  event_type: 'knowledge_error';
+  error: string;
+  operation: string;
+}
+
+export interface KnowledgeLibraryUpdatedEvent extends ServerEvent {
+  event_type: 'knowledge_library_updated';
+  library: KnowledgeLibrary;
+}
+
+export interface KnowledgeIngestProgressEvent extends ServerEvent {
+  event_type: 'knowledge_ingest_progress';
+  library_id: string;
+  progress: number;
+  current_file: string;
+  files_processed: number;
+  total_files: number;
+}
+
+export interface KnowledgeIngestCompleteEvent extends ServerEvent {
+  event_type: 'knowledge_ingest_complete';
+  library_id: string;
+  success: boolean;
+  stats: Record<string, any>;
+  message: string;
+}
+
+// ============================================================================
+// Document Management Events
+// ============================================================================
+
+export interface DocumentListEvent extends ServerEvent {
+  event_type: 'document_list';
+  library_id: string;
+  documents: KnowledgeDocument[];
+}
+
+export interface DocumentDetailEvent extends ServerEvent {
+  event_type: 'document_detail';
+  library_id: string;
+  document: KnowledgeDocument;
+}
+
+export interface DocumentDeletedEvent extends ServerEvent {
+  event_type: 'document_deleted';
+  library_id: string;
+  doc_id: string;
+}
+
+export interface DocumentStatusChangedEvent extends ServerEvent {
+  event_type: 'document_status_changed';
+  library_id: string;
+  doc_id: string;
+  status: string;
+}
+
+export interface ChunkListEvent extends ServerEvent {
+  event_type: 'chunk_list';
+  library_id: string;
+  doc_id: string;
+  chunks: KnowledgeChunk[];
+}
+
+export interface ChunkPreviewEvent extends ServerEvent {
+  event_type: 'chunk_preview';
+  chunks: ChunkPreview[];
+  chunk_size: number;
+  chunk_overlap: number;
+  strategy: string;
 }
 
 export type AnyServerEvent =
@@ -184,7 +267,20 @@ export type AnyServerEvent =
   | WorkflowListEvent
   | ConflictEvent
   | LogLevelEvent
-  | SpanUpdateEvent;
+  | KnowledgeLibraryListEvent
+  | KnowledgeLibraryCreatedEvent
+  | KnowledgeLibraryUpdatedEvent
+  | KnowledgeLibraryDeletedEvent
+  | KnowledgeSearchResultsEvent
+  | KnowledgeIngestProgressEvent
+  | KnowledgeIngestCompleteEvent
+  | KnowledgeErrorEvent
+  | DocumentListEvent
+  | DocumentDetailEvent
+  | DocumentDeletedEvent
+  | DocumentStatusChangedEvent
+  | ChunkListEvent
+  | ChunkPreviewEvent;
 
 // Command types (client -> server)
 export type CommandType =
@@ -195,7 +291,24 @@ export type CommandType =
   | 'retry_node'
   | 'patch_plan'
   | 'restore_checkpoint'
-  | 'set_log_level';
+  | 'set_log_level'
+  // Knowledge Base commands
+  | 'list_knowledge_libraries'
+  | 'create_knowledge_library'
+  | 'update_knowledge_library'
+  | 'delete_knowledge_library'
+  | 'search_knowledge'
+  | 'ingest_knowledge_files'
+  | 'rebuild_knowledge_index'
+  | 'cancel_ingest'
+  // Document management commands
+  | 'list_documents'
+  | 'get_document'
+  | 'delete_document'
+  | 'disable_document'
+  | 'enable_document'
+  | 'list_chunks'
+  | 'preview_chunks';
 
 export interface ClientCommand {
   command_type: CommandType;
@@ -255,6 +368,106 @@ export interface SetLogLevelCommand extends ClientCommand {
   level: string;
 }
 
+// ============================================================================
+// Knowledge Base Commands
+// ============================================================================
+
+export interface ListKnowledgeLibrariesCommand extends ClientCommand {
+  command_type: 'list_knowledge_libraries';
+}
+
+export interface CreateKnowledgeLibraryCommand extends ClientCommand {
+  command_type: 'create_knowledge_library';
+  name: string;
+  description: string;
+  mode: 'agentic' | 'indexed' | 'auto';
+  knowledge_dir: string;
+  metadata?: Record<string, any>;
+}
+
+export interface DeleteKnowledgeLibraryCommand extends ClientCommand {
+  command_type: 'delete_knowledge_library';
+  library_id: string;
+}
+
+export interface SearchKnowledgeCommand extends ClientCommand {
+  command_type: 'search_knowledge';
+  query: string;
+  library_id?: string;
+  mode?: 'agentic' | 'indexed' | 'auto';
+  top_k?: number;
+}
+
+export interface IngestKnowledgeFilesCommand extends ClientCommand {
+  command_type: 'ingest_knowledge_files';
+  library_id: string;
+  paths: string[];
+}
+
+export interface UpdateKnowledgeLibraryCommand extends ClientCommand {
+  command_type: 'update_knowledge_library';
+  library_id: string;
+  updates: Record<string, any>;
+}
+
+export interface RebuildKnowledgeIndexCommand extends ClientCommand {
+  command_type: 'rebuild_knowledge_index';
+  library_id: string;
+  incremental?: boolean;
+}
+
+export interface CancelIngestCommand extends ClientCommand {
+  command_type: 'cancel_ingest';
+  library_id: string;
+}
+
+// ============================================================================
+// Document Management Commands
+// ============================================================================
+
+export interface ListDocumentsCommand extends ClientCommand {
+  command_type: 'list_documents';
+  library_id: string;
+}
+
+export interface GetDocumentCommand extends ClientCommand {
+  command_type: 'get_document';
+  library_id: string;
+  doc_id: string;
+}
+
+export interface DeleteDocumentCommand extends ClientCommand {
+  command_type: 'delete_document';
+  library_id: string;
+  doc_id: string;
+}
+
+export interface DisableDocumentCommand extends ClientCommand {
+  command_type: 'disable_document';
+  library_id: string;
+  doc_id: string;
+}
+
+export interface EnableDocumentCommand extends ClientCommand {
+  command_type: 'enable_document';
+  library_id: string;
+  doc_id: string;
+}
+
+export interface ListChunksCommand extends ClientCommand {
+  command_type: 'list_chunks';
+  library_id: string;
+  doc_id: string;
+}
+
+export interface PreviewChunksCommand extends ClientCommand {
+  command_type: 'preview_chunks';
+  content: string;
+  chunk_size: number;
+  chunk_overlap: number;
+  strategy: string;
+}
+
 export type AnyClientCommand =
   | StartExecutionCommand
   | PauseCommand
@@ -263,4 +476,19 @@ export type AnyClientCommand =
   | RetryNodeCommand
   | PatchPlanCommand
   | RestoreCheckpointCommand
-  | SetLogLevelCommand;
+  | SetLogLevelCommand
+  | ListKnowledgeLibrariesCommand
+  | CreateKnowledgeLibraryCommand
+  | UpdateKnowledgeLibraryCommand
+  | DeleteKnowledgeLibraryCommand
+  | SearchKnowledgeCommand
+  | IngestKnowledgeFilesCommand
+  | RebuildKnowledgeIndexCommand
+  | CancelIngestCommand
+  | ListDocumentsCommand
+  | GetDocumentCommand
+  | DeleteDocumentCommand
+  | DisableDocumentCommand
+  | EnableDocumentCommand
+  | ListChunksCommand
+  | PreviewChunksCommand;

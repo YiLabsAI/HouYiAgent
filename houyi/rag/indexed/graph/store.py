@@ -51,15 +51,29 @@ class GraphStore:
             str, list[tuple[str, str, float]]
         ] = {}  # src -> [(dst, rel_type, weight)]
 
+    def __del__(self) -> None:
+        """Clean up resources on deletion."""
+        self.close()
+
+    def close(self) -> None:
+        """Close database connection."""
+        if self._conn is not None:
+            self._conn.close()
+            self._conn = None
+
+    async def __aenter__(self) -> GraphStore:
+        """Async context manager entry."""
+        await self.load()
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+        """Async context manager exit."""
+        self.close()
+
     async def load(self) -> None:
         """Load graph from SQLite database."""
-        # Make load() idempotent: if already loaded, do nothing.
-        if self._conn is not None:
-            return
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
-        # On Windows, open handles prevent deletion of TemporaryDirectory trees.
-        # Use a small timeout to reduce flakiness under concurrent access.
-        self._conn = sqlite3.connect(str(self._db_path), timeout=5.0)
+        self._conn = sqlite3.connect(str(self._db_path))
         self._conn.row_factory = sqlite3.Row
 
         # Create tables if not exist
@@ -89,13 +103,6 @@ class GraphStore:
 
         # Load into memory
         await self._load_to_memory()
-
-    async def __aenter__(self) -> GraphStore:
-        await self.load()
-        return self
-
-    async def __aexit__(self, exc_type, exc, tb) -> None:
-        self.close()
 
     async def _load_to_memory(self) -> None:
         """Load graph data into memory for fast access."""
@@ -133,30 +140,6 @@ class GraphStore:
         """Save graph to SQLite database."""
         if self._conn:
             self._conn.commit()
-
-    def close(self) -> None:
-        """Close the SQLite connection, if open.
-
-        This is important for Windows, where open file handles prevent cleanup
-        of temporary directories.
-        """
-        if self._conn is None:
-            return
-        try:
-            self._conn.close()
-        finally:
-            self._conn = None
-
-    async def aclose(self) -> None:
-        """Async-friendly close wrapper."""
-        self.close()
-
-    def __del__(self) -> None:  # pragma: no cover
-        # Best-effort cleanup. Tests should call close() explicitly.
-        try:
-            self.close()
-        except Exception:
-            pass
 
     async def add_entities(self, entities: list[Entity]) -> None:
         """Add entities to graph."""

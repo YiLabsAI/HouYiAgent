@@ -34,6 +34,22 @@ class EventType(str, Enum):
     CONFLICT = "conflict"
     LOG_LEVEL = "log_level"
     SPAN_UPDATE = "span_update"
+    # Knowledge Base events
+    KNOWLEDGE_LIBRARY_LIST = "knowledge_library_list"
+    KNOWLEDGE_LIBRARY_CREATED = "knowledge_library_created"
+    KNOWLEDGE_LIBRARY_UPDATED = "knowledge_library_updated"
+    KNOWLEDGE_LIBRARY_DELETED = "knowledge_library_deleted"
+    KNOWLEDGE_SEARCH_RESULTS = "knowledge_search_results"
+    KNOWLEDGE_INGEST_PROGRESS = "knowledge_ingest_progress"
+    KNOWLEDGE_INGEST_COMPLETE = "knowledge_ingest_complete"
+    KNOWLEDGE_ERROR = "knowledge_error"
+    # Document management events
+    DOCUMENT_LIST = "document_list"
+    DOCUMENT_DETAIL = "document_detail"
+    DOCUMENT_DELETED = "document_deleted"
+    DOCUMENT_STATUS_CHANGED = "document_status_changed"
+    CHUNK_LIST = "chunk_list"
+    CHUNK_PREVIEW = "chunk_preview"
 
 
 class ServerEvent(BaseModel):
@@ -345,3 +361,150 @@ class SpanUpdateEvent(ServerEvent):
             replay_mode=span.replay_mode,
             attributes=span.attributes,
         )
+
+
+# ============================================================================
+# Knowledge Base Events
+# ============================================================================
+
+
+class KnowledgeLibraryListEvent(ServerEvent):
+    """Event when knowledge library list is requested."""
+
+    event_type: EventType = Field(default=EventType.KNOWLEDGE_LIBRARY_LIST)
+    libraries: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="List of knowledge libraries",
+    )
+
+
+class KnowledgeLibraryCreatedEvent(ServerEvent):
+    """Event when a new knowledge library is created."""
+
+    event_type: EventType = Field(default=EventType.KNOWLEDGE_LIBRARY_CREATED)
+    library: dict[str, Any] = Field(..., description="Created library metadata")
+
+
+class KnowledgeLibraryDeletedEvent(ServerEvent):
+    """Event when a knowledge library is deleted."""
+
+    event_type: EventType = Field(default=EventType.KNOWLEDGE_LIBRARY_DELETED)
+    library_id: str = Field(..., description="Deleted library ID")
+
+
+class KnowledgeSearchResultsEvent(ServerEvent):
+    """Event with knowledge search results."""
+
+    event_type: EventType = Field(default=EventType.KNOWLEDGE_SEARCH_RESULTS)
+    query: str = Field(..., description="Search query")
+    library_id: str = Field(default="", description="Library ID searched")
+    results: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="Search results",
+    )
+    mode_used: str = Field(default="", description="RAG mode used for search")
+    total_results: int = Field(default=0, description="Total number of results")
+    quality: dict[str, Any] | None = Field(default=None, description="Quality assessment summary (v1.1)")
+
+
+class KnowledgeErrorEvent(ServerEvent):
+    """Event when a knowledge operation fails."""
+
+    event_type: EventType = Field(default=EventType.KNOWLEDGE_ERROR)
+    error: str = Field(..., description="Error message")
+    operation: str = Field(..., description="Operation that failed")
+
+
+class KnowledgeLibraryUpdatedEvent(ServerEvent):
+    """Event when a knowledge library is updated."""
+
+    event_type: EventType = Field(default=EventType.KNOWLEDGE_LIBRARY_UPDATED)
+    library: dict[str, Any] = Field(..., description="Updated library metadata")
+
+
+class KnowledgeIngestProgressEvent(ServerEvent):
+    """Event for ingest progress updates."""
+
+    event_type: EventType = Field(default=EventType.KNOWLEDGE_INGEST_PROGRESS)
+    library_id: str = Field(..., description="Library ID being ingested")
+    progress: float = Field(..., description="Progress percentage (0-100)")
+    current_file: str = Field(default="", description="Current file being processed")
+    files_processed: int = Field(default=0, description="Number of files processed")
+    total_files: int = Field(default=0, description="Total number of files")
+
+
+class KnowledgeIngestCompleteEvent(ServerEvent):
+    """Event when ingest is complete."""
+
+    event_type: EventType = Field(default=EventType.KNOWLEDGE_INGEST_COMPLETE)
+    library_id: str = Field(..., description="Library ID")
+    success: bool = Field(..., description="Whether ingest succeeded")
+    stats: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Ingest statistics (docs, chunks, errors)",
+    )
+    message: str = Field(default="", description="Completion message")
+
+
+# ========== Document Management Events ==========
+
+
+class DocumentListEvent(ServerEvent):
+    """Event containing list of documents in a library."""
+
+    event_type: EventType = Field(default=EventType.DOCUMENT_LIST)
+    library_id: str = Field(..., description="Library ID")
+    documents: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="List of document metadata",
+    )
+
+
+class DocumentDetailEvent(ServerEvent):
+    """Event containing document details."""
+
+    event_type: EventType = Field(default=EventType.DOCUMENT_DETAIL)
+    library_id: str = Field(..., description="Library ID")
+    document: dict[str, Any] = Field(..., description="Document metadata")
+
+
+class DocumentDeletedEvent(ServerEvent):
+    """Event when a document is deleted."""
+
+    event_type: EventType = Field(default=EventType.DOCUMENT_DELETED)
+    library_id: str = Field(..., description="Library ID")
+    doc_id: str = Field(..., description="Deleted document ID")
+
+
+class DocumentStatusChangedEvent(ServerEvent):
+    """Event when document status changes."""
+
+    event_type: EventType = Field(default=EventType.DOCUMENT_STATUS_CHANGED)
+    library_id: str = Field(..., description="Library ID")
+    doc_id: str = Field(..., description="Document ID")
+    status: str = Field(..., description="New status")
+
+
+class ChunkListEvent(ServerEvent):
+    """Event containing list of chunks for a document."""
+
+    event_type: EventType = Field(default=EventType.CHUNK_LIST)
+    library_id: str = Field(..., description="Library ID")
+    doc_id: str = Field(..., description="Document ID")
+    chunks: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="List of chunk metadata",
+    )
+
+
+class ChunkPreviewEvent(ServerEvent):
+    """Event containing chunk preview results."""
+
+    event_type: EventType = Field(default=EventType.CHUNK_PREVIEW)
+    chunks: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="Preview chunks",
+    )
+    chunk_size: int = Field(..., description="Chunk size used")
+    chunk_overlap: int = Field(..., description="Chunk overlap used")
+    strategy: str = Field(..., description="Chunking strategy used")

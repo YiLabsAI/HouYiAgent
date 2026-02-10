@@ -294,9 +294,26 @@ class SkillHooksManager:
             return HookResult(success=False, error=str(e))
 
     def _load_handler(self, handler_path: str) -> Callable[..., Any] | None:
-        """Load Python handler from dotted path (e.g., 'module.submodule.function')."""
+        """Load Python handler from path.
+
+        Supports two formats:
+        - Colon format: 'module.submodule:function' (preferred, explicit)
+        - Dot format: 'module.submodule.function' (legacy, implicit)
+
+        Args:
+            handler_path: Handler path in colon or dot format
+
+        Returns:
+            Callable if loaded successfully, None otherwise
+        """
         try:
-            module_path, func_name = handler_path.rsplit(".", 1)
+            # Support colon format (module:func) - preferred
+            if ":" in handler_path:
+                module_path, func_name = handler_path.rsplit(":", 1)
+            else:
+                # Fallback to dot format (module.func) - legacy
+                module_path, func_name = handler_path.rsplit(".", 1)
+
             import importlib
 
             module = importlib.import_module(module_path)

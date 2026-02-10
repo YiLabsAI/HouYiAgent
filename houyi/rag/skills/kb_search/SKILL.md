@@ -1,13 +1,49 @@
 ---
 name: kb-search
+version: "1.0.0"
 description: |
   知识库智能检索助手。根据查询复杂度自动选择检索模式：
   - 小规模/简单查询：Agentic 模式（grep + read_file）
   - 大规模/复杂查询：Indexed 模式（Vector + Graph + BM25）
   支持渐进式检索，最多 5 轮迭代确保找到最相关信息。
+
+user-invocable: true
+
+allowed-tools:
+  - Read
+  - Glob
+  - Grep
+
+hooks:
+  PreToolUse:
+    - matcher: "Read|Glob|Grep"
+      type: handler
+      handler: houyi.rag.skills.kb_search.hooks:pre_search_hook
+  PostToolUse:
+    - matcher: ".*"
+      type: handler
+      handler: houyi.rag.skills.kb_search.hooks:post_search_hook
+  Stop:
+    - type: handler
+      handler: houyi.rag.skills.kb_search.hooks:stop_hook
+
+invocationPolicy:
+  modelAutoInvoke: allow
+  userInvocable: true
+  sideEffect: none
+
+permissions:
+  filesystem:
+    read: true
+    write: false
+    paths:
+      - "${KNOWLEDGE_DIR}/**/*"
+      - "${WORKSPACE}/knowledge/**/*"
 ---
 
-# 本地知识库检索 Skill（kb-search）
+# 知识库检索 Skill（kb-search）
+
+智能知识库检索助手，支持 Agentic 和 Indexed 双模式自动切换。
 
 ## 触发条件
 
@@ -76,14 +112,21 @@ description: |
    - CRAG 验证相关性
    - 生成最终答案
 
-## 协同工具
+## Hooks
 
-在 Agentic 模式下，本 Skill 会使用以下工具：
+### PreToolUse (Read/Glob/Grep)
 
-- **grep**: 关键词搜索
-- **read_file**: 局部文件读取
-- **pdftotext/pdfplumber**: PDF 处理（需先读取 references/pdf_reading.md）
-- **pandas**: Excel 分析（需先读取 references/excel_reading.md）
+在执行检索工具前，注入知识库上下文信息：
+- 当前知识库路径
+- 搜索策略提示
+
+### PostToolUse
+
+在工具执行后，记录检索进度和结果统计。
+
+### Stop
+
+在停止前验证是否找到了有效答案，提示未完成的检索任务。
 
 ## 示例
 
@@ -118,3 +161,63 @@ Skill: 使用 Indexed 模式，结合向量搜索和图检索
 3. **来源引用**
    - 始终标注信息来源
    - 包含文件路径和大致位置
+
+## Input Schema
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "query": {
+      "type": "string",
+      "description": "User query to search in knowledge base"
+    },
+    "knowledge_dir": {
+      "type": "string",
+      "default": "knowledge/",
+      "description": "Root directory of the knowledge base"
+    },
+    "mode": {
+      "type": "string",
+      "enum": ["auto", "agentic", "indexed"],
+      "default": "auto",
+      "description": "Search mode"
+    },
+    "max_rounds": {
+      "type": "integer",
+      "default": 5,
+      "description": "Maximum search iterations"
+    }
+  },
+  "required": ["query"]
+}
+```
+
+## Output Schema
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "answer": {
+      "type": "string",
+      "description": "Generated answer"
+    },
+    "sources": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "file_path": { "type": "string" },
+          "location": { "type": "string" },
+          "snippet": { "type": "string" }
+        }
+      }
+    },
+    "confidence": {
+      "type": "number",
+      "description": "Confidence score (0-1)"
+    }
+  }
+}
+```

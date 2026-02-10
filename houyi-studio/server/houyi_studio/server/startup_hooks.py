@@ -1,58 +1,75 @@
-"""Startup hooks for console server."""
+"""Startup hooks for console server.
+
+Registers built-in skills for the console runtime.
+User/custom skills will be loaded through a unified mechanism (SimpleSkill project).
+"""
 
 from __future__ import annotations
 
 import logging
-import os
-from importlib.util import module_from_spec, spec_from_file_location
-from pathlib import Path
 
 from houyi.core.skill_registry import DEFAULT_SKILL_REGISTRY
-from houyi.web_search.skill import build_web_search_skill
 
 logger = logging.getLogger(__name__)
 
 
 def register_console_skills() -> None:
-    """Register default skills for console runtime."""
-    DEFAULT_SKILL_REGISTRY.register(build_web_search_skill(), overwrite=True)
+    """Register built-in skills for console runtime.
 
-    # Register RAG kb-search skill
-    _register_rag_skill()
+    Registers the following skills:
+    - Web search: web_search
+    - Weather: get_date, get_weather, get_weather_live
+    - Location: get_location
+    - RAG: kb-search (if available)
 
-    if _should_load_e2e_tools():
-        _load_e2e_tools()
+    Note: User/custom skills should be loaded through the unified skill
+    loading mechanism (to be implemented in SimpleSkill project optimization).
+    """
+    registered_skills: list[str] = []
 
+    # 1. Web search skill
+    try:
+        from houyi.web_search.skill import build_web_search_skill
 
-def _register_rag_skill() -> None:
-    """Register knowledge base search skill if available."""
+        skill = build_web_search_skill()
+        DEFAULT_SKILL_REGISTRY.register(skill, overwrite=True)
+        registered_skills.append(skill.name)
+    except ImportError as e:
+        logger.warning("Web search skill not available: %s", e)
+
+    # 2. Weather tools (each @tool is a SkillSpec)
+    try:
+        from houyi.skills.weather import get_date, get_weather, get_weather_live
+
+        DEFAULT_SKILL_REGISTRY.register(get_date, overwrite=True)
+        DEFAULT_SKILL_REGISTRY.register(get_weather, overwrite=True)
+        DEFAULT_SKILL_REGISTRY.register(get_weather_live, overwrite=True)
+        registered_skills.extend(["get_date", "get_weather", "get_weather_live"])
+    except ImportError as e:
+        logger.warning("Weather skills not available: %s", e)
+
+    # 3. Location tool
+    try:
+        from houyi.skills.location import get_location
+
+        DEFAULT_SKILL_REGISTRY.register(get_location, overwrite=True)
+        registered_skills.append("get_location")
+    except ImportError as e:
+        logger.warning("Location skill not available: %s", e)
+
+    # 4. RAG kb-search skill
     try:
         from houyi.rag.skills.kb_search import kb_search_skill
 
         DEFAULT_SKILL_REGISTRY.register(kb_search_skill, overwrite=True)
-        logger.info("Registered kb-search skill")
+        registered_skills.append(kb_search_skill.name)
     except ImportError as e:
-        logger.debug("RAG skill not available: %s", e)
+        logger.debug("RAG kb-search skill not available: %s", e)
 
-
-def _should_load_e2e_tools() -> bool:
-    disable_e2e = (os.getenv("HOUYI_DISABLE_E2E_TOOLS") or "").strip().lower()
-    return disable_e2e not in {"1", "true", "yes", "on"}
-
-
-def _load_e2e_tools() -> None:
-    script_path = (
-        Path(__file__).resolve().parents[1]
-        / "tests"
-        / "integration"
-        / "fixtures"
-        / "console_e2e_tools.py"
+    # Log summary
+    total_skills = len(DEFAULT_SKILL_REGISTRY.list())
+    logger.info(
+        "Registered %d skills: %s",
+        total_skills,
+        ", ".join(registered_skills),
     )
-    if not script_path.exists():
-        logger.warning("E2E tool script not found: %s", script_path)
-        return
-    spec = spec_from_file_location("console_e2e_tools", script_path)
-    if spec and spec.loader:
-        module = module_from_spec(spec)
-        spec.loader.exec_module(module)
-        logger.info("Loaded console E2E tools from %s", script_path)

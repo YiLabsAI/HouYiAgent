@@ -139,3 +139,105 @@ export interface CheckpointIR {
   delta: Record<string, any> | null;
   metadata: Record<string, any>;
 }
+
+// ============================================================================
+// Knowledge Base Types (RAG)
+// ============================================================================
+
+export type RAGMode = 'agentic' | 'indexed' | 'auto';
+
+export interface KnowledgeLibrary {
+  library_id: string;
+  name: string;
+  description: string;
+  mode: RAGMode;
+  knowledge_dir: string;
+  created_at: string;
+  updated_at: string;
+  doc_count: number;
+  chunk_count: number;
+  metadata: Record<string, any>;
+}
+
+export interface KnowledgeConfig {
+  name: string;
+  description: string;
+  mode: RAGMode;
+  knowledge_dir: string;
+  metadata?: Record<string, any>;
+}
+
+export interface KnowledgeSource {
+  file_path: string;
+  location: string;
+  snippet: string;
+  score: number;
+}
+
+export interface KnowledgeSearchResult {
+  chunk_id: string;
+  content: string;
+  score: number;
+  source?: KnowledgeSource;
+  metadata: Record<string, any>;
+}
+
+export interface KnowledgeSearchResponse {
+  query: string;
+  library_id: string;
+  results: KnowledgeSearchResult[];
+  mode_used: RAGMode;
+  total_results: number;
+  quality?: QualitySummary;
+}
+
+
+export interface QualitySummary {
+  min_score: number;
+  max_score: number;
+  avg_score: number;
+  above_threshold_count: number;
+  total_count: number;
+  relevance: 'high' | 'medium' | 'low' | 'unknown';
+  coverage: 'high' | 'medium' | 'low' | 'unknown';
+  confidence_level: 'high' | 'medium' | 'low' | 'unknown';
+  suggestion?: string | null;
+  score_distribution: Record<string, number>;
+}
+
+// ============================================================================
+// Document Management Types
+// ============================================================================
+
+export type DocumentStatus = 'pending' | 'indexing' | 'indexed' | 'error' | 'failed' | 'disabled';
+
+export interface KnowledgeDocument {
+  doc_id: string;
+  library_id: string;
+  file_path: string;
+  file_name: string;
+  file_size: number;
+  status: DocumentStatus;
+  chunk_count: number;
+  created_at: string;
+  updated_at: string;
+  error_message?: string;
+  metadata: Record<string, any>;
+}
+
+export interface KnowledgeChunk {
+  chunk_id: string;
+  doc_id: string;
+  content: string;
+  chunk_index: number;
+  start_char: number;
+  end_char: number;
+  metadata: Record<string, any>;
+}
+
+export interface ChunkPreview {
+  content: string;
+  chunk_index: number;
+  start_char: number;
+  end_char: number;
+}

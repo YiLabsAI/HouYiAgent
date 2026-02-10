@@ -1,0 +1,129 @@
+{
+  "id": "kb-graph",
+  "version": "1.0.0",
+  "name": "Knowledge Graph Query",
+  "description": "Knowledge graph traversal and query. Supports entity lookup, relation traversal, and PPR-based search.",
+  "engines": {
+    "host": "houyi>=0.1.0"
+  },
+  "activationEvents": [
+    "onTaskMatch:query graph",
+    "onTaskMatch:find relations",
+    "onTaskMatch:traverse knowledge graph",
+    "onCommand:kb-graph"
+  ],
+  "contributions": {
+    "skills": [
+      {
+        "id": "kb-graph",
+        "description": "Knowledge graph traversal and entity relation query",
+        "invocationPolicy": {
+          "modelAutoInvoke": "allow_with_consent",
+          "userInvocable": true,
+          "sideEffect": "none"
+        },
+        "toolRefs": ["Read"],
+        "entry": "skill.py:kb_graph_skill"
+      }
+    ],
+    "tools": [
+      {
+        "name": "kb-graph.execute",
+        "description": "Query knowledge graph for entities and relations",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Query string or entity name"
+            },
+            "knowledge_dir": {
+              "type": "string",
+              "default": "knowledge/",
+              "description": "Knowledge base directory"
+            },
+            "operation": {
+              "type": "string",
+              "enum": ["search", "traverse", "community"],
+              "default": "search",
+              "description": "Graph operation type"
+            },
+            "max_hops": {
+              "type": "integer",
+              "default": 2,
+              "description": "Maximum hops for traversal"
+            },
+            "top_k": {
+              "type": "integer",
+              "default": 10,
+              "description": "Number of results to return"
+            }
+          },
+          "required": ["query"]
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "entities": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": {"type": "string"},
+                  "type": {"type": "string"},
+                  "score": {"type": "number"}
+                }
+              }
+            },
+            "relations": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "source": {"type": "string"},
+                  "target": {"type": "string"},
+                  "relation": {"type": "string"}
+                }
+              }
+            },
+            "communities": {
+              "type": "array",
+              "description": "Community detection results"
+            }
+          }
+        },
+        "execution": {
+          "type": "in-process",
+          "entry": "skill.py:execute_kb_graph"
+        }
+      }
+    ],
+    "hooks": [
+      {
+        "event": "PreToolUse",
+        "matcher": "Read",
+        "handler": "hooks.py:pre_graph_hook"
+      },
+      {
+        "event": "PostToolUse",
+        "matcher": ".*",
+        "handler": "hooks.py:post_graph_hook"
+      },
+      {
+        "event": "Stop",
+        "handler": "hooks.py:stop_hook"
+      }
+    ]
+  },
+  "permissions": {
+    "filesystem": {
+      "read": ["${knowledge_dir}/.houyi/**"]
+    },
+    "network": false,
+    "exec": false
+  },
+  "source": "builtin",
+  "metadata": {
+    "category": "rag"
+  }
+}

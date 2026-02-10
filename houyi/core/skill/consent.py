@@ -151,7 +151,7 @@ class ConsentHandler(Protocol):
         Returns:
             ConsentResponse with the user's decision
         """
-        raise NotImplementedError
+        ...
 
     def check_remembered(self, request: ConsentRequest) -> ConsentResponse | None:
         """Check if consent was previously granted and remembered.
@@ -162,7 +162,7 @@ class ConsentHandler(Protocol):
         Returns:
             ConsentResponse if remembered, None otherwise
         """
-        raise NotImplementedError
+        ...
 
 
 class ConsentStore(ABC):
@@ -171,17 +171,17 @@ class ConsentStore(ABC):
     @abstractmethod
     def save(self, response: ConsentResponse) -> None:
         """Save a consent response."""
-        raise NotImplementedError
+        ...
 
     @abstractmethod
     def load(self, skill_name: str, consent_type: ConsentType) -> ConsentResponse | None:
         """Load a remembered consent response."""
-        raise NotImplementedError
+        ...
 
     @abstractmethod
     def revoke(self, skill_name: str, consent_type: ConsentType | None = None) -> None:
         """Revoke previously granted consent."""
-        raise NotImplementedError
+        ...
 
 
 class InMemoryConsentStore(ConsentStore):
@@ -243,7 +243,7 @@ class FileConsentStore(ConsentStore):
                 with open(self._path) as f:
                     self._consents = json.load(f)
             except (json.JSONDecodeError, OSError) as e:
-                logger.warning("Failed to load consent store: %s", e)
+                logger.warning(f"Failed to load consent store: {e}")
                 self._consents = {}
 
     def _save_to_file(self) -> None:
@@ -393,11 +393,7 @@ class ConsentManager:
             consent_type: Specific type to revoke, or None for all
         """
         self._store.revoke(skill_name, consent_type)
-        logger.info(
-            "Revoked consent for skill '%s' (type=%s)",
-            skill_name,
-            consent_type,
-        )
+        logger.info(f"Revoked consent for skill '{skill_name}' (type={consent_type})")
 
     def get_audit_log(self) -> list[ConsentResponse]:
         """Get the audit log of consent decisions."""
@@ -416,7 +412,7 @@ class ConsentManager:
         with open(path, "w") as f:
             json.dump(entries, f, indent=2)
 
-        logger.info("Exported %s consent audit entries to %s", len(entries), path)
+        logger.info(f"Exported {len(entries)} consent audit entries to {path}")
 
     def _audit(self, response: ConsentResponse) -> None:
         """Record consent decision in audit log."""
@@ -425,10 +421,9 @@ class ConsentManager:
         # Log significant decisions
         if response.result in (ConsentResult.GRANTED, ConsentResult.DENIED):
             logger.info(
-                "Consent %s: skill=%s, type=%s",
-                response.result.value,
-                response.request.skill_name,
-                response.request.consent_type.value,
+                f"Consent {response.result.value}: "
+                f"skill={response.request.skill_name}, "
+                f"type={response.request.consent_type.value}"
             )
 
 

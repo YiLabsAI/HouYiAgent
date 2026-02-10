@@ -1,0 +1,112 @@
+{
+  "id": "kb-ingest",
+  "version": "1.0.0",
+  "name": "Knowledge Base Ingest",
+  "description": "Document ingestion and index building. Supports chunking, embedding, and graph extraction.",
+  "engines": {
+    "host": "houyi>=0.1.0"
+  },
+  "activationEvents": [
+    "onTaskMatch:import documents",
+    "onTaskMatch:index files",
+    "onTaskMatch:ingest knowledge",
+    "onCommand:kb-ingest"
+  ],
+  "contributions": {
+    "skills": [
+      {
+        "id": "kb-ingest",
+        "description": "Document ingestion and index building for knowledge base",
+        "invocationPolicy": {
+          "modelAutoInvoke": "allow_with_consent",
+          "userInvocable": true,
+          "sideEffect": "filesystem"
+        },
+        "toolRefs": ["Read", "Glob", "Write"],
+        "entry": "skill.py:kb_ingest_skill"
+      }
+    ],
+    "tools": [
+      {
+        "name": "kb-ingest.execute",
+        "description": "Ingest documents into knowledge base",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "source_dir": {
+              "type": "string",
+              "description": "Directory containing documents to ingest"
+            },
+            "knowledge_dir": {
+              "type": "string",
+              "default": "knowledge/",
+              "description": "Target knowledge base directory"
+            },
+            "chunk_size": {
+              "type": "integer",
+              "default": 512,
+              "description": "Chunk size for document splitting"
+            },
+            "chunk_overlap": {
+              "type": "integer",
+              "default": 50,
+              "description": "Overlap between chunks"
+            },
+            "enable_graph": {
+              "type": "boolean",
+              "default": false,
+              "description": "Enable knowledge graph extraction"
+            },
+            "contextual_retrieval": {
+              "type": "boolean",
+              "default": false,
+              "description": "Enable contextual retrieval (adds context to chunks)"
+            }
+          },
+          "required": ["source_dir"]
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "success": {"type": "boolean"},
+            "documents_processed": {"type": "integer"},
+            "chunks_created": {"type": "integer"},
+            "index_path": {"type": "string"}
+          }
+        },
+        "execution": {
+          "type": "in-process",
+          "entry": "skill.py:execute_kb_ingest"
+        }
+      }
+    ],
+    "hooks": [
+      {
+        "event": "PreToolUse",
+        "matcher": "Read|Glob|Write",
+        "handler": "hooks.py:pre_ingest_hook"
+      },
+      {
+        "event": "PostToolUse",
+        "matcher": ".*",
+        "handler": "hooks.py:post_ingest_hook"
+      },
+      {
+        "event": "Stop",
+        "handler": "hooks.py:stop_hook"
+      }
+    ]
+  },
+  "permissions": {
+    "filesystem": {
+      "read": ["${source_dir}/**"],
+      "write": ["${knowledge_dir}/.houyi/**"]
+    },
+    "network": false,
+    "exec": false
+  },
+  "source": "builtin",
+  "metadata": {
+    "category": "rag"
+  }
+}

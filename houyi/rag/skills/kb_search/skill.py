@@ -7,6 +7,7 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 
 from houyi.core.skill import ExecutionMode, SkillSpec
+from houyi.core.skill.hooks import HookEvent, HookType, SkillHook
 
 
 class KBSearchInput(BaseModel):
@@ -68,10 +69,10 @@ async def execute_kb_search(input_data: KBSearchInput) -> KBSearchOutput:
     Returns:
         Search output with answer and sources
     """
-    from houyi.rag import RAGService
+    from houyi.rag import RAG
 
     # Create RAG service
-    service = RAGService(
+    rag = RAG(
         mode=input_data.mode,
         knowledge_dir=input_data.knowledge_dir,
         llm_provider=input_data.llm_provider or None,
@@ -79,7 +80,7 @@ async def execute_kb_search(input_data: KBSearchInput) -> KBSearchOutput:
     )
 
     # Execute search
-    result = await service.query(
+    result = await rag.query(
         query=input_data.query,
         max_rounds=input_data.max_rounds,
     )
@@ -101,6 +102,27 @@ async def execute_kb_search(input_data: KBSearchInput) -> KBSearchOutput:
     )
 
 
+# Define hooks for SimpleSkill v0.1
+_kb_search_hooks = [
+    SkillHook(
+        event=HookEvent.PRE_TOOL_USE,
+        matcher="Read|Glob|Grep",
+        hook_type=HookType.HANDLER,
+        handler_path="houyi.rag.skills.kb_search.hooks:pre_search_hook",
+    ),
+    SkillHook(
+        event=HookEvent.POST_TOOL_USE,
+        matcher=".*",
+        hook_type=HookType.HANDLER,
+        handler_path="houyi.rag.skills.kb_search.hooks:post_search_hook",
+    ),
+    SkillHook(
+        event=HookEvent.STOP,
+        hook_type=HookType.HANDLER,
+        handler_path="houyi.rag.skills.kb_search.hooks:stop_hook",
+    ),
+]
+
 # Skill definition
 kb_search_skill = SkillSpec(
     name="kb-search",
@@ -115,8 +137,11 @@ Use when the user asks to "search knowledge base", "find in documents", or "look
     executor=execute_kb_search,
     skill_md_path=str(Path(__file__).parent / "SKILL.md"),
     execution_mode=ExecutionMode.PLUGIN,
+    version="1.0.0",
+    user_invocable=True,
+    allowed_tools=["Read", "Glob", "Grep"],
+    hooks=_kb_search_hooks,
     metadata={
         "category": "rag",
-        "version": "1.0.0",
     },
 )

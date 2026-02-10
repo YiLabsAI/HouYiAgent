@@ -129,7 +129,7 @@ class TestAnswerGenerator:
 
         answer, confidence = await generator.generate("What is RAG?", [])
 
-        assert "未在知识库中找到相关信息" in answer
+        assert "No relevant" in answer or "not found" in answer.lower()
         assert confidence == 0.0
 
     @pytest.mark.asyncio

@@ -5,6 +5,9 @@ import { WorkflowManagement } from './WorkflowManagement';
 import { ExecutionControls } from './ExecutionControls';
 import { SaveWorkflowDialog } from './SaveWorkflowDialog';
 import { LoadWorkflowDialog } from './LoadWorkflowDialog';
+import { KnowledgePanel } from './KnowledgePanel';
+import { KnowledgeConfigDialog } from './KnowledgeConfigDialog';
+import { KnowledgeSearch } from './KnowledgeSearch';
 import { MoreHorizontal } from 'lucide-react';
 
 interface LeftSidebarProps {
@@ -22,6 +25,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
 }) => {
   const logic = useLeftSidebarLogic();
   const [isMenuOpen, setIsMenuOpen] = React.useState(false);
+  const [isKnowledgeDialogOpen, setIsKnowledgeDialogOpen] = React.useState(false);
   const menuRef = React.useRef<HTMLDivElement | null>(null);
 
   React.useEffect(() => {
@@ -96,14 +100,10 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
 
   const renderKnowledgeEntry = () => {
     return (
-      <div className="p-3 text-xs text-gray-300">
-        <div className="text-xs font-semibold text-gray-200">Knowledge</div>
-        <div className="text-[11px] text-gray-500 mt-1">MVP placeholder</div>
-        <div className="mt-3 bg-gray-900 border border-gray-700 rounded p-2">
-          <div className="text-[11px] text-gray-400">Libraries</div>
-          <div className="text-[11px] text-gray-500 mt-1">No knowledge libraries configured</div>
-        </div>
-      </div>
+      <>
+        <KnowledgePanel onOpenCreateDialog={() => setIsKnowledgeDialogOpen(true)} />
+        <KnowledgeSearch />
+      </>
     );
   };
 
@@ -256,6 +256,12 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
           </div>
         </div>
       )}
+
+      {/* Knowledge Config Dialog */}
+      <KnowledgeConfigDialog
+        isOpen={isKnowledgeDialogOpen}
+        onClose={() => setIsKnowledgeDialogOpen(false)}
+      />
     </div>
   );
 };

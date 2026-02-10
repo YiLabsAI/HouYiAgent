@@ -59,13 +59,12 @@ service-account-key.json
 .stash-archive/
 data/
 docs/console/
+
+
+docs/design/archive/
 docs/design/
-docs/progress/
 docs/verification/
-
-# !docs/progress/*
-# !docs/design/*
-
+docs/progress/
 RELEASE_*.md
 Design.md
 ROADMAP.md
@@ -77,4 +76,7 @@ CODE_REVIEW*.md
 reports/
 datasets/
 
-.houyi/
+# Claude Code memory (personal, not shared)
+CLAUDE.md
+knowledge/
+CLAUDE.md

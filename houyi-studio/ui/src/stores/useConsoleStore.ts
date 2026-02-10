@@ -2,7 +2,7 @@
  * Zustand store for console state management
  */
 import { create } from 'zustand';
-import type { PlanIR, NodeIR, ExecutionIR, CheckpointIR } from '@/types/ir';
+import type { PlanIR, NodeIR, ExecutionIR, CheckpointIR, KnowledgeLibrary, KnowledgeSearchResult, RAGMode, KnowledgeDocument, KnowledgeChunk, ChunkPreview, QualitySummary } from '@/types/ir';
 import type { AnyServerEvent } from '@/types/websocket';
 import { ConsoleWebSocket } from '@/utils/websocket';
 import type { ToolStatistics } from './utils/toolStats';
@@ -18,7 +18,7 @@ import {
 import { createToastActions } from './storeActions/toastActions';
 import { createCommandActions } from './storeActions/commandActions';
 import { createToolStatsActions } from './storeActions/toolStatsActions';
-import { createSpanActions, type SpanStore } from './storeActions/spanActions';
+import { createKnowledgeActions, initialKnowledgeState } from './storeActions/knowledgeActions';
 
 interface Toast {
   id: string;
@@ -92,12 +92,12 @@ interface ConsoleState {
   toastKeys: Record<string, string>;
   activityLogs: ActivityLog[];
   nodeObservations: Record<string, Record<string, Record<string, any>>>;
-  spanStore: SpanStore;
-  executionLineageMap: Record<string, { parentExecutionId: string; parentCheckpointId?: string; replayMode?: string }>;
   serverLogLevel: 'debug' | 'info' | 'warning' | 'error';
   loadingWorkflowName: string | null; // Track which workflow is being loaded
   workflows: WorkflowSummary[];
   isLoadingWorkflows: boolean;
+  bottomPanelTab: 'timeline' | 'checkpoints' | 'context' | 'logs' | 'verification' | 'compare' | 'knowledge';
+  setBottomPanelTab: (tab: 'timeline' | 'checkpoints' | 'context' | 'logs' | 'verification' | 'compare' | 'knowledge') => void;
 
   // React Flow state
   nodes: any[];
@@ -159,16 +159,91 @@ interface ConsoleState {
   requestWorkflows: () => void;
 
   // Command actions
-  sendCommand: (command: any) => void;
+  sendCommand: (command: any) => boolean;
   sendPatchPlan: (patches: any[]) => void;
 
   // Tool statistics
   getToolStatistics: () => ToolStatistics;
 
-  // Span actions for timeline
-  updateSpan: (event: any) => void;
-  getSpanTree: (executionId: string) => any;
-  clearSpans: (executionId?: string) => void;
+  // Knowledge Base actions
+  knowledgeLibraries: KnowledgeLibrary[];
+  selectedLibraryId: string | null;
+  knowledgeSearchResults: KnowledgeSearchResult[];
+  knowledgeSearchQuery: string;
+  knowledgeSearchModeUsed: string;
+  knowledgeSearchStrategiesUsed: string[];
+  knowledgeSearchQuality: QualitySummary | null;
+  isSearchingKnowledge: boolean;
+  isLoadingLibraries: boolean;
+  // Ingest state
+  isIngesting: boolean;
+  ingestLibraryId: string | null;
+  ingestProgress: number;
+  ingestCurrentFile: string;
+  ingestFilesProcessed: number;
+  ingestTotalFiles: number;
+  requestKnowledgeLibraries: () => void;
+  setKnowledgeLibraries: (libraries: KnowledgeLibrary[]) => void;
+  createKnowledgeLibrary: (config: {
+    name: string;
+    description: string;
+    mode: RAGMode;
+    knowledge_dir: string;
+    metadata?: Record<string, any>;
+   
+    strategies?: string[];
+    embedding_provider?: string;
+    contextual_retrieval?: boolean;
+  }) => void;
+  deleteKnowledgeLibrary: (libraryId: string) => void;
+  addKnowledgeLibrary: (library: KnowledgeLibrary) => void;
+  removeKnowledgeLibrary: (libraryId: string) => void;
+  selectKnowledgeLibrary: (libraryId: string | null) => void;
+  searchKnowledge: (query: string, libraryId?: string, mode?: RAGMode, topK?: number) => void;
+  setKnowledgeSearchResults: (results: KnowledgeSearchResult[], query: string, modeUsed?: string, strategiesUsed?: string[], quality?: QualitySummary | null) => void;
+  // Ingest actions
+  ingestKnowledgeFiles: (libraryId: string, paths: string[]) => void;
+  handleIngestProgress: (data: {
+    library_id: string;
+    progress: number;
+    current_file: string;
+    files_processed: number;
+    total_files: number;
+  }) => void;
+  handleIngestComplete: (data: {
+    library_id: string;
+    success: boolean;
+    stats: Record<string, any>;
+    message: string;
+  }) => void;
+  updateKnowledgeLibrary: (library: KnowledgeLibrary) => void;
+  editKnowledgeLibrary: (libraryId: string, updates: Record<string, any>) => void;
+  rebuildKnowledgeIndex: (libraryId: string, incremental?: boolean) => void;
+  cancelIngest: () => void;
+  clearKnowledgeSearch: () => void;
+  handleKnowledgeError: (error: string, operation: string) => void;
+  // Document management state
+  documents: KnowledgeDocument[];
+  selectedDocumentId: string | null;
+  isLoadingDocuments: boolean;
+  chunks: KnowledgeChunk[];
+  isLoadingChunks: boolean;
+  chunkPreviews: ChunkPreview[];
+  isPreviewingChunks: boolean;
+  // Document management actions
+  requestDocuments: (libraryId: string) => void;
+  setDocuments: (documents: KnowledgeDocument[]) => void;
+  selectDocument: (docId: string | null) => void;
+  deleteDocument: (libraryId: string, docId: string) => void;
+  removeDocument: (docId: string) => void;
+  disableDocument: (libraryId: string, docId: string) => void;
+  enableDocument: (libraryId: string, docId: string) => void;
+  updateDocumentStatus: (docId: string, status: string) => void;
+  requestChunks: (libraryId: string, docId: string) => void;
+  setChunks: (chunks: KnowledgeChunk[]) => void;
+  previewChunks: (content: string, chunkSize: number, chunkOverlap: number, strategy: string) => void;
+  setChunkPreviews: (previews: ChunkPreview[]) => void;
+  clearChunks: () => void;
 }
 
 export const useConsoleStore = create<ConsoleState>((set, get) => ({
@@ -198,16 +273,19 @@ export const useConsoleStore = create<ConsoleState>((set, get) => ({
   toastKeys: {},
   activityLogs: [],
   nodeObservations: {},
-  spanStore: {},
-  executionLineageMap: {},
   serverLogLevel: 'info',
   loadingWorkflowName: null,
   workflows: [],
   isLoadingWorkflows: false,
+  bottomPanelTab: 'timeline',
+  setBottomPanelTab: (tab) => set({ bottomPanelTab: tab }),
 
   nodes: [],
   edges: [],
   selectedNodeId: null,
+
+  // Knowledge Base state
+  ...initialKnowledgeState,
 
   // WebSocket actions
   ...createWsActions(set, get),
@@ -249,6 +327,6 @@ export const useConsoleStore = create<ConsoleState>((set, get) => ({
   // Tool statistics
   ...createToolStatsActions(set, get),
 
-  // Span actions for timeline
-  ...createSpanActions(set, get),
+  // Knowledge Base actions
+  ...createKnowledgeActions(set, get),
 }));

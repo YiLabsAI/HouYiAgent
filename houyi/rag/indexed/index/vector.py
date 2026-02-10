@@ -44,6 +44,7 @@ class VectorIndex:
         self._index: Any = None
         self._id_to_chunk: dict[int, Chunk] = {}
         self._next_id = 0
+        self._loaded = False  # Track if index was loaded from disk
         self._index_path = self.knowledge_dir / ".houyi" / "vector_index.bin"
         self._meta_path = self.knowledge_dir / ".houyi" / "vector_meta.json"
 
@@ -69,17 +70,42 @@ class VectorIndex:
 
     async def load(self) -> None:
         """Load index from disk."""
+        # Skip if already loaded
+        if self._loaded:
+            return
+
         self._ensure_index()
 
         if self._index_path.exists() and self._meta_path.exists():
-            self._index.load_index(str(self._index_path))
-
             with open(self._meta_path, encoding="utf-8") as f:
                 meta = json.load(f)
-                self._next_id = meta.get("next_id", 0)
-                # Load chunk metadata
-                for id_str, chunk_data in meta.get("chunks", {}).items():
-                    self._id_to_chunk[int(id_str)] = Chunk(**chunk_data)
+
+            # Validate dimension compatibility
+            saved_dim = meta.get("dimension")
+            if saved_dim and saved_dim != self.dimension:
+                import logging
+
+                logger = logging.getLogger(__name__)
+                logger.warning(
+                    "Index dimension mismatch: saved=%d, requested=%d. "
+                    "Delete %s to rebuild with new dimension.",
+                    saved_dim,
+                    self.dimension,
+                    self._index_path.parent,
+                )
+                raise ValueError(
+                    f"Vector index dimension mismatch: existing index has dimension "
+                    f"{saved_dim}, but embedder uses dimension {self.dimension}. "
+                    f"Delete the .houyi directory to rebuild with new embedding model."
+                )
+
+            self._index.load_index(str(self._index_path))
+            self._next_id = meta.get("next_id", 0)
+            # Load chunk metadata
+            for id_str, chunk_data in meta.get("chunks", {}).items():
+                self._id_to_chunk[int(id_str)] = Chunk(**chunk_data)
+
+        self._loaded = True
 
     async def save(self) -> None:
         """Save index to disk."""
@@ -88,6 +114,7 @@ class VectorIndex:
         self._index.save_index(str(self._index_path))
 
         meta = {
+            "dimension": self.dimension,  # Save dimension for validation
             "next_id": self._next_id,
             "chunks": {str(id_): chunk.model_dump() for id_, chunk in self._id_to_chunk.items()},
         }

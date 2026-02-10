@@ -6,6 +6,11 @@ import re
 
 from houyi.rag.types import Chunk, Document
 
+# Maximum characters per chunk to avoid exceeding embedding model token limits
+# Most embedding models have ~8K token limit, ~4 chars/token = ~32K chars
+# Using 8000 chars as safe limit (~2000 tokens)
+MAX_CHUNK_CHARS = 8000
+
 
 async def split_documents(
     documents: list[Document],
@@ -48,6 +53,16 @@ def _recursive_split(
     separators = ["\n\n", "\n", ". ", " ", ""]
 
     def _split(text: str, sep_idx: int = 0) -> list[str]:
+        # Hard limit: if text exceeds MAX_CHUNK_CHARS, force split
+        if len(text) > MAX_CHUNK_CHARS:
+            # Force split into smaller pieces
+            result = []
+            for i in range(0, len(text), MAX_CHUNK_CHARS - chunk_overlap):
+                piece = text[i : i + MAX_CHUNK_CHARS]
+                if piece:
+                    result.append(piece)
+            return result
+
         if sep_idx >= len(separators) or len(text) <= chunk_size:
             return [text] if text else []
 
@@ -84,6 +99,10 @@ def _recursive_split(
     chunks = []
     pos = 0
     for i, text in enumerate(text_chunks):
+        # Ensure no chunk exceeds MAX_CHUNK_CHARS
+        if len(text) > MAX_CHUNK_CHARS:
+            text = text[:MAX_CHUNK_CHARS]
+
         chunk = Chunk(
             chunk_id=f"{doc.doc_id}_{i}",
             doc_id=doc.doc_id,

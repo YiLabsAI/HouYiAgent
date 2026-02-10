@@ -1,31 +1,13 @@
+import type { AnyServerEvent } from '@/types/websocket';
 import type { ExecutionIR } from '@/types/ir';
 import { ConsoleWebSocket } from '@/utils/websocket';
+import { logger } from '@/utils/logger';
 
 type StoreSet = (partial: any) => void;
 type StoreGet = () => any;
 
-const normalizeEventType = (eventType: any): string | null => {
-  if (typeof eventType === 'string') return eventType;
-  if (eventType && typeof eventType === 'object' && typeof eventType.value === 'string') {
-    return eventType.value;
-  }
-  return null;
-};
-
 export const createWsActions = (set: StoreSet, get: StoreGet) => ({
   connect: (sessionId: string) => {
-    // Guard: if already connected with the same session, skip re-creation
-    // (happens during HMR re-mounts)
-    const existing = get().ws;
-    if (existing && get().sessionId === sessionId && existing.isConnected()) {
-      console.log('[wsActions] Already connected with session', sessionId, '— skipping');
-      return;
-    }
-    // Clean up any stale connection before creating a new one
-    if (existing) {
-      existing.disconnect();
-    }
-
     const ws = new ConsoleWebSocket(sessionId);
 
     set({ connectionStatus: 'connecting' });
@@ -43,10 +25,24 @@ export const createWsActions = (set: StoreSet, get: StoreGet) => ({
       }
 
       if (status === 'disconnected') {
-        // ReconnectingWebSocket will auto-reconnect; don't abort execution
-        // on transient disconnects. Only show toast as a warning.
         set({ connectionStatus: 'disconnected' });
         get().showToastOnce(toastKey, 'Backend not connected. Please start the server.', 'error');
+        const { currentExecution, viewMode, liveExecution } = get();
+        const target = viewMode === 'checkpoint' ? liveExecution : currentExecution;
+        if (target && target.status === 'running') {
+          const completedAt = new Date().toISOString();
+          const updated = {
+            ...target,
+            status: 'aborted',
+            completed_at: completedAt,
+            error: 'Backend disconnected during execution.',
+          } as ExecutionIR;
+          if (viewMode === 'checkpoint') {
+            set({ liveExecution: updated, executionId: updated.execution_id });
+          } else {
+            set({ currentExecution: updated, executionId: updated.execution_id });
+          }
+        }
         return;
       }
 
@@ -57,6 +53,9 @@ export const createWsActions = (set: StoreSet, get: StoreGet) => ({
     ws.connect();
 
     set({ ws, sessionId });
+
+    // Connect the frontend logger to bridge logs to backend terminal
+    logger.connect((cmd) => get().sendCommand(cmd), sessionId);
   },
 
   disconnect: () => {
@@ -64,28 +63,28 @@ export const createWsActions = (set: StoreSet, get: StoreGet) => ({
     if (ws) {
       ws.disconnect();
     }
+    logger.disconnect();
     set({ ws: null, connectionStatus: 'disconnected' });
   },
 
-  handleEvent: (event: any) => {
-    const eventType = normalizeEventType(event?.event_type);
-    console.log('[Store] Received event:', eventType ?? event?.event_type, event);
+  handleEvent: (event: AnyServerEvent) => {
+    console.log('[Store] Received event:', event.event_type, event);
 
-    switch (eventType) {
+    switch (event.event_type) {
       case 'plan_created':
       case 'plan_updated':
-        console.log('[Store] Received plan event:', eventType, event.plan);
+        console.log('[Store] Received plan event:', event.event_type, event.plan);
         const previousPlanId = get().currentPlan?.plan_id;
         const nextPlanId = event.plan?.plan_id;
         const planChanged = Boolean(nextPlanId && previousPlanId && nextPlanId !== previousPlanId);
         {
           const planId = event.plan?.plan_id ? `plan_id=${event.plan.plan_id}` : undefined;
-          const changes = eventType === 'plan_updated' && event.changes?.length
+          const changes = event.event_type === 'plan_updated' && event.changes?.length
             ? `changes: ${event.changes.join(', ')}`
             : undefined;
           const detail = [planId, changes].filter(Boolean).join(' · ');
           get().addActivityLog({
-            message: eventType === 'plan_created' ? 'Plan created' : 'Plan updated',
+            message: event.event_type === 'plan_created' ? 'Plan created' : 'Plan updated',
             detail: detail || undefined,
           });
 
@@ -154,7 +153,7 @@ export const createWsActions = (set: StoreSet, get: StoreGet) => ({
           console.log('[Store] Restored nodes:', nodes.length, 'backend edges:', backendEdges.length, 'merged edges:', mergedEdges.length);
           set({ nodes, edges: mergedEdges });
 
-          if (eventType === 'plan_updated' && get().loadingWorkflowName) {
+          if (event.event_type === 'plan_updated' && get().loadingWorkflowName) {
             if (nodes.length === 0) {
               get().showToast(
                 `Workflow "${get().loadingWorkflowName}" loaded but has no nodes. Check the saved workflow file.`,
@@ -341,19 +340,6 @@ export const createWsActions = (set: StoreSet, get: StoreGet) => ({
                 set({ currentExecution: updatedExecution, executionId: updatedExecution.execution_id });
               }
             }
-            // Track execution lineage from execution_metadata
-            const parentExecId = event.execution_metadata?.parent_execution_id;
-            if (parentExecId && event.execution_id) {
-              const lineageMap = { ...get().executionLineageMap };
-              if (!lineageMap[event.execution_id]) {
-                lineageMap[event.execution_id] = {
-                  parentExecutionId: parentExecId,
-                  parentCheckpointId: event.execution_metadata?.parent_checkpoint_id,
-                  replayMode: event.execution_metadata?.replay_mode,
-                };
-                set({ executionLineageMap: lineageMap });
-              }
-            }
           }
           if (event.inputs !== undefined && event.inputs !== null) {
             statusUpdate.inputs = event.inputs;
@@ -458,7 +444,7 @@ export const createWsActions = (set: StoreSet, get: StoreGet) => ({
             llm_call_logs: event.llm_call_logs ?? [],
             parent_checkpoint_id: null,
             delta: null,
-            metadata: event.metadata ?? {},
+            metadata: {},
           };
 
           console.log('[checkpoint_created] Saved execution snapshot:', {
@@ -594,16 +580,150 @@ export const createWsActions = (set: StoreSet, get: StoreGet) => ({
         set({ serverLogLevel: event.level });
         break;
 
-      case 'span_update':
+      // ====================================================================
+      // Knowledge Base Events
+      // ====================================================================
+      case 'knowledge_library_list':
         {
-          // Update span store for Timeline visualization
-          get().updateSpan(event);
+          const libraries = event.libraries || [];
+          get().setKnowledgeLibraries(libraries);
+          console.log('[Store] Received knowledge libraries:', libraries.length);
+        }
+        break;
+
+      case 'knowledge_library_created':
+        {
+          const library = event.library;
+          if (library) {
+            get().addKnowledgeLibrary(library);
+            console.log('[Store] Knowledge library created:', library.name);
+          }
+        }
+        break;
+
+      case 'knowledge_library_deleted':
+        {
+          const libraryId = event.library_id;
+          if (libraryId) {
+            get().removeKnowledgeLibrary(libraryId);
+            console.log('[Store] Knowledge library deleted:', libraryId);
+          }
+        }
+        break;
+
+      case 'knowledge_search_results':
+        {
+          const results = event.results || [];
+          const query = event.query || '';
+          const modeUsed = event.mode_used || '';
+          const strategiesUsed = event.strategies_used || []; 
+          const quality = event.quality || null; 
+          get().setKnowledgeSearchResults(results, query, modeUsed, strategiesUsed, quality);
+          console.log('[Store] Knowledge search results:', results.length, 'for query:', query, 'mode:', modeUsed, 'strategies:', strategiesUsed, 'quality:', quality);
+        }
+        break;
+
+      case 'knowledge_library_updated':
+        {
+          const library = event.library;
+          if (library) {
+            get().updateKnowledgeLibrary(library);
+            console.log('[Store] Knowledge library updated:', library.library_id);
+          }
+        }
+        break;
+
+      case 'knowledge_ingest_progress':
+        {
+          get().handleIngestProgress({
+            library_id: event.library_id,
+            progress: event.progress,
+            current_file: event.current_file || '',
+            files_processed: event.files_processed || 0,
+            total_files: event.total_files || 0,
+          });
+          console.log('[Store] Ingest progress:', event.progress, '%');
+        }
+        break;
+
+      case 'knowledge_ingest_complete':
+        {
+          get().handleIngestComplete({
+            library_id: event.library_id,
+            success: event.success,
+            stats: event.stats || {},
+            message: event.message || '',
+          });
+          console.log('[Store] Ingest complete:', event.success);
+        }
+        break;
+
+      case 'knowledge_error':
+        {
+          const error = event.error || 'Unknown error';
+          const operation = event.operation || 'operation';
+          get().handleKnowledgeError(error, operation);
+          console.error('[Store] Knowledge error:', operation, error);
+        }
+        break;
+
+      // ====================================================================
+      // Document Management Events
+      // ====================================================================
+      case 'document_list':
+        {
+          const documents = event.documents || [];
+          get().setDocuments(documents);
+          console.log('[Store] Received documents:', documents.length);
+        }
+        break;
+
+      case 'document_detail':
+        {
+          // Document detail is typically handled directly by components
+          console.log('[Store] Document detail received:', event.document?.doc_id);
+        }
+        break;
+
+      case 'document_deleted':
+        {
+          const docId = event.doc_id;
+          if (docId) {
+            get().removeDocument(docId);
+            console.log('[Store] Document deleted:', docId);
+          }
+        }
+        break;
+
+      case 'document_status_changed':
+        {
+          const docId = event.doc_id;
+          const status = event.status;
+          if (docId && status) {
+            get().updateDocumentStatus(docId, status);
+            console.log('[Store] Document status changed:', docId, status);
+          }
+        }
+        break;
+
+      case 'chunk_list':
+        {
+          const chunks = event.chunks || [];
+          get().setChunks(chunks);
+          console.log('[Store] Received chunks:', chunks.length);
+        }
+        break;
+
+      case 'chunk_preview':
+        {
+          const previews = event.chunks || [];
+          get().setChunkPreviews(previews);
+          console.log('[Store] Received chunk previews:', previews.length);
         }
         break;
 
       default:
-        console.warn('Unknown event type:', event?.event_type);
-        break;
+        console.warn('Unknown event type:', (event as AnyServerEvent).event_type);
     }
   },
 });

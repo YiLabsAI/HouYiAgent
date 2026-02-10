@@ -8,11 +8,13 @@ import os
 import time as _time
 from contextlib import asynccontextmanager
 from datetime import datetime
+from pathlib import Path
 from uuid import uuid4
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from houyi.core.skill_registry import DEFAULT_SKILL_REGISTRY
 from houyi.protocol.ir import ExecutionStatus, PlanIR
@@ -39,6 +41,7 @@ from .logging_config import (
     set_log_level,
     truncate_payload,
 )
+from .rag_service import get_knowledge_service
 from .startup_hooks import register_console_skills
 from .websocket import connection_manager
 
@@ -254,8 +257,32 @@ async def lifespan(app: FastAPI):
         os.getenv("SILICONFLOW_BASE_URL", "https://api.siliconflow.cn/v1"),
     )
     logger.info("  DeepSeek Model: %s", os.getenv("DEEPSEEK_MODEL", "deepseek-chat"))
+
+    # Check Google/Vertex AI configuration (auto-detect from service account)
     google_project = os.getenv("GOOGLE_PROJECT_ID", "")
-    logger.info("  Google Project ID: %s", "✓ Configured" if google_project else "✗ Not Set")
+    google_creds_file = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "")
+
+    if not google_project and google_creds_file:
+        # Auto-detect project_id from service account credentials file
+        try:
+            import json
+            with open(google_creds_file) as f:
+                creds = json.load(f)
+                google_project = creds.get("project_id", "")
+        except Exception:
+            pass
+
+    if google_project:
+        logger.info("  Google Project: ✓ %s", google_project)
+    else:
+        logger.info("  Google Project: ✗ Not configured")
+
+    if google_creds_file:
+        creds_name = os.path.basename(google_creds_file)
+        logger.info("  Google Credentials: ✓ %s", creds_name)
+    else:
+        logger.info("  Google Credentials: ✗ Not set")
+
     logger.info("  Gemini Model: %s", os.getenv("GEMINI_MODEL", "gemini-1.5-pro"))
     logger.info("=" * 60)
     yield
@@ -315,6 +342,72 @@ _CLIENT_TIMEOUT_S = 90
 # ReconnectingWebSocket reconnects within 500ms-2s on first attempt;
 # 15s covers several retry cycles with exponential back-off.
 _DISCONNECT_GRACE_S = 15
+
+
+@app.post("/api/knowledge/{library_id}/upload")
+async def upload_knowledge_files(
+    library_id: str,
+    files: list[UploadFile] = File(...),  # noqa: B008
+) -> JSONResponse:
+    """Upload files to a knowledge library.
+
+    Files are saved to the library's dedicated storage directory:
+    {STORAGE}/{library_id}/uploads/
+
+    Args:
+        library_id: Knowledge library identifier
+        files: List of files to upload
+
+    Returns:
+        JSON with uploaded file paths
+    """
+    import aiofiles
+
+    from .rag_service import get_library_upload_dir
+
+    knowledge_service = get_knowledge_service()
+    library = knowledge_service.get_library(library_id)
+
+    if not library:
+        return JSONResponse(
+            status_code=404,
+            content={"error": f"Library {library_id} not found"},
+        )
+
+    # Use library-specific upload directory
+    upload_dir = get_library_upload_dir(library_id)
+    upload_dir.mkdir(parents=True, exist_ok=True)
+
+    saved_paths: list[str] = []
+    errors: list[str] = []
+
+    for file in files:
+        if not file.filename:
+            continue
+
+        # Sanitize filename
+        safe_filename = Path(file.filename).name
+        file_path = upload_dir / safe_filename
+
+        try:
+            # Read and save file content
+            content = await file.read()
+            async with aiofiles.open(file_path, "wb") as f:
+                await f.write(content)
+            saved_paths.append(str(file_path.resolve()))  # Use absolute path
+            logger.info("Uploaded file: %s -> %s", file.filename, file_path.resolve())
+        except Exception as e:
+            errors.append(f"{file.filename}: {e!s}")
+            logger.error("Failed to upload %s: %s", file.filename, e)
+
+    return JSONResponse(
+        content={
+            "library_id": library_id,
+            "uploaded_paths": saved_paths,
+            "errors": errors,
+            "upload_dir": str(upload_dir.resolve()),  # Use absolute path
+        }
+    )
 
 
 @app.websocket("/ws/session/{session_id}")
@@ -499,6 +592,40 @@ def parse_command(data: dict) -> ClientCommand | None:
             return data
         elif command_type == "list_workflows":
             return data
+        # Knowledge Base commands
+        elif command_type == "list_knowledge_libraries":
+            return data
+        elif command_type == "create_knowledge_library":
+            return data
+        elif command_type == "delete_knowledge_library":
+            return data
+        elif command_type == "search_knowledge":
+            return data
+        elif command_type == "update_knowledge_library":
+            return data
+        elif command_type == "ingest_knowledge_files":
+            return data
+        elif command_type == "rebuild_knowledge_index":
+            return data
+        elif command_type == "cancel_ingest":
+            return data
+        # Document management commands
+        elif command_type == "list_documents":
+            return data
+        elif command_type == "get_document":
+            return data
+        elif command_type == "delete_document":
+            return data
+        elif command_type == "disable_document":
+            return data
+        elif command_type == "enable_document":
+            return data
+        elif command_type == "list_chunks":
+            return data
+        elif command_type == "preview_chunks":
+            return data
+        elif command_type == "frontend_log":
+            return data
         else:
             logger.warning("Unknown command type: %s", command_type)
             return None
@@ -610,6 +737,548 @@ async def handle_command(command: ClientCommand | dict, session_id: str) -> None
             )
             await connection_manager.send_event(session_id, workflow_event)
             logger.info("Sent workflow list to frontend")
+
+        # ====================================================================
+        # Knowledge Base Commands
+        # ====================================================================
+        elif isinstance(command, dict) and command.get("command_type") == "list_knowledge_libraries":
+            logger.info("=== List knowledge libraries command received ===")
+            knowledge_service = get_knowledge_service()
+            libraries = knowledge_service.list_libraries()
+            logger.info("Found %d knowledge libraries", len(libraries))
+
+            from .events import KnowledgeLibraryListEvent
+
+            event = KnowledgeLibraryListEvent(
+                event_id=f"evt_{uuid4().hex[:8]}",
+                session_id=session_id,
+                libraries=libraries,
+            )
+            await connection_manager.send_event(session_id, event)
+
+        elif isinstance(command, dict) and command.get("command_type") == "create_knowledge_library":
+            logger.info("=== Create knowledge library command received ===")
+            knowledge_service = get_knowledge_service()
+
+            name = command.get("name", "Untitled")
+            description = command.get("description", "")
+            mode = command.get("mode", "auto")
+            knowledge_dir = command.get("knowledge_dir", "./knowledge")
+
+            # Build metadata from advanced options
+            metadata = command.get("metadata") or {}
+            if command.get("strategies"):
+                metadata["strategies"] = command.get("strategies")
+            if command.get("embedding_provider"):
+                metadata["embedding_provider"] = command.get("embedding_provider")
+            if command.get("contextual_retrieval") is not None:
+                metadata["contextual_retrieval"] = command.get("contextual_retrieval")
+
+            library = knowledge_service.create_library(
+                name=name,
+                description=description,
+                mode=mode,
+                knowledge_dir=knowledge_dir,
+                metadata=metadata,
+            )
+            logger.info("Created knowledge library: %s with metadata: %s", library.get("library_id"), metadata)
+
+            from .events import KnowledgeLibraryCreatedEvent
+
+            event = KnowledgeLibraryCreatedEvent(
+                event_id=f"evt_{uuid4().hex[:8]}",
+                session_id=session_id,
+                library=library,
+            )
+            await connection_manager.send_event(session_id, event)
+
+        elif isinstance(command, dict) and command.get("command_type") == "delete_knowledge_library":
+            logger.info("=== Delete knowledge library command received ===")
+            knowledge_service = get_knowledge_service()
+
+            library_id = command.get("library_id")
+            if library_id:
+                success = knowledge_service.delete_library(library_id)
+                if success:
+                    from .events import KnowledgeLibraryDeletedEvent
+
+                    event = KnowledgeLibraryDeletedEvent(
+                        event_id=f"evt_{uuid4().hex[:8]}",
+                        session_id=session_id,
+                        library_id=library_id,
+                    )
+                    await connection_manager.send_event(session_id, event)
+                    logger.info("Deleted knowledge library: %s", library_id)
+                else:
+                    from .events import KnowledgeErrorEvent
+
+                    event = KnowledgeErrorEvent(
+                        event_id=f"evt_{uuid4().hex[:8]}",
+                        session_id=session_id,
+                        error=f"Library not found: {library_id}",
+                        operation="delete",
+                    )
+                    await connection_manager.send_event(session_id, event)
+
+        elif isinstance(command, dict) and command.get("command_type") == "update_knowledge_library":
+            logger.info("=== Update knowledge library command received ===")
+            knowledge_service = get_knowledge_service()
+
+            library_id = command.get("library_id")
+            updates = command.get("updates", {})
+
+            if not library_id:
+                from .events import KnowledgeErrorEvent
+
+                event = KnowledgeErrorEvent(
+                    event_id=f"evt_{uuid4().hex[:8]}",
+                    session_id=session_id,
+                    error="library_id is required",
+                    operation="update",
+                )
+                await connection_manager.send_event(session_id, event)
+            else:
+                library = knowledge_service.update_library(library_id, updates)
+                if library:
+                    from .events import KnowledgeLibraryUpdatedEvent
+
+                    event = KnowledgeLibraryUpdatedEvent(
+                        event_id=f"evt_{uuid4().hex[:8]}",
+                        session_id=session_id,
+                        library=library,
+                    )
+                    await connection_manager.send_event(session_id, event)
+                    logger.info("Updated knowledge library: %s", library_id)
+                else:
+                    from .events import KnowledgeErrorEvent
+
+                    event = KnowledgeErrorEvent(
+                        event_id=f"evt_{uuid4().hex[:8]}",
+                        session_id=session_id,
+                        error=f"Library not found: {library_id}",
+                        operation="update",
+                    )
+                    await connection_manager.send_event(session_id, event)
+
+        elif isinstance(command, dict) and command.get("command_type") == "search_knowledge":
+            logger.info("=== Search knowledge command received ===")
+            knowledge_service = get_knowledge_service()
+
+            query = command.get("query", "")
+            library_id = command.get("library_id")
+            mode = command.get("mode")
+            top_k = command.get("top_k", 10)
+
+            if not query:
+                from .events import KnowledgeErrorEvent
+
+                event = KnowledgeErrorEvent(
+                    event_id=f"evt_{uuid4().hex[:8]}",
+                    session_id=session_id,
+                    error="Query is required",
+                    operation="search",
+                )
+                await connection_manager.send_event(session_id, event)
+            else:
+                results = await knowledge_service.search_knowledge(
+                    query=query,
+                    library_id=library_id,
+                    mode=mode,
+                    top_k=top_k,
+                )
+                logger.info("Search returned %d results", results.get("total_results", 0))
+
+                from .events import KnowledgeSearchResultsEvent
+
+                event = KnowledgeSearchResultsEvent(
+                    event_id=f"evt_{uuid4().hex[:8]}",
+                    session_id=session_id,
+                    query=results.get("query", query),
+                    library_id=results.get("library_id", ""),
+                    results=results.get("results", []),
+                    mode_used=results.get("mode_used", ""),
+                    total_results=results.get("total_results", 0),
+                    quality=results.get("quality"),  # v1.1
+                )
+                await connection_manager.send_event(session_id, event)
+
+        elif isinstance(command, dict) and command.get("command_type") == "ingest_knowledge_files":
+            logger.info("=== Ingest knowledge files command received ===")
+            knowledge_service = get_knowledge_service()
+
+            library_id = command.get("library_id")
+            paths = command.get("paths", [])
+
+            if not library_id:
+                from .events import KnowledgeErrorEvent
+
+                event = KnowledgeErrorEvent(
+                    event_id=f"evt_{uuid4().hex[:8]}",
+                    session_id=session_id,
+                    error="library_id is required",
+                    operation="ingest",
+                )
+                await connection_manager.send_event(session_id, event)
+            elif not paths:
+                from .events import KnowledgeErrorEvent
+
+                event = KnowledgeErrorEvent(
+                    event_id=f"evt_{uuid4().hex[:8]}",
+                    session_id=session_id,
+                    error="paths is required",
+                    operation="ingest",
+                )
+                await connection_manager.send_event(session_id, event)
+            else:
+                # Progress callback to send updates
+                async def progress_callback(
+                    progress: float,
+                    current_file: str,
+                    files_processed: int,
+                    total_files: int,
+                ) -> None:
+                    from .events import KnowledgeIngestProgressEvent
+
+                    event = KnowledgeIngestProgressEvent(
+                        event_id=f"evt_{uuid4().hex[:8]}",
+                        session_id=session_id,
+                        library_id=library_id,
+                        progress=progress,
+                        current_file=current_file,
+                        files_processed=files_processed,
+                        total_files=total_files,
+                    )
+                    await connection_manager.send_event(session_id, event)
+
+                # Run ingest
+                result = await knowledge_service.ingest_files(
+                    library_id=library_id,
+                    paths=paths,
+                    progress_callback=progress_callback,
+                )
+
+                from .events import KnowledgeIngestCompleteEvent
+
+                event = KnowledgeIngestCompleteEvent(
+                    event_id=f"evt_{uuid4().hex[:8]}",
+                    session_id=session_id,
+                    library_id=library_id,
+                    success=result.get("success", False),
+                    stats=result.get("stats", {}),
+                    message=result.get("error", "") if not result.get("success") else "Ingest complete",
+                )
+                await connection_manager.send_event(session_id, event)
+
+                # Also send updated library info
+                library = knowledge_service.get_library(library_id)
+                if library:
+                    from .events import KnowledgeLibraryUpdatedEvent
+
+                    update_event = KnowledgeLibraryUpdatedEvent(
+                        event_id=f"evt_{uuid4().hex[:8]}",
+                        session_id=session_id,
+                        library=library,
+                    )
+                    await connection_manager.send_event(session_id, update_event)
+
+        elif isinstance(command, dict) and command.get("command_type") == "rebuild_knowledge_index":
+            logger.info("=== Rebuild knowledge index command received ===")
+            knowledge_service = get_knowledge_service()
+
+            library_id = command.get("library_id")
+
+            if not library_id:
+                from .events import KnowledgeErrorEvent
+
+                event = KnowledgeErrorEvent(
+                    event_id=f"evt_{uuid4().hex[:8]}",
+                    session_id=session_id,
+                    error="library_id is required",
+                    operation="rebuild",
+                )
+                await connection_manager.send_event(session_id, event)
+            else:
+                # Get library to find knowledge_dir
+                library = knowledge_service.get_library(library_id)
+                if not library:
+                    from .events import KnowledgeErrorEvent
+
+                    event = KnowledgeErrorEvent(
+                        event_id=f"evt_{uuid4().hex[:8]}",
+                        session_id=session_id,
+                        error=f"Library {library_id} not found",
+                        operation="rebuild",
+                    )
+                    await connection_manager.send_event(session_id, event)
+                else:
+                    # Progress callback to send updates
+                    async def progress_callback(
+                        progress: float,
+                        current_file: str,
+                        files_processed: int,
+                        total_files: int,
+                    ) -> None:
+                        from .events import KnowledgeIngestProgressEvent
+
+                        event = KnowledgeIngestProgressEvent(
+                            event_id=f"evt_{uuid4().hex[:8]}",
+                            session_id=session_id,
+                            library_id=library_id,
+                            progress=progress,
+                            current_file=current_file,
+                            files_processed=files_processed,
+                            total_files=total_files,
+                        )
+                        await connection_manager.send_event(session_id, event)
+
+                    # Run rebuild using the library's knowledge_dir AND uploads
+                    from .rag_service import get_library_upload_dir
+
+                    knowledge_dir = library.get("knowledge_dir", "./knowledge")
+                    upload_dir = get_library_upload_dir(library_id)
+                    incremental = command.get("incremental", False)
+
+                    # Include both knowledge_dir and upload directory
+                    paths_to_index = [knowledge_dir]
+                    if upload_dir.exists():
+                        paths_to_index.append(str(upload_dir))
+
+                    result = await knowledge_service.ingest_files(
+                        library_id=library_id,
+                        paths=paths_to_index,
+                        progress_callback=progress_callback,
+                        incremental=incremental,
+                    )
+
+                    from .events import KnowledgeIngestCompleteEvent
+
+                    stats = result.get("stats", {})
+                    if result.get("success"):
+                        files_processed = stats.get("files_processed", 0)
+                        chunks_created = stats.get("chunks_created", 0)
+                        if files_processed > 0:
+                            message = f"Indexed {files_processed} files, {chunks_created} chunks"
+                        else:
+                            message = "No changes detected"
+                    else:
+                        message = result.get("error", "Unknown error")
+
+                    event = KnowledgeIngestCompleteEvent(
+                        event_id=f"evt_{uuid4().hex[:8]}",
+                        session_id=session_id,
+                        library_id=library_id,
+                        success=result.get("success", False),
+                        stats=stats,
+                        message=message,
+                    )
+                    await connection_manager.send_event(session_id, event)
+
+                    # Also send updated library info
+                    updated_library = knowledge_service.get_library(library_id)
+                    if updated_library:
+                        from .events import KnowledgeLibraryUpdatedEvent
+
+                        update_event = KnowledgeLibraryUpdatedEvent(
+                            event_id=f"evt_{uuid4().hex[:8]}",
+                            session_id=session_id,
+                            library=updated_library,
+                        )
+                        await connection_manager.send_event(session_id, update_event)
+
+        elif isinstance(command, dict) and command.get("command_type") == "cancel_ingest":
+            logger.info("=== Cancel ingest command received ===")
+            knowledge_service = get_knowledge_service()
+            library_id = command.get("library_id")
+            if library_id:
+                knowledge_service.cancel_ingest(library_id)
+
+        # ====================================================================
+        # Document Management Commands
+        # ====================================================================
+        elif isinstance(command, dict) and command.get("command_type") == "list_documents":
+            logger.info("=== List documents command received ===")
+            knowledge_service = get_knowledge_service()
+            library_id = command.get("library_id")
+
+            if not library_id:
+                from .events import KnowledgeErrorEvent
+
+                event = KnowledgeErrorEvent(
+                    event_id=f"evt_{uuid4().hex[:8]}",
+                    session_id=session_id,
+                    error="library_id is required",
+                    operation="list_documents",
+                )
+                await connection_manager.send_event(session_id, event)
+            else:
+                documents = knowledge_service.list_documents(library_id)
+                from .events import DocumentListEvent
+
+                event = DocumentListEvent(
+                    event_id=f"evt_{uuid4().hex[:8]}",
+                    session_id=session_id,
+                    library_id=library_id,
+                    documents=documents,
+                )
+                await connection_manager.send_event(session_id, event)
+
+        elif isinstance(command, dict) and command.get("command_type") == "get_document":
+            logger.info("=== Get document command received ===")
+            knowledge_service = get_knowledge_service()
+            library_id = command.get("library_id")
+            doc_id = command.get("doc_id")
+
+            if not library_id or not doc_id:
+                from .events import KnowledgeErrorEvent
+
+                event = KnowledgeErrorEvent(
+                    event_id=f"evt_{uuid4().hex[:8]}",
+                    session_id=session_id,
+                    error="library_id and doc_id are required",
+                    operation="get_document",
+                )
+                await connection_manager.send_event(session_id, event)
+            else:
+                document = knowledge_service.get_document(library_id, doc_id)
+                if document:
+                    from .events import DocumentDetailEvent
+
+                    event = DocumentDetailEvent(
+                        event_id=f"evt_{uuid4().hex[:8]}",
+                        session_id=session_id,
+                        library_id=library_id,
+                        document=document,
+                    )
+                    await connection_manager.send_event(session_id, event)
+
+        elif isinstance(command, dict) and command.get("command_type") == "delete_document":
+            logger.info("=== Delete document command received ===")
+            knowledge_service = get_knowledge_service()
+            library_id = command.get("library_id")
+            doc_id = command.get("doc_id")
+
+            if library_id and doc_id:
+                success = knowledge_service.delete_document(library_id, doc_id)
+                if success:
+                    from .events import DocumentDeletedEvent, KnowledgeLibraryUpdatedEvent
+
+                    event = DocumentDeletedEvent(
+                        event_id=f"evt_{uuid4().hex[:8]}",
+                        session_id=session_id,
+                        library_id=library_id,
+                        doc_id=doc_id,
+                    )
+                    await connection_manager.send_event(session_id, event)
+
+                    # Also send updated library info (doc_count, status changed)
+                    updated_library = knowledge_service.get_library(library_id)
+                    if updated_library:
+                        update_event = KnowledgeLibraryUpdatedEvent(
+                            event_id=f"evt_{uuid4().hex[:8]}",
+                            session_id=session_id,
+                            library=updated_library,
+                        )
+                        await connection_manager.send_event(session_id, update_event)
+
+        elif isinstance(command, dict) and command.get("command_type") == "disable_document":
+            logger.info("=== Disable document command received ===")
+            knowledge_service = get_knowledge_service()
+            library_id = command.get("library_id")
+            doc_id = command.get("doc_id")
+
+            if library_id and doc_id:
+                document = knowledge_service.disable_document(library_id, doc_id)
+                if document:
+                    from .events import DocumentStatusChangedEvent
+
+                    event = DocumentStatusChangedEvent(
+                        event_id=f"evt_{uuid4().hex[:8]}",
+                        session_id=session_id,
+                        library_id=library_id,
+                        doc_id=doc_id,
+                        status="disabled",
+                    )
+                    await connection_manager.send_event(session_id, event)
+
+        elif isinstance(command, dict) and command.get("command_type") == "enable_document":
+            logger.info("=== Enable document command received ===")
+            knowledge_service = get_knowledge_service()
+            library_id = command.get("library_id")
+            doc_id = command.get("doc_id")
+
+            if library_id and doc_id:
+                document = knowledge_service.enable_document(library_id, doc_id)
+                if document:
+                    from .events import DocumentStatusChangedEvent
+
+                    event = DocumentStatusChangedEvent(
+                        event_id=f"evt_{uuid4().hex[:8]}",
+                        session_id=session_id,
+                        library_id=library_id,
+                        doc_id=doc_id,
+                        status="indexed",
+                    )
+                    await connection_manager.send_event(session_id, event)
+
+        elif isinstance(command, dict) and command.get("command_type") == "list_chunks":
+            logger.info("=== List chunks command received ===")
+            knowledge_service = get_knowledge_service()
+            library_id = command.get("library_id")
+            doc_id = command.get("doc_id")
+
+            if library_id and doc_id:
+                chunks = knowledge_service.list_chunks(library_id, doc_id)
+                from .events import ChunkListEvent
+
+                event = ChunkListEvent(
+                    event_id=f"evt_{uuid4().hex[:8]}",
+                    session_id=session_id,
+                    library_id=library_id,
+                    doc_id=doc_id,
+                    chunks=chunks,
+                )
+                await connection_manager.send_event(session_id, event)
+
+        elif isinstance(command, dict) and command.get("command_type") == "preview_chunks":
+            logger.info("=== Preview chunks command received ===")
+            knowledge_service = get_knowledge_service()
+            content = command.get("content", "")
+            chunk_size = command.get("chunk_size", 512)
+            chunk_overlap = command.get("chunk_overlap", 50)
+            strategy = command.get("strategy", "recursive")
+
+            chunks = knowledge_service.preview_chunks(
+                content=content,
+                chunk_size=chunk_size,
+                chunk_overlap=chunk_overlap,
+                strategy=strategy,
+            )
+            from .events import ChunkPreviewEvent
+
+            event = ChunkPreviewEvent(
+                event_id=f"evt_{uuid4().hex[:8]}",
+                session_id=session_id,
+                chunks=chunks,
+                chunk_size=chunk_size,
+                chunk_overlap=chunk_overlap,
+                strategy=strategy,
+            )
+            await connection_manager.send_event(session_id, event)
+
+        elif isinstance(command, dict) and command.get("command_type") == "frontend_log":
+            # Bridge frontend logs to backend terminal
+            level = command.get("level", "info")
+            category = command.get("category", "Frontend")
+            message = command.get("message", "")
+            log_prefix = f"[Frontend/{category}] {message}"
+            if level == "debug":
+                logger.debug(log_prefix)
+            elif level == "warn":
+                logger.warning(log_prefix)
+            elif level == "error":
+                logger.error(log_prefix)
+            else:
+                logger.info(log_prefix)
 
         # Handle standard ClientCommand objects
         if isinstance(command, StartExecutionCommand):
@@ -806,11 +1475,20 @@ if __name__ == "__main__":
 
     log_config = build_logging_config(LOG_LEVEL)
 
+    # Get absolute paths for reload directories
+    server_dir = Path(__file__).parent.parent.parent  # houyi-studio/server/
+    project_root = server_dir.parent.parent  # project root
+    reload_dirs = [
+        str(server_dir / "houyi_studio"),  # houyi-studio/server/houyi_studio/
+        str(project_root / "houyi"),        # houyi/ (core library)
+    ]
+
     uvicorn.run(
         "houyi_studio.server.app:app",
         host="0.0.0.0",
         port=int(os.environ.get("HOUYI_PORT", "8000")),
         reload=True,
+        reload_dirs=reload_dirs,
         log_level=LOG_LEVEL.lower(),
         log_config=log_config,
     )

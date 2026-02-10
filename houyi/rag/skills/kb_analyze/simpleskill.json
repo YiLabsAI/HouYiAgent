@@ -1,0 +1,126 @@
+{
+  "id": "kb-analyze",
+  "version": "1.0.0",
+  "name": "Knowledge Base Analyze",
+  "description": "Knowledge base statistics and health check. Provides index stats, coverage analysis, and quality metrics.",
+  "engines": {
+    "host": "houyi>=0.1.0"
+  },
+  "activationEvents": [
+    "onTaskMatch:analyze knowledge base",
+    "onTaskMatch:show stats",
+    "onTaskMatch:check index health",
+    "onCommand:kb-analyze"
+  ],
+  "contributions": {
+    "skills": [
+      {
+        "id": "kb-analyze",
+        "description": "Knowledge base statistics and health analysis",
+        "invocationPolicy": {
+          "modelAutoInvoke": "allow",
+          "userInvocable": true,
+          "sideEffect": "none"
+        },
+        "toolRefs": ["Read", "Glob"],
+        "entry": "skill.py:kb_analyze_skill"
+      }
+    ],
+    "tools": [
+      {
+        "name": "kb-analyze.execute",
+        "description": "Analyze knowledge base and return statistics",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "knowledge_dir": {
+              "type": "string",
+              "default": "knowledge/",
+              "description": "Knowledge base directory"
+            },
+            "analysis_type": {
+              "type": "string",
+              "enum": ["stats", "health", "coverage", "quality"],
+              "default": "stats",
+              "description": "Type of analysis to perform"
+            },
+            "include_details": {
+              "type": "boolean",
+              "default": false,
+              "description": "Include detailed breakdown"
+            }
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "total_documents": {"type": "integer"},
+            "total_chunks": {"type": "integer"},
+            "index_size_bytes": {"type": "integer"},
+            "vector_index_stats": {
+              "type": "object",
+              "properties": {
+                "dimension": {"type": "integer"},
+                "num_vectors": {"type": "integer"}
+              }
+            },
+            "sparse_index_stats": {
+              "type": "object",
+              "properties": {
+                "vocab_size": {"type": "integer"},
+                "avg_doc_length": {"type": "number"}
+              }
+            },
+            "graph_stats": {
+              "type": "object",
+              "properties": {
+                "num_entities": {"type": "integer"},
+                "num_relations": {"type": "integer"},
+                "num_communities": {"type": "integer"}
+              }
+            },
+            "health_status": {
+              "type": "string",
+              "enum": ["healthy", "warning", "error"]
+            },
+            "issues": {
+              "type": "array",
+              "items": {"type": "string"}
+            }
+          }
+        },
+        "execution": {
+          "type": "in-process",
+          "entry": "skill.py:execute_kb_analyze"
+        }
+      }
+    ],
+    "hooks": [
+      {
+        "event": "PreToolUse",
+        "matcher": "Read|Glob",
+        "handler": "hooks.py:pre_analyze_hook"
+      },
+      {
+        "event": "PostToolUse",
+        "matcher": ".*",
+        "handler": "hooks.py:post_analyze_hook"
+      },
+      {
+        "event": "Stop",
+        "handler": "hooks.py:stop_hook"
+      }
+    ]
+  },
+  "permissions": {
+    "filesystem": {
+      "read": ["${knowledge_dir}/**"]
+    },
+    "network": false,
+    "exec": false
+  },
+  "source": "builtin",
+  "metadata": {
+    "category": "rag"
+  }
+}

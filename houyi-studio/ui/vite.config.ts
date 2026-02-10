@@ -8,6 +8,16 @@ export default defineConfig({
   optimizeDeps: {
     exclude: ['playwright', 'playwright-core', 'chromium-bidi', 'fsevents'],
   },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          vendor: ['react', 'react-dom', 'zustand'],
+          reactflow: ['reactflow'],
+        },
+      },
+    },
+  },
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),

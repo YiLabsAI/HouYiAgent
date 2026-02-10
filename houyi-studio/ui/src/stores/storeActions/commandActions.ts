@@ -2,7 +2,7 @@ type StoreSet = (partial: any | ((state: any) => any)) => void;
 type StoreGet = () => any;
 
 export const createCommandActions = (_set: StoreSet, get: StoreGet) => ({
-  sendCommand: (command: any) => {
+  sendCommand: (command: any): boolean => {
     const { ws } = get();
     console.log('[Store] sendCommand called, ws:', ws ? 'exists' : 'null', 'command:', command);
     if (command?.command_type) {
@@ -17,9 +17,11 @@ export const createCommandActions = (_set: StoreSet, get: StoreGet) => ({
     }
     if (ws && ws.isConnected()) {
       ws.sendCommand(command);
+      return true;
     } else {
       console.error('[Store] WebSocket not initialized, cannot send command');
       get().showToastOnce('backend-connection', 'Backend not connected. Please start the server.', 'error');
+      return false;
     }
   },
 

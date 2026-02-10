@@ -1,45 +1,68 @@
-"""Houyi RAG - 面向未来的 Agentic RAG 框架.
+"""Houyi RAG - Agentic RAG framework.
 
-支持双模架构：
-- Agentic Mode: LLM 驱动的智能检索（无需预构建索引）
-- Indexed Mode: 传统混合检索（Vector + Graph + BM25）
+Supports dual-mode architecture:
+- Agentic Mode: LLM-driven intelligent retrieval (no pre-built indexes)
+- Indexed Mode: Traditional hybrid retrieval (Vector + Graph + BM25)
 
-渐进式 API 设计：
-    # Level 1: 零配置入门
-    from houyi.rag import search
-    answer = search("什么是 RAG?", knowledge_dir="./docs")
+Unified API:
+    from houyi.rag import RAG
 
-    # Level 2: 配置化使用
-    from houyi.rag import RAGService
-    rag = RAGService(mode="agentic")
-    answer = rag.query("...")
+    # Zero config (Agentic mode)
+    rag = RAG("./docs")
+    result = await rag.query("What is RAG?")
 
-    # Level 3: Skill 集成
+    # With indexing (Indexed mode)
+    rag = RAG("./docs", mode="indexed")
+    await rag.index()
+    result = await rag.query("What is RAG?")
+
+    # With LLM
+    rag = RAG("./docs", mode="indexed", llm="openai:gpt-4o-mini")
+
+For Skill integration:
     from houyi.rag.skills import kb_search_skill
     agent = Agent(skills=[kb_search_skill])
-
-    # Level 4: 完全自定义
-    from houyi.rag import RAGPipeline, HybridRetriever
-    pipeline = RAGPipeline(retriever=HybridRetriever(...))
 """
 
 from houyi.rag.config import RAGConfig
-from houyi.rag.service import RAGService, search
+from houyi.rag.rag import RAG, search
+from houyi.rag.retrieval import (
+    Generator,
+    HybridRetriever,
+    HybridRetrieverConfig,
+    Reranker,
+    Retriever,
+    Validator,
+    create_hybrid_retriever,
+)
 from houyi.rag.types import (
     Chunk,
     Document,
     Entity,
+    RAGMode,
     Relation,
     RetrievalResult,
+    RetrievalStrategy,
     SearchResult,
     Source,
 )
 
 __all__ = [
-    # Core Service
-    "RAGService",
+    # Primary API
+    "RAG",
     "search",
     "RAGConfig",
+    "RAGMode",
+    "RetrievalStrategy",
+    # Internal components (for advanced usage)
+    "HybridRetriever",
+    "HybridRetrieverConfig",
+    "create_hybrid_retriever",
+    # Protocols
+    "Retriever",
+    "Reranker",
+    "Generator",
+    "Validator",
     # Types
     "Document",
     "Chunk",

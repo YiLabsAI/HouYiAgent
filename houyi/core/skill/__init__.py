@@ -31,16 +31,6 @@ from houyi.core.skill.capability import (
     ManifestFormat,
     ObservabilityFeature,
 )
-from houyi.core.skill.config import (
-    DEFAULT_SKILL_CONFIG,
-    ConsentConfig,
-    HookConfig,
-    MetricsConfig,
-    PolicyConfig,
-    SkillConfig,
-    get_skill_config,
-    load_skill_config_from_env,
-)
 from houyi.core.skill.consent import (
     CLIConsentHandler,
     ConsentHandler,
@@ -167,13 +157,4 @@ __all__ = [
     "MetricsCollector",
     "MetricsExporter",
     "MetricsStore",
-    # config.py
-    "HookConfig",
-    "ConsentConfig",
-    "MetricsConfig",
-    "PolicyConfig",
-    "SkillConfig",
-    "get_skill_config",
-    "load_skill_config_from_env",
-    "DEFAULT_SKILL_CONFIG",
 ]

@@ -5,6 +5,7 @@ from houyi.rag.types import (
     Chunk,
     Document,
     Entity,
+    QualitySummary,
     RAGMode,
     Relation,
     RetrievalResult,
@@ -204,3 +205,91 @@ class TestIndexedConfig:
         assert config.use_crag is True
         assert RetrievalStrategy.BM25 in config.strategies
         assert RetrievalStrategy.VECTOR in config.strategies
+
+
+class TestQualitySummary:
+    """Tests for QualitySummary model (v1.1)."""
+
+    def test_quality_summary_defaults(self) -> None:
+        """Test QualitySummary default values."""
+        qs = QualitySummary()
+        assert qs.min_score == 0.0
+        assert qs.max_score == 0.0
+        assert qs.avg_score == 0.0
+        assert qs.relevance == "unknown"
+        assert qs.coverage == "unknown"
+        assert qs.confidence_level == "unknown"
+        assert qs.suggestion is None
+
+    def test_quality_summary_from_scores_high(self) -> None:
+        """Test QualitySummary.from_scores with high scores."""
+        scores = [0.9, 0.85, 0.8, 0.75, 0.7]
+        qs = QualitySummary.from_scores(scores)
+
+        assert qs.min_score == 0.7
+        assert qs.max_score == 0.9
+        assert qs.avg_score == 0.8
+        assert qs.relevance == "high"
+        assert qs.coverage == "high"
+        assert qs.above_threshold_count == 5
+        assert qs.total_count == 5
+
+    def test_quality_summary_from_scores_medium(self) -> None:
+        """Test QualitySummary.from_scores with medium scores."""
+        scores = [0.7, 0.6, 0.5, 0.4, 0.3]
+        qs = QualitySummary.from_scores(scores)
+
+        assert qs.min_score == 0.3
+        assert qs.max_score == 0.7
+        assert qs.avg_score == 0.5
+        assert qs.relevance == "medium"
+        assert qs.above_threshold_count == 2
+
+    def test_quality_summary_from_scores_low(self) -> None:
+        """Test QualitySummary.from_scores with low scores."""
+        scores = [0.3, 0.2, 0.1, 0.15, 0.25]
+        qs = QualitySummary.from_scores(scores)
+
+        assert qs.avg_score == 0.2
+        assert qs.relevance == "low"
+        assert qs.above_threshold_count == 0
+        assert qs.suggestion is not None  # Should have improvement suggestion
+
+    def test_quality_summary_from_empty_scores(self) -> None:
+        """Test QualitySummary.from_scores with empty list."""
+        qs = QualitySummary.from_scores([])
+        assert qs.total_count == 0
+        assert qs.relevance == "unknown"
+
+    def test_quality_summary_score_distribution(self) -> None:
+        """Test QualitySummary score distribution buckets."""
+        scores = [0.95, 0.85, 0.75, 0.65, 0.55, 0.45, 0.35, 0.25, 0.15, 0.05]
+        qs = QualitySummary.from_scores(scores)
+
+        assert qs.score_distribution["80-100"] == 2
+        assert qs.score_distribution["60-80"] == 2
+        assert qs.score_distribution["40-60"] == 2
+        assert qs.score_distribution["20-40"] == 2
+        assert qs.score_distribution["0-20"] == 2
+
+
+class TestRetrievalResultWithQuality:
+    """Tests for RetrievalResult with quality field (v1.1)."""
+
+    def test_retrieval_result_with_quality(self) -> None:
+        """Test RetrievalResult includes quality field."""
+        import pytest
+        quality = QualitySummary.from_scores([0.8, 0.7, 0.6])
+        result = RetrievalResult(
+            answer="Test answer",
+            confidence=0.75,
+            quality=quality,
+        )
+        assert result.quality is not None
+        assert result.quality.avg_score == pytest.approx(0.7)
+        assert result.quality.relevance == "high"
+
+    def test_retrieval_result_quality_none_by_default(self) -> None:
+        """Test RetrievalResult quality is None by default."""
+        result = RetrievalResult(answer="Test")
+        assert result.quality is None

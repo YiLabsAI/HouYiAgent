@@ -77,7 +77,7 @@ Sources:
         from houyi.llm.base import LLMMessage, MessageRole
 
         if not results:
-            return "未在知识库中找到相关信息。", 0.0
+            return "No relevant information found in knowledge base.", 0.0
 
         context = self._format_context(results)
 
@@ -145,9 +145,8 @@ Please answer the question based on the context above."""
             "not enough information",
             "cannot find",
             "no relevant",
-            "未找到",
-            "无法确定",
-            "信息不足",
+            "unable to determine",
+            "insufficient information",
         ]
         if any(phrase in answer.lower() for phrase in uncertainty_phrases):
             confidence -= 0.2
@@ -157,7 +156,7 @@ Please answer the question based on the context above."""
     def _fallback_answer(self, results: list[SearchResult]) -> str:
         """Generate a simple fallback answer by concatenating results."""
         if not results:
-            return "未找到相关信息。"
+            return "No relevant information found."
 
         parts = []
         for i, result in enumerate(results[:3], 1):
@@ -165,6 +164,6 @@ Please answer the question based on the context above."""
                 parts.append(f"[{i}] {result.content.strip()[:500]}")
 
         if not parts:
-            return "未找到相关信息。"
+            return "No relevant information found."
 
         return "\n\n".join(parts)

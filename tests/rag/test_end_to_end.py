@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 
-from houyi.rag import RAGService, search
+from houyi.rag import RAG, search
 from houyi.rag.skills.kb_search import KBSearchInput, execute_kb_search
 
 
@@ -56,7 +56,7 @@ class TestEndToEndAgentic:
                 "1. A vector database\n2. An embedding model\n3. An LLM"
             )
 
-            service = RAGService(mode="agentic", knowledge_dir=str(kb_dir))
+            service = RAG(mode="agentic", knowledge_dir=str(kb_dir))
             result = await service.query("What is RAG?")
 
             assert result.answer
@@ -69,10 +69,10 @@ class TestEndToEndAgentic:
             kb_dir = Path(tmpdir) / "knowledge"
             kb_dir.mkdir()
 
-            service = RAGService(mode="agentic", knowledge_dir=str(kb_dir))
+            service = RAG(mode="agentic", knowledge_dir=str(kb_dir))
             result = await service.query("What is RAG?")
 
-            assert "未" in result.answer  # Should indicate no results
+            assert "No relevant" in result.answer or "not found" in result.answer.lower()
             assert result.confidence == 0.0
 
     @pytest.mark.asyncio
@@ -91,7 +91,7 @@ class TestEndToEndAgentic:
                 ]
             )
 
-            service = RAGService(
+            service = RAG(
                 mode="agentic",
                 knowledge_dir=str(kb_dir),
                 llm_adapter=fake_adapter,
@@ -204,7 +204,7 @@ class TestModeSelection:
             for i in range(10):
                 (kb_dir / f"doc{i}.md").write_text(f"Document {i} content")
 
-            service = RAGService(mode="auto", knowledge_dir=str(kb_dir))
+            service = RAG(mode="auto", knowledge_dir=str(kb_dir))
 
             # Mode selection happens during query
             selected = service._select_mode("test query")
@@ -222,7 +222,7 @@ class TestModeSelection:
             for i in range(120):
                 (kb_dir / f"doc{i}.md").write_text(f"Document {i} content")
 
-            service = RAGService(mode="auto", knowledge_dir=str(kb_dir))
+            service = RAG(mode="auto", knowledge_dir=str(kb_dir))
 
             selected = service._select_mode("test query")
 
@@ -248,7 +248,7 @@ class TestLLMProviderIntegration:
                 ]
             )
 
-            service = RAGService(
+            service = RAG(
                 mode="agentic",
                 knowledge_dir=str(kb_dir),
                 llm_adapter=fake_adapter,
@@ -263,7 +263,7 @@ class TestLLMProviderIntegration:
     @pytest.mark.asyncio
     async def test_service_with_llm_model_config(self) -> None:
         """Test service stores llm_model in config."""
-        service = RAGService(
+        service = RAG(
             mode="indexed",
             llm_model="gpt-4",
         )

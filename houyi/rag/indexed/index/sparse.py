@@ -39,6 +39,16 @@ class SparseIndex:
         self._chunks: list[Chunk] = []
         self._index_path = self.knowledge_dir / ".houyi" / "sparse_index"
 
+    def __del__(self) -> None:
+        """Clean up resources on deletion."""
+        self.close()
+
+    def close(self) -> None:
+        """Close and cleanup index resources."""
+        if self._index is not None:
+            # bm25s stores internal state - setting to None allows GC
+            self._index = None
+
     def _ensure_index(self) -> None:
         """Ensure index is initialized."""
         if self._index is not None:

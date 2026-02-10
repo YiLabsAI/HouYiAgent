@@ -3,6 +3,7 @@
 Reference: SimpleSkill Specification v0.1 Section 5.1 (Capability Negotiation)
 """
 
+
 from houyi.core.skill.capability import (
     DEFAULT_HOUYI_CAPABILITIES,
     CapabilityMatchResult,
@@ -125,10 +126,14 @@ class TestCapabilityNegotiator:
         assert any("version" in m.lower() for m in result.missing_capabilities)
 
     def test_check_compatibility_execution_form_mismatch(self):
-        caps = HostCapabilities(execution_forms=[ExecutionForm.IN_PROCESS])
+        caps = HostCapabilities(
+            execution_forms=[ExecutionForm.IN_PROCESS]
+        )
         negotiator = CapabilityNegotiator(caps)
 
-        reqs = ExtensionRequirements(required_execution_forms=[ExecutionForm.MCP])
+        reqs = ExtensionRequirements(
+            required_execution_forms=[ExecutionForm.MCP]
+        )
         result = negotiator.check_compatibility(reqs)
 
         assert not result.compatible
@@ -138,7 +143,9 @@ class TestCapabilityNegotiator:
         caps = HostCapabilities(hook_events=["PreToolUse"])
         negotiator = CapabilityNegotiator(caps)
 
-        reqs = ExtensionRequirements(required_hook_events=["PreToolUse", "CustomEvent"])
+        reqs = ExtensionRequirements(
+            required_hook_events=["PreToolUse", "CustomEvent"]
+        )
         result = negotiator.check_compatibility(reqs)
 
         assert not result.compatible
@@ -148,7 +155,9 @@ class TestCapabilityNegotiator:
         caps = HostCapabilities(hook_handlers=[HookHandler.COMMAND])
         negotiator = CapabilityNegotiator(caps)
 
-        reqs = ExtensionRequirements(required_hook_handlers=[HookHandler.AGENT])
+        reqs = ExtensionRequirements(
+            required_hook_handlers=[HookHandler.AGENT]
+        )
         result = negotiator.check_compatibility(reqs)
 
         assert not result.compatible

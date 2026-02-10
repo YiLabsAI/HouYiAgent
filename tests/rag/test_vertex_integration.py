@@ -175,7 +175,7 @@ class TestVertexAIEndToEnd:
     async def test_full_rag_pipeline_vertex(self) -> None:
         """Test complete RAG pipeline with Vertex AI."""
         from houyi.llm.vertex_gemini_adapter import GoogleVertexGeminiAdapter
-        from houyi.rag import RAGService
+        from houyi.rag import RAG
 
         with tempfile.TemporaryDirectory() as tmpdir:
             kb_dir = Path(tmpdir) / "knowledge"
@@ -210,7 +210,7 @@ It runs in web browsers and enables interactive web pages.
             # Create RAG service with Vertex AI
             adapter = GoogleVertexGeminiAdapter.from_env()
 
-            service = RAGService(
+            service = RAG(
                 mode="agentic",
                 knowledge_dir=str(kb_dir),
                 llm_adapter=adapter,

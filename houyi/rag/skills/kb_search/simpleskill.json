@@ -1,0 +1,118 @@
+{
+  "id": "kb-search",
+  "version": "1.0.0",
+  "name": "Knowledge Base Search",
+  "description": "Intelligent search with auto mode selection. Supports Agentic mode (grep+read) for small datasets and Indexed mode (Vector+BM25+Graph) for large datasets.",
+  "engines": {
+    "host": "houyi>=0.1.0"
+  },
+  "activationEvents": [
+    "onTaskMatch:search knowledge base",
+    "onTaskMatch:find in documents",
+    "onTaskMatch:look up information",
+    "onCommand:kb-search"
+  ],
+  "contributions": {
+    "skills": [
+      {
+        "id": "kb-search",
+        "description": "Knowledge base intelligent search assistant with auto mode selection",
+        "invocationPolicy": {
+          "modelAutoInvoke": "allow_with_consent",
+          "userInvocable": true,
+          "sideEffect": "filesystem"
+        },
+        "toolRefs": ["Read", "Glob", "Grep"],
+        "entry": "skill.py:kb_search_skill"
+      }
+    ],
+    "tools": [
+      {
+        "name": "kb-search.execute",
+        "description": "Execute knowledge base search with query",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "User query to search in knowledge base"
+            },
+            "knowledge_dir": {
+              "type": "string",
+              "default": "knowledge/",
+              "description": "Root directory of the knowledge base"
+            },
+            "mode": {
+              "type": "string",
+              "enum": ["auto", "agentic", "indexed"],
+              "default": "auto",
+              "description": "Search mode selection"
+            },
+            "max_rounds": {
+              "type": "integer",
+              "default": 5,
+              "description": "Maximum search iterations for agentic mode"
+            }
+          },
+          "required": ["query"]
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "answer": {
+              "type": "string",
+              "description": "Generated answer based on retrieved content"
+            },
+            "sources": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "file_path": {"type": "string"},
+                  "location": {"type": "string"},
+                  "snippet": {"type": "string"}
+                }
+              },
+              "description": "Citation sources"
+            },
+            "confidence": {
+              "type": "number",
+              "description": "Confidence score (0-1)"
+            }
+          }
+        },
+        "execution": {
+          "type": "in-process",
+          "entry": "skill.py:execute_kb_search"
+        }
+      }
+    ],
+    "hooks": [
+      {
+        "event": "PreToolUse",
+        "matcher": "Read|Glob|Grep",
+        "handler": "hooks.py:pre_search_hook"
+      },
+      {
+        "event": "PostToolUse",
+        "matcher": ".*",
+        "handler": "hooks.py:post_search_hook"
+      },
+      {
+        "event": "Stop",
+        "handler": "hooks.py:stop_hook"
+      }
+    ]
+  },
+  "permissions": {
+    "filesystem": {
+      "read": ["${knowledge_dir}/**"]
+    },
+    "network": false,
+    "exec": false
+  },
+  "source": "builtin",
+  "metadata": {
+    "category": "rag"
+  }
+}

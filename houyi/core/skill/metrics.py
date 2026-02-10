@@ -484,7 +484,7 @@ class MetricsExporter:
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "w") as f:
             json.dump(metrics.to_dict(), f, indent=2)
-        logger.info("Exported metrics to %s", path)
+        logger.info(f"Exported metrics to {path}")
 
     @staticmethod
     def to_json_lines(
@@ -499,11 +499,7 @@ class MetricsExporter:
         with open(path, mode) as f:
             for metrics in metrics_list:
                 f.write(json.dumps(metrics.to_dict()) + "\n")
-        logger.info(
-            "Exported %s metrics entries to %s",
-            len(metrics_list),
-            path,
-        )
+        logger.info(f"Exported {len(metrics_list)} metrics entries to {path}")
 
     @staticmethod
     def to_opentelemetry_attributes(metrics: SkillMetrics) -> dict[str, Any]:
@@ -614,4 +610,4 @@ class MetricsStore:
         with open(path, "w") as f:
             json.dump(data, f, indent=2)
 
-        logger.info("Exported metrics for %s skills to %s", len(data), path)
+        logger.info(f"Exported metrics for {len(data)} skills to {path}")
