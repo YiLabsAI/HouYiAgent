@@ -85,7 +85,9 @@ disable=
     # Import error (false positives for optional dependencies like black, z3)
     import-error,
     # Unsubscriptable object (false positives with Pydantic models)
-    unsubscriptable-object
+    unsubscriptable-object,
+    # Unnecessary ellipsis (valid in Protocol/ABC classes per PEP 544)
+    unnecessary-ellipsis
 
 [REPORTS]
 # Set the output format

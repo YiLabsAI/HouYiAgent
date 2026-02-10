@@ -75,7 +75,7 @@ class ActivationEvent:
             try:
                 event_type = ActivationEventType(event_type_str)
             except ValueError:
-                logger.warning(f"Unknown activation event type: {event_type_str}")
+                logger.warning("Unknown activation event type: %s", event_type_str)
                 event_type = ActivationEventType.ON_STARTUP
             return cls(event_type=event_type, pattern=pattern)
 
@@ -83,7 +83,7 @@ class ActivationEvent:
             event_type = ActivationEventType(event_str)
             return cls(event_type=event_type)
         except ValueError:
-            logger.warning(f"Unknown activation event: {event_str}")
+            logger.warning("Unknown activation event: %s", event_str)
             return cls(event_type=ActivationEventType.ON_STARTUP)
 
 
@@ -539,7 +539,7 @@ class ManifestRegistry:
             self._skill_index[full_id] = manifest.id
             self._skill_index[skill.id] = manifest.id
 
-        logger.info(f"Registered manifest: {manifest.id} (v{manifest.version})")
+        logger.debug("Registered manifest: %s (v%s)", manifest.id, manifest.version)
 
     def unregister(self, manifest_id: str) -> None:
         """Unregister a manifest."""

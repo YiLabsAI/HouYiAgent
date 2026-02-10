@@ -10,6 +10,7 @@ Reference:
 
 from __future__ import annotations
 
+import importlib.util
 import logging
 from dataclasses import dataclass, field
 
@@ -67,13 +68,10 @@ class CommunityDetector:
 
     def _check_louvain(self) -> bool:
         """Check if python-louvain is available."""
-        try:
-            import community  # noqa: F401
-
-            return True
-        except ImportError:
-            logger.info("python-louvain not installed, using fallback")
-            return False
+        available = importlib.util.find_spec("community") is not None
+        if not available:
+            logger.debug("python-louvain not installed, using fallback")
+        return available
 
     def detect(
         self,
