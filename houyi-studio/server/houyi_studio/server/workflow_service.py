@@ -112,7 +112,7 @@ class WorkflowService:
                     logger.error("Failed to read workflow file %s: %s", workflow_file, exc)
 
             workflows.sort(key=lambda item: item.get("saved_at", ""), reverse=True)
-            logger.info("Listed %d workflows", len(workflows))
+            logger.debug("Listed %d workflows", len(workflows))
         except Exception as exc:
             logger.error("Failed to list workflows: %s", exc, exc_info=True)
 

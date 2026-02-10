@@ -95,7 +95,7 @@ class KnowledgeService:
             try:
                 with open(metadata_file) as f:
                     self._libraries = json.load(f)
-                logger.info("Loaded %d knowledge libraries", len(self._libraries))
+                logger.debug("Loaded %d knowledge libraries", len(self._libraries))
                 # Migrate old data - ensure all libraries have correct status
                 self._migrate_library_data()
             except Exception as e:
@@ -131,7 +131,7 @@ class KnowledgeService:
             if old_status != new_status:
                 lib["status"] = new_status
                 needs_save = True
-                logger.info("Migrated library %s status: %s -> %s", lib_id, old_status, new_status)
+                logger.debug("Migrated library %s status: %s -> %s", lib_id, old_status, new_status)
 
             # Fix doc_count if incorrect
             if lib.get("doc_count") != doc_count:
@@ -151,7 +151,7 @@ class KnowledgeService:
             for doc_id in docs_to_remove:
                 del documents[doc_id]
                 needs_save = True
-                logger.info("Removed duplicate document %s", doc_id)
+                logger.debug("Removed duplicate document %s", doc_id)
 
             # Update doc_count after dedup
             if docs_to_remove:
@@ -159,7 +159,7 @@ class KnowledgeService:
 
         if needs_save:
             self._save_libraries()
-            logger.info("Library data migration complete")
+            logger.debug("Library data migration complete")
 
     def _save_libraries(self) -> None:
         """Save libraries to storage."""
@@ -239,7 +239,7 @@ class KnowledgeService:
         storage_dir = get_library_storage_dir(library_id)
         get_library_upload_dir(library_id).mkdir(parents=True, exist_ok=True)
         get_library_index_dir(library_id).mkdir(parents=True, exist_ok=True)
-        logger.info("Created library storage at: %s", storage_dir)
+        logger.debug("Created library storage at: %s", storage_dir)
 
         self._libraries[library_id] = library
         self._save_libraries()
@@ -269,7 +269,7 @@ class KnowledgeService:
         if storage_dir.exists():
             try:
                 shutil.rmtree(storage_dir)
-                logger.info("Deleted library storage: %s", storage_dir)
+                logger.debug("Deleted library storage: %s", storage_dir)
             except Exception as e:
                 logger.warning("Failed to delete library storage %s: %s", storage_dir, e)
 
@@ -397,10 +397,10 @@ class KnowledgeService:
 
             # If no saved hash (old data) or hash changed, force full rebuild
             if not saved_config_hash:
-                logger.info("No saved config hash (old data), forcing full rebuild to ensure consistency")
+                logger.debug("No saved config hash (old data), forcing full rebuild to ensure consistency")
                 file_index = {}  # Clear file index to force full rebuild
             elif saved_config_hash != current_config_hash:
-                logger.info("Config changed (hash %s -> %s), forcing full rebuild", saved_config_hash, current_config_hash)
+                logger.debug("Config changed (hash %s -> %s), forcing full rebuild", saved_config_hash, current_config_hash)
                 file_index = {}  # Clear file index to force full rebuild
 
             # Build a map of file_path -> document status for quick lookup
@@ -437,7 +437,7 @@ class KnowledgeService:
 
             all_files = filtered
             if not all_files:
-                logger.info("Incremental ingest: all %d files up to date", files_skipped)
+                logger.debug("Incremental ingest: all %d files up to date", files_skipped)
                 return {
                     "success": True,
                     "stats": {
@@ -447,10 +447,10 @@ class KnowledgeService:
                         "errors": [],
                     },
                 }
-            logger.info("Incremental ingest: %d new/modified/failed, %d skipped", len(all_files), files_skipped)
+            logger.debug("Incremental ingest: %d new/modified/failed, %d skipped", len(all_files), files_skipped)
 
         total_files = len(all_files)
-        logger.info("Starting ingest for library %s: %d files", library_id, total_files)
+        logger.debug("Starting ingest for library %s: %d files", library_id, total_files)
 
         # Update library status
         library["status"] = "indexing"
@@ -491,7 +491,7 @@ class KnowledgeService:
                         model="text-embedding-004",
                         dimension=768,
                     )
-                    logger.info("Using Gemini embedding (Vertex AI)")
+                    logger.debug("Using Gemini embedding (Vertex AI)")
                 except ImportError:
                     logger.debug("google-genai not installed, trying other providers")
 
@@ -502,7 +502,7 @@ class KnowledgeService:
                     model="text-embedding-3-small",
                     dimension=1536,
                 )
-                logger.info("Using OpenAI embedding")
+                logger.debug("Using OpenAI embedding")
 
             # Try local embedding as last resort
             if embedding_config is None:
@@ -513,7 +513,7 @@ class KnowledgeService:
                         model="BAAI/bge-small-en-v1.5",
                         dimension=384,
                     )
-                    logger.info("Using local embedding (fastembed)")
+                    logger.debug("Using local embedding (fastembed)")
                 except ImportError:
                     # No embedding available - fall back to simple file counting
                     logger.warning("No embedding provider available, falling back to simple file counting")
@@ -537,7 +537,7 @@ class KnowledgeService:
             for i, file_path in enumerate(all_files):
                 # Check for cancellation
                 if self._cancel_flags.get(library_id):
-                    logger.info("Ingest cancelled for library %s at file %d/%d", library_id, i, total_files)
+                    logger.debug("Ingest cancelled for library %s at file %d/%d", library_id, i, total_files)
                     self._cancel_flags.pop(library_id, None)
                     library["status"] = "ready" if stats["files_processed"] > 0 else "empty"
                     self._save_libraries()
@@ -1171,7 +1171,7 @@ class KnowledgeService:
         library["documents"][doc_id] = document
         self._save_libraries()
 
-        logger.info("Added document %s to library %s", path.name, library_id)
+        logger.debug("Added document %s to library %s", path.name, library_id)
         return document
 
     def update_document_status(
@@ -1215,7 +1215,7 @@ class KnowledgeService:
             del document["error_message"]
 
         self._save_libraries()
-        logger.info("Updated document %s status to %s", doc_id, status)
+        logger.debug("Updated document %s status to %s", doc_id, status)
         return document
 
     def delete_document(self, library_id: str, doc_id: str) -> bool:
@@ -1259,7 +1259,7 @@ class KnowledgeService:
         library["updated_at"] = datetime.now().isoformat()
         self._save_libraries()
 
-        logger.info("Deleted document %s from library %s", doc_id, library_id)
+        logger.debug("Deleted document %s from library %s", doc_id, library_id)
         return True
 
     def disable_document(self, library_id: str, doc_id: str) -> dict[str, Any] | None:

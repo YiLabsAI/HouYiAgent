@@ -662,9 +662,9 @@ async def handle_command(command: ClientCommand | dict, session_id: str) -> None
         # Handle workflow commands first (dict-based)
         if isinstance(command, dict) and command.get("command_type") == "save_workflow":
             workflow_name = command.get("workflow_name")
-            logger.info("=== Save workflow command received ===")
-            logger.info("Workflow name: %s", workflow_name)
-            logger.info("Session ID: %s", session_id)
+            logger.debug("=== Save workflow command received ===")
+            logger.debug("Workflow name: %s", workflow_name)
+            logger.debug("Session ID: %s", session_id)
 
             # Prefer plan payload from client if provided
             plan_payload = command.get("plan") if isinstance(command, dict) else None
@@ -673,7 +673,7 @@ async def handle_command(command: ClientCommand | dict, session_id: str) -> None
                 try:
                     sanitized_payload = _sanitize_plan_payload(plan_payload)
                     current_plan = PlanIR.model_validate(sanitized_payload)
-                    logger.info("Using plan payload from client for workflow save")
+                    logger.debug("Using plan payload from client for workflow save")
                 except Exception:
                     logger.warning(
                         "Failed to parse plan payload for workflow save; falling back to session plan",
@@ -681,7 +681,7 @@ async def handle_command(command: ClientCommand | dict, session_id: str) -> None
                     )
             if current_plan is None:
                 current_plan = engine.plan_service.get_current_plan(session_id)
-            logger.info("Current plan exists: %s", current_plan is not None)
+            logger.debug("Current plan exists: %s", current_plan is not None)
 
             if current_plan:
                 logger.info(
@@ -698,9 +698,9 @@ async def handle_command(command: ClientCommand | dict, session_id: str) -> None
 
         elif isinstance(command, dict) and command.get("command_type") == "load_workflow":
             workflow_name = command.get("workflow_name")
-            logger.info("=== Load workflow command received ===")
-            logger.info("Workflow name: %s", workflow_name)
-            logger.info("Session ID: %s", session_id)
+            logger.debug("=== Load workflow command received ===")
+            logger.debug("Workflow name: %s", workflow_name)
+            logger.debug("Session ID: %s", session_id)
 
             # Load workflow
             plan = engine.workflow_service.load_workflow(workflow_name)
@@ -722,12 +722,12 @@ async def handle_command(command: ClientCommand | dict, session_id: str) -> None
                 logger.error("✗ Failed to load workflow '%s'", workflow_name)
 
         elif isinstance(command, dict) and command.get("command_type") == "list_workflows":
-            logger.info("=== List workflows command received ===")
-            logger.info("Session ID: %s", session_id)
+            logger.debug("=== List workflows command received ===")
+            logger.debug("Session ID: %s", session_id)
 
             # Get workflow list
             workflows = engine.workflow_service.list_workflows()
-            logger.info("Found %d workflows", len(workflows))
+            logger.debug("Found %d workflows", len(workflows))
             from .events import WorkflowListEvent
 
             workflow_event = WorkflowListEvent(
@@ -736,16 +736,16 @@ async def handle_command(command: ClientCommand | dict, session_id: str) -> None
                 workflows=workflows,
             )
             await connection_manager.send_event(session_id, workflow_event)
-            logger.info("Sent workflow list to frontend")
+            logger.debug("Sent workflow list to frontend")
 
         # ====================================================================
         # Knowledge Base Commands
         # ====================================================================
         elif isinstance(command, dict) and command.get("command_type") == "list_knowledge_libraries":
-            logger.info("=== List knowledge libraries command received ===")
+            logger.debug("=== List knowledge libraries command received ===")
             knowledge_service = get_knowledge_service()
             libraries = knowledge_service.list_libraries()
-            logger.info("Found %d knowledge libraries", len(libraries))
+            logger.debug("Found %d knowledge libraries", len(libraries))
 
             from .events import KnowledgeLibraryListEvent
 
@@ -757,7 +757,7 @@ async def handle_command(command: ClientCommand | dict, session_id: str) -> None
             await connection_manager.send_event(session_id, event)
 
         elif isinstance(command, dict) and command.get("command_type") == "create_knowledge_library":
-            logger.info("=== Create knowledge library command received ===")
+            logger.debug("=== Create knowledge library command received ===")
             knowledge_service = get_knowledge_service()
 
             name = command.get("name", "Untitled")
@@ -793,7 +793,7 @@ async def handle_command(command: ClientCommand | dict, session_id: str) -> None
             await connection_manager.send_event(session_id, event)
 
         elif isinstance(command, dict) and command.get("command_type") == "delete_knowledge_library":
-            logger.info("=== Delete knowledge library command received ===")
+            logger.debug("=== Delete knowledge library command received ===")
             knowledge_service = get_knowledge_service()
 
             library_id = command.get("library_id")
@@ -821,7 +821,7 @@ async def handle_command(command: ClientCommand | dict, session_id: str) -> None
                     await connection_manager.send_event(session_id, event)
 
         elif isinstance(command, dict) and command.get("command_type") == "update_knowledge_library":
-            logger.info("=== Update knowledge library command received ===")
+            logger.debug("=== Update knowledge library command received ===")
             knowledge_service = get_knowledge_service()
 
             library_id = command.get("library_id")
@@ -861,7 +861,7 @@ async def handle_command(command: ClientCommand | dict, session_id: str) -> None
                     await connection_manager.send_event(session_id, event)
 
         elif isinstance(command, dict) and command.get("command_type") == "search_knowledge":
-            logger.info("=== Search knowledge command received ===")
+            logger.debug("=== Search knowledge command received ===")
             knowledge_service = get_knowledge_service()
 
             query = command.get("query", "")
@@ -903,7 +903,7 @@ async def handle_command(command: ClientCommand | dict, session_id: str) -> None
                 await connection_manager.send_event(session_id, event)
 
         elif isinstance(command, dict) and command.get("command_type") == "ingest_knowledge_files":
-            logger.info("=== Ingest knowledge files command received ===")
+            logger.debug("=== Ingest knowledge files command received ===")
             knowledge_service = get_knowledge_service()
 
             library_id = command.get("library_id")
@@ -982,7 +982,7 @@ async def handle_command(command: ClientCommand | dict, session_id: str) -> None
                     await connection_manager.send_event(session_id, update_event)
 
         elif isinstance(command, dict) and command.get("command_type") == "rebuild_knowledge_index":
-            logger.info("=== Rebuild knowledge index command received ===")
+            logger.debug("=== Rebuild knowledge index command received ===")
             knowledge_service = get_knowledge_service()
 
             library_id = command.get("library_id")
@@ -1086,7 +1086,7 @@ async def handle_command(command: ClientCommand | dict, session_id: str) -> None
                         await connection_manager.send_event(session_id, update_event)
 
         elif isinstance(command, dict) and command.get("command_type") == "cancel_ingest":
-            logger.info("=== Cancel ingest command received ===")
+            logger.debug("=== Cancel ingest command received ===")
             knowledge_service = get_knowledge_service()
             library_id = command.get("library_id")
             if library_id:
@@ -1096,7 +1096,7 @@ async def handle_command(command: ClientCommand | dict, session_id: str) -> None
         # Document Management Commands
         # ====================================================================
         elif isinstance(command, dict) and command.get("command_type") == "list_documents":
-            logger.info("=== List documents command received ===")
+            logger.debug("=== List documents command received ===")
             knowledge_service = get_knowledge_service()
             library_id = command.get("library_id")
 
@@ -1123,7 +1123,7 @@ async def handle_command(command: ClientCommand | dict, session_id: str) -> None
                 await connection_manager.send_event(session_id, event)
 
         elif isinstance(command, dict) and command.get("command_type") == "get_document":
-            logger.info("=== Get document command received ===")
+            logger.debug("=== Get document command received ===")
             knowledge_service = get_knowledge_service()
             library_id = command.get("library_id")
             doc_id = command.get("doc_id")
@@ -1152,7 +1152,7 @@ async def handle_command(command: ClientCommand | dict, session_id: str) -> None
                     await connection_manager.send_event(session_id, event)
 
         elif isinstance(command, dict) and command.get("command_type") == "delete_document":
-            logger.info("=== Delete document command received ===")
+            logger.debug("=== Delete document command received ===")
             knowledge_service = get_knowledge_service()
             library_id = command.get("library_id")
             doc_id = command.get("doc_id")
@@ -1181,7 +1181,7 @@ async def handle_command(command: ClientCommand | dict, session_id: str) -> None
                         await connection_manager.send_event(session_id, update_event)
 
         elif isinstance(command, dict) and command.get("command_type") == "disable_document":
-            logger.info("=== Disable document command received ===")
+            logger.debug("=== Disable document command received ===")
             knowledge_service = get_knowledge_service()
             library_id = command.get("library_id")
             doc_id = command.get("doc_id")
@@ -1201,7 +1201,7 @@ async def handle_command(command: ClientCommand | dict, session_id: str) -> None
                     await connection_manager.send_event(session_id, event)
 
         elif isinstance(command, dict) and command.get("command_type") == "enable_document":
-            logger.info("=== Enable document command received ===")
+            logger.debug("=== Enable document command received ===")
             knowledge_service = get_knowledge_service()
             library_id = command.get("library_id")
             doc_id = command.get("doc_id")
@@ -1221,7 +1221,7 @@ async def handle_command(command: ClientCommand | dict, session_id: str) -> None
                     await connection_manager.send_event(session_id, event)
 
         elif isinstance(command, dict) and command.get("command_type") == "list_chunks":
-            logger.info("=== List chunks command received ===")
+            logger.debug("=== List chunks command received ===")
             knowledge_service = get_knowledge_service()
             library_id = command.get("library_id")
             doc_id = command.get("doc_id")
@@ -1240,7 +1240,7 @@ async def handle_command(command: ClientCommand | dict, session_id: str) -> None
                 await connection_manager.send_event(session_id, event)
 
         elif isinstance(command, dict) and command.get("command_type") == "preview_chunks":
-            logger.info("=== Preview chunks command received ===")
+            logger.debug("=== Preview chunks command received ===")
             knowledge_service = get_knowledge_service()
             content = command.get("content", "")
             chunk_size = command.get("chunk_size", 512)
@@ -1412,16 +1412,16 @@ async def handle_command(command: ClientCommand | dict, session_id: str) -> None
                 execution_engine.plan_service.set_current_plan(
                     session_id, current_plan, persist=False
                 )
-                logger.info("Created new empty plan for session: %s", session_id)
+                logger.debug("Created new empty plan for session: %s", session_id)
 
             if current_plan:
-                logger.info("Processing %d patches", len(command.patches))
+                logger.debug("Processing %d patches", len(command.patches))
                 plan_modified = _apply_plan_patches(current_plan, command.patches)
 
                 # Increment plan version if modified
                 if plan_modified:
                     current_plan.version += 1
-                    logger.info("Plan patched successfully")
+                    logger.debug("Plan patched successfully")
                     # Save plan to file for persistence
                     execution_engine.plan_service.save_plan_to_file(session_id, current_plan)
 
@@ -1434,7 +1434,7 @@ async def handle_command(command: ClientCommand | dict, session_id: str) -> None
                         plan=current_plan,
                     )
                     await connection_manager.send_event(session_id, plan_event)
-                    logger.info("Plan updated and sent to frontend")
+                    logger.debug("Plan updated and sent to frontend")
 
         elif isinstance(command, RestoreCheckpointCommand):
             logger.info(

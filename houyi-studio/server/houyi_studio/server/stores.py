@@ -78,6 +78,6 @@ class PlanStore:
             for pattern in ("session_*.json", "current_plan.json"):
                 for f in self.plans_dir.glob(pattern):
                     f.unlink()
-                    logger.info("Cleaned up legacy plan file: %s", f.name)
+                    logger.debug("Cleaned up legacy plan file: %s", f.name)
         except Exception as exc:
             logger.warning("Failed to clean up legacy plan files: %s", exc)

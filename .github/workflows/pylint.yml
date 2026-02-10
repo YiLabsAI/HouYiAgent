@@ -19,7 +19,7 @@ jobs:
       uses: astral-sh/setup-uv@v3
     - name: Install dependencies
       run: |
-        uv sync --extra dev
+        uv sync --extra dev --extra rag
     - name: Analysing the code with pylint
       run: |
         uv run pylint houyi/ --rcfile=.pylintrc

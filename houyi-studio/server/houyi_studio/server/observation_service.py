@@ -31,7 +31,7 @@ class ObservationService:
         if "streaming_output" in et_str or "span_update" in et_str or "node_status" in et_str:
             logger.debug("[ObservationService] emit: type=%s session=%s", event_type, session_id)
         else:
-            logger.info("[ObservationService] emit: type=%s session=%s", event_type, session_id)
+            logger.debug("[ObservationService] emit: type=%s session=%s", event_type, session_id)
         await self.event_bus.publish(event)
         await self.connection_manager.send_event(event.session_id, event)
         # Buffer span events for replay on reconnect

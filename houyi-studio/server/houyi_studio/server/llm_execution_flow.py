@@ -141,7 +141,7 @@ class LLMExecutionFlow:
         )
 
         if decision.kind == ReplayDecisionKind.RECORDED_LLM_TEXT and decision.llm_text:
-            logger.info("Using recorded response for node %s (deterministic replay)", node_id)
+            logger.debug("Using recorded response for node %s (deterministic replay)", node_id)
 
             # Create LLM span for replay (cache_hit=True since we're using recorded response)
             llm_span = self._create_llm_span(
@@ -206,11 +206,11 @@ class LLMExecutionFlow:
                     )
                 )
 
-            logger.info("Deterministic replay completed for node %s", node_id)
+            logger.debug("Deterministic replay completed for node %s", node_id)
             return
 
         if decision.kind == ReplayDecisionKind.RECORDED_TOOL_OUTPUT and decision.tool_output:
-            logger.info("Using recorded tool-calling response for node %s", node_id)
+            logger.debug("Using recorded tool-calling response for node %s", node_id)
             await self.replay_tool_call_log(
                 session_id, execution, node_id, node_exec, decision.tool_output
             )
@@ -318,9 +318,9 @@ class LLMExecutionFlow:
             )
 
         try:
-            logger.info("Creating LLM adapter and starting stream...")
+            logger.debug("Creating LLM adapter and starting stream...")
             if enable_reasoning:
-                logger.info("Reasoning mode enabled with budget=%s", thinking_budget or "default")
+                logger.debug("Reasoning mode enabled with budget=%s", thinking_budget or "default")
 
             chunk_count = 0
             reasoning_count = 0
@@ -364,7 +364,7 @@ class LLMExecutionFlow:
                                     is_final=False,
                                 )
                                 await self._observation_service.emit(start_event)
-                                logger.info("[%s] Reasoning started...", node_id)
+                                logger.debug("[%s] Reasoning started...", node_id)
 
                             reasoning_event = StreamingOutputEvent(
                                 event_id=f"evt_{uuid4().hex[:8]}",
@@ -453,7 +453,7 @@ class LLMExecutionFlow:
                     reasoning_count,
                     len(reasoning_output),
                 )
-                logger.info("[%s] Reasoning content: %s...", node_id, reasoning_output[:200])
+                logger.debug("[%s] Reasoning content: %s...", node_id, reasoning_output[:200])
                 if not node_exec.metadata:
                     node_exec.metadata = {}
                 node_exec.metadata["reasoning_content"] = reasoning_output

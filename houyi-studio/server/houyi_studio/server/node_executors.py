@@ -105,13 +105,13 @@ class LLMNodeExecutor(NodeExecutor):
         parallel_tool_calls = inputs.get("parallel_tool_calls")
         prompt_cache_key = inputs.get("prompt_cache_key")
 
-        logger.info("Executing LLM node %s with prompt: %s", node.node_id, str(prompt)[:50])
-        logger.info("Node config: %s", node.config)
-        logger.info("enable_reasoning=%s (type: %s)", enable_reasoning, type(enable_reasoning))
+        logger.debug("Executing LLM node %s with prompt: %s", node.node_id, str(prompt)[:50])
+        logger.debug("Node config: %s", node.config)
+        logger.debug("enable_reasoning=%s (type: %s)", enable_reasoning, type(enable_reasoning))
         if enable_reasoning:
-            logger.info("Reasoning enabled for node %s (budget: %s)", node.node_id, thinking_budget)
+            logger.debug("Reasoning enabled for node %s (budget: %s)", node.node_id, thinking_budget)
         else:
-            logger.info("Reasoning disabled for node %s", node.node_id)
+            logger.debug("Reasoning disabled for node %s", node.node_id)
 
         if self.use_mock:
             await self.execute_llm_mock(

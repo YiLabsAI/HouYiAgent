@@ -67,7 +67,7 @@ class PlanExecutionLoop:
             )
             await self._observation_service.emit(event)
         except asyncio.CancelledError:
-            logger.info("Execution task cancelled: %s", execution.execution_id)
+            logger.debug("Execution task cancelled: %s", execution.execution_id)
             return
         except Exception as exc:
             logger.error(
