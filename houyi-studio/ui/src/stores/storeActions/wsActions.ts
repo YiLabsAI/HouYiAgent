@@ -6,6 +6,14 @@ import { logger } from '@/utils/logger';
 type StoreSet = (partial: any) => void;
 type StoreGet = () => any;
 
+const normalizeEventType = (eventType: any): string | null => {
+  if (typeof eventType === 'string') return eventType;
+  if (eventType && typeof eventType === 'object' && typeof eventType.value === 'string') {
+    return eventType.value;
+  }
+  return null;
+};
+
 export const createWsActions = (set: StoreSet, get: StoreGet) => ({
   connect: (sessionId: string) => {
     const ws = new ConsoleWebSocket(sessionId);
@@ -25,24 +33,10 @@ export const createWsActions = (set: StoreSet, get: StoreGet) => ({
       }
 
       if (status === 'disconnected') {
+        // ReconnectingWebSocket will auto-reconnect; don't abort execution
+        // on transient disconnects. Only show toast as a warning.
         set({ connectionStatus: 'disconnected' });
         get().showToastOnce(toastKey, 'Backend not connected. Please start the server.', 'error');
-        const { currentExecution, viewMode, liveExecution } = get();
-        const target = viewMode === 'checkpoint' ? liveExecution : currentExecution;
-        if (target && target.status === 'running') {
-          const completedAt = new Date().toISOString();
-          const updated = {
-            ...target,
-            status: 'aborted',
-            completed_at: completedAt,
-            error: 'Backend disconnected during execution.',
-          } as ExecutionIR;
-          if (viewMode === 'checkpoint') {
-            set({ liveExecution: updated, executionId: updated.execution_id });
-          } else {
-            set({ currentExecution: updated, executionId: updated.execution_id });
-          }
-        }
         return;
       }
 
@@ -68,18 +62,19 @@ export const createWsActions = (set: StoreSet, get: StoreGet) => ({
   },
 
   handleEvent: (event: AnyServerEvent) => {
-    console.log('[Store] Received event:', event.event_type, event);
+    const eventType = normalizeEventType(event?.event_type);
+    console.log('[Store] Received event:', eventType ?? event?.event_type, event);
 
-    switch (event.event_type) {
+    switch (eventType) {
       case 'plan_created':
       case 'plan_updated':
-        console.log('[Store] Received plan event:', event.event_type, event.plan);
+        console.log('[Store] Received plan event:', eventType, event.plan);
         const previousPlanId = get().currentPlan?.plan_id;
         const nextPlanId = event.plan?.plan_id;
         const planChanged = Boolean(nextPlanId && previousPlanId && nextPlanId !== previousPlanId);
         {
           const planId = event.plan?.plan_id ? `plan_id=${event.plan.plan_id}` : undefined;
-          const changes = event.event_type === 'plan_updated' && event.changes?.length
+          const changes = eventType === 'plan_updated' && event.changes?.length
             ? `changes: ${event.changes.join(', ')}`
             : undefined;
           const detail = [planId, changes].filter(Boolean).join(' · ');
@@ -743,7 +738,7 @@ export const createWsActions = (set: StoreSet, get: StoreGet) => ({
         break;
 
       default:
-        console.warn('Unknown event type:', (event as AnyServerEvent).event_type);
+        console.warn('Unknown event type:', eventType ?? event?.event_type);
     }
   },
 });

@@ -696,3 +696,177 @@ describe('wsActions.connect status handling', () => {
     expect(Object.keys(state.toastKeys).filter((k) => k === 'backend-connection')).toHaveLength(1);
   });
 });
+
+describe('wsActions: checkpoint metadata and execution lineage', () => {
+  it('should preserve event.metadata (including trigger_node_id) in checkpoint_created', () => {
+    let state: any = {
+      viewMode: 'live',
+      currentPlan: { plan_id: 'plan_1' },
+      currentExecution: {
+        execution_id: 'exec_1',
+        plan_id: 'plan_1',
+        status: 'running',
+        node_executions: {},
+        context: {},
+        started_at: null,
+        completed_at: null,
+        error: null,
+        metadata: {},
+      },
+      liveExecution: null,
+      checkpointExecution: null,
+      checkpoints: [],
+      nodes: [],
+      edges: [],
+      toasts: [],
+      toastKeys: {},
+      activityLogs: [],
+      nodeObservations: {},
+    };
+
+    const set = (partial: any) => {
+      const next = typeof partial === 'function' ? partial(state) : partial;
+      state = { ...state, ...next };
+    };
+    const get = () => state;
+
+    Object.assign(state, createToastActions(set, get));
+    Object.assign(state, createExecutionActions(set, get));
+    Object.assign(state, createWsActions(set, get));
+
+    state.handleEvent(
+      makeBaseEvent('checkpoint_created', {
+        checkpoint_id: 'cp_1',
+        execution_id: 'exec_1',
+        sequence_number: 1,
+        trigger: 'node_completed',
+        metadata: { trigger_node_id: 'logic_1', custom_key: 'custom_value' },
+      }),
+    );
+
+    expect(state.checkpoints).toHaveLength(1);
+    expect(state.checkpoints[0].metadata).toEqual({
+      trigger_node_id: 'logic_1',
+      custom_key: 'custom_value',
+    });
+  });
+
+  it('should track executionLineageMap from node_status execution_metadata', () => {
+    let state: any = {
+      viewMode: 'live',
+      currentPlan: { plan_id: 'plan_1' },
+      currentExecution: {
+        execution_id: 'exec_child',
+        plan_id: 'plan_1',
+        status: 'running',
+        node_executions: {},
+        context: {},
+        started_at: null,
+        completed_at: null,
+        error: null,
+        metadata: {},
+      },
+      liveExecution: null,
+      executionId: 'exec_child',
+      executionLineageMap: {},
+      nodes: [{ id: 'node_a', data: { status: 'pending' } }],
+      edges: [],
+      toasts: [],
+      toastKeys: {},
+      activityLogs: [],
+      nodeObservations: {},
+    };
+
+    const set = (partial: any) => {
+      const next = typeof partial === 'function' ? partial(state) : partial;
+      state = { ...state, ...next };
+    };
+    const get = () => state;
+
+    Object.assign(state, createToastActions(set, get));
+    Object.assign(state, createExecutionActions(set, get));
+    Object.assign(state, createWsActions(set, get));
+
+    state.handleEvent(
+      makeBaseEvent('node_status', {
+        execution_id: 'exec_child',
+        node_id: 'node_a',
+        status: 'running',
+        execution_metadata: {
+          parent_execution_id: 'exec_parent',
+          parent_checkpoint_id: 'cp_1',
+          replay_mode: 'fresh',
+        },
+      }),
+    );
+
+    expect(state.executionLineageMap['exec_child']).toEqual({
+      parentExecutionId: 'exec_parent',
+      parentCheckpointId: 'cp_1',
+      replayMode: 'fresh',
+    });
+  });
+
+  it('should not overwrite executionLineageMap if already set for execution', () => {
+    let state: any = {
+      viewMode: 'live',
+      currentPlan: { plan_id: 'plan_1' },
+      currentExecution: {
+        execution_id: 'exec_child',
+        plan_id: 'plan_1',
+        status: 'running',
+        node_executions: {},
+        context: {},
+        started_at: null,
+        completed_at: null,
+        error: null,
+        metadata: {},
+      },
+      liveExecution: null,
+      executionId: 'exec_child',
+      executionLineageMap: {
+        exec_child: {
+          parentExecutionId: 'exec_original_parent',
+          parentCheckpointId: 'cp_original',
+          replayMode: 'deterministic',
+        },
+      },
+      nodes: [{ id: 'node_a', data: { status: 'pending' } }],
+      edges: [],
+      toasts: [],
+      toastKeys: {},
+      activityLogs: [],
+      nodeObservations: {},
+    };
+
+    const set = (partial: any) => {
+      const next = typeof partial === 'function' ? partial(state) : partial;
+      state = { ...state, ...next };
+    };
+    const get = () => state;
+
+    Object.assign(state, createToastActions(set, get));
+    Object.assign(state, createExecutionActions(set, get));
+    Object.assign(state, createWsActions(set, get));
+
+    state.handleEvent(
+      makeBaseEvent('node_status', {
+        execution_id: 'exec_child',
+        node_id: 'node_a',
+        status: 'completed',
+        execution_metadata: {
+          parent_execution_id: 'exec_new_parent',
+          parent_checkpoint_id: 'cp_new',
+          replay_mode: 'fresh',
+        },
+      }),
+    );
+
+    // Should keep original lineage, not overwrite
+    expect(state.executionLineageMap['exec_child']).toEqual({
+      parentExecutionId: 'exec_original_parent',
+      parentCheckpointId: 'cp_original',
+      replayMode: 'deterministic',
+    });
+  });
+});
