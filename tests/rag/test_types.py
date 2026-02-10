@@ -1,5 +1,7 @@
 """Tests for RAG types and configuration."""
 
+import pytest
+
 from houyi.rag.config import AgenticConfig, IndexedConfig, RAGConfig
 from houyi.rag.types import (
     Chunk,
@@ -241,7 +243,7 @@ class TestQualitySummary:
 
         assert qs.min_score == 0.3
         assert qs.max_score == 0.7
-        assert qs.avg_score == 0.5
+        assert qs.avg_score == pytest.approx(0.5)
         assert qs.relevance == "medium"
         assert qs.above_threshold_count == 2
 
@@ -250,7 +252,7 @@ class TestQualitySummary:
         scores = [0.3, 0.2, 0.1, 0.15, 0.25]
         qs = QualitySummary.from_scores(scores)
 
-        assert qs.avg_score == 0.2
+        assert qs.avg_score == pytest.approx(0.2)
         assert qs.relevance == "low"
         assert qs.above_threshold_count == 0
         assert qs.suggestion is not None  # Should have improvement suggestion

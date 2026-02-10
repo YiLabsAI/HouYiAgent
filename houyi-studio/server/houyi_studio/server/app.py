@@ -651,7 +651,7 @@ async def handle_command(command: ClientCommand | dict, session_id: str) -> None
         command_type = command.command_type
         command_id = command.command_id
 
-    logger.info(
+    logger.debug(
         "Handling command: type=%s session=%s command_id=%s",
         command_type,
         session_id,
