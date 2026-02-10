@@ -20,6 +20,7 @@ export type EventType =
   | 'workflow_list'
   | 'conflict'
   | 'log_level'
+  | 'span_update'
   // Knowledge Base events
   | 'knowledge_library_list'
   | 'knowledge_library_created'
@@ -138,6 +139,39 @@ export interface LogLevelEvent extends ServerEvent {
   event_type: 'log_level';
   level: 'debug' | 'info' | 'warning' | 'error';
   requested_level?: string | null;
+}
+
+// Span types for timeline visualization
+export type SpanType = 'execution' | 'node' | 'llm' | 'tool' | 'retriever' | 'retry' | 'internal';
+
+export interface SpanUpdateEvent extends ServerEvent {
+  event_type: 'span_update';
+  execution_id: string;
+  trace_id: string;
+  span_id: string;
+  parent_span_id?: string | null;
+  span_type: SpanType;
+  name: string;
+  status: 'ok' | 'error';
+  start_time: number;
+  end_time?: number | null;
+
+  // AI-native fields
+  node_id?: string | null;
+  model?: string | null;
+  tokens_input?: number | null;
+  tokens_output?: number | null;
+  cost_usd?: number | null;
+  cache_hit?: boolean | null;
+  tool_name?: string | null;
+
+  // Checkpoint lineage
+  parent_trace_id?: string | null;
+  restore_checkpoint_id?: string | null;
+  replay_mode?: boolean;
+
+  // Generic attributes
+  attributes?: Record<string, any>;
 }
 
 export interface WorkflowListEvent extends ServerEvent {
@@ -267,6 +301,7 @@ export type AnyServerEvent =
   | WorkflowListEvent
   | ConflictEvent
   | LogLevelEvent
+  | SpanUpdateEvent
   | KnowledgeLibraryListEvent
   | KnowledgeLibraryCreatedEvent
   | KnowledgeLibraryUpdatedEvent

@@ -18,6 +18,7 @@ import {
 import { createToastActions } from './storeActions/toastActions';
 import { createCommandActions } from './storeActions/commandActions';
 import { createToolStatsActions } from './storeActions/toolStatsActions';
+import { createSpanActions, type SpanStore } from './storeActions/spanActions';
 import { createKnowledgeActions, initialKnowledgeState } from './storeActions/knowledgeActions';
 
 interface Toast {
@@ -92,12 +93,14 @@ interface ConsoleState {
   toastKeys: Record<string, string>;
   activityLogs: ActivityLog[];
   nodeObservations: Record<string, Record<string, Record<string, any>>>;
+  spanStore: SpanStore;
+  executionLineageMap: Record<string, { parentExecutionId: string; parentCheckpointId?: string; replayMode?: string }>;
   serverLogLevel: 'debug' | 'info' | 'warning' | 'error';
   loadingWorkflowName: string | null; // Track which workflow is being loaded
   workflows: WorkflowSummary[];
   isLoadingWorkflows: boolean;
-  bottomPanelTab: 'timeline' | 'checkpoints' | 'context' | 'logs' | 'verification' | 'compare' | 'knowledge';
-  setBottomPanelTab: (tab: 'timeline' | 'checkpoints' | 'context' | 'logs' | 'verification' | 'compare' | 'knowledge') => void;
+  bottomPanelTab: 'observability' | 'checkpoints' | 'context' | 'logs' | 'compare' | 'knowledge';
+  setBottomPanelTab: (tab: 'observability' | 'checkpoints' | 'context' | 'logs' | 'compare' | 'knowledge') => void;
 
   // React Flow state
   nodes: any[];
@@ -164,6 +167,11 @@ interface ConsoleState {
 
   // Tool statistics
   getToolStatistics: () => ToolStatistics;
+
+  // Span actions for timeline
+  updateSpan: (event: any) => void;
+  getSpanTree: (executionId: string) => any;
+  clearSpans: (executionId?: string) => void;
 
   // Knowledge Base actions
   knowledgeLibraries: KnowledgeLibrary[];
@@ -273,11 +281,13 @@ export const useConsoleStore = create<ConsoleState>((set, get) => ({
   toastKeys: {},
   activityLogs: [],
   nodeObservations: {},
+  spanStore: {},
+  executionLineageMap: {},
   serverLogLevel: 'info',
   loadingWorkflowName: null,
   workflows: [],
   isLoadingWorkflows: false,
-  bottomPanelTab: 'timeline',
+  bottomPanelTab: 'observability',
   setBottomPanelTab: (tab) => set({ bottomPanelTab: tab }),
 
   nodes: [],
@@ -326,6 +336,9 @@ export const useConsoleStore = create<ConsoleState>((set, get) => ({
 
   // Tool statistics
   ...createToolStatsActions(set, get),
+
+  // Span actions for timeline
+  ...createSpanActions(set, get),
 
   // Knowledge Base actions
   ...createKnowledgeActions(set, get),

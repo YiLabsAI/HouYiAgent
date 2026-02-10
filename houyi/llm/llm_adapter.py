@@ -306,8 +306,12 @@ class VertexAIAdapter(LLMAdapter):
         prompt: str,
         model: str | None = None,
         **kwargs,
-    ) -> AsyncIterator[str]:
-        """Stream completion from Gemini via Vertex AI."""
+    ) -> AsyncIterator[tuple[str, str | None]]:
+        """Stream completion from Gemini via Vertex AI.
+
+        Returns (content, reasoning) tuples for interface consistency.
+        Reasoning is always None for Vertex AI.
+        """
         model = model or self.default_model
 
         if not self.project_id:
@@ -315,7 +319,7 @@ class VertexAIAdapter(LLMAdapter):
             logger.info("Using mock streaming (no project ID)")
             words = f"Mock response from {model}: {prompt[:50]}...".split()
             for word in words:
-                yield word + " "
+                yield (word + " ", None)
             return
 
         try:
@@ -333,11 +337,11 @@ class VertexAIAdapter(LLMAdapter):
 
             async for chunk in response:
                 if chunk.text:
-                    yield chunk.text
+                    yield (chunk.text, None)
 
         except Exception as e:
             logger.error("Vertex AI error: %s", e, exc_info=True)
-            yield f"[Error: {str(e)}]"
+            yield (f"[Error: {str(e)}]", None)
 
 
 class LLMAdapterFactory:

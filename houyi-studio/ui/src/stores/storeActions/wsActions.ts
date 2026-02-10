@@ -340,6 +340,19 @@ export const createWsActions = (set: StoreSet, get: StoreGet) => ({
                 set({ currentExecution: updatedExecution, executionId: updatedExecution.execution_id });
               }
             }
+            // Track execution lineage from execution_metadata
+            const parentExecId = event.execution_metadata?.parent_execution_id;
+            if (parentExecId && event.execution_id) {
+              const lineageMap = { ...get().executionLineageMap };
+              if (!lineageMap[event.execution_id]) {
+                lineageMap[event.execution_id] = {
+                  parentExecutionId: parentExecId,
+                  parentCheckpointId: event.execution_metadata?.parent_checkpoint_id,
+                  replayMode: event.execution_metadata?.replay_mode,
+                };
+                set({ executionLineageMap: lineageMap });
+              }
+            }
           }
           if (event.inputs !== undefined && event.inputs !== null) {
             statusUpdate.inputs = event.inputs;
@@ -444,7 +457,7 @@ export const createWsActions = (set: StoreSet, get: StoreGet) => ({
             llm_call_logs: event.llm_call_logs ?? [],
             parent_checkpoint_id: null,
             delta: null,
-            metadata: {},
+            metadata: event.metadata ?? {},
           };
 
           console.log('[checkpoint_created] Saved execution snapshot:', {
@@ -578,6 +591,13 @@ export const createWsActions = (set: StoreSet, get: StoreGet) => ({
 
       case 'log_level':
         set({ serverLogLevel: event.level });
+        break;
+
+      case 'span_update':
+        {
+          // Update span store for Timeline visualization
+          get().updateSpan(event);
+        }
         break;
 
       // ====================================================================
