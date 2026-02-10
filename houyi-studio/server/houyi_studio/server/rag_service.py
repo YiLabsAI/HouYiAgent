@@ -766,7 +766,7 @@ class KnowledgeService:
 
         self._save_libraries()
 
-        logger.info(
+        logger.debug(
             "Ingest complete for library %s: %d files processed, %d failed, %d chunks",
             library_id,
             stats["files_processed"],

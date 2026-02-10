@@ -1278,7 +1278,8 @@ async def handle_command(command: ClientCommand | dict, session_id: str) -> None
             elif level == "error":
                 logger.error(log_prefix)
             else:
-                logger.info(log_prefix)
+                # Default to DEBUG to reduce noise (info-level frontend logs are verbose)
+                logger.debug(log_prefix)
 
         # Handle standard ClientCommand objects
         if isinstance(command, StartExecutionCommand):
