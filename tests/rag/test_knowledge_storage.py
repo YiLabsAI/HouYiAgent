@@ -99,21 +99,29 @@ class TestFileFiltering:
         Note: This test verifies the is_index_path function correctly identifies
         index paths. The function uses string matching to handle cross-platform paths.
         """
+        import os
         from pathlib import Path
 
         from houyi_studio.server.rag_service import is_index_path
 
         # Test that is_index_path correctly identifies production index paths
-        # Using Unix-style paths (works on all platforms)
-        assert is_index_path(Path("/home/.houyi/knowledge/lib_001/index/vectors.bin"))
-        assert is_index_path(Path("/Users/test/.houyi/knowledge/lib_001/index/meta.json"))
+        # Use os.sep for cross-platform compatibility
+        index_path = Path(os.path.join("/home", ".houyi", "knowledge", "lib_001", "index", "vectors.bin"))
+        assert is_index_path(index_path), f"Should identify index path: {index_path}"
+
+        index_path2 = Path(os.path.join("/Users", "test", ".houyi", "knowledge", "lib_001", "index", "meta.json"))
+        assert is_index_path(index_path2), f"Should identify index path: {index_path2}"
 
         # Upload paths should NOT be marked as index
-        assert not is_index_path(Path("/home/.houyi/knowledge/lib_001/uploads/doc.md"))
-        assert not is_index_path(Path("/home/user/documents/readme.md"))
+        upload_path = Path(os.path.join("/home", ".houyi", "knowledge", "lib_001", "uploads", "doc.md"))
+        assert not is_index_path(upload_path), f"Upload path should not be index: {upload_path}"
+
+        regular_path = Path(os.path.join("/home", "user", "documents", "readme.md"))
+        assert not is_index_path(regular_path), f"Regular path should not be index: {regular_path}"
 
         # Just having /index/ in the path isn't enough - needs .houyi too
-        assert not is_index_path(Path("/some/random/index/file.txt"))
+        random_index = Path(os.path.join("/some", "random", "index", "file.txt"))
+        assert not is_index_path(random_index), f"Random index should not match: {random_index}"
 
 
 class TestLibraryIsolation:

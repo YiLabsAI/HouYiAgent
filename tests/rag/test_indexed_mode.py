@@ -585,7 +585,8 @@ class TestSequentialRetrieval:
             assert len(task_results) == 1
             assert task_results[0].strategy == RetrievalStrategy.BM25
             assert task_results[0].success is True
-            assert task_results[0].duration_ms > 0
+            # duration_ms may be 0.0 on fast systems, just check it's non-negative
+            assert task_results[0].duration_ms >= 0
 
 
 class TestParallelRetrieval:
@@ -990,11 +991,16 @@ class TestMultipleStrategies:
             ])
             mode._graph_store = graph_store
 
-            result = await mode.search("Python")
+            try:
+                result = await mode.search("Python")
 
-            assert result.mode_used == RAGMode.INDEXED
-            # Both strategies should be used
-            assert len(result.strategies_used) >= 1
+                assert result.mode_used == RAGMode.INDEXED
+                # Both strategies should be used
+                assert len(result.strategies_used) >= 1
+            finally:
+                # Explicitly close resources to avoid Windows file locking issues
+                sparse_index.close()
+                graph_store.close()
 
     @pytest.mark.asyncio
     async def test_sequential_multiple_strategies(self) -> None:
@@ -1030,10 +1036,15 @@ class TestMultipleStrategies:
             ])
             mode._graph_store = graph_store
 
-            task_results = await mode._execute_sequential_retrieval("Python", 10)
+            try:
+                task_results = await mode._execute_sequential_retrieval("Python", 10)
 
-            # Should have results for both strategies
-            assert len(task_results) == 2
+                # Should have results for both strategies
+                assert len(task_results) == 2
+            finally:
+                # Explicitly close resources to avoid Windows file locking issues
+                sparse_index.close()
+                graph_store.close()
 
 
 class TestVectorStrategy:
@@ -1349,6 +1360,10 @@ class TestEnsureMethods:
             assert mode._graph_store is None
             await mode._ensure_graph_store()
             assert mode._graph_store is not None
+
+            # Explicitly close to avoid Windows file locking issues
+            if mode._graph_store:
+                mode._graph_store.close()
 
     @pytest.mark.asyncio
     async def test_ensure_vector_index(self) -> None:

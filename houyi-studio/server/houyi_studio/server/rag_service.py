@@ -63,7 +63,11 @@ def is_index_path(path: Path) -> bool:
     """
     path_str = str(path)
     # Skip files in index directories, but allow uploads
-    return f"/{INDEX_SUBDIR}/" in path_str and ".houyi" in path_str
+    # Check for both Unix and Windows path separators
+    index_unix = f"/{INDEX_SUBDIR}/"
+    index_win = f"\\{INDEX_SUBDIR}\\"
+    has_index = index_unix in path_str or index_win in path_str
+    return has_index and ".houyi" in path_str
 
 
 @dataclass(slots=True)

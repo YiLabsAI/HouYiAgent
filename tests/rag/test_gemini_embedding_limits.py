@@ -228,12 +228,17 @@ class TestIndexDirSeparation:
 
     def test_rag_config_index_dir_default(self):
         """Test RAGConfig defaults index_dir to knowledge_dir/.houyi."""
+        import os
+        from pathlib import Path
         from houyi.rag.config import RAGConfig
 
-        config = RAGConfig(knowledge_dir="/path/to/knowledge")
+        # Use a platform-appropriate path
+        knowledge_dir = str(Path("/path/to/knowledge"))
+        config = RAGConfig(knowledge_dir=knowledge_dir)
 
         assert config.index_dir is None
-        assert config.get_index_dir() == "/path/to/knowledge/.houyi"
+        expected = str(Path(knowledge_dir) / ".houyi")
+        assert config.get_index_dir() == expected
 
 
 class TestLibraryStorageIsolation:
@@ -257,13 +262,14 @@ class TestLibraryStorageIsolation:
         assert "lib_001" in str(lib1_storage)
         assert "lib_002" in str(lib2_storage)
 
-        # Uploads should be under library storage
+        # Uploads should be under library storage (use os.sep for cross-platform)
+        import os
         lib1_uploads = get_library_upload_dir("lib_001")
-        assert str(lib1_uploads).endswith("lib_001/uploads")
+        assert str(lib1_uploads).endswith(os.path.join("lib_001", "uploads"))
 
         # Index should be under library storage
         lib1_index = get_library_index_dir("lib_001")
-        assert str(lib1_index).endswith("lib_001/index")
+        assert str(lib1_index).endswith(os.path.join("lib_001", "index"))
 
     def test_different_libraries_isolated(self):
         """Test that libraries don't share any directories."""
