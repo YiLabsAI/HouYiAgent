@@ -78,6 +78,7 @@ vertex-ai = [
 ]
 
 rag = [
+    "numpy>=1.24.0",
     "hnswlib>=0.8.0",
     "bm25s>=0.2.0",
 ]

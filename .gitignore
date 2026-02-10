@@ -78,5 +78,7 @@ datasets/
 
 # Claude Code memory (personal, not shared)
 CLAUDE.md
+
+# Houyi runtime data
+.houyi/
 knowledge/
-CLAUDE.md
