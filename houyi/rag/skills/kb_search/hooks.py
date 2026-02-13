@@ -70,7 +70,9 @@ async def pre_search_hook(context: HookContext) -> HookResult:
     if not knowledge_dir and context.metadata:
         knowledge_dir = context.metadata.get("knowledge_dir", "")
     if not knowledge_dir:
-        knowledge_dir = "knowledge/"
+        from houyi.config import env
+
+        knowledge_dir = env.rag_knowledge_dir
 
     # Track search state
     _search_state["knowledge_dir"] = knowledge_dir

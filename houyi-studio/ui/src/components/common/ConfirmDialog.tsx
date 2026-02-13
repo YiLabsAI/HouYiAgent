@@ -76,7 +76,7 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
         <div className="flex items-start gap-3 mb-4">
           <AlertTriangle className={`${iconColor} flex-shrink-0 mt-0.5`} size={24} />
           <div>
-            <h2 id="confirm-dialog-title" className="text-xl font-bold text-white">
+            <h2 id="confirm-dialog-title" className="text-xl font-bold text-gray-50">
               {title}
             </h2>
             <p className="text-gray-300 mt-2">{message}</p>
@@ -91,7 +91,7 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
         <div className="flex justify-end gap-2 mt-6">
           <button
             onClick={onCancel}
-            className="px-4 py-2 bg-gray-600 hover:bg-gray-500 text-white rounded transition-colors"
+            className="px-4 py-2 bg-gray-600 hover:bg-gray-500 text-gray-50 rounded transition-colors"
           >
             {cancelText}
           </button>

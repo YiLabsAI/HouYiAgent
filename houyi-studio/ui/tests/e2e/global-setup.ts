@@ -158,6 +158,13 @@ export default async function globalSetup(): Promise<void> {
   const pythonPath = process.env.PYTHONPATH
     ? `${serverRoot}${path.delimiter}${repoRoot}${path.delimiter}${process.env.PYTHONPATH}`
     : `${serverRoot}${path.delimiter}${repoRoot}`;
+
+  // CRITICAL: Use isolated data directory for e2e tests to prevent
+  // deleting user data. See acceptance doc §14 for incident report.
+  const e2eDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'houyi-e2e-chat-'));
+  const e2eSettingsPath = path.join(e2eDataDir, 'settings.json');
+  console.log(`[E2E] Using isolated chat data dir: ${e2eDataDir}`);
+
   const child = spawn('uv', ['run', 'python', 'tests/integration/fixtures/console_e2e_tools.py'], {
     cwd: repoRoot,
     stdio: quietLogs ? 'ignore' : 'inherit',
@@ -165,6 +172,8 @@ export default async function globalSetup(): Promise<void> {
       ...process.env,
       PYTHONUNBUFFERED: '1',
       PYTHONPATH: pythonPath,
+      HOUYI_CHAT_DATA_DIR: e2eDataDir,
+      HOUYI_CHAT_SETTINGS_PATH: e2eSettingsPath,
       HOUYI_E2E_QUIET: quietLogs ? '1' : '0',
       HOUYI_LOG_LEVEL: logLevel,
       HOUYI_TOOLCALL_MAX_RETRIES: String(toolcallRetries),

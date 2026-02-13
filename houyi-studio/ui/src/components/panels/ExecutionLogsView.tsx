@@ -1,4 +1,5 @@
 import React from 'react';
+import { ScrollText } from 'lucide-react';
 
 export interface ExecutionLogsViewProps {
   viewExecution: any;
@@ -82,8 +83,12 @@ const NodeExecutionLog: React.FC<{ nodeId: string; nodeExec: any }> = ({ nodeId,
 export const ExecutionLogsView: React.FC<ExecutionLogsViewProps> = ({ viewExecution, normalizedSearch }) => {
   if (!viewExecution) {
     return (
-      <div className="text-gray-400 text-center py-8">
-        No execution logs available - start execution to see logs
+      <div className="flex items-center justify-center h-full">
+        <div className="text-center text-gray-500">
+          <ScrollText size={32} className="mx-auto mb-2 opacity-50" />
+          <div className="text-sm">No execution logs available</div>
+          <div className="text-xs mt-1">Start execution to see logs</div>
+        </div>
       </div>
     );
   }

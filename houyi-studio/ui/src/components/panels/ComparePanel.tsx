@@ -2,6 +2,7 @@ import React from 'react';
 import { useConsoleStore } from '@/stores/useConsoleStore';
 import type { ExecutionIR } from '@/types/ir';
 import { diffExecutions, type NodeExecutionChangeSet } from '@/utils/diff';
+import { GitCompareArrows } from 'lucide-react';
 
 export const ComparePanel: React.FC = () => {
   const { checkpoints, currentExecution, liveExecution, checkpointExecution, viewMode } = useConsoleStore();
@@ -220,10 +221,10 @@ export const ComparePanel: React.FC = () => {
 
   if (executionScopedCheckpoints.length < 2) {
     return (
-      <div className="h-full flex items-center justify-center">
-        <div className="text-center text-gray-400">
-          <div className="text-lg mb-2">📊</div>
-          <div>Need at least 2 checkpoints to compare</div>
+      <div className="flex items-center justify-center h-full">
+        <div className="text-center text-gray-500">
+          <GitCompareArrows size={32} className="mx-auto mb-2 opacity-50" />
+          <div className="text-sm">Need at least 2 checkpoints to compare</div>
           <div className="text-xs mt-1">Execute workflow to create checkpoints</div>
         </div>
       </div>

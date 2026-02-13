@@ -13,6 +13,7 @@ import { useMemo, useState, useCallback, useEffect, useRef } from 'react';
 import { useConsoleStore } from '@/stores/useConsoleStore';
 import type { SpanData, SpanTree } from '@/stores/storeActions/spanActions';
 import { ExecutionLineageTree } from './ExecutionLineageTree';
+import { Activity } from 'lucide-react';
 
 // Degradation thresholds
 const DEGRADATION_THRESHOLD = 200; // Collapse sub-spans when total exceeds this
@@ -575,11 +576,12 @@ export function TimelineWaterfall({
 
   if (!spanTree || spans.length === 0) {
     return (
-      <div className="p-4 text-center text-gray-500 dark:text-gray-400">
-        <p className="text-sm">No span data available</p>
-        <p className="text-xs mt-1">
-          Spans will appear here during execution
-        </p>
+      <div className="flex items-center justify-center h-full">
+        <div className="text-center text-gray-500">
+          <Activity size={32} className="mx-auto mb-2 opacity-50" />
+          <div className="text-sm">No span data available</div>
+          <div className="text-xs mt-1">Spans will appear here during execution</div>
+        </div>
       </div>
     );
   }

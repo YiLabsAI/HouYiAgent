@@ -116,10 +116,10 @@ export const EditLibraryDialog: React.FC<EditLibraryDialogProps> = ({
       <div className="bg-gray-800 rounded-lg shadow-xl w-full max-w-lg mx-4 max-h-[85vh] overflow-y-auto custom-scrollbar">
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-gray-700 sticky top-0 bg-gray-800">
-          <h3 className="text-sm font-semibold text-white">Edit Knowledge Library</h3>
+          <h3 className="text-sm font-semibold text-gray-50">Edit Knowledge Library</h3>
           <button
             onClick={onCancel}
-            className="text-gray-400 hover:text-white transition-colors"
+            className="text-gray-400 hover:text-gray-50 transition-colors"
           >
             <X size={18} />
           </button>
@@ -134,7 +134,7 @@ export const EditLibraryDialog: React.FC<EditLibraryDialogProps> = ({
               type="text"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded text-xs text-white placeholder-gray-500 focus:outline-none focus:border-blue-500"
+              className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded text-xs text-gray-50 placeholder-gray-500 focus:outline-none focus:border-blue-500"
               autoFocus
             />
           </div>
@@ -146,7 +146,7 @@ export const EditLibraryDialog: React.FC<EditLibraryDialogProps> = ({
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               placeholder="Optional description"
-              className="w-full h-20 px-3 py-2 bg-gray-900 border border-gray-700 rounded text-xs text-white placeholder-gray-500 focus:outline-none focus:border-blue-500 resize-none"
+              className="w-full h-20 px-3 py-2 bg-gray-900 border border-gray-700 rounded text-xs text-gray-50 placeholder-gray-500 focus:outline-none focus:border-blue-500 resize-none"
             />
           </div>
 
@@ -161,7 +161,7 @@ export const EditLibraryDialog: React.FC<EditLibraryDialogProps> = ({
                   onClick={() => setMode(m)}
                   className={`flex-1 px-3 py-2 rounded text-xs transition-colors ${
                     mode === m
-                      ? 'bg-blue-600 text-white'
+                      ? 'bg-blue-600 text-gray-50'
                       : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
                   }`}
                 >
@@ -175,7 +175,7 @@ export const EditLibraryDialog: React.FC<EditLibraryDialogProps> = ({
           <button
             type="button"
             onClick={() => setShowAdvanced(!showAdvanced)}
-            className="flex items-center gap-2 text-xs text-gray-400 hover:text-white transition-colors w-full py-2"
+            className="flex items-center gap-2 text-xs text-gray-400 hover:text-gray-50 transition-colors w-full py-2"
           >
             {showAdvanced ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
             <Settings2 size={14} />
@@ -205,7 +205,7 @@ export const EditLibraryDialog: React.FC<EditLibraryDialogProps> = ({
                       step="64"
                       value={settings.chunk_size}
                       onChange={(e) => updateSettings('chunk_size', Number(e.target.value))}
-                      className="w-full px-2 py-1 bg-gray-800 border border-gray-700 rounded text-[10px] text-white"
+                      className="w-full px-2 py-1 bg-gray-800 border border-gray-700 rounded text-[10px] text-gray-50"
                     />
                   </div>
                   <div>
@@ -219,7 +219,7 @@ export const EditLibraryDialog: React.FC<EditLibraryDialogProps> = ({
                       step="10"
                       value={settings.chunk_overlap}
                       onChange={(e) => updateSettings('chunk_overlap', Number(e.target.value))}
-                      className="w-full px-2 py-1 bg-gray-800 border border-gray-700 rounded text-[10px] text-white"
+                      className="w-full px-2 py-1 bg-gray-800 border border-gray-700 rounded text-[10px] text-gray-50"
                     />
                   </div>
                 </div>
@@ -235,7 +235,7 @@ export const EditLibraryDialog: React.FC<EditLibraryDialogProps> = ({
                         onClick={() => updateSettings('chunking_strategy', s)}
                         className={`flex-1 px-2 py-1 rounded text-[10px] transition-colors ${
                           settings.chunking_strategy === s
-                            ? 'bg-blue-600 text-white'
+                            ? 'bg-blue-600 text-gray-50'
                             : 'bg-gray-700 text-gray-400 hover:bg-gray-600'
                         }`}
                       >
@@ -265,7 +265,7 @@ export const EditLibraryDialog: React.FC<EditLibraryDialogProps> = ({
                       max="50"
                       value={settings.top_k}
                       onChange={(e) => updateSettings('top_k', Number(e.target.value))}
-                      className="w-full px-2 py-1 bg-gray-800 border border-gray-700 rounded text-[10px] text-white"
+                      className="w-full px-2 py-1 bg-gray-800 border border-gray-700 rounded text-[10px] text-gray-50"
                     />
                   </div>
                   <div>
@@ -278,7 +278,7 @@ export const EditLibraryDialog: React.FC<EditLibraryDialogProps> = ({
                       max="100"
                       value={Math.round(settings.score_threshold * 100)}
                       onChange={(e) => updateSettings('score_threshold', Number(e.target.value) / 100)}
-                      className="w-full px-2 py-1 bg-gray-800 border border-gray-700 rounded text-[10px] text-white"
+                      className="w-full px-2 py-1 bg-gray-800 border border-gray-700 rounded text-[10px] text-gray-50"
                     />
                   </div>
                 </div>
@@ -312,14 +312,14 @@ export const EditLibraryDialog: React.FC<EditLibraryDialogProps> = ({
             <button
               type="button"
               onClick={onCancel}
-              className="px-4 py-2 text-xs text-gray-300 hover:text-white transition-colors"
+              className="px-4 py-2 text-xs text-gray-300 hover:text-gray-50 transition-colors"
             >
               Cancel
             </button>
             <button
               type="submit"
               disabled={!name.trim()}
-              className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white text-xs rounded transition-colors"
+              className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-gray-50 text-xs rounded transition-colors"
             >
               Save
             </button>

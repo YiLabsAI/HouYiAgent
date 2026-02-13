@@ -1,27 +1,26 @@
-"""Houyi RAG - Agentic RAG framework.
+"""Houyi RAG - Future-oriented Agentic RAG Framework.
 
-Supports dual-mode architecture:
-- Agentic Mode: LLM-driven intelligent retrieval (no pre-built indexes)
+Dual-mode architecture:
+- Agentic Mode: LLM-driven intelligent retrieval (no pre-built index required)
 - Indexed Mode: Traditional hybrid retrieval (Vector + Graph + BM25)
 
-Unified API:
-    from houyi.rag import RAG
+Progressive API design:
+    # Level 1: Zero-config quickstart
+    from houyi.rag import search
+    answer = search("What is RAG?", knowledge_dir="./docs")
 
-    # Zero config (Agentic mode)
-    rag = RAG("./docs")
-    result = await rag.query("What is RAG?")
+    # Level 2: Configurable usage
+    from houyi.rag import RAGService
+    rag = RAGService(mode="agentic")
+    answer = rag.query("...")
 
-    # With indexing (Indexed mode)
-    rag = RAG("./docs", mode="indexed")
-    await rag.index()
-    result = await rag.query("What is RAG?")
-
-    # With LLM
-    rag = RAG("./docs", mode="indexed", llm="openai:gpt-4o-mini")
-
-For Skill integration:
+    # Level 3: Skill integration
     from houyi.rag.skills import kb_search_skill
     agent = Agent(skills=[kb_search_skill])
+
+    # Level 4: Fully customizable
+    from houyi.rag import RAGPipeline, HybridRetriever
+    pipeline = RAGPipeline(retriever=HybridRetriever(...))
 """
 
 from houyi.rag.config import RAGConfig

@@ -1,5 +1,8 @@
 import React from 'react';
 import { useConsoleStore } from '../stores/useConsoleStore';
+import { DEFAULT_MODEL } from '../constants/models';
+import { useAvailableModels } from '../hooks/useAvailableModels';
+import { ChevronLeft, ChevronRight } from 'lucide-react';
 
 interface RightSidebarProps {
   isCollapsed: boolean;
@@ -16,6 +19,7 @@ type PromptVariable = {
 
 export const RightSidebar: React.FC<RightSidebarProps> = ({ isCollapsed, onToggleCollapse }) => {
   const { selectedNodeId, nodes, updateNode } = useConsoleStore();
+  const { modelIds } = useAvailableModels();
   const [activeTab, setActiveTab] = React.useState<TabType>('config');
   const [saveStatus, setSaveStatus] = React.useState<'idle' | 'saving' | 'saved'>('idle');
   const [maxTokensDraft, setMaxTokensDraft] = React.useState<string>('');
@@ -213,8 +217,8 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({ isCollapsed, onToggl
   }, [tabs, activeTab]);
 
   return (
-    <div className={`bg-gray-800 border-l border-gray-700 flex flex-col transition-all duration-300 ease-in-out ${
-      isCollapsed ? 'w-8' : 'w-80'
+    <div className={`bg-gray-800 border-l border-gray-700 flex flex-col h-full ${
+      isCollapsed ? 'w-8' : 'w-full'
     }`}>
       {isCollapsed ? (
         <div className="flex items-center justify-center h-full">
@@ -223,7 +227,7 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({ isCollapsed, onToggl
             className="p-1 hover:bg-gray-700 rounded text-gray-400"
             title="Expand sidebar"
           >
-            ◀
+            <ChevronLeft size={16} />
           </button>
         </div>
       ) : (
@@ -240,7 +244,7 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({ isCollapsed, onToggl
               className="p-1 hover:bg-gray-700 rounded text-gray-400"
               title="Collapse sidebar"
             >
-              ▶
+              <ChevronRight size={16} />
             </button>
           </div>
 
@@ -251,7 +255,7 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({ isCollapsed, onToggl
             onClick={() => setActiveTab(tab.id)}
             className={`flex-1 min-w-0 px-3 py-2 text-xs font-medium ${
               activeTab === tab.id
-                ? 'bg-gray-700 text-white border-b-2 border-blue-500'
+                ? 'bg-gray-700 text-gray-50 border-b-2 border-blue-500'
                 : 'text-gray-400 hover:text-gray-200'
             }`}
           >
@@ -339,7 +343,7 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({ isCollapsed, onToggl
                       <label className="block text-xs font-medium text-gray-400 mb-1">Model</label>
                       <select
                         className="w-full px-2 py-1 bg-gray-700 border border-gray-600 rounded text-sm text-gray-200 focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
-                        value={selectedNode.data?.config?.model || 'deepseek-ai/DeepSeek-V3'}
+                        value={selectedNode.data?.config?.model || DEFAULT_MODEL}
                         onChange={(e) => {
                           if (selectedNodeId && selectedNode.data) {
                             const updatedData = {
@@ -351,10 +355,9 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({ isCollapsed, onToggl
                           }
                         }}
                       >
-                        <option value="deepseek-ai/DeepSeek-V3">DeepSeek-V3 (Standard)</option>
-                        <option value="deepseek-ai/DeepSeek-V3.1">DeepSeek-V3.1 (Latest)</option>
-                        <option value="deepseek-ai/DeepSeek-R1">DeepSeek-R1 (Reasoning)</option>
-                        <option value="Qwen/Qwen2.5-72B-Instruct">Qwen 2.5 72B</option>
+                        {modelIds.map(m => (
+                          <option key={m} value={m}>{m}</option>
+                        ))}
                       </select>
                     </div>
                     <div>

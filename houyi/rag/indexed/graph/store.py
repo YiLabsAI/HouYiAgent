@@ -30,7 +30,7 @@ class GraphStore:
 
     def __init__(
         self,
-        knowledge_dir: str = "knowledge/",
+        knowledge_dir: str | None = None,
         config: GraphConfig | None = None,
     ) -> None:
         """Initialize graph store.
@@ -39,6 +39,10 @@ class GraphStore:
             knowledge_dir: Knowledge base directory
             config: Graph configuration
         """
+        if knowledge_dir is None:
+            from houyi.config import env
+
+            knowledge_dir = env.rag_knowledge_dir
         self.knowledge_dir = Path(knowledge_dir)
         self.config = config or GraphConfig()
 

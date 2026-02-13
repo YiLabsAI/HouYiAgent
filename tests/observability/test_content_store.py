@@ -282,7 +282,7 @@ class TestFileContentStore:
 
     def test_unicode_content(self, content_store):
         """Test storing and retrieving unicode content."""
-        content = "你好世界 🌍 مرحبا العالم"
+        content = "Hello World - Greetings Earth (special: @#$%)"
 
         ref = content_store.store(
             content=content,

@@ -8,36 +8,30 @@ import { LoadWorkflowDialog } from './LoadWorkflowDialog';
 import { KnowledgePanel } from './KnowledgePanel';
 import { KnowledgeConfigDialog } from './KnowledgeConfigDialog';
 import { KnowledgeSearch } from './KnowledgeSearch';
-import { MoreHorizontal } from 'lucide-react';
+import { ConversationRail } from '../Chat/ConversationRail';
+import { useChatStore } from '@/stores/useChatStore';
+import { ChevronLeft, ChevronRight } from 'lucide-react';
 
 interface LeftSidebarProps {
   activeTab: 'workflow' | 'chat' | 'knowledge' | 'skills';
   isCollapsed: boolean;
   onToggleCollapse: () => void;
   onResetWidth: () => void;
+  onOpenChatSettings?: (conversationId: string) => void;
+  onOpenGlobalSettings?: () => void;
 }
 
 export const LeftSidebar: React.FC<LeftSidebarProps> = ({
   activeTab,
   isCollapsed,
   onToggleCollapse,
-  onResetWidth,
+  onResetWidth: _onResetWidth,
+  onOpenChatSettings,
+  // onOpenGlobalSettings is available via props but currently only used in Header
 }) => {
   const logic = useLeftSidebarLogic();
-  const [isMenuOpen, setIsMenuOpen] = React.useState(false);
   const [isKnowledgeDialogOpen, setIsKnowledgeDialogOpen] = React.useState(false);
-  const menuRef = React.useRef<HTMLDivElement | null>(null);
-
-  React.useEffect(() => {
-    const onMouseDown = (e: MouseEvent) => {
-      if (!isMenuOpen) return;
-      const target = e.target as Node | null;
-      if (target && menuRef.current && menuRef.current.contains(target)) return;
-      setIsMenuOpen(false);
-    };
-    window.addEventListener('mousedown', onMouseDown);
-    return () => window.removeEventListener('mousedown', onMouseDown);
-  }, [isMenuOpen]);
+  void _onResetWidth; // available via double-click on drag handle
 
   const sidebarTitle = React.useMemo(() => {
     switch (activeTab) {
@@ -65,38 +59,30 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
             className="p-1 hover:bg-gray-700 rounded text-gray-400"
             title="Expand sidebar"
           >
-            ▶
+            <ChevronRight size={16} />
           </button>
         </div>
       </div>
     );
   }
 
-  const renderChatEntry = () => {
-    return (
-      <div className="p-3 text-xs text-gray-300">
-        <div className="text-xs font-semibold text-gray-200">Chatbox</div>
-        <div className="text-[11px] text-gray-500 mt-1">MVP placeholder</div>
-        <div className="mt-3 bg-gray-900 border border-gray-700 rounded p-2">
-          <div className="text-[11px] text-gray-400">Agents</div>
-          <div className="text-[11px] text-gray-500 mt-1">Research Agent (coming soon)</div>
-          <div className="text-[11px] text-gray-500">Data Agent (coming soon)</div>
-        </div>
-        <div className="mt-3 flex gap-2">
-          <input
-            className="flex-1 bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 placeholder:text-gray-500"
-            placeholder="Ask HouYi..."
-          />
-          <button
-            className="px-2 py-1 bg-gray-700 hover:bg-gray-600 rounded text-xs text-white"
-            type="button"
-          >
-            Send
-          </button>
-        </div>
-      </div>
-    );
-  };
+  const chatConversations = useChatStore((s) => s.conversations);
+  const chatActiveId = useChatStore((s) => s.activeConversationId);
+  const chatIsLoading = useChatStore((s) => s.isLoadingList);
+  const chatFetch = useChatStore((s) => s.fetchConversations);
+  const chatCreate = useChatStore((s) => s.createConversation);
+  const chatLoad = useChatStore((s) => s.loadConversation);
+  const chatDelete = useChatStore((s) => s.deleteConversation);
+  const chatUpdate = useChatStore((s) => s.updateConversation);
+
+  // Fetch conversations when chat tab is first shown
+  const chatFetchedRef = React.useRef(false);
+  React.useEffect(() => {
+    if (activeTab === 'chat' && !chatFetchedRef.current) {
+      chatFetchedRef.current = true;
+      chatFetch();
+    }
+  }, [activeTab, chatFetch]);
 
   const renderKnowledgeEntry = () => {
     return (
@@ -125,41 +111,15 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
       {/* Header */}
       <div className="p-3 border-b border-gray-700 flex items-center justify-between shrink-0">
         <h2 className="text-sm font-semibold text-gray-200">{sidebarTitle}</h2>
-        <div className="relative flex items-center gap-1" ref={menuRef}>
-          <button
-            onClick={() => setIsMenuOpen((v) => !v)}
-            className="p-1 hover:bg-gray-700 rounded text-gray-400"
-            title="More"
-            aria-label="More"
-            type="button"
-          >
-            <MoreHorizontal size={16} />
-          </button>
-          {isMenuOpen && (
-            <div className="absolute right-0 top-8 z-50 w-40 bg-gray-900 border border-gray-700 rounded shadow-lg overflow-hidden">
-              <button
-                className="w-full text-left px-3 py-2 text-xs text-gray-200 hover:bg-gray-800"
-                type="button"
-                onClick={() => {
-                  setIsMenuOpen(false);
-                  onToggleCollapse();
-                }}
-              >
-                Collapse Side Bar
-              </button>
-              <button
-                className="w-full text-left px-3 py-2 text-xs text-gray-200 hover:bg-gray-800"
-                type="button"
-                onClick={() => {
-                  setIsMenuOpen(false);
-                  onResetWidth();
-                }}
-              >
-                Reset Side Bar Width
-              </button>
-            </div>
-          )}
-        </div>
+        <button
+          onClick={onToggleCollapse}
+          className="p-1 hover:bg-gray-700 rounded text-gray-400"
+          title="Collapse sidebar"
+          aria-label="Collapse sidebar"
+          type="button"
+        >
+          <ChevronLeft size={16} />
+        </button>
       </div>
 
       <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar pb-6 flex flex-col">
@@ -196,7 +156,21 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
           </>
         )}
 
-        {activeTab === 'chat' && renderChatEntry()}
+        {activeTab === 'chat' && (
+          <ConversationRail
+            conversations={chatConversations}
+            activeConversationId={chatActiveId}
+            isLoading={chatIsLoading}
+            onSelect={chatLoad}
+            onCreate={() => chatCreate()}
+            onDelete={chatDelete}
+            onOpenSettings={(id) => {
+              chatLoad(id);
+              onOpenChatSettings?.(id);
+            }}
+            onToggleBookmark={(id, bookmarked) => chatUpdate(id, { bookmarked })}
+          />
+        )}
 
         {activeTab === 'knowledge' && renderKnowledgeEntry()}
         {activeTab === 'skills' && renderSkillsEntry()}
@@ -232,7 +206,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
             <div className="p-4 space-y-3">
               <button
                 onClick={() => logic.handleConfirmRestoreDialog('deterministic')}
-                className="w-full p-2 bg-gray-700 hover:bg-gray-600 rounded text-sm text-white transition-colors"
+                className="w-full p-2 bg-gray-700 hover:bg-gray-600 rounded text-sm text-gray-50 transition-colors"
               >
                 Deterministic replay (use recorded output)
               </button>
@@ -248,7 +222,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
             <div className="p-3 border-t border-gray-700 flex justify-end">
               <button
                 onClick={logic.handleCancelRestoreDialog}
-                className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded text-xs text-white transition-colors"
+                className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded text-xs text-gray-50 transition-colors"
               >
                 Cancel
               </button>

@@ -1,6 +1,7 @@
 import React, { useMemo } from 'react';
 import { useConsoleStore } from '@/stores/useConsoleStore';
 import type { SpanData } from '@/stores/storeActions/spanActions';
+import { BarChart3 } from 'lucide-react';
 
 export interface MetricsPanelProps {
   executionId?: string;
@@ -179,8 +180,12 @@ export const MetricsPanel: React.FC<MetricsPanelProps> = ({ executionId }) => {
 
   if (!effectiveExecId || spans.length === 0) {
     return (
-      <div className="text-gray-400 text-center py-8 text-xs">
-        No span data available for metrics
+      <div className="flex items-center justify-center h-full">
+        <div className="text-center text-gray-500">
+          <BarChart3 size={32} className="mx-auto mb-2 opacity-50" />
+          <div className="text-sm">No metrics available</div>
+          <div className="text-xs mt-1">Metrics will appear here during execution</div>
+        </div>
       </div>
     );
   }

@@ -276,10 +276,10 @@ export const ImportFilesDialog: React.FC<ImportFilesDialogProps> = ({
       <div className="bg-gray-800 rounded-lg shadow-xl w-full max-w-md mx-4">
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-gray-700">
-          <h3 className="text-sm font-semibold text-white">Import Files</h3>
+          <h3 className="text-sm font-semibold text-gray-50">Import Files</h3>
           <button
             onClick={onCancel}
-            className="text-gray-400 hover:text-white transition-colors"
+            className="text-gray-400 hover:text-gray-50 transition-colors"
           >
             <X size={18} />
           </button>
@@ -289,7 +289,7 @@ export const ImportFilesDialog: React.FC<ImportFilesDialogProps> = ({
         <form onSubmit={handleSubmit} className="p-4 space-y-4">
           {/* Library info */}
           <div className="text-xs text-gray-400">
-            Importing into: <span className="text-white">{libraryName}</span>
+            Importing into: <span className="text-gray-50">{libraryName}</span>
           </div>
 
           {/* Import type selection */}
@@ -357,7 +357,7 @@ export const ImportFilesDialog: React.FC<ImportFilesDialogProps> = ({
                       ? './knowledge\n./docs/guides'
                       : './knowledge/doc1.md\n./knowledge/doc2.txt'
                   }
-                  className="w-full h-24 px-3 py-2 bg-transparent text-xs text-white placeholder-gray-500 focus:outline-none resize-none"
+                  className="w-full h-24 px-3 py-2 bg-transparent text-xs text-gray-50 placeholder-gray-500 focus:outline-none resize-none"
                   autoFocus
                 />
                 <div className="px-3 pb-2 text-[10px] text-gray-600">
@@ -394,7 +394,7 @@ export const ImportFilesDialog: React.FC<ImportFilesDialogProps> = ({
                       key={i}
                       type="button"
                       onClick={() => handleHistorySelect(entry)}
-                      className="w-full text-left px-2 py-1 rounded text-[10px] text-gray-400 hover:bg-gray-700 hover:text-gray-200 transition-colors truncate"
+                      className="w-full text-left px-2 py-1 rounded text-[10px] text-gray-400 hover:bg-gray-700 hover:text-gray-50 transition-colors truncate"
                       title={entry.paths.join('\n')}
                     >
                       {displayPaths}
@@ -420,14 +420,14 @@ export const ImportFilesDialog: React.FC<ImportFilesDialogProps> = ({
             <button
               type="button"
               onClick={onCancel}
-              className="px-4 py-2 text-xs text-gray-300 hover:text-white transition-colors"
+              className="px-4 py-2 text-xs text-gray-300 hover:text-gray-50 transition-colors"
             >
               Cancel
             </button>
             <button
               type="submit"
               disabled={!paths.trim() || isUploading}
-              className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white text-xs rounded transition-colors"
+              className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-gray-50 text-xs rounded transition-colors"
             >
               Import
             </button>

@@ -2,11 +2,25 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from pydantic import BaseModel, Field
 
 from houyi.rag.types import RAGMode, RetrievalStrategy
+
+logger = logging.getLogger(__name__)
+
+
+def _default_knowledge_dir() -> str:
+    """Get default knowledge directory from EnvConfig.
+
+    Reads RAG_KNOWLEDGE_DIR env var; falls back to ``"knowledge/"``.
+    Logs a warning if the env var is not explicitly set.
+    """
+    from houyi.config import env
+
+    return env.rag_knowledge_dir
 
 
 class AgenticConfig(BaseModel):
@@ -72,7 +86,10 @@ class RAGConfig(BaseModel):
     """Main RAG configuration."""
 
     mode: RAGMode = Field(default=RAGMode.AUTO, description="RAG operating mode")
-    knowledge_dir: str = Field(default="knowledge/", description="Knowledge base source directory")
+    knowledge_dir: str = Field(
+        default_factory=_default_knowledge_dir,
+        description="Knowledge base source directory (reads RAG_KNOWLEDGE_DIR env var)",
+    )
     index_dir: str | None = Field(
         default=None,
         description="Index storage directory (default: {knowledge_dir}/.houyi). "
@@ -101,18 +118,17 @@ class RAGConfig(BaseModel):
         return str(Path(self.knowledge_dir) / ".houyi")
 
     @classmethod
-    def for_agentic(cls, knowledge_dir: str = "knowledge/", **kwargs: Any) -> RAGConfig:
+    def for_agentic(cls, knowledge_dir: str | None = None, **kwargs: Any) -> RAGConfig:
         """Create config optimized for Agentic mode."""
-        return cls(
-            mode=RAGMode.AGENTIC,
-            knowledge_dir=knowledge_dir,
-            **kwargs,
-        )
+        kw: dict[str, Any] = {"mode": RAGMode.AGENTIC, **kwargs}
+        if knowledge_dir is not None:
+            kw["knowledge_dir"] = knowledge_dir
+        return cls(**kw)
 
     @classmethod
     def for_indexed(
         cls,
-        knowledge_dir: str = "knowledge/",
+        knowledge_dir: str | None = None,
         strategies: list[RetrievalStrategy] | None = None,
         **kwargs: Any,
     ) -> RAGConfig:
@@ -120,9 +136,7 @@ class RAGConfig(BaseModel):
         indexed_config = IndexedConfig()
         if strategies:
             indexed_config.strategies = strategies
-        return cls(
-            mode=RAGMode.INDEXED,
-            knowledge_dir=knowledge_dir,
-            indexed=indexed_config,
-            **kwargs,
-        )
+        kw: dict[str, Any] = {"mode": RAGMode.INDEXED, "indexed": indexed_config, **kwargs}
+        if knowledge_dir is not None:
+            kw["knowledge_dir"] = knowledge_dir
+        return cls(**kw)

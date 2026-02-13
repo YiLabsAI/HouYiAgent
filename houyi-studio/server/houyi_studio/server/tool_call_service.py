@@ -19,6 +19,7 @@ from houyi.execution.tool_call_orchestrator import (
 )
 from houyi.execution.tool_call_runner_service import ToolCallRunnerService
 from houyi.execution.tool_call_web_search_hooks import build_web_search_tool_hooks
+from houyi.llm.models import DEFAULT_MODEL
 from houyi.protocol.ir import ExecutionIR, NodeExecutionIR
 from houyi.protocol.ir.tooling_ir import LLMToolCallOutputIR
 
@@ -78,7 +79,7 @@ class ToolCallService:
             os.getenv("HOUYI_TOOLCALL_MODEL")
             or model
             or os.getenv("DEEPSEEK_MODEL")
-            or "deepseek-ai/DeepSeek-V3"
+            or DEFAULT_MODEL
         )
         toolcall_adapter = (os.getenv("HOUYI_TOOLCALL_ADAPTER") or "real").strip().lower()
         toolcall_max_tokens = os.getenv("HOUYI_TOOLCALL_MAX_TOKENS")

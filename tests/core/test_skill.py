@@ -1066,14 +1066,14 @@ class AdvancedTestSkillSpecEdgeCases:
             return Output(y=input.x)
 
         skill = SkillSpec(
-            name="测试技能",
+            name="test_skill_unicode",
             description="Test skill",
             input_schema=Input,
             output_schema=Output,
             executor=func,
         )
 
-        assert skill.name == "测试技能"
+        assert skill.name == "test_skill_unicode"
 
     def test_skill_without_executor(self):
         class Input(BaseModel):

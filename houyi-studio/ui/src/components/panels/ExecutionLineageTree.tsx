@@ -1,10 +1,8 @@
 /**
  * ExecutionLineageTree — Tree-based execution selector for Timeline.
  *
- * Design rationale (industry survey):
+ * Design rationale:
  * ─────────────────────────────────────────────────────────────────
- * - Jaeger/Tempo: flat trace list, no fork/branch visualization.
- * - LangSmith: RunTree with parent→child nesting, but single-run scope.
  * - Our scenario is unique: checkpoint/restore creates a **DAG of executions**.
  *   Multiple restores from the same checkpoint = branching (like git).
  *

@@ -7,6 +7,7 @@ import { ObsFullView } from './panels/ObsFullView';
 import { TimelineWaterfall } from './panels/TimelineWaterfall';
 import { useConsoleStore } from '../stores/useConsoleStore';
 import { diffExecutions } from '@/utils/diff';
+import { ChevronUp, ChevronDown, Activity, Flag, FileText } from 'lucide-react';
 
 interface ExecTreeNode {
   execId: string;
@@ -466,7 +467,7 @@ export const BottomPanel: React.FC<BottomPanelProps> = ({
             className="p-1 hover:bg-gray-700 rounded text-gray-400"
             title="Expand panel"
           >
-            ▲
+            <ChevronUp size={16} />
           </button>
         </div>
       ) : (
@@ -479,7 +480,7 @@ export const BottomPanel: React.FC<BottomPanelProps> = ({
                   onClick={() => setActiveTab(tab.id)}
                   className={`px-4 py-2 text-xs font-medium ${
                     activeTab === tab.id
-                      ? 'bg-gray-700 text-white border-b-2 border-blue-500'
+                      ? 'bg-gray-700 text-gray-50 border-b-2 border-blue-500'
                       : 'text-gray-400 hover:text-gray-200'
                   }`}
                 >
@@ -490,11 +491,11 @@ export const BottomPanel: React.FC<BottomPanelProps> = ({
             <div className="flex items-center gap-2 pr-2">
               <button
                 onClick={() => setShowObsFullView(true)}
-                className="px-2 py-1 text-[11px] rounded border border-gray-600 text-gray-200 hover:bg-gray-700 hover:text-white"
+                className="p-1.5 rounded hover:bg-gray-700 text-gray-400 hover:text-gray-200 transition-colors"
                 title="Open full observability view (waterfall + metrics)"
                 type="button"
               >
-                Obs
+                <Activity size={16} />
               </button>
               {viewMode === 'checkpoint' && (
                 <button
@@ -512,7 +513,7 @@ export const BottomPanel: React.FC<BottomPanelProps> = ({
                 title="Collapse panel"
                 type="button"
               >
-                ▼
+                <ChevronDown size={16} />
               </button>
             </div>
           </div>
@@ -532,8 +533,12 @@ export const BottomPanel: React.FC<BottomPanelProps> = ({
             {activeTab === 'checkpoints' && (
               <div className="space-y-2">
                 {checkpointTree.length === 0 ? (
-                  <div className="text-center text-gray-400 py-8">
-                    No checkpoints created yet
+                  <div className="flex items-center justify-center h-full">
+                    <div className="text-center text-gray-500">
+                      <Flag size={32} className="mx-auto mb-2 opacity-50" />
+                      <div className="text-sm">No checkpoints created yet</div>
+                      <div className="text-xs mt-1">Checkpoints will appear here during execution</div>
+                    </div>
                   </div>
                 ) : (
                   checkpointTree.map((rootNode) => (
@@ -661,8 +666,12 @@ export const BottomPanel: React.FC<BottomPanelProps> = ({
                     </div>
                   </>
                 ) : (
-                  <div className="text-center text-gray-400 py-8">
-                    No execution context available
+                  <div className="flex items-center justify-center h-full">
+                    <div className="text-center text-gray-500">
+                      <FileText size={32} className="mx-auto mb-2 opacity-50" />
+                      <div className="text-sm">No execution context available</div>
+                      <div className="text-xs mt-1">Context will appear here during execution</div>
+                    </div>
                   </div>
                 )}
               </div>

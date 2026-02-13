@@ -1,4 +1,4 @@
-.PHONY: help install install-dev test test-cov lint lint-fix quick-check check clean format
+.PHONY: help install install-dev install-studio install-all dev test test-cov test-fast test-integration test-e2e lint lint-fix quick-check check clean format
 
 # Default target
 help:
@@ -8,9 +8,12 @@ help:
 	@echo "Setup:"
 	@echo "  make install          Install production dependencies"
 	@echo "  make install-dev      Install development dependencies"
+	@echo "  make install-studio   Install Studio server + UI deps into .venv"
+	@echo "  make install-all      Full setup (dev + rag + studio + UI)"
 	@echo "  make setup-hooks      Setup pre-commit hooks"
 	@echo ""
 	@echo "Development:"
+	@echo "  make dev              Start backend + frontend (tmux)"
 	@echo "  make quick-check      Quick checks (ruff + fast tests)"
 	@echo "  make check            Full checks (ruff + pylint + tests + coverage)"
 	@echo "  make format           Auto-format code with ruff"
@@ -18,9 +21,11 @@ help:
 	@echo "  make lint-fix         Run linters with auto-fix"
 	@echo ""
 	@echo "Testing:"
-	@echo "  make test             Run all tests"
+	@echo "  make test             Run SDK unit tests"
 	@echo "  make test-cov         Run tests with coverage report"
 	@echo "  make test-fast        Run tests (fail fast)"
+	@echo "  make test-integration Run integration tests (requires studio server deps)"
+	@echo "  make test-e2e         Run Playwright e2e tests (requires running backend)"
 	@echo ""
 	@echo "Cleanup:"
 	@echo "  make clean            Remove cache and build files"
@@ -32,6 +37,20 @@ install:
 
 install-dev:
 	uv sync --extra dev
+
+# Install Studio server (backend) + UI deps into .venv
+install-studio:
+	uv pip install -e houyi-studio/server --quiet
+	@echo "✓ Studio server installed"
+	@cd houyi-studio/ui && pnpm install --frozen-lockfile
+	@echo "✓ UI dependencies installed"
+
+# Full setup: SDK dev + RAG extras + Studio server + UI
+install-all:
+	uv sync --extra dev --extra rag
+	uv pip install -e houyi-studio/server --quiet
+	@cd houyi-studio/ui && pnpm install --frozen-lockfile
+	@echo "✓ All dependencies installed (SDK + RAG + Studio + UI)"
 
 setup-hooks:
 	uv run pre-commit install
@@ -58,6 +77,10 @@ lint:
 lint-fix:
 	uv run ruff check . --fix
 
+# Start dev environment (backend + frontend via tmux)
+dev:
+	@./scripts/dev.sh
+
 # Testing
 test:
 	uv run pytest tests/ -v
@@ -67,6 +90,15 @@ test-cov:
 
 test-fast:
 	uv run pytest tests/ -x --tb=short
+
+# Integration tests (requires studio server deps)
+test-integration:
+	@uv run python -c "import houyi_studio" 2>/dev/null || (echo '📦 Installing studio server...' && uv pip install -e houyi-studio/server --quiet)
+	uv run pytest tests/integration/ -v
+
+# E2E tests (requires backend running + Playwright browsers)
+test-e2e:
+	@cd houyi-studio/ui && pnpm install --frozen-lockfile && pnpm test:e2e
 
 # Cleanup
 clean:

@@ -11,6 +11,7 @@ from typing import Any, Protocol
 
 from houyi.core.skill import SkillSpec
 from houyi.llm.base import LLMResponse
+from houyi.llm.models import DEFAULT_MODEL
 
 logger = logging.getLogger(__name__)
 
@@ -139,11 +140,7 @@ def _siliconflow_tool_call_adapter_hook(context: ToolCallAdapterContext) -> Any 
 
     api_key = os.getenv("SILICONFLOW_API_KEY") or os.getenv("OPENAI_API_KEY")
     base_url = os.getenv("SILICONFLOW_BASE_URL") or os.getenv("OPENAI_BASE_URL")
-    model = (
-        os.getenv("SILICONFLOW_MODEL")
-        or os.getenv("HOUYI_TOOLCALL_MODEL")
-        or "deepseek-ai/DeepSeek-V3"
-    )
+    model = os.getenv("SILICONFLOW_MODEL") or os.getenv("HOUYI_TOOLCALL_MODEL") or DEFAULT_MODEL
     return OpenAICompatibleAdapter(api_key=api_key, base_url=base_url, model=model)
 
 
@@ -154,11 +151,7 @@ def _deepseek_tool_call_adapter_hook(context: ToolCallAdapterContext) -> Any | N
 
     api_key = os.getenv("DEEPSEEK_API_KEY") or os.getenv("OPENAI_API_KEY")
     base_url = os.getenv("DEEPSEEK_BASE_URL") or os.getenv("OPENAI_BASE_URL")
-    model = (
-        os.getenv("DEEPSEEK_MODEL")
-        or os.getenv("HOUYI_TOOLCALL_MODEL")
-        or "deepseek-ai/DeepSeek-V3"
-    )
+    model = os.getenv("DEEPSEEK_MODEL") or os.getenv("HOUYI_TOOLCALL_MODEL") or DEFAULT_MODEL
     return OpenAICompatibleAdapter(api_key=api_key, base_url=base_url, model=model)
 
 

@@ -1,5 +1,5 @@
 import React from 'react';
-import { BookOpen, FolderTree, MessageSquare, Puzzle, Settings } from 'lucide-react';
+import { BookOpen, FolderTree, Puzzle, Settings } from 'lucide-react';
 
 interface ActivityBarProps {
   activeTab: 'workflow' | 'chat' | 'knowledge' | 'skills';
@@ -19,7 +19,7 @@ export const ActivityBar: React.FC<ActivityBarProps> = ({
           onClick={() => onSelectTab('workflow')}
           className={`mx-1 h-10 rounded text-xs font-semibold transition-colors ${
             activeTab === 'workflow'
-              ? 'bg-gray-700 text-white'
+              ? 'bg-gray-700 text-gray-50'
               : 'text-gray-400 hover:bg-gray-800 hover:text-gray-200'
           }`}
           title="Workflow"
@@ -31,25 +31,10 @@ export const ActivityBar: React.FC<ActivityBarProps> = ({
           </div>
         </button>
         <button
-          onClick={() => onSelectTab('chat')}
-          className={`mx-1 h-10 rounded text-xs font-semibold transition-colors ${
-            activeTab === 'chat'
-              ? 'bg-gray-700 text-white'
-              : 'text-gray-400 hover:bg-gray-800 hover:text-gray-200'
-          }`}
-          title="Chat"
-          aria-label="Chat"
-          type="button"
-        >
-          <div className="flex items-center justify-center">
-            <MessageSquare size={18} />
-          </div>
-        </button>
-        <button
           onClick={() => onSelectTab('knowledge')}
           className={`mx-1 h-10 rounded text-xs font-semibold transition-colors ${
             activeTab === 'knowledge'
-              ? 'bg-gray-700 text-white'
+              ? 'bg-gray-700 text-gray-50'
               : 'text-gray-400 hover:bg-gray-800 hover:text-gray-200'
           }`}
           title="Knowledge"
@@ -64,7 +49,7 @@ export const ActivityBar: React.FC<ActivityBarProps> = ({
           onClick={() => onSelectTab('skills')}
           className={`mx-1 h-10 rounded text-xs font-semibold transition-colors ${
             activeTab === 'skills'
-              ? 'bg-gray-700 text-white'
+              ? 'bg-gray-700 text-gray-50'
               : 'text-gray-400 hover:bg-gray-800 hover:text-gray-200'
           }`}
           title="Skills"

@@ -29,7 +29,20 @@ sleep 1
 
 echo "✅ Backend process stopped"
 echo ""
-echo "🚀 Starting backend service..."
+
+cd "$ROOT_DIR"
+
+# Ensure SDK + RAG deps are synced
+echo "� Syncing SDK dependencies..."
+uv sync --extra dev --extra rag --quiet
+
+# Ensure houyi-studio-server is installed (uv sync may uninstall it)
+if ! uv run python -c "import houyi_studio" 2>/dev/null; then
+    echo "📦 Installing houyi-studio-server..."
+    uv pip install -e houyi-studio/server --quiet
+fi
+
+echo "�🚀 Starting backend service..."
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 
@@ -39,13 +52,5 @@ WEB_SEARCH_CACHE_TTL=${WEB_SEARCH_CACHE_TTL:-600}
 WEB_SEARCH_CACHE_MAX_SIZE=${WEB_SEARCH_CACHE_MAX_SIZE:-256}
 WEB_SEARCH_CACHE_LOG_HITS=${WEB_SEARCH_CACHE_LOG_HITS:-1}
 WEB_SEARCH_PROVIDER=${WEB_SEARCH_PROVIDER:-ddg}
-
-cd "$ROOT_DIR"
-
-# Ensure houyi-studio-server is installed (uv sync may uninstall it)
-if ! uv run python -c "import houyi_studio" 2>/dev/null; then
-    echo "📦 Installing houyi-studio-server..."
-    uv pip install -e houyi-studio/server --quiet
-fi
 
 env WEB_SEARCH_CACHE_ENABLED=${WEB_SEARCH_CACHE_ENABLED} WEB_SEARCH_CACHE_TTL=${WEB_SEARCH_CACHE_TTL} WEB_SEARCH_CACHE_MAX_SIZE=${WEB_SEARCH_CACHE_MAX_SIZE} WEB_SEARCH_CACHE_LOG_HITS=${WEB_SEARCH_CACHE_LOG_HITS} WEB_SEARCH_PROVIDER=${WEB_SEARCH_PROVIDER} uv run python -m houyi_studio.server.app

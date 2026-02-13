@@ -2,19 +2,22 @@
 @tailwind components;
 @tailwind utilities;
 
+/* highlight.js theme is imported in main.tsx (JS import) to avoid PostCSS @import ordering issues */
+
+/* Theme variables are defined in themes.css (imported after this file in main.tsx) */
+
 :root {
   font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
   line-height: 1.5;
   font-weight: 400;
-
-  color-scheme: light dark;
-  color: rgba(255, 255, 255, 0.87);
-  background-color: #242424;
-
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+
+  color-scheme: light dark;
+  color: rgb(var(--gray-50) / 1);
+  background-color: rgb(var(--gray-900) / 1);
 }
 
 body {
@@ -51,26 +54,109 @@ body {
   display: none;
 }
 
-/* Custom dark theme scrollbar */
-.custom-scrollbar {
-  scrollbar-width: thin;
-  scrollbar-color: #4b5563 transparent;
-}
-
-.custom-scrollbar::-webkit-scrollbar {
+/* Global scrollbar — adapts to light/dark via color-scheme */
+::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
 
-.custom-scrollbar::-webkit-scrollbar-track {
+::-webkit-scrollbar-track {
   background: transparent;
 }
 
-.custom-scrollbar::-webkit-scrollbar-thumb {
-  background-color: #4b5563;
+::-webkit-scrollbar-thumb {
+  background: rgba(128, 128, 128, 0.3);
   border-radius: 3px;
 }
 
-.custom-scrollbar::-webkit-scrollbar-thumb:hover {
-  background-color: #6b7280;
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(128, 128, 128, 0.5);
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* Firefox scrollbar */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(128, 128, 128, 0.3) transparent;
+}
+
+/* Custom scrollbar (backward compat with main) */
+.custom-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(128, 128, 128, 0.3) transparent;
+}
+
+/* Code block container: uses theme-aware background via --code-bg */
+.hljs-container {
+  background: var(--code-bg, #0d1117);
+}
+.hljs-container > div:first-child {
+  background: var(--code-header-bg, rgba(255,255,255,0.05));
+}
+
+/* Markdown body: prevent horizontal overflow from code/tables */
+.markdown-body {
+  overflow-wrap: break-word;
+  word-break: break-word;
+}
+
+.markdown-body pre {
+  overflow-x: auto;
+  max-width: 100%;
+}
+
+.houyi-message-item {
+  content-visibility: auto;
+  contain: layout paint style;
+  contain-intrinsic-size: auto 120px;
+}
+
+.houyi-message-item--priority {
+  content-visibility: visible;
+  contain: none;
+  contain-intrinsic-size: auto;
+}
+
+.houyi-md-image {
+  display: block;
+  max-width: 100%;
+}
+
+.houyi-md-image--loading {
+  min-height: 180px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.houyi-md-image__img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border-radius: 8px;
+}
+
+.houyi-md-image__img--hidden {
+  visibility: hidden;
+}
+
+/* Typing indicator bounce animation */
+@keyframes typing-bounce {
+  0%, 60%, 100% {
+    transform: translateY(0);
+    opacity: 0.4;
+  }
+  30% {
+    transform: translateY(-4px);
+    opacity: 1;
+  }
+}
+
+/* KaTeX overflow handling */
+.katex-display {
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 2px 0;
 }

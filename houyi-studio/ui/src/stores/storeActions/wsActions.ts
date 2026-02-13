@@ -1,4 +1,3 @@
-import type { AnyServerEvent } from '@/types/websocket';
 import type { ExecutionIR } from '@/types/ir';
 import { ConsoleWebSocket } from '@/utils/websocket';
 import { logger } from '@/utils/logger';
@@ -16,6 +15,19 @@ const normalizeEventType = (eventType: any): string | null => {
 
 export const createWsActions = (set: StoreSet, get: StoreGet) => ({
   connect: (sessionId: string) => {
+    // Guard: if already connected or connecting with the same session, skip
+    // re-creation (happens during HMR re-mounts and StrictMode double-mount)
+    const existing = get().ws;
+    if (existing && get().sessionId === sessionId && (existing.isConnected() || existing.isConnecting())) {
+      console.log('[wsActions] Already connected/connecting with session', sessionId, '— skipping');
+      return;
+    }
+    // Clean up any stale connection before creating a new one
+    if (existing) {
+      existing.disconnect();
+    }
+
+
     const ws = new ConsoleWebSocket(sessionId);
 
     set({ connectionStatus: 'connecting' });
@@ -61,22 +73,28 @@ export const createWsActions = (set: StoreSet, get: StoreGet) => ({
     set({ ws: null, connectionStatus: 'disconnected' });
   },
 
-  handleEvent: (event: AnyServerEvent) => {
+  handleEvent: (event: any) => {
     const eventType = normalizeEventType(event?.event_type);
     console.log('[Store] Received event:', eventType ?? event?.event_type, event);
 
     switch (eventType) {
       case 'plan_created':
       case 'plan_updated':
+        if (!('plan' in event)) {
+          console.warn('[Store] Plan event missing plan payload:', event);
+          break;
+        }
+
         console.log('[Store] Received plan event:', eventType, event.plan);
         const previousPlanId = get().currentPlan?.plan_id;
         const nextPlanId = event.plan?.plan_id;
         const planChanged = Boolean(nextPlanId && previousPlanId && nextPlanId !== previousPlanId);
         {
           const planId = event.plan?.plan_id ? `plan_id=${event.plan.plan_id}` : undefined;
-          const changes = eventType === 'plan_updated' && event.changes?.length
-            ? `changes: ${event.changes.join(', ')}`
-            : undefined;
+          const changes =
+            eventType === 'plan_updated' && 'changes' in event && Array.isArray(event.changes) && event.changes.length
+              ? `changes: ${event.changes.join(', ')}`
+              : undefined;
           const detail = [planId, changes].filter(Boolean).join(' · ');
           get().addActivityLog({
             message: event.event_type === 'plan_created' ? 'Plan created' : 'Plan updated',
@@ -631,8 +649,8 @@ export const createWsActions = (set: StoreSet, get: StoreGet) => ({
           const results = event.results || [];
           const query = event.query || '';
           const modeUsed = event.mode_used || '';
-          const strategiesUsed = event.strategies_used || []; 
-          const quality = event.quality || null; 
+          const strategiesUsed = event.strategies_used || [];
+          const quality = event.quality || null;
           get().setKnowledgeSearchResults(results, query, modeUsed, strategiesUsed, quality);
           console.log('[Store] Knowledge search results:', results.length, 'for query:', query, 'mode:', modeUsed, 'strategies:', strategiesUsed, 'quality:', quality);
         }
@@ -723,6 +741,10 @@ export const createWsActions = (set: StoreSet, get: StoreGet) => ({
 
       case 'chunk_list':
         {
+          if (!('chunks' in event)) {
+            console.warn('[Store] chunk_list event missing chunks payload:', event);
+            break;
+          }
           const chunks = event.chunks || [];
           get().setChunks(chunks);
           console.log('[Store] Received chunks:', chunks.length);
@@ -731,6 +753,10 @@ export const createWsActions = (set: StoreSet, get: StoreGet) => ({
 
       case 'chunk_preview':
         {
+          if (!('chunks' in event)) {
+            console.warn('[Store] chunk_preview event missing chunks payload:', event);
+            break;
+          }
           const previews = event.chunks || [];
           get().setChunkPreviews(previews);
           console.log('[Store] Received chunk previews:', previews.length);

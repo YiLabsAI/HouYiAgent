@@ -32,10 +32,10 @@ export class ConsoleWebSocket {
     console.log('[WebSocket] Attempting to connect to:', wsUrl);
 
     this.ws = new ReconnectingWebSocket(wsUrl, [], {
-      maxRetries: Infinity,
-      reconnectionDelayGrowFactor: 1.5,
-      maxReconnectionDelay: 15000,
-      minReconnectionDelay: 500,
+      maxRetries: 20,
+      reconnectionDelayGrowFactor: 2,
+      maxReconnectionDelay: 30000,
+      minReconnectionDelay: 2000,
     });
 
     this.ws.addEventListener('open', () => {
@@ -165,5 +165,9 @@ export class ConsoleWebSocket {
 
   isConnected(): boolean {
     return this.ws?.readyState === WebSocket.OPEN;
+  }
+
+  isConnecting(): boolean {
+    return this.ws?.readyState === WebSocket.CONNECTING;
   }
 }

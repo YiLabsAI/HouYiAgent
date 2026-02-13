@@ -1,7 +1,9 @@
 import type { Node, Edge } from 'reactflow';
 
+import { DEFAULT_MODEL } from '../../constants/models';
+
 const DEFAULT_LLM_CONFIG = {
-  model: 'deepseek-ai/DeepSeek-V3',
+  model: DEFAULT_MODEL,
   max_tokens: 2000,
   prompt: 'Hello, how can I help you?',
 };

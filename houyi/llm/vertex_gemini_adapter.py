@@ -51,7 +51,7 @@ class GoogleVertexGeminiAdapter(LLMAdapter):
         location = (
             os.getenv("VERTEX_LOCATION") or os.getenv("GOOGLE_CLOUD_LOCATION") or "us-central1"
         )
-        model = os.getenv("VERTEX_GEMINI_MODEL") or "gemini-2.0-flash"
+        model = os.getenv("VERTEX_GEMINI_MODEL") or "gemini-2.5-pro"
         credentials_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
         if not project:
             raise ValueError("VERTEX_PROJECT or GOOGLE_CLOUD_PROJECT must be set")
@@ -67,7 +67,12 @@ class GoogleVertexGeminiAdapter(LLMAdapter):
         max_tokens: int | None = None,
         **kwargs: Any,
     ) -> LLMResponse:
-        from google.genai import types  # type: ignore[attr-defined]
+        try:
+            from google.genai import types  # type: ignore[import-not-found]
+        except ImportError as exc:
+            raise ImportError(
+                "Google GenAI SDK not installed. Install with: pip install google-genai"
+            ) from exc
 
         normalized_messages = self._normalize_messages(messages)
 
@@ -113,7 +118,12 @@ class GoogleVertexGeminiAdapter(LLMAdapter):
         max_tokens: int | None = None,
         **kwargs: Any,
     ) -> AsyncIterator[str]:
-        from google.genai import types  # type: ignore[attr-defined]
+        try:
+            from google.genai import types  # type: ignore[import-not-found]
+        except ImportError as exc:
+            raise ImportError(
+                "Google GenAI SDK not installed. Install with: pip install google-genai"
+            ) from exc
 
         normalized_messages = self._normalize_messages(messages)
 

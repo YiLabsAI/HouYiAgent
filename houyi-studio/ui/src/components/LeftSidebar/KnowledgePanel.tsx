@@ -206,6 +206,8 @@ export const KnowledgePanel: React.FC<KnowledgePanelProps> = ({ onOpenCreateDial
         return { icon: Loader2, color: 'text-yellow-400 animate-spin', label: 'Indexing' };
       case 'ready':
         return { icon: CheckCircle, color: 'text-green-400', label: 'Ready' };
+      case 'degraded':
+        return { icon: AlertCircle, color: 'text-amber-400', label: 'No Embed' };
       case 'error':
         return { icon: AlertCircle, color: 'text-red-400', label: 'Error' };
       default:
@@ -218,7 +220,7 @@ export const KnowledgePanel: React.FC<KnowledgePanelProps> = ({ onOpenCreateDial
   return (
     <div className="p-3 text-xs text-gray-300">
       {/* Header */}
-      <div className="flex items-center justify-between mb-3">
+      <div className="flex items-center justify-between mb-3 shrink-0">
         <div className="text-xs font-semibold text-gray-200">Knowledge Libraries</div>
         <div className="flex gap-1">
           <button
@@ -289,7 +291,7 @@ export const KnowledgePanel: React.FC<KnowledgePanelProps> = ({ onOpenCreateDial
                       {library.description}
                     </div>
                   )}
-                  <div className="flex items-center gap-3 mt-1 text-[10px] text-gray-500">
+                  <div className="flex items-center gap-2 mt-1 text-[10px] text-gray-500 flex-wrap">
                     <div className="flex items-center gap-1" title={statusInfo.label}>
                       <StatusIcon size={10} className={statusInfo.color} />
                       <span className={statusInfo.color}>{statusInfo.label}</span>

@@ -200,6 +200,28 @@ pnpm install
 
 All commands MUST be run inside `.venv` via `uv run` (or through Makefile targets).
 
+### Dependency Profiles
+
+HouYi has multiple dependency profiles for different scenarios. Using the wrong
+profile causes `ModuleNotFoundError` at runtime — the most common source of
+"it worked on main but broke after merge" issues.
+
+| Scenario | What to install | One-liner |
+|----------|----------------|-----------|
+| **SDK development** | Core SDK + dev tools | `make install-dev` |
+| **Console development** | SDK + RAG + Studio server + UI | `make install-all` (single `uv sync --extra dev --extra rag`) |
+| **Run backend only** | SDK + RAG + Studio server | `uv sync --extra dev --extra rag && uv pip install -e houyi-studio/server` |
+| **Run frontend only** | UI node_modules | `cd houyi-studio/ui && pnpm install` |
+| **Unit tests** | SDK + dev tools | `make install-dev && make test` |
+| **Integration tests** | SDK + Studio server | `make install-dev && make test-integration` |
+| **E2E tests** | Full stack + Playwright | `make install-all && pnpm run e2e:install-browsers && make test-e2e` |
+| **PyPI release** | Production deps only | `uv sync && uv build` |
+
+**Key invariant**: `uv sync` manages the root `pyproject.toml` deps but does NOT
+install `houyi-studio/server` (it's a separate package). After every `uv sync`,
+you MUST re-run `uv pip install -e houyi-studio/server` if you need the backend.
+The scripts (`dev.sh`, `restart-backend.sh`) handle this automatically.
+
 ### HouYi Studio Server
 
 **Policy**:
@@ -210,20 +232,25 @@ All commands MUST be run inside `.venv` via `uv run` (or through Makefile target
 **Install (one-time)**:
 
 ```bash
-# From repo root
-uv sync --extra dev
+# From repo root — full setup (recommended)
+make install-all
 
-# Install the Studio server package into the same venv (editable is recommended for development)
+# Or manually:
+uv sync --extra dev --extra rag
 uv pip install -e houyi-studio/server
-
-# Optional: enable and validate LLM model adapters (e.g. OpenAI SDK)
-uv pip install -e "houyi-studio/server[llm]"
+cd houyi-studio/ui && pnpm install --frozen-lockfile
 ```
 
 **Start server (standard)**:
 
 ```bash
-# From repo root
+# Recommended: auto-installs deps if missing
+./scripts/restart-backend.sh
+
+# Or via Makefile (starts backend + frontend via tmux)
+make dev
+
+# Or manually:
 uv run python -m houyi_studio.server.app
 ```
 
@@ -231,8 +258,13 @@ uv run python -m houyi_studio.server.app
 
 ```bash
 # Setup
-make install-dev      # Install all development dependencies
+make install-dev      # Install SDK + dev dependencies
+make install-studio   # Install Studio server + UI deps
+make install-all      # Full setup (SDK + RAG + Studio + UI)
 make setup-hooks      # Setup pre-commit hooks
+
+# Development
+make dev              # Start backend + frontend (tmux)
 
 # Code Quality (use before committing!)
 make quick-check      # Fast checks (ruff + quick tests)
@@ -242,13 +274,30 @@ make lint             # Run all linters
 make lint-fix         # Run linters with auto-fix
 
 # Testing
-make test             # Run all tests
+make test             # Run SDK unit tests
 make test-cov         # Run tests with coverage report
 make test-fast        # Run tests (fail fast)
+make test-integration # Run integration tests (auto-installs studio deps)
+make test-e2e         # Run Playwright e2e tests
 
 # Cleanup
 make clean            # Remove cache and build files
 make help             # Show all available commands
+```
+
+### Post-Merge Checklist
+
+After rebasing or merging branches, MUST run:
+
+```bash
+# 1. Re-sync all deps (merge may have changed pyproject.toml)
+make install-all
+
+# 2. Run full regression
+make test
+
+# 3. Verify backend starts
+./scripts/restart-backend.sh
 ```
 
 ### Manual Commands

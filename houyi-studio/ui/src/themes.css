@@ -1,0 +1,159 @@
+/* -----------------------------------------------------------------------
+ * HouYi Theme System
+ *
+ * Architecture (same pattern as shadcn/ui, Radix Themes, Ant Design):
+ *
+ *   1. Gray scale: 11-step scale (50–950) mapped to Tailwind via CSS vars.
+ *      In DARK themes:  50 = lightest (text)  → 950 = darkest (bg).
+ *      In LIGHT themes: 50 = darkest (text)   → 950 = lightest (bg).
+ *      This inversion lets the same Tailwind classes (bg-gray-900, text-gray-100)
+ *      work correctly in both modes.
+ *
+ *   2. Semantic tokens: --accent, --accent-hover, --code-bg, --code-header-bg.
+ *
+ *   3. Values are space-separated RGB channels (e.g. "24 24 27") so Tailwind
+ *      can inject alpha: rgb(var(--gray-900) / 0.5).
+ *
+ * How to add a new theme:
+ *   - Copy any .theme-* block below.
+ *   - Adjust the hex reference table and RGB values.
+ *   - Register the theme in useThemeStore.ts THEMES array.
+ *
+ * tailwind.config.js maps gray-{50..950} → var(--gray-{50..950}).
+ * ----------------------------------------------------------------------- */
+
+
+/* ==========================================================================
+ * DEFAULT (pre-JS fallback) — Zinc Dark
+ * ========================================================================== */
+:root {
+  /* Hex ref:  #fafafa #f4f4f5 #e4e4e7 #d4d4d8 #a1a1aa #71717a #52525b #3f3f46 #27272a #18181b #09090b */
+  --gray-50:  250 250 250;
+  --gray-100: 244 244 245;
+  --gray-200: 228 228 231;
+  --gray-300: 212 212 216;
+  --gray-400: 161 161 170;
+  --gray-500: 113 113 122;
+  --gray-600: 82  82  91;
+  --gray-700: 63  63  70;
+  --gray-800: 39  39  42;
+  --gray-900: 24  24  27;
+  --gray-950: 9   9   11;
+  --accent:          #3b82f6;
+  --accent-hover:    #2563eb;
+  --code-bg:         #0d1117;
+  --code-header-bg:  rgba(255, 255, 255, 0.05);
+}
+
+
+/* ==========================================================================
+ * DARK — Zinc (same as :root, explicit class for JS toggling)
+ * Hex ref:  #fafafa → #09090b  (Tailwind Zinc)
+ * ========================================================================== */
+.theme-dark {
+  color-scheme: dark;
+  color: rgba(255, 255, 255, 0.87);
+  background-color: #18181b;
+}
+
+
+/* ==========================================================================
+ * LIGHT — GitHub-inspired
+ * Hex ref (inverted: 50=darkest text, 950=lightest bg):
+ *   50  #24292f   primary text
+ *   100 #374151   secondary text
+ *   200 #4b5563   tertiary text
+ *   300 #6b7280   muted / icons
+ *   400 #9ca3af   placeholder
+ *   500 #babfc7   borders
+ *   600 #d1d5db   subtle borders
+ *   700 #e5e7eb   card / input bg
+ *   800 #f1f3f5   surface 1 (sidebar, composer)
+ *   900 #f6f8fa   surface 2 (main area)
+ *   950 #ffffff   base background
+ * ========================================================================== */
+.theme-light {
+  color-scheme: light;
+  color: #24292f;
+  background-color: #f6f8fa;
+  --gray-50:  36  41  47;
+  --gray-100: 55  65  81;
+  --gray-200: 75  85  99;
+  --gray-300: 107 114 128;
+  --gray-400: 156 163 175;
+  --gray-500: 186 191 199;
+  --gray-600: 209 213 219;
+  --gray-700: 229 231 235;
+  --gray-800: 241 243 245;
+  --gray-900: 246 248 250;
+  --gray-950: 255 255 255;
+  --accent:          #2563eb;
+  --accent-hover:    #1d4ed8;
+  --code-bg:         #f6f8fa;
+  --code-header-bg:  #f1f3f5;
+}
+
+
+/* ==========================================================================
+ * NORD — Cool blue-gray (Tailwind coolGray + Nord accents)
+ * Hex ref:
+ *   50  #f9fafb  100 #f3f4f6  200 #e5e7eb  300 #d1d5db
+ *   400 #9ca3af  500 #6b7280  600 #4b5563  700 #374151
+ *   800 #1f2937  900 #111827  950 #030712
+ * ========================================================================== */
+.theme-nord {
+  color-scheme: dark;
+  color: rgba(255, 255, 255, 0.87);
+  background-color: #111827;
+  --gray-50:  249 250 251;
+  --gray-100: 243 244 246;
+  --gray-200: 229 231 235;
+  --gray-300: 209 213 219;
+  --gray-400: 156 163 175;
+  --gray-500: 107 114 128;
+  --gray-600: 75  85  99;
+  --gray-700: 55  65  81;
+  --gray-800: 31  41  55;
+  --gray-900: 17  24  39;
+  --gray-950: 3   7   18;
+  --accent:          #88c0d0;
+  --accent-hover:    #81a1c1;
+  --code-bg:         #0d1117;
+  --code-header-bg:  rgba(255, 255, 255, 0.05);
+}
+
+
+/* ==========================================================================
+ * WARM — Amber / Stone tones
+ * Hex ref:
+ *   50  #faf5f0  100 #f0e8df  200 #ddd2c4  300 #c4b5a3
+ *   400 #a8977f  500 #857562  600 #5c4f42  700 #44392f
+ *   800 #2c2420  900 #1c1917  950 #0f0d0b
+ * ========================================================================== */
+.theme-warm {
+  color-scheme: dark;
+  color: #e7e0d5;
+  background-color: #1c1917;
+  --gray-50:  250 245 240;
+  --gray-100: 240 232 223;
+  --gray-200: 221 210 196;
+  --gray-300: 196 181 163;
+  --gray-400: 168 151 127;
+  --gray-500: 133 117 98;
+  --gray-600: 92  79  66;
+  --gray-700: 68  57  47;
+  --gray-800: 44  36  32;
+  --gray-900: 28  25  23;
+  --gray-950: 15  13  11;
+  --accent:          #f59e0b;
+  --accent-hover:    #d97706;
+  --code-bg:         #1a1412;
+  --code-header-bg:  rgba(255, 255, 255, 0.05);
+}
+
+.theme-switching *,
+.theme-switching *::before,
+.theme-switching *::after {
+  transition: none !important;
+  animation: none !important;
+}

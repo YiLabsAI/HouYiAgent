@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 import json
 from pathlib import Path
 from typing import Any
@@ -21,7 +22,7 @@ class VectorIndex:
     def __init__(
         self,
         dimension: int = 1536,
-        knowledge_dir: str = "knowledge/",
+        knowledge_dir: str | None = None,
         max_elements: int = 100000,
         ef_construction: int = 200,
         M: int = 16,
@@ -54,13 +55,14 @@ class VectorIndex:
             return
 
         try:
-            import hnswlib
+            hnswlib = importlib.import_module("hnswlib")
         except ImportError as err:
             raise ImportError(
                 "hnswlib package required for vector index. Install with: pip install hnswlib"
             ) from err
 
-        self._index = hnswlib.Index(space="cosine", dim=self.dimension)
+        index_cls = hnswlib.Index
+        self._index = index_cls(space="cosine", dim=self.dimension)
         self._index.init_index(
             max_elements=self.max_elements,
             ef_construction=self.ef_construction,

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -78,6 +79,65 @@ class RAGService:
         return []
 
 
+def _detect_embedding_config() -> tuple[Any, str] | tuple[None, str]:
+    """Detect the best available embedding provider from environment.
+
+    Tries providers in order: Gemini/Vertex > OpenAI > local fastembed.
+
+    Returns:
+        (EmbeddingConfig, provider_name) or (None, reason) if none available.
+    """
+    from houyi.rag.config import EmbeddingConfig
+
+    # 1. Check for Vertex/Gemini
+    vertex_project = (
+        os.environ.get("VERTEX_PROJECT")
+        or os.environ.get("GOOGLE_CLOUD_PROJECT")
+        or os.environ.get("GOOGLE_PROJECT_ID")
+    )
+    if not vertex_project:
+        creds_file = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "")
+        if creds_file:
+            try:
+                with open(creds_file) as f:
+                    vertex_project = json.load(f).get("project_id", "")
+            except Exception:
+                pass
+    if vertex_project:
+        try:
+            from google import genai  # noqa: F401
+
+            return EmbeddingConfig(
+                provider="gemini",
+                model="text-embedding-004",
+                dimension=768,
+            ), "gemini"
+        except ImportError:
+            logger.debug("google-genai not installed, trying other providers")
+
+    # 2. OpenAI
+    if os.environ.get("OPENAI_API_KEY"):
+        return EmbeddingConfig(
+            provider="openai",
+            model="text-embedding-3-small",
+            dimension=1536,
+        ), "openai"
+
+    # 3. Local fastembed
+    try:
+        import fastembed  # noqa: F401
+
+        return EmbeddingConfig(
+            provider="local",
+            model="BAAI/bge-small-en-v1.5",
+            dimension=384,
+        ), "local"
+    except ImportError:
+        pass
+
+    return None, "no_provider"
+
+
 class KnowledgeService:
     """Service for managing knowledge libraries and RAG operations."""
 
@@ -122,6 +182,7 @@ class KnowledgeService:
             error_count = sum(1 for d in documents.values() if d.get("status") == "error")
 
             # Fix status if missing or incorrect
+            total_chunks = sum(d.get("chunk_count", 0) for d in documents.values())
             old_status = lib.get("status")
             if doc_count == 0:
                 new_status = "empty"
@@ -129,6 +190,8 @@ class KnowledgeService:
                 new_status = "error"
             elif indexed_count < doc_count and error_count > 0:
                 new_status = "partial"
+            elif total_chunks == 0 and indexed_count > 0:
+                new_status = "degraded"
             else:
                 new_status = "ready"
 
@@ -137,9 +200,12 @@ class KnowledgeService:
                 needs_save = True
                 logger.debug("Migrated library %s status: %s -> %s", lib_id, old_status, new_status)
 
-            # Fix doc_count if incorrect
+            # Fix doc_count and chunk_count if incorrect
             if lib.get("doc_count") != doc_count:
                 lib["doc_count"] = doc_count
+                needs_save = True
+            if lib.get("chunk_count") != total_chunks:
+                lib["chunk_count"] = total_chunks
                 needs_save = True
 
             # Remove duplicate documents by file_path
@@ -313,7 +379,15 @@ class KnowledgeService:
             return None
 
         # Update allowed fields (including metadata for settings)
-        for key in ["name", "description", "mode", "doc_count", "chunk_count", "status", "metadata"]:
+        for key in [
+            "name",
+            "description",
+            "mode",
+            "doc_count",
+            "chunk_count",
+            "status",
+            "metadata",
+        ]:
             if key in updates:
                 if key == "metadata":
                     # Merge metadata instead of replacing
@@ -388,23 +462,35 @@ class KnowledgeService:
             documents = library.get("documents", {})
 
             # Check if config has changed - if so, need full rebuild
+            # Include embedding provider/model/dimension so switching
+            # embedding providers triggers a full re-index.
             metadata = library.get("metadata", {})
+            emb_cfg, _ = _detect_embedding_config()
             current_config = {
                 "chunk_size": metadata.get("chunk_size", 512),
                 "chunk_overlap": metadata.get("chunk_overlap", 50),
                 "chunking_strategy": metadata.get("chunking_strategy", "recursive"),
+                "embedding_provider": emb_cfg.provider if emb_cfg else "none",
+                "embedding_model": emb_cfg.model if emb_cfg else "none",
+                "embedding_dimension": emb_cfg.dimension if emb_cfg else 0,
             }
-            import hashlib
-            import json
-            current_config_hash = hashlib.md5(json.dumps(current_config, sort_keys=True).encode()).hexdigest()[:8]
+            current_config_hash = hashlib.md5(
+                json.dumps(current_config, sort_keys=True).encode()
+            ).hexdigest()[:8]
             saved_config_hash = file_index.get("_config_hash", "")
 
             # If no saved hash (old data) or hash changed, force full rebuild
             if not saved_config_hash:
-                logger.debug("No saved config hash (old data), forcing full rebuild to ensure consistency")
+                logger.debug(
+                    "No saved config hash (old data), forcing full rebuild to ensure consistency"
+                )
                 file_index = {}  # Clear file index to force full rebuild
             elif saved_config_hash != current_config_hash:
-                logger.debug("Config changed (hash %s -> %s), forcing full rebuild", saved_config_hash, current_config_hash)
+                logger.debug(
+                    "Config changed (hash %s -> %s), forcing full rebuild",
+                    saved_config_hash,
+                    current_config_hash,
+                )
                 file_index = {}  # Clear file index to force full rebuild
 
             # Build a map of file_path -> document status for quick lookup
@@ -428,7 +514,9 @@ class KnowledgeService:
                 # Check if document previously failed - always retry failed docs
                 doc_status = doc_status_by_path.get(key)
                 if doc_status in ("error", "pending"):
-                    logger.debug("Retrying previously failed file: %s (status=%s)", fp.name, doc_status)
+                    logger.debug(
+                        "Retrying previously failed file: %s (status=%s)", fp.name, doc_status
+                    )
                     filtered.append(fp)
                     continue
 
@@ -451,7 +539,11 @@ class KnowledgeService:
                         "errors": [],
                     },
                 }
-            logger.debug("Incremental ingest: %d new/modified/failed, %d skipped", len(all_files), files_skipped)
+            logger.debug(
+                "Incremental ingest: %d new/modified/failed, %d skipped",
+                len(all_files),
+                files_skipped,
+            )
 
         total_files = len(all_files)
         logger.debug("Starting ingest for library %s: %d files", library_id, total_files)
@@ -474,54 +566,23 @@ class KnowledgeService:
         try:
             # Try to use RAG service for proper indexing
             from houyi.rag import RAG as HouyiRAG
-            from houyi.rag.config import EmbeddingConfig, RAGConfig
+            from houyi.rag.config import RAGConfig
 
             knowledge_dir = library.get("knowledge_dir", "./knowledge")
 
-            # Try embedding providers in order of preference:
-            # 1. Gemini/Vertex (if configured) - recommended
-            # 2. OpenAI (if API key available)
-            # 3. Local fastembed (requires model download)
-            embedding_config = None
-            import os
-
-            # Check for Vertex/Gemini configuration
-            vertex_project = os.environ.get("VERTEX_PROJECT") or os.environ.get("GOOGLE_CLOUD_PROJECT")
-            if vertex_project:
-                try:
-                    from google import genai  # noqa: F401
-                    embedding_config = EmbeddingConfig(
-                        provider="gemini",
-                        model="text-embedding-004",
-                        dimension=768,
-                    )
-                    logger.debug("Using Gemini embedding (Vertex AI)")
-                except ImportError:
-                    logger.debug("google-genai not installed, trying other providers")
-
-            # Try OpenAI if Gemini not available
-            if embedding_config is None and os.environ.get("OPENAI_API_KEY"):
-                embedding_config = EmbeddingConfig(
-                    provider="openai",
-                    model="text-embedding-3-small",
-                    dimension=1536,
-                )
-                logger.debug("Using OpenAI embedding")
-
-            # Try local embedding as last resort
+            # Detect embedding provider (centralized helper)
+            embedding_config, provider_name = _detect_embedding_config()
             if embedding_config is None:
-                try:
-                    import fastembed  # noqa: F401
-                    embedding_config = EmbeddingConfig(
-                        provider="local",
-                        model="BAAI/bge-small-en-v1.5",
-                        dimension=384,
-                    )
-                    logger.debug("Using local embedding (fastembed)")
-                except ImportError:
-                    # No embedding available - fall back to simple file counting
-                    logger.warning("No embedding provider available, falling back to simple file counting")
-                    raise ImportError("No embedding provider available") from None
+                logger.warning(
+                    "No embedding provider available, falling back to simple file counting"
+                )
+                raise ImportError("No embedding provider available") from None
+            logger.debug("Using %s embedding for ingest", provider_name)
+
+            # Save embedding config to library metadata so search uses the same provider
+            library.setdefault("metadata", {})["embedding_provider"] = embedding_config.provider
+            library["metadata"]["embedding_model"] = embedding_config.model
+            library["metadata"]["embedding_dimension"] = embedding_config.dimension
 
             # Get library-level options from metadata
             lib_metadata = library.get("metadata", {})
@@ -541,7 +602,9 @@ class KnowledgeService:
             for i, file_path in enumerate(all_files):
                 # Check for cancellation
                 if self._cancel_flags.get(library_id):
-                    logger.debug("Ingest cancelled for library %s at file %d/%d", library_id, i, total_files)
+                    logger.debug(
+                        "Ingest cancelled for library %s at file %d/%d", library_id, i, total_files
+                    )
                     self._cancel_flags.pop(library_id, None)
                     library["status"] = "ready" if stats["files_processed"] > 0 else "empty"
                     self._save_libraries()
@@ -719,6 +782,11 @@ class KnowledgeService:
             library["status"] = "error"
         elif indexed_docs < total_docs:
             library["status"] = "partial"  # Some files failed
+        elif total_chunks == 0 and indexed_docs > 0:
+            # Files were "indexed" but no chunks created — embedding provider
+            # was unavailable (fallback mode).  Show degraded instead of ready
+            # so the user knows search quality is limited.
+            library["status"] = "degraded"
         else:
             library["status"] = "ready"
 
@@ -751,16 +819,20 @@ class KnowledgeService:
                 # (This shouldn't happen normally, but just in case)
                 pass
 
-        # Save config hash for detecting config changes on next incremental rebuild
+        # Save config hash for detecting config changes on next incremental rebuild.
+        # Includes embedding provider/model/dimension so switching providers triggers rebuild.
         metadata = library.get("metadata", {})
         current_config = {
             "chunk_size": metadata.get("chunk_size", 512),
             "chunk_overlap": metadata.get("chunk_overlap", 50),
             "chunking_strategy": metadata.get("chunking_strategy", "recursive"),
+            "embedding_provider": metadata.get("embedding_provider", "none"),
+            "embedding_model": metadata.get("embedding_model", "none"),
+            "embedding_dimension": metadata.get("embedding_dimension", 0),
         }
-        import hashlib
-        import json
-        config_hash = hashlib.md5(json.dumps(current_config, sort_keys=True).encode()).hexdigest()[:8]
+        config_hash = hashlib.md5(json.dumps(current_config, sort_keys=True).encode()).hexdigest()[
+            :8
+        ]
         file_index["_config_hash"] = config_hash
 
         library["file_index"] = file_index
@@ -841,58 +913,49 @@ class KnowledgeService:
 
         try:
             # Try to use the RAG service
-            import os
-
             from houyi.rag import RAG as HouyiRAG
             from houyi.rag.config import EmbeddingConfig, GraphConfig, IndexedConfig, RAGConfig
             from houyi.rag.types import RetrievalStrategy
 
-            # Determine embedding config for indexed mode
+            # Determine embedding config for indexed mode.
+            # Prefer the library's saved embedding config (set during ingest)
+            # to guarantee search uses the same provider/model/dimension as indexing.
+            # Fall back to auto-detection if library has no saved config.
             embedding_config = None
             if effective_mode in ("indexed", "auto"):
                 logger.debug("Search mode=%s, checking embedding providers...", effective_mode)
 
-                # Check for Vertex/Gemini configuration
-                vertex_project = os.environ.get("VERTEX_PROJECT") or os.environ.get("GOOGLE_CLOUD_PROJECT")
-                logger.debug("VERTEX_PROJECT=%s, GOOGLE_CLOUD_PROJECT=%s",
-                           os.environ.get("VERTEX_PROJECT"), os.environ.get("GOOGLE_CLOUD_PROJECT"))
-                if vertex_project:
-                    try:
-                        from google import genai  # noqa: F401
-                        embedding_config = EmbeddingConfig(
-                            provider="gemini",
-                            model="text-embedding-004",
-                            dimension=768,
-                        )
-                        logger.debug("Using Gemini embedding for search")
-                    except ImportError:
-                        logger.warning("google-genai not installed for search")
-
-                # Try OpenAI if Gemini not available
-                if embedding_config is None and os.environ.get("OPENAI_API_KEY"):
+                # Try library's saved embedding config first
+                lib_meta = library.get("metadata", {}) if library else {}
+                saved_provider = lib_meta.get("embedding_provider")
+                saved_model = lib_meta.get("embedding_model")
+                saved_dim = lib_meta.get("embedding_dimension")
+                if saved_provider and saved_model and saved_dim:
                     embedding_config = EmbeddingConfig(
-                        provider="openai",
-                        model="text-embedding-3-small",
-                        dimension=1536,
+                        provider=saved_provider,
+                        model=saved_model,
+                        dimension=saved_dim,
                     )
-                    logger.debug("Using OpenAI embedding for search")
-
-                # Try local embedding as last resort
-                if embedding_config is None:
-                    try:
-                        import fastembed  # noqa: F401
-                        embedding_config = EmbeddingConfig(
-                            provider="local",
-                            model="BAAI/bge-small-en-v1.5",
-                            dimension=384,
+                    logger.debug(
+                        "Using library's saved embedding config: %s/%s (dim=%d)",
+                        saved_provider,
+                        saved_model,
+                        saved_dim,
+                    )
+                else:
+                    # Auto-detect from environment
+                    embedding_config, provider_name = _detect_embedding_config()
+                    if embedding_config:
+                        logger.debug("Using auto-detected %s embedding for search", provider_name)
+                    else:
+                        logger.warning(
+                            "No embedding provider for indexed mode, falling back to agentic"
                         )
-                        logger.debug("Using local embedding for search")
-                    except ImportError:
-                        # Fall back to agentic mode if no embedding available
-                        logger.warning("No embedding provider for indexed mode, falling back to agentic")
                         effective_mode = "agentic"
 
-                logger.debug("Final effective_mode=%s, embedding_config=%s", effective_mode, embedding_config)
+                logger.debug(
+                    "Final effective_mode=%s, embedding_config=%s", effective_mode, embedding_config
+                )
 
             # Build indexed config from library metadata
             indexed_config = None
@@ -913,7 +976,9 @@ class KnowledgeService:
                         has_graph = True
                 if strategies:
                     indexed_config = IndexedConfig(strategies=strategies)
-                    logger.debug("Using strategies from library metadata: %s", [s.value for s in strategies])
+                    logger.debug(
+                        "Using strategies from library metadata: %s", [s.value for s in strategies]
+                    )
                 if has_graph:
                     graph_config = GraphConfig(enabled=True)
                     logger.debug("Graph retrieval enabled")
@@ -940,17 +1005,21 @@ class KnowledgeService:
             # Format results
             search_results = []
             for sr in result.search_results:
-                search_results.append({
-                    "chunk_id": sr.chunk_id,
-                    "content": sr.content,
-                    "score": sr.score,
-                    "source": {
-                        "file_path": sr.source.file_path if sr.source else "",
-                        "location": sr.source.location if sr.source else "",
-                        "snippet": sr.source.snippet if sr.source else "",
-                    } if sr.source else None,
-                    "metadata": sr.metadata,
-                })
+                search_results.append(
+                    {
+                        "chunk_id": sr.chunk_id,
+                        "content": sr.content,
+                        "score": sr.score,
+                        "source": {
+                            "file_path": sr.source.file_path if sr.source else "",
+                            "location": sr.source.location if sr.source else "",
+                            "snippet": sr.source.snippet if sr.source else "",
+                        }
+                        if sr.source
+                        else None,
+                        "metadata": sr.metadata,
+                    }
+                )
 
             # v1.1: Extract quality summary
             quality_data = None
@@ -973,8 +1042,12 @@ class KnowledgeService:
                 "library_id": library_id or "",
                 "answer": result.answer,
                 "results": search_results,
-                "mode_used": result.mode_used.value if hasattr(result.mode_used, "value") else str(result.mode_used),
-                "strategies_used": [s.value if hasattr(s, "value") else str(s) for s in result.strategies_used],
+                "mode_used": result.mode_used.value
+                if hasattr(result.mode_used, "value")
+                else str(result.mode_used),
+                "strategies_used": [
+                    s.value if hasattr(s, "value") else str(s) for s in result.strategies_used
+                ],
                 "confidence": result.confidence,
                 "total_results": len(search_results),
                 "metadata": result.metadata,
@@ -1053,17 +1126,19 @@ class KnowledgeService:
                                 snippet = content[start:end].strip()
                                 break
 
-                        results.append({
-                            "chunk_id": f"chunk_{file_path.stem}_{len(results)}",
-                            "content": content[:500] if len(content) > 500 else content,
-                            "score": score,
-                            "source": {
-                                "file_path": str(file_path),
-                                "location": "",
-                                "snippet": snippet,
-                            },
-                            "metadata": {"file_name": file_path.name},
-                        })
+                        results.append(
+                            {
+                                "chunk_id": f"chunk_{file_path.stem}_{len(results)}",
+                                "content": content[:500] if len(content) > 500 else content,
+                                "score": score,
+                                "source": {
+                                    "file_path": str(file_path),
+                                    "location": "",
+                                    "snippet": snippet,
+                                },
+                                "metadata": {"file_name": file_path.name},
+                            }
+                        )
 
                 except Exception as e:
                     logger.debug("Failed to read file %s: %s", file_path, e)
@@ -1352,7 +1427,8 @@ class KnowledgeService:
         chunks = []
         if strategy == "sentence":
             import re
-            sentences = re.split(r'(?<=[.!?])\s+', content)
+
+            sentences = re.split(r"(?<=[.!?])\s+", content)
             current = ""
             for sentence in sentences:
                 if len(current) + len(sentence) <= chunk_size:

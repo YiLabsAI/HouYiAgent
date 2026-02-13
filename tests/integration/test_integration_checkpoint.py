@@ -10,6 +10,8 @@ import time
 
 import websockets
 
+from houyi.llm.models import DEFAULT_MODEL
+
 
 async def test_checkpoint_integration():
     """Test complete checkpoint workflow via WebSocket."""
@@ -36,7 +38,7 @@ async def test_checkpoint_integration():
                                 "node_type": "llm",
                                 "config": {
                                     "prompt": "Say hello in one sentence",
-                                    "model": "deepseek-ai/DeepSeek-V3",
+                                    "model": DEFAULT_MODEL,
                                 },
                                 "inputs": {},
                                 "position": {"x": 100, "y": 100},

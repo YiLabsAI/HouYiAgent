@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 
 from houyi.core.skill import ExecutionMode, SkillSpec
 from houyi.core.skill.hooks import HookEvent, HookType, SkillHook
+from houyi.rag.config import _default_knowledge_dir
 
 
 class Stats(BaseModel):
@@ -42,8 +43,8 @@ class KBAnalyzeInput(BaseModel):
     """Input schema for knowledge base analyze."""
 
     knowledge_dir: str = Field(
-        default="knowledge/",
-        description="Knowledge base root directory",
+        default_factory=_default_knowledge_dir,
+        description="Knowledge base root directory (reads RAG_KNOWLEDGE_DIR env var)",
     )
     analysis_type: str = Field(
         default="full",

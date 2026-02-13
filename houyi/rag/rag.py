@@ -64,7 +64,7 @@ class RAG:
 
     def __init__(
         self,
-        knowledge_dir: str | RAGConfig = "knowledge/",
+        knowledge_dir: str | RAGConfig | None = None,
         *,
         config: RAGConfig | None = None,
         mode: str | RAGMode = RAGMode.AUTO,
@@ -134,13 +134,16 @@ class RAG:
                 strategy_list = [RetrievalStrategy(s) for s in strategies]
 
             if mode == RAGMode.AGENTIC:
-                self._config = RAGConfig.for_agentic(knowledge_dir, **config_kwargs)
+                self._config = RAGConfig.for_agentic(knowledge_dir=knowledge_dir, **config_kwargs)
             elif mode == RAGMode.INDEXED:
                 self._config = RAGConfig.for_indexed(
-                    knowledge_dir, strategies=strategy_list, **config_kwargs
+                    knowledge_dir=knowledge_dir, strategies=strategy_list, **config_kwargs
                 )
             else:
-                self._config = RAGConfig(mode=mode, knowledge_dir=knowledge_dir, **config_kwargs)
+                kw: dict[str, Any] = {"mode": mode, **config_kwargs}
+                if knowledge_dir is not None:
+                    kw["knowledge_dir"] = knowledge_dir
+                self._config = RAGConfig(**kw)
 
         self._agent = agent
         self._llm_adapter = _llm_adapter
@@ -162,19 +165,27 @@ class RAG:
         Returns:
             LLMAdapter instance or None if creation fails
         """
+        from houyi.llm.models import (
+            CLAUDE_35_HAIKU,
+            GPT_4O_MINI,
+            PROVIDER_ANTHROPIC,
+            PROVIDER_OPENAI,
+            PROVIDER_VERTEX,
+        )
+
         try:
-            if provider == "openai":
+            if provider == PROVIDER_OPENAI:
                 from houyi.llm.openai_adapter import OpenAIAdapter
 
-                return OpenAIAdapter(model=model or "gpt-4o-mini")
-            elif provider == "anthropic":
+                return OpenAIAdapter(model=model or GPT_4O_MINI)
+            elif provider == PROVIDER_ANTHROPIC:
                 from houyi.llm.anthropic_adapter import AnthropicAdapter
 
-                return AnthropicAdapter(model=model or "claude-3-haiku-20240307")
-            elif provider == "vertex":
-                from houyi.llm.vertex_gemini_adapter import VertexGeminiAdapter
+                return AnthropicAdapter(model=model or CLAUDE_35_HAIKU)
+            elif provider == PROVIDER_VERTEX:
+                from houyi.llm.vertex_gemini_adapter import GoogleVertexGeminiAdapter
 
-                return VertexGeminiAdapter(model=model or "gemini-1.5-flash")
+                return GoogleVertexGeminiAdapter.from_env()
             else:
                 logger.warning("Unknown LLM provider: %s", provider)
                 return None
@@ -463,7 +474,7 @@ def _iter_files(directory: str) -> Iterator[str]:
 
 async def search(
     query: str,
-    knowledge_dir: str = "knowledge/",
+    knowledge_dir: str | None = None,
     mode: str = "auto",
     llm: str | None = None,
     **kwargs: Any,

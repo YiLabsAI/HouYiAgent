@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 
 from houyi.core.skill import ExecutionMode, SkillSpec
 from houyi.core.skill.hooks import HookEvent, HookType, SkillHook
+from houyi.rag.config import _default_knowledge_dir
 
 
 class KBSearchInput(BaseModel):
@@ -15,8 +16,8 @@ class KBSearchInput(BaseModel):
 
     query: str = Field(..., description="User query to search in knowledge base")
     knowledge_dir: str = Field(
-        default="knowledge/",
-        description="Root directory of the knowledge base",
+        default_factory=_default_knowledge_dir,
+        description="Root directory of the knowledge base (reads RAG_KNOWLEDGE_DIR env var)",
     )
     mode: str = Field(
         default="auto",

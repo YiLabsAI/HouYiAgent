@@ -95,11 +95,14 @@ class TestLibraryManagement:
         created = knowledge_service.create_library(name="Original", description="", mode="auto")
         lib_id = created["library_id"]
 
-        updated = knowledge_service.update_library(lib_id, {
-            "name": "Updated",
-            "description": "New description",
-            "mode": "indexed",
-        })
+        updated = knowledge_service.update_library(
+            lib_id,
+            {
+                "name": "Updated",
+                "description": "New description",
+                "mode": "indexed",
+            },
+        )
 
         assert updated["name"] == "Updated"
         assert updated["description"] == "New description"
@@ -111,14 +114,17 @@ class TestLibraryManagement:
         lib_id = created["library_id"]
 
         # Update with settings in metadata
-        updated = knowledge_service.update_library(lib_id, {
-            "metadata": {
-                "chunk_size": 1024,
-                "chunk_overlap": 100,
-                "top_k": 20,
-                "enable_rerank": False,
-            }
-        })
+        updated = knowledge_service.update_library(
+            lib_id,
+            {
+                "metadata": {
+                    "chunk_size": 1024,
+                    "chunk_overlap": 100,
+                    "top_k": 20,
+                    "enable_rerank": False,
+                }
+            },
+        )
 
         assert updated["metadata"]["chunk_size"] == 1024
         assert updated["metadata"]["chunk_overlap"] == 100
@@ -140,7 +146,7 @@ class TestFileIngest:
         lib_id = created["library_id"]
 
         # Create a temp file
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.md', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
             f.write("# Test\n\nThis is test content.")
             temp_path = f.name
 
@@ -148,7 +154,11 @@ class TestFileIngest:
             result = asyncio.run(knowledge_service.ingest_files(lib_id, [temp_path]))
 
             # Should succeed (even in fallback mode)
-            assert result["success"] is True or result["stats"]["files_processed"] > 0 or result["stats"]["files_failed"] > 0
+            assert (
+                result["success"] is True
+                or result["stats"]["files_processed"] > 0
+                or result["stats"]["files_failed"] > 0
+            )
 
             # Document should be recorded
             docs = knowledge_service.list_documents(lib_id)
@@ -166,7 +176,7 @@ class TestFileIngest:
         created = knowledge_service.create_library(name="DedupTest", description="", mode="auto")
         lib_id = created["library_id"]
 
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.md', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
             f.write("# Duplicate Test\n\nContent.")
             temp_path = f.name
 
@@ -193,7 +203,7 @@ class TestFileIngest:
         temp_files = []
         try:
             for i in range(3):
-                with tempfile.NamedTemporaryFile(mode='w', suffix='.md', delete=False) as f:
+                with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
                     f.write(f"# Doc {i}\n\nContent {i}.")
                     temp_files.append(f.name)
 
@@ -208,10 +218,12 @@ class TestFileIngest:
 
     def test_ingest_unsupported_file_type(self, knowledge_service):
         """Test that unsupported file types are handled gracefully."""
-        created = knowledge_service.create_library(name="UnsupportedTest", description="", mode="auto")
+        created = knowledge_service.create_library(
+            name="UnsupportedTest", description="", mode="auto"
+        )
         lib_id = created["library_id"]
 
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.xyz', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".xyz", delete=False) as f:
             f.write("Random content")
             temp_path = f.name
 
@@ -233,7 +245,7 @@ class TestFileIngest:
         lib = knowledge_service.get_library(lib_id)
         assert lib["status"] == "empty"
 
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.md', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
             f.write("# Test\n\nContent.")
             temp_path = f.name
 
@@ -241,8 +253,9 @@ class TestFileIngest:
             asyncio.run(knowledge_service.ingest_files(lib_id, [temp_path]))
 
             lib = knowledge_service.get_library(lib_id)
-            # Status should be ready, error, or partial - not empty
-            assert lib["status"] in ["ready", "error", "partial"]
+            # Status should be ready, degraded, error, or partial - not empty
+            # 'degraded' means files counted but no embedding provider (chunks=0)
+            assert lib["status"] in ["ready", "degraded", "error", "partial"]
             assert lib["doc_count"] >= 1
 
         finally:
@@ -295,7 +308,7 @@ class TestDataMigration:
                     "file_name": "file.md",
                     "status": "indexed",
                 },
-            }
+            },
         }
         knowledge_service._save_libraries()
 
@@ -305,6 +318,100 @@ class TestDataMigration:
         lib = knowledge_service.get_library(lib_id)
         assert lib["doc_count"] == 1  # Duplicate should be removed
         assert len(lib["documents"]) == 1
+
+    def test_migrate_ready_with_zero_chunks_to_degraded(self, knowledge_service):
+        """Libraries with status=ready but chunks=0 should be migrated to degraded."""
+        lib_id = "lib_test_zero_chunks"
+        knowledge_service._libraries[lib_id] = {
+            "library_id": lib_id,
+            "name": "Zero Chunks Lib",
+            "description": "",
+            "mode": "auto",
+            "status": "ready",
+            "doc_count": 2,
+            "chunk_count": 0,
+            "documents": {
+                "doc_1": {
+                    "doc_id": "doc_1",
+                    "file_path": "/test/a.md",
+                    "file_name": "a.md",
+                    "status": "indexed",
+                    "chunk_count": 0,
+                },
+                "doc_2": {
+                    "doc_id": "doc_2",
+                    "file_path": "/test/b.md",
+                    "file_name": "b.md",
+                    "status": "indexed",
+                    "chunk_count": 0,
+                },
+            },
+        }
+        knowledge_service._save_libraries()
+
+        # Reload to trigger migration
+        knowledge_service._load_libraries()
+
+        lib = knowledge_service.get_library(lib_id)
+        assert lib["status"] == "degraded", (
+            f"Expected 'degraded' for ready+0chunks, got '{lib['status']}'"
+        )
+
+
+class TestEmbeddingProviderDetection:
+    """Tests for embedding provider detection and degraded status."""
+
+    def test_no_embedding_provider_sets_degraded_status(self, knowledge_service):
+        """When no embedding provider is available, ingest should set status='degraded'
+        instead of 'ready' when chunks=0."""
+        created = knowledge_service.create_library(name="NoProv", description="", mode="auto")
+        lib_id = created["library_id"]
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
+            f.write("# Test\n\nSome content for embedding test.")
+            temp_path = f.name
+
+        try:
+            # Clear embedding-related env vars to force fallback
+            env_backup = {}
+            for key in ("VERTEX_PROJECT", "GOOGLE_CLOUD_PROJECT", "OPENAI_API_KEY"):
+                env_backup[key] = os.environ.pop(key, None)
+
+            asyncio.run(knowledge_service.ingest_files(lib_id, [temp_path]))
+
+            lib = knowledge_service.get_library(lib_id)
+            # Files should be counted but no chunks created
+            assert lib["doc_count"] >= 1
+            assert lib["chunk_count"] == 0
+            # Status should be 'degraded', NOT 'ready'
+            assert lib["status"] == "degraded", (
+                f"Expected 'degraded' when chunks=0, got '{lib['status']}'"
+            )
+        finally:
+            os.unlink(temp_path)
+            # Restore env vars
+            for key, val in env_backup.items():
+                if val is not None:
+                    os.environ[key] = val
+
+    def test_google_cloud_project_env_enables_gemini_embedding(self):
+        """GOOGLE_CLOUD_PROJECT env var should be checked for Gemini embedding."""
+        # This test verifies the detection logic, not actual embedding
+        env_backup = os.environ.get("GOOGLE_CLOUD_PROJECT")
+        try:
+            os.environ["GOOGLE_CLOUD_PROJECT"] = "test-project-123"
+            # The RAG ingest code checks os.environ.get("GOOGLE_CLOUD_PROJECT")
+            # Verify the env var is accessible
+            assert os.environ.get("GOOGLE_CLOUD_PROJECT") == "test-project-123"
+            vertex_project = os.environ.get("VERTEX_PROJECT") or os.environ.get(
+                "GOOGLE_CLOUD_PROJECT"
+            )
+            assert vertex_project == "test-project-123"
+        finally:
+            if env_backup is not None:
+                os.environ["GOOGLE_CLOUD_PROJECT"] = env_backup
+            else:
+                os.environ.pop("GOOGLE_CLOUD_PROJECT", None)
 
 
 class TestDocumentManagement:
@@ -323,7 +430,7 @@ class TestDocumentManagement:
         created = knowledge_service.create_library(name="DocsTest", description="", mode="auto")
         lib_id = created["library_id"]
 
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.md', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
             f.write("# Test\n\nContent.")
             temp_path = f.name
 

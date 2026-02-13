@@ -20,7 +20,7 @@ class SparseIndex:
 
     def __init__(
         self,
-        knowledge_dir: str = "knowledge/",
+        knowledge_dir: str | None = None,
         k1: float = 1.5,
         b: float = 0.75,
     ) -> None:

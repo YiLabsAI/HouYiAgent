@@ -17,8 +17,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from houyi.core.skill_registry import DEFAULT_SKILL_REGISTRY
+from houyi.llm.models import DEFAULT_MODEL
 from houyi.protocol.ir import ExecutionStatus, PlanIR
 
+from .chat.chat_api import register_chat_routes
+from .chat.chat_service import ChatService
+from .chat.json_store import JsonStore
+from .chat.settings_store import SettingsStore
 from .commands import (
     AbortCommand,
     ClientCommand,
@@ -242,6 +247,24 @@ def _apply_plan_patches(current_plan: PlanIR, patches: list[PlanPatch]) -> bool:
 async def lifespan(app: FastAPI):
     get_execution_engine()
     register_console_skills()
+
+    # Initialize Chat subsystem
+    chat_data_dir = os.getenv("HOUYI_CHAT_DATA_DIR", "data/conversations")
+    settings_path = os.getenv("HOUYI_CHAT_SETTINGS_PATH", "data/settings.json")
+    json_store = JsonStore(data_dir=chat_data_dir)
+    settings_store = SettingsStore(settings_path=settings_path)
+    chat_service = ChatService(
+        json_store=json_store,
+        default_model=os.getenv("DEEPSEEK_MODEL", DEFAULT_MODEL),
+        default_system_instructions=os.getenv("HOUYI_CHAT_SYSTEM_PROMPT", ""),
+        settings_store=settings_store,
+    )
+    chat_router = register_chat_routes(chat_service, settings_store=settings_store)
+    app.include_router(chat_router)
+    logger.info(
+        "Chat subsystem initialized (data_dir=%s, settings=%s)", chat_data_dir, settings_path
+    )
+
     logger.info("=" * 60)
     logger.info("HouYi Console Server Starting - %s", datetime.now())
     logger.info("Logging level: %s", LOG_LEVEL)
@@ -266,6 +289,7 @@ async def lifespan(app: FastAPI):
         # Auto-detect project_id from service account credentials file
         try:
             import json
+
             with open(google_creds_file) as f:
                 creds = json.load(f)
                 google_project = creds.get("project_id", "")
@@ -274,6 +298,10 @@ async def lifespan(app: FastAPI):
 
     if google_project:
         logger.info("  Google Project: ✓ %s", google_project)
+        # Ensure GOOGLE_CLOUD_PROJECT is set so downstream services (RAG
+        # embedding, etc.) can detect Vertex AI / Gemini availability.
+        if not os.environ.get("GOOGLE_CLOUD_PROJECT"):
+            os.environ["GOOGLE_CLOUD_PROJECT"] = google_project
     else:
         logger.info("  Google Project: ✗ Not configured")
 
@@ -283,7 +311,7 @@ async def lifespan(app: FastAPI):
     else:
         logger.info("  Google Credentials: ✗ Not set")
 
-    logger.info("  Gemini Model: %s", os.getenv("GEMINI_MODEL", "gemini-1.5-pro"))
+    logger.info("  Gemini Model: %s", os.getenv("GEMINI_MODEL", "gemini-2.5-pro"))
     logger.info("=" * 60)
     yield
 
@@ -424,9 +452,9 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str) -> None:
       4. On disconnect, server waits 15s for reconnect before aborting executions.
     """
     engine = get_execution_engine()
-    logger.info("WebSocket connection attempt: session=%s", session_id)
+    logger.debug("WebSocket connection attempt: session=%s", session_id)
     await connection_manager.connect(websocket, session_id)
-    logger.info("WebSocket connected: session=%s", session_id)
+    logger.debug("WebSocket connected: session=%s", session_id)
 
     # --- Restore session state for reconnecting clients ---
     # Wrap in try/except: the client may disconnect during this phase (e.g. during
@@ -473,7 +501,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str) -> None:
                 await connection_manager.send_event(session_id, span_event)
     except (RuntimeError, WebSocketDisconnect):
         # Client already gone — clean up and exit (heartbeat not started yet)
-        logger.info("Client disconnected during session restore: session=%s", session_id)
+        logger.debug("Client disconnected during session restore: session=%s", session_id)
         connection_manager.disconnect(websocket)
         return
 
@@ -532,28 +560,34 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str) -> None:
                 logger.error("Error handling command: %s", e, exc_info=True)
 
     except WebSocketDisconnect:
-        logger.info("WebSocket disconnected: session=%s", session_id)
+        logger.debug("WebSocket disconnected: session=%s", session_id)
 
     finally:
         heartbeat_task.cancel()
         connection_manager.disconnect(websocket)
         if connection_manager.get_session_count(session_id) == 0:
-            # Grace period: allow ReconnectingWebSocket to reconnect with same session ID
-            logger.info(
-                "No active connections for session=%s, waiting %ds for reconnect",
-                session_id,
-                _DISCONNECT_GRACE_S,
+            # Check if this session has any running executions worth waiting for
+            has_running = any(
+                e.status == ExecutionStatus.RUNNING and e.metadata.get("session_id") == session_id
+                for e in engine.execution_store.executions.values()
             )
-            await asyncio.sleep(_DISCONNECT_GRACE_S)
-            if connection_manager.get_session_count(session_id) == 0:
+            if has_running:
+                # Grace period: allow ReconnectingWebSocket to reconnect
                 logger.info(
-                    "No reconnection after grace period, aborting executions: session=%s",
+                    "Session disconnected with running executions, waiting %ds for reconnect: session=%s",
+                    _DISCONNECT_GRACE_S,
                     session_id,
                 )
-                await execution_engine.abort_session_executions(session_id)
-                engine.observation_service.clear_session_buffer(session_id)
+                await asyncio.sleep(_DISCONNECT_GRACE_S)
+                if connection_manager.get_session_count(session_id) == 0:
+                    logger.info("No reconnection, aborting executions: session=%s", session_id)
+                    await execution_engine.abort_session_executions(session_id)
+                else:
+                    logger.info("Client reconnected during grace period: session=%s", session_id)
             else:
-                logger.info("Client reconnected during grace period: session=%s", session_id)
+                # No running executions — clean up immediately, no grace period needed
+                logger.debug("Session disconnected (no running executions): session=%s", session_id)
+            engine.observation_service.clear_session_buffer(session_id)
 
 
 def parse_command(data: dict) -> ClientCommand | None:
@@ -741,7 +775,9 @@ async def handle_command(command: ClientCommand | dict, session_id: str) -> None
         # ====================================================================
         # Knowledge Base Commands
         # ====================================================================
-        elif isinstance(command, dict) and command.get("command_type") == "list_knowledge_libraries":
+        elif (
+            isinstance(command, dict) and command.get("command_type") == "list_knowledge_libraries"
+        ):
             logger.debug("=== List knowledge libraries command received ===")
             knowledge_service = get_knowledge_service()
             libraries = knowledge_service.list_libraries()
@@ -756,7 +792,9 @@ async def handle_command(command: ClientCommand | dict, session_id: str) -> None
             )
             await connection_manager.send_event(session_id, event)
 
-        elif isinstance(command, dict) and command.get("command_type") == "create_knowledge_library":
+        elif (
+            isinstance(command, dict) and command.get("command_type") == "create_knowledge_library"
+        ):
             logger.debug("=== Create knowledge library command received ===")
             knowledge_service = get_knowledge_service()
 
@@ -781,7 +819,11 @@ async def handle_command(command: ClientCommand | dict, session_id: str) -> None
                 knowledge_dir=knowledge_dir,
                 metadata=metadata,
             )
-            logger.info("Created knowledge library: %s with metadata: %s", library.get("library_id"), metadata)
+            logger.info(
+                "Created knowledge library: %s with metadata: %s",
+                library.get("library_id"),
+                metadata,
+            )
 
             from .events import KnowledgeLibraryCreatedEvent
 
@@ -792,7 +834,9 @@ async def handle_command(command: ClientCommand | dict, session_id: str) -> None
             )
             await connection_manager.send_event(session_id, event)
 
-        elif isinstance(command, dict) and command.get("command_type") == "delete_knowledge_library":
+        elif (
+            isinstance(command, dict) and command.get("command_type") == "delete_knowledge_library"
+        ):
             logger.debug("=== Delete knowledge library command received ===")
             knowledge_service = get_knowledge_service()
 
@@ -820,7 +864,9 @@ async def handle_command(command: ClientCommand | dict, session_id: str) -> None
                     )
                     await connection_manager.send_event(session_id, event)
 
-        elif isinstance(command, dict) and command.get("command_type") == "update_knowledge_library":
+        elif (
+            isinstance(command, dict) and command.get("command_type") == "update_knowledge_library"
+        ):
             logger.debug("=== Update knowledge library command received ===")
             knowledge_service = get_knowledge_service()
 
@@ -965,7 +1011,9 @@ async def handle_command(command: ClientCommand | dict, session_id: str) -> None
                     library_id=library_id,
                     success=result.get("success", False),
                     stats=result.get("stats", {}),
-                    message=result.get("error", "") if not result.get("success") else "Ingest complete",
+                    message=result.get("error", "")
+                    if not result.get("success")
+                    else "Ingest complete",
                 )
                 await connection_manager.send_event(session_id, event)
 
@@ -1481,7 +1529,7 @@ if __name__ == "__main__":
     project_root = server_dir.parent.parent  # project root
     reload_dirs = [
         str(server_dir / "houyi_studio"),  # houyi-studio/server/houyi_studio/
-        str(project_root / "houyi"),        # houyi/ (core library)
+        str(project_root / "houyi"),  # houyi/ (core library)
     ]
 
     uvicorn.run(

@@ -162,13 +162,6 @@ Return ONLY a JSON array: ["term1", "term2", ...]"""
         """Simple rule-based keyword extraction as fallback."""
         # Remove common stop words and split
         stop_words = {
-            "的",
-            "是",
-            "在",
-            "了",
-            "和",
-            "与",
-            "或",
             "a",
             "an",
             "the",

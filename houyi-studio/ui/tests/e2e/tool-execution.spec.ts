@@ -1,6 +1,7 @@
 import fs from 'fs';
 import { test, expect } from '@playwright/test';
 import type { Page } from '@playwright/test';
+import { DEFAULT_MODEL } from '../../src/constants/models';
 
 type E2EConfig = {
   disableLiveWeather?: boolean;
@@ -921,7 +922,7 @@ test('Timeline tab shows spans after execution with span_update events', async (
           start_time: now,
           end_time: now + 1.5,
           node_id: llmNode.id,
-          model: 'deepseek-ai/DeepSeek-V3',
+          model: DEFAULT_MODEL,
           tokens_input: 100,
           tokens_output: 50,
           attributes: {},
