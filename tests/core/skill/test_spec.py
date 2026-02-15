@@ -444,7 +444,7 @@ class TestSkillSpecExport:
             export_path = Path(tmpdir) / "exported_skill.md"
             spec.export_skill_md(str(export_path))
 
-            content = export_path.read_text()
+            content = export_path.read_text(encoding="utf-8")
 
             assert "# export-skill" in content
             assert "## Description" in content
@@ -476,7 +476,7 @@ class TestSkillSpecExport:
                 metadata={"language": "Python", "runtime": "async"},
             )
 
-            content = export_path.read_text()
+            content = export_path.read_text(encoding="utf-8")
 
             assert "## Implementation" in content
             assert "Language: Python" in content
@@ -507,7 +507,7 @@ class TestSkillSpecExport:
             export_path = Path(tmpdir) / "example_skill.md"
             spec.export_skill_md(str(export_path), examples=examples)
 
-            content = export_path.read_text()
+            content = export_path.read_text(encoding="utf-8")
 
             assert "## Examples" in content
             assert "### Example 1" in content
@@ -535,7 +535,7 @@ class TestSkillSpecExport:
             export_path = Path(tmpdir) / "constrained_skill.md"
             spec.export_skill_md(str(export_path))
 
-            content = export_path.read_text()
+            content = export_path.read_text(encoding="utf-8")
 
             assert "## Constraints" in content
             assert "Timeout: 30" in content
@@ -562,7 +562,7 @@ class TestSkillSpecExport:
             spec.export_skill_md(str(export_path))
 
             assert export_path.exists()
-            assert "# nested-skill" in export_path.read_text()
+            assert "# nested-skill" in export_path.read_text(encoding="utf-8")
 
 
 class TestSkillSpecSimpleSkillExtensions:

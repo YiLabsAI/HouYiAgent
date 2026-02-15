@@ -26,6 +26,8 @@ env/
 ENV/
 .venv
 
+*.env
+
 # Testing
 .pytest_cache/
 .coverage
@@ -52,19 +54,23 @@ dmypy.json
 # Ruff
 .ruff_cache/
 
-.env
-tests/.env
 service-account-key.json
 *-credentials.json
 .stash-archive/
+
 data/
+reports/
+datasets/
+
+# mkdocs documentation
+/site
+
 docs/console/
-
-
-docs/design/archive/
 docs/design/
 docs/verification/
 docs/progress/
+
+
 RELEASE_*.md
 Design.md
 ROADMAP.md
@@ -73,11 +79,9 @@ CODE_REVIEW*.md
 *backup*
 *bak*
 
-reports/
-datasets/
-
-# Claude Code memory (personal, not shared)
 CLAUDE.md
+
+node_modules/
 
 # Houyi runtime data
 .houyi/

@@ -134,7 +134,7 @@ class SkillSpec(BaseModel):
             SkillSpec instance (executor needs to be bound separately)
         """
         path_obj = Path(path)
-        content = path_obj.read_text()
+        content = path_obj.read_text(encoding="utf-8")
 
         # Auto-detect skill directory
         detected_skill_dir: Path | None = None

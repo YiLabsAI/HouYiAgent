@@ -310,7 +310,7 @@ class SkillManifest:
         if not path.exists():
             raise FileNotFoundError(f"Manifest not found: {path}")
 
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             data = json.load(f)
 
         manifest = cls.from_dict(data)
