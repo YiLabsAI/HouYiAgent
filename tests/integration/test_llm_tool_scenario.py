@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 
 from houyi.core.skill_registry import DEFAULT_SKILL_REGISTRY
 from houyi.execution.skill_executor import SkillExecutor
-from houyi.execution.tool_call_runner_service import ToolCallRunnerService
+from houyi.execution.tool_call_runner import ToolCallRunner
 from houyi.llm.base import LLMResponse
 from houyi.web_search.skill import build_web_search_skill
 
@@ -107,16 +107,16 @@ async def test_llm_tool_scenario_weather_and_web_search(
     _load_console_e2e_tools()
     DEFAULT_SKILL_REGISTRY.register(build_web_search_skill(), overwrite=True)
 
-    service = ToolCallRunnerService()
     tool_names = ["get_date", "get_location", "get_weather_live", "web_search"]
-    skills = service.select_skills(tool_names)
+    skills = [s for name in tool_names if (s := DEFAULT_SKILL_REGISTRY.get(name)) is not None]
     tools = DEFAULT_SKILL_REGISTRY.to_tool_schemas()
 
     tomorrow = (date.today() + timedelta(days=1)).isoformat()
     adapter = ScenarioAdapter(tomorrow)
     executor = SkillExecutor(max_retries=1, timeout=30)
+    runner = ToolCallRunner()
 
-    response, trace = await service.run_tool_calls(
+    response, trace = await runner.run(
         adapter=adapter,
         messages=[
             {

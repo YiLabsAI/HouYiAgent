@@ -168,10 +168,8 @@ test('console UI loads core panels', async ({ page }) => {
 
   await expect(page.getByRole('heading', { name: 'Workflow', exact: true })).toBeVisible();
   await expect(page.getByLabel('Timeline')).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Compare' })).toBeVisible();
-
-  await page.getByRole('button', { name: 'Compare' }).click();
-  await expect(page.getByText('Need at least 2 checkpoints to compare')).toBeVisible();
+  await page.locator('button.px-4:has-text("Checkpoints")').first().click();
+  await expect(page.getByText('No checkpoints created yet')).toBeVisible();
 });
 
 test('smoke: load position_test workflow and run end-to-end', async ({ page }) => {

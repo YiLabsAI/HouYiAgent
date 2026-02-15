@@ -12,9 +12,13 @@ import { SearchModal } from './components/Chat/SearchModal';
 import { BookmarkModal } from './components/Chat/BookmarkModal';
 import { ToastContainer } from './components/Toast';
 import { RunSettingsDrawer } from './components/RunSettingsDrawer';
+import { CenterStage } from './components/CenterStage';
 import { useConsoleStore } from './stores/useConsoleStore';
 import { useThemeStore } from './stores/useThemeStore';
 import { ObsFullView } from './components/panels/ObsFullView';
+import { useSkillsLogic } from './components/LeftSidebar/useSkillsLogic';
+import { SkillConfigDialog } from './components/panels/SkillConfigDialog';
+import type { SkillConfigValues } from './components/LeftSidebar/useSkillsLogic';
 
 // Module-level session ID: survives Vite HMR but resets on full page reload.
 // This is the correct persistence scope — not sessionStorage (persists across
@@ -36,15 +40,16 @@ const MAX_BOTTOM_HEIGHT = 600;
 function App() {
   const { toasts, removeToast, bottomPanelTab, setBottomPanelTab } = useConsoleStore();
   const setRunSettingsOpen = useConsoleStore((state) => state.setRunSettingsOpen);
+  const primaryMode = useConsoleStore((s) => s.primaryMode);
+  const sidebarTab = useConsoleStore((s) => s.sidebarTab);
+  const setPrimaryMode = useConsoleStore((s) => s.setPrimaryMode);
+  const setSidebarTab = useConsoleStore((s) => s.setSidebarTab);
   // Ensure theme store is initialized at app boot (applies theme class to <html>).
   // Subscribe to a no-op selector so the App component does NOT re-render
   // when the theme changes — CSS custom properties handle the visual switch.
   useThemeStore(() => null);
   const [leftCollapsed, setLeftCollapsed] = React.useState(false);
   const [leftWidth, setLeftWidth] = React.useState(DEFAULT_LEFT_WIDTH);
-  const [activeLeftTab, setActiveLeftTab] = React.useState<
-    'workflow' | 'chat' | 'knowledge' | 'skills'
-  >('workflow');
   const [rightCollapsed, setRightCollapsed] = React.useState(true);
   const [rightWidth, setRightWidth] = React.useState(DEFAULT_RIGHT_WIDTH);
   const [bottomCollapsed, setBottomCollapsed] = React.useState(false);
@@ -53,6 +58,9 @@ function App() {
   const [showGlobalSettings, setShowGlobalSettings] = React.useState(false);
   const [showSearch, setShowSearch] = React.useState(false);
   const [showBookmarks, setShowBookmarks] = React.useState(false);
+  const [showSkillConfig, setShowSkillConfig] = React.useState(false);
+  // Center Stage L state for Panel expand
+  const [centerStageTab, setCenterStageTab] = React.useState<string | null>(null);
   const [bottomHeight, setBottomHeight] = React.useState(DEFAULT_BOTTOM_HEIGHT);
   const bottomHeightRef = React.useRef(bottomHeight);
   React.useEffect(() => { bottomHeightRef.current = bottomHeight; }, [bottomHeight]);
@@ -83,7 +91,7 @@ function App() {
         setLeftWidth(next);
       }
       if (isResizingRightRef.current) {
-        // Dragging left increases width (right sidebar is on the right edge)
+        // Dragging left increases width (Secondary Sidebar is on the right edge)
         const delta = startXRightRef.current - e.clientX;
         const next = Math.min(MAX_RIGHT_WIDTH, Math.max(MIN_RIGHT_WIDTH, startWidthRightRef.current + delta));
         setRightWidth(next);
@@ -128,20 +136,28 @@ function App() {
     document.body.style.cursor = 'row-resize';
   };
 
-  const handleSelectLeftTab = (
-    tab: 'workflow' | 'chat' | 'knowledge' | 'skills',
-  ) => {
-    if (!leftCollapsed && tab === activeLeftTab) {
-      setLeftCollapsed(true);
-      return;
-    }
-    setActiveLeftTab(tab);
-    setLeftCollapsed(false);
-    // Close Run Settings panel when switching away from Graph mode
-    if (tab === 'chat') {
-      setRunSettingsOpen(false);
-    }
-  };
+  const handleSelectSidebarTab = React.useCallback(
+    (tab: import('./stores/useConsoleStore').SidebarTab) => {
+      if (!leftCollapsed && tab === sidebarTab) {
+        setLeftCollapsed(true);
+        return;
+      }
+      setSidebarTab(tab);
+      setLeftCollapsed(false);
+    },
+    [leftCollapsed, sidebarTab, setSidebarTab],
+  );
+
+  const handleSetPrimaryMode = React.useCallback(
+    (mode: import('./stores/useConsoleStore').PrimaryMode) => {
+      setPrimaryMode(mode);
+      // Close Run Settings panel when leaving Graph mode
+      if (mode === 'chat') {
+        setRunSettingsOpen(false);
+      }
+    },
+    [setPrimaryMode, setRunSettingsOpen],
+  );
 
   const handleToggleLeftCollapsed = () => {
     setLeftCollapsed((prev) => !prev);
@@ -152,9 +168,8 @@ function App() {
   };
 
   const handleOpenBottomPanel = (
-    tab: 'observability' | 'checkpoints' | 'context' | 'logs' | 'compare',
+    tab: 'observability' | 'checkpoints' | 'context' | 'logs' | 'knowledge',
   ) => {
-    // NOTE(core): Centralized entry for opening BottomPanel tabs (e.g. run-toolbar shortcuts in Header).
     setBottomPanelTab(tab);
     setBottomCollapsed(false);
   };
@@ -227,6 +242,19 @@ function App() {
     }
   }, []);
 
+  // Skills logic
+  const sendCommand = React.useCallback(
+    (cmd: Record<string, unknown>) => useConsoleStore.getState().sendCommand(cmd),
+    [],
+  );
+  const registerSkillEventHandler = React.useCallback(
+    (eventType: string, handler: (event: unknown) => void) =>
+      useConsoleStore.getState().registerSkillEventHandler(eventType, handler),
+    [],
+  );
+  const sessionId = useConsoleStore((s) => s.sessionId);
+  const skillsLogic = useSkillsLogic(sessionId, sendCommand, registerSkillEventHandler);
+
   // Cmd+K / Ctrl+K shortcut for global search
   React.useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -243,21 +271,27 @@ function App() {
     <div className="h-screen flex flex-col bg-gray-900 text-gray-50">
       <Header
         onOpenBottomPanel={handleOpenBottomPanel}
-        onSelectLeftTab={handleSelectLeftTab}
-        activeLeftTab={activeLeftTab}
+        primaryMode={primaryMode}
+        onSetPrimaryMode={handleSetPrimaryMode}
         onOpenGlobalSettings={() => setShowGlobalSettings(true)}
         onOpenSearch={() => setShowSearch(true)}
         onOpenBookmarks={() => setShowBookmarks(true)}
       />
 
       <div className="flex-1 flex overflow-hidden">
-        {activeLeftTab !== 'chat' && (
-          <ActivityBar
-            activeTab={activeLeftTab}
-            onSelectTab={handleSelectLeftTab}
-            onOpenSettings={() => setRunSettingsOpen(true)}
-          />
-        )}
+        <ActivityBar
+          primaryMode={primaryMode}
+          sidebarTab={sidebarTab}
+          onSelectTab={handleSelectSidebarTab}
+          onOpenSettings={() => {
+            // Unified settings entry point: mode-aware
+            if (primaryMode === 'graph') {
+              setRunSettingsOpen(true);
+            } else {
+              setShowGlobalSettings(true);
+            }
+          }}
+        />
 
         {!leftCollapsed && (
           <>
@@ -266,16 +300,27 @@ function App() {
               style={{ width: leftWidth }}
             >
               <LeftSidebar
-                activeTab={activeLeftTab as any}
+                activeTab={sidebarTab}
                 isCollapsed={false}
                 onToggleCollapse={handleToggleLeftCollapsed}
                 onResetWidth={handleResetLeftWidth}
                 onOpenChatSettings={() => setShowChatSettings(true)}
                 onOpenGlobalSettings={() => setShowGlobalSettings(true)}
+                skills={skillsLogic.skills}
+                isLoadingSkills={skillsLogic.isLoadingList}
+                selectedSkill={skillsLogic.selectedSkill}
+                onSelectSkill={(name) => {
+                  skillsLogic.selectSkill(name);
+                  // Sync to global store so Secondary Sidebar can route
+                  useConsoleStore.getState().selectSkill(name);
+                  // Expand Secondary Sidebar to show skill detail
+                  setRightCollapsed(false);
+                }}
+                onRefreshSkills={skillsLogic.refreshSkills}
               />
             </div>
             <div
-              className="w-1 shrink-0 cursor-col-resize bg-gray-900 hover:bg-gray-700"
+              className="w-px shrink-0 cursor-col-resize bg-gray-700 hover:bg-blue-500 transition-colors"
               onMouseDown={handleStartResizeLeft}
               title="Resize sidebar"
             />
@@ -283,35 +328,36 @@ function App() {
         )}
 
         <div className="flex-1 flex flex-col overflow-hidden">
-          <div className="flex-1 flex flex-col overflow-hidden" style={{ display: activeLeftTab === 'chat' ? 'flex' : 'none' }}>
+          <div className="flex-1 flex flex-col overflow-hidden" style={{ display: primaryMode === 'chat' ? 'flex' : 'none' }}>
             <ChatPage />
           </div>
-          <div className="flex-1 flex flex-col overflow-hidden" style={{ display: activeLeftTab !== 'chat' ? 'flex' : 'none' }}>
+          <div className="flex-1 flex flex-col overflow-hidden" style={{ display: primaryMode === 'graph' ? 'flex' : 'none' }}>
             <DAGCanvas />
           </div>
 
-          {activeLeftTab !== 'chat' && !bottomCollapsed && (
+          {primaryMode === 'graph' && !bottomCollapsed && (
             <div
-              className="h-1 shrink-0 cursor-row-resize bg-gray-900 hover:bg-gray-700"
+              className="h-px shrink-0 cursor-row-resize bg-gray-700 hover:bg-blue-500 transition-colors"
               onMouseDown={handleStartResizeBottom}
               title="Resize panel"
             />
           )}
-          {activeLeftTab !== 'chat' && (
+          {primaryMode === 'graph' && (
             <BottomPanel
               isCollapsed={bottomCollapsed}
               onToggleCollapse={() => setBottomCollapsed(!bottomCollapsed)}
               activeTab={bottomPanelTab}
               onTabChange={setBottomPanelTab}
               height={bottomHeight}
+              onExpandTab={(tab) => setCenterStageTab(tab)}
             />
           )}
         </div>
 
-        {activeLeftTab !== 'chat' && !rightCollapsed && (
+        {!rightCollapsed && (
           <>
             <div
-              className="w-1 shrink-0 cursor-col-resize bg-gray-900 hover:bg-gray-700"
+              className="w-px shrink-0 cursor-col-resize bg-gray-700 hover:bg-blue-500 transition-colors"
               onMouseDown={handleStartResizeRight}
               onDoubleClick={handleResetRightWidth}
               title="Resize properties panel (double-click to reset)"
@@ -320,11 +366,25 @@ function App() {
               <RightSidebar
                 isCollapsed={false}
                 onToggleCollapse={() => setRightCollapsed(true)}
+                skillDetail={skillsLogic.skillDetail}
+                skillMetrics={skillsLogic.skillMetrics}
+                isLoadingSkillDetail={skillsLogic.isLoadingDetail}
+                onConfigureSkill={() => setShowSkillConfig(true)}
+                onDryRunSkill={(toolName: string) => {
+                  // SkillDetailPanel passes only toolName; supply the selected skill name
+                  const skillName = skillsLogic.selectedSkill;
+                  if (skillName) {
+                    skillsLogic.dryRunSkill(skillName, toolName);
+                  }
+                }}
+                onUnloadSkill={skillsLogic.unloadSkill}
+                onOpenChatSettings={() => setShowChatSettings(true)}
+                onRebuildKnowledgeIndex={(libId) => useConsoleStore.getState().rebuildKnowledgeIndex(libId)}
               />
             </div>
           </>
         )}
-        {activeLeftTab !== 'chat' && rightCollapsed && (
+        {rightCollapsed && (
           <RightSidebar
             isCollapsed={true}
             onToggleCollapse={() => setRightCollapsed(false)}
@@ -332,9 +392,34 @@ function App() {
         )}
       </div>
 
-      {showObsFullView && (
-        <ObsFullView onClose={() => setShowObsFullView(false)} />
+      <ObsFullView isOpen={showObsFullView} onClose={() => setShowObsFullView(false)} />
+
+      {/* Expanded panel content in large overlay */}
+      {centerStageTab !== null && (
+        <CenterStage
+          isOpen={true}
+          onClose={() => setCenterStageTab(null)}
+          size="L"
+          title={
+            centerStageTab === 'checkpoints' ? 'Checkpoints' :
+            centerStageTab === 'observability' ? 'Observability' :
+            centerStageTab === 'logs' ? 'Logs' :
+            centerStageTab === 'context' ? 'Context' :
+            centerStageTab === 'knowledge' ? 'Knowledge' :
+            'Panel'
+          }
+        >
+          <div className="h-full">
+            <BottomPanel
+              isCollapsed={false}
+              onToggleCollapse={() => setCenterStageTab(null)}
+              activeTab={centerStageTab as any}
+              height={9999}
+            />
+          </div>
+        </CenterStage>
       )}
+
       <ToastContainer toasts={toasts} onRemove={removeToast} />
       <RunSettingsDrawer />
       <ConversationSettingsDrawer
@@ -354,6 +439,20 @@ function App() {
         isOpen={showBookmarks}
         onClose={() => setShowBookmarks(false)}
       />
+      {skillsLogic.skillDetail && (
+        <SkillConfigDialog
+          isOpen={showSkillConfig}
+          detail={skillsLogic.skillDetail}
+          onSave={(config: SkillConfigValues) => {
+            const skillName = skillsLogic.selectedSkill;
+            if (skillName) {
+              skillsLogic.configureSkill(skillName, config);
+            }
+            setShowSkillConfig(false);
+          }}
+          onCancel={() => setShowSkillConfig(false)}
+        />
+      )}
     </div>
   );
 }

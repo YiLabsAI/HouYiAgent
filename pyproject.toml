@@ -165,6 +165,7 @@ filterwarnings = [
 ]
 markers = [
     "benchmark: performance benchmark tests",
+    "smoke: critical-path smoke tests that must pass before any delivery",
 ]
 
 [tool.uv]

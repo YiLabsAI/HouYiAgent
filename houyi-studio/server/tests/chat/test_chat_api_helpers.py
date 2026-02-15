@@ -1,27 +1,27 @@
-"""Tests for chat_api helper functions: _sanitize_error_message, _is_vertex_provider."""
+"""Tests for provider_service helper functions: sanitize_error, _is_vertex_provider."""
 
-from houyi_studio.server.chat.chat_api import _is_vertex_provider, _sanitize_error_message
+from houyi_studio.server.chat.provider_service import _is_vertex_provider, sanitize_error
 
 
-class TestSanitizeErrorMessage:
+class TestSanitizeError:
     """Test HTML sanitization for error messages."""
 
     def test_plain_text_unchanged(self):
-        assert _sanitize_error_message("simple error") == "simple error"
+        assert sanitize_error("simple error") == "simple error"
 
     def test_strips_html_tags(self):
-        assert _sanitize_error_message("<b>bold</b> text") == "bold text"
+        assert sanitize_error("<b>bold</b> text") == "bold text"
 
     def test_strips_style_block_with_content(self):
         html = "<html><head><style>*{margin:0;padding:0}html,code{font:15px}</style></head><body>Error 404</body></html>"
-        result = _sanitize_error_message(html)
+        result = sanitize_error(html)
         assert "{margin" not in result
         assert "padding" not in result
         assert "404" in result
 
     def test_strips_script_block_with_content(self):
         html = "<html><script>alert('xss')</script><body>Error</body></html>"
-        result = _sanitize_error_message(html)
+        result = sanitize_error(html)
         assert "alert" not in result
         assert "Error" in result
 
@@ -38,7 +38,7 @@ class TestSanitizeErrorMessage:
             "<p><b>404.</b> <ins>That's an error.</ins>"
             "<p>The requested URL was not found on this server. <ins>That's all we know.</ins>"
         )
-        result = _sanitize_error_message(html)
+        result = sanitize_error(html)
         # CSS content must not leak
         assert "{margin" not in result
         assert "padding:0}" not in result
@@ -48,15 +48,15 @@ class TestSanitizeErrorMessage:
 
     def test_truncation(self):
         long_text = "x" * 500
-        result = _sanitize_error_message(long_text, max_len=200)
+        result = sanitize_error(long_text, max_len=200)
         assert len(result) == 203  # 200 + "..."
         assert result.endswith("...")
 
     def test_collapses_whitespace(self):
-        assert _sanitize_error_message("a   b\n\nc") == "a b c"
+        assert sanitize_error("a   b\n\nc") == "a b c"
 
     def test_empty_string(self):
-        assert _sanitize_error_message("") == ""
+        assert sanitize_error("") == ""
 
 
 class TestIsVertexProvider:

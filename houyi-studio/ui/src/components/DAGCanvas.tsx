@@ -1,5 +1,5 @@
 /**
- * DAG Canvas component using React Flow
+ * DAG Canvas component (Editor Area) using React Flow.
  */
 
 import React from 'react';

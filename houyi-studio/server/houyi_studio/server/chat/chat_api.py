@@ -490,7 +490,7 @@ async def export_conversations() -> StreamingResponse:
     """Export all conversations as HouyiChatWorkspace JSON.
 
     Returns a downloadable JSON file containing all conversations,
-    settings, and metadata in the HouyiChatWorkspace format (§6.3).
+    settings, and metadata in the HouYiChatWorkspace format.
 
     Response: application/json file download.
     """

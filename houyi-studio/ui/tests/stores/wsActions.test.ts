@@ -683,6 +683,10 @@ describe('wsActions.connect status handling', () => {
     state.connect('s1');
     expect(lastWsInstance).toBeTruthy();
 
+    // Must connect first before a transient disconnect can show a toast.
+    lastWsInstance.emitStatus('connected');
+    expect(state.connectionStatus).toBe('connected');
+
     lastWsInstance.emitStatus('disconnected');
 
     expect(state.connectionStatus).toBe('disconnected');

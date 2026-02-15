@@ -15,14 +15,18 @@ export const createCommandActions = (_set: StoreSet, get: StoreGet) => ({
         detail: detailParts.length > 0 ? detailParts.join(' · ') : undefined,
       });
     }
-    if (ws && ws.isConnected()) {
-      ws.sendCommand(command);
-      return true;
-    } else {
+    if (!ws) {
       console.error('[Store] WebSocket not initialized, cannot send command');
       get().showToastOnce('backend-connection', 'Backend not connected. Please start the server.', 'error');
       return false;
     }
+    // Always delegate to ws.sendCommand() — it queues commands when the
+    // connection is still opening, and sends them once connected.  The
+    // old code checked isConnected() first and silently dropped commands
+    // sent during the CONNECTING phase, causing skills & other features
+    // that fire on mount to never receive a response.
+    ws.sendCommand(command);
+    return true;
   },
 
   sendPatchPlan: (patches: any[]) => {

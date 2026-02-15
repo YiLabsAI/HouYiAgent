@@ -1,16 +1,15 @@
 import React from 'react';
 import { useConsoleStore } from '../stores/useConsoleStore';
+import type { PrimaryMode } from '../stores/useConsoleStore';
 import { useThemeStore, THEMES } from '../stores/useThemeStore';
 import { ToolStatistics } from './ToolStatistics';
-import { History, Flag, Settings, Search, Bookmark, Palette } from 'lucide-react';
+import { History, Flag, Search, Bookmark, Palette } from 'lucide-react';
 
-type ViewMode = 'graph' | 'chat';
-
-// NOTE(core): Header "mode" is a lightweight UI toggle (top-level workspace view switch).
+// NOTE(core): Title Bar "mode" is a lightweight UI toggle (top-level workspace view switch).
 interface HeaderProps {
-  onOpenBottomPanel?: (tab: 'observability' | 'checkpoints' | 'logs' | 'context') => void;
-  onSelectLeftTab?: (tab: 'workflow' | 'chat' | 'knowledge' | 'skills') => void;
-  activeLeftTab?: 'workflow' | 'chat' | 'knowledge' | 'skills';
+  onOpenBottomPanel?: (tab: 'observability' | 'checkpoints' | 'context' | 'logs' | 'knowledge') => void;
+  primaryMode: PrimaryMode;
+  onSetPrimaryMode: (mode: PrimaryMode) => void;
   onOpenGlobalSettings?: () => void;
   onOpenSearch?: () => void;
   onOpenBookmarks?: () => void;
@@ -18,9 +17,8 @@ interface HeaderProps {
 
 export const Header: React.FC<HeaderProps> = ({
   onOpenBottomPanel,
-  onSelectLeftTab,
-  activeLeftTab,
-  onOpenGlobalSettings,
+  primaryMode,
+  onSetPrimaryMode,
   onOpenSearch,
   onOpenBookmarks,
 }) => {
@@ -28,9 +26,6 @@ export const Header: React.FC<HeaderProps> = ({
   const { theme, setTheme } = useThemeStore();
   const [themeMenuOpen, setThemeMenuOpen] = React.useState(false);
   const themeMenuRef = React.useRef<HTMLDivElement>(null);
-
-  // NOTE(core): Header mode is derived from the primary ActivityBar view to avoid state drift.
-  const viewMode: ViewMode = activeLeftTab === 'chat' ? 'chat' : 'graph';
 
   // Close theme menu on outside click
   React.useEffect(() => {
@@ -56,13 +51,9 @@ export const Header: React.FC<HeaderProps> = ({
 
         <div className="flex items-center bg-gray-800 rounded-lg p-1">
           <button
-            onClick={() => {
-              // NOTE(core): Header mode toggle is a shortcut into primary ActivityBar views.
-              // Graph == Workflow authoring surface.
-              onSelectLeftTab?.('workflow');
-            }}
+            onClick={() => onSetPrimaryMode('graph')}
             className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${
-              viewMode === 'graph'
+              primaryMode === 'graph'
                 ? 'bg-blue-600 text-white shadow-sm'
                 : 'text-gray-400 hover:text-gray-200'
             }`}
@@ -73,12 +64,9 @@ export const Header: React.FC<HeaderProps> = ({
             </span>
           </button>
           <button
-            onClick={() => {
-              // NOTE(core): Chat is a high-frequency surface; keep it reachable from both Header and ActivityBar.
-              onSelectLeftTab?.('chat');
-            }}
+            onClick={() => onSetPrimaryMode('chat')}
             className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${
-              viewMode === 'chat'
+              primaryMode === 'chat'
                 ? 'bg-blue-600 text-white shadow-sm'
                 : 'text-gray-400 hover:text-gray-200'
             }`}
@@ -105,8 +93,8 @@ export const Header: React.FC<HeaderProps> = ({
       </div>
 
       <div className="flex items-center gap-4">
-        {/* Chat mode: search + global settings buttons */}
-        {viewMode === 'chat' && (
+        {/* Chat mode: search + bookmarks (settings unified to ActivityBar gear) */}
+        {primaryMode === 'chat' && (
           <>
             <button
               onClick={onOpenSearch}
@@ -124,21 +112,13 @@ export const Header: React.FC<HeaderProps> = ({
             >
               <Bookmark size={18} />
             </button>
-            <button
-              onClick={onOpenGlobalSettings}
-              className="p-2 rounded-lg hover:bg-gray-800 text-gray-400 hover:text-gray-200 transition-colors"
-              title="Global settings"
-              type="button"
-            >
-              <Settings size={18} />
-            </button>
           </>
         )}
 
         <ToolStatistics />
 
         {/* Graph mode: Timeline / Checkpoints */}
-        {viewMode !== 'chat' && (
+        {primaryMode === 'graph' && (
           <>
             <button
               type="button"

@@ -95,9 +95,8 @@ const tryKillPid = (pid: number, signal: NodeJS.Signals): boolean => {
 export default async function globalSetup(): Promise<void> {
   if (await isServerUp()) {
     if (SKIP_KILL_PORT) {
-      throw new Error(
-        'Console server already running on 127.0.0.1:8000. Stop it or unset SKIP_KILL_E2E_PORT before Playwright E2E runs.',
-      );
+      console.log('[E2E] Reusing existing server on 127.0.0.1:8000 (SKIP_KILL_E2E_PORT=1)');
+      return;
     }
 
     if (fs.existsSync(PID_FILE)) {

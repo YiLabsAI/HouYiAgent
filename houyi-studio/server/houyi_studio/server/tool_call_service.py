@@ -1,4 +1,8 @@
-"""Tool-call service for console execution engine."""
+"""Tool-call service for console execution engine.
+
+Uses ``ToolCallRunner`` (the full-featured runner with hooks, policy, consent,
+and metrics integration) for production tool execution.
+"""
 
 from __future__ import annotations
 
@@ -8,6 +12,7 @@ from collections.abc import Callable
 from datetime import datetime, timezone
 from typing import Any
 
+from houyi.core.skill.hooks import DEFAULT_HOOKS_MANAGER
 from houyi.core.skill_registry import DEFAULT_SKILL_REGISTRY, SkillRegistry
 from houyi.core.tool_call_adapter import normalize_adapter_error
 from houyi.core.tool_call_adapter_registry import ToolCallAdapterRegistry, ToolCallAdapterRequest
@@ -17,19 +22,25 @@ from houyi.execution.tool_call_orchestrator import (
     choose_tool_cache,
     wrap_tool_choice,
 )
-from houyi.execution.tool_call_runner_service import ToolCallRunnerService
+from houyi.execution.tool_call_runner import ToolCallRunner
 from houyi.execution.tool_call_web_search_hooks import build_web_search_tool_hooks
 from houyi.llm.models import DEFAULT_MODEL
 from houyi.protocol.ir import ExecutionIR, NodeExecutionIR
 from houyi.protocol.ir.tooling_ir import LLMToolCallOutputIR
 
+from .skill_service import get_skill_service
 from .tool_call_response import ConsoleToolCallResponseAssembler, ToolCallContext
 
 logger = logging.getLogger(__name__)
 
 
 class ToolCallService:
-    """Encapsulates tool-calling execution with internal-first policy."""
+    """Encapsulates tool-calling execution with internal-first policy.
+
+    The runner is initialized lazily (on first ``execute_tool_calls``) so that
+    governance components from ``SkillService`` (which is set up during
+    ``register_console_skills``) are picked up automatically.
+    """
 
     def __init__(
         self,
@@ -44,7 +55,41 @@ class ToolCallService:
         self.tool_call_cache = tool_call_cache
         self.llm_tool_call_cache = llm_tool_call_cache
         self.skill_registry = skill_registry or DEFAULT_SKILL_REGISTRY
-        self.tool_call_runner = ToolCallRunnerService()
+        self._runner: ToolCallRunner | None = None
+
+    def _get_runner(self) -> ToolCallRunner:
+        """Lazily build ``ToolCallRunner`` with governance components."""
+        if self._runner is not None:
+            return self._runner
+
+        # Pick up governance components from the global SkillService if available
+        policy_enforcer = None
+        consent_manager = None
+        metrics_store = None
+        try:
+            svc = get_skill_service()
+            policy_enforcer = svc.policy_enforcer
+            consent_manager = svc.consent_manager
+            metrics_store = svc.metrics_store
+        except Exception:
+            logger.debug("SkillService not available; runner initialized without governance")
+
+        self._runner = ToolCallRunner(
+            skill_hooks_manager=DEFAULT_HOOKS_MANAGER,
+            policy_enforcer=policy_enforcer,
+            consent_manager=consent_manager,
+            metrics_store=metrics_store,
+        )
+        return self._runner
+
+    def _select_skills(self, tool_names: list[str]) -> list[Any]:
+        """Look up skills from the registry by name."""
+        selected: list[Any] = []
+        for name in tool_names:
+            skill = self.skill_registry.get(name)
+            if skill is not None:
+                selected.append(skill)
+        return selected
 
     async def execute_tool_calls(
         self,
@@ -67,7 +112,7 @@ class ToolCallService:
         from houyi.execution.skill_executor import SkillExecutor
         from houyi.llm.openai_adapter import OpenAIAdapter
 
-        skills = self.tool_call_runner.select_skills(tool_names)
+        skills = self._select_skills(tool_names)
         if not skills:
             logger.warning("[%s] Tool-calling enabled but no tools are registered", node_id)
             return False
@@ -252,8 +297,15 @@ class ToolCallService:
             tool_cache=self.tool_call_cache,
             allow_fresh_tool_cache=allow_fresh_tool_cache,
         )
+        # Collect preprocessors from all resolved skills
+        all_preprocessors: list[Any] = []
+        for skill in skills:
+            if hasattr(skill, "preprocessors") and skill.preprocessors:
+                all_preprocessors.extend(skill.preprocessors)
+
+        runner = self._get_runner()
         try:
-            response, tool_trace = await self.tool_call_runner.run_tool_calls(
+            response, tool_trace = await runner.run(
                 adapter=adapter,
                 messages=messages,
                 tools=tools,
@@ -265,6 +317,7 @@ class ToolCallService:
                 allow_tool_replace=False,
                 tool_cache=tool_cache,
                 llm_cache=self.llm_tool_call_cache,
+                preprocessors=all_preprocessors or None,
             )
         except Exception as exc:
             node_exec.error = str(exc)

@@ -5,6 +5,7 @@ Reference: SimpleSkill Specification v0.1 Section 3 (Layer A: Manifest)
 
 import json
 import tempfile
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -20,6 +21,7 @@ from houyi.core.skill.manifest import (
     ToolContribution,
 )
 from houyi.core.skill.policy import ModelAutoInvoke, SideEffect
+from houyi.core.skill_registry import SkillRegistry
 
 
 class TestActivationEvent:
@@ -94,6 +96,27 @@ class TestSkillContribution:
         assert skill.invocation_policy.model_auto_invoke == ModelAutoInvoke.ALLOW
         assert skill.invocation_policy.side_effect == SideEffect.FILESYSTEM
         assert skill.tool_refs == ["file_read", "file_write"]
+        assert skill.path == ""
+
+    def test_from_dict_with_path(self):
+        """Path-based contribution references a SKILL.md file."""
+        data = {
+            "id": "planning",
+            "description": "Task planning skill",
+            "path": "skills/planning/SKILL.md",
+        }
+        skill = SkillContribution.from_dict(data)
+        assert skill.id == "planning"
+        assert skill.path == "skills/planning/SKILL.md"
+
+    def test_from_dict_defaults(self):
+        """Minimal contribution with only required fields."""
+        data = {"id": "minimal", "description": "Minimal skill"}
+        skill = SkillContribution.from_dict(data)
+        assert skill.id == "minimal"
+        assert skill.path == ""
+        assert skill.tool_refs == []
+        assert skill.resources == []
 
 
 class TestResourceContribution:
@@ -415,3 +438,149 @@ class TestManifestRegistry:
 
         found = registry.find_by_activation(ActivationEventType.ON_COMMAND, "other")
         assert len(found) == 1  # Only always matches
+
+
+class TestRegisterFromManifest:
+    """Test SkillRegistry.register_from_manifest() — FIX-01 regression tests."""
+
+    def test_inline_skill_contribution(self, tmp_path: Path):
+        """Manifest with inline skill (no path) should register successfully."""
+        manifest = {
+            "id": "test.inline",
+            "version": "1.0.0",
+            "name": "Inline Test",
+            "description": "Test inline skill contributions",
+            "contributions": {
+                "skills": [
+                    {
+                        "id": "inline-skill",
+                        "description": "Skill defined inline in manifest",
+                        "invocationPolicy": {
+                            "modelAutoInvoke": "allow",
+                            "sideEffect": "none",
+                        },
+                    }
+                ],
+            },
+        }
+        manifest_path = tmp_path / "simpleskill.json"
+        manifest_path.write_text(json.dumps(manifest))
+
+        registry = SkillRegistry()
+        registered = registry.register_from_manifest(manifest_path)
+
+        assert registered == ["inline-skill"]
+        skill = registry.get("inline-skill")
+        assert skill is not None
+        assert skill.description == "Skill defined inline in manifest"
+
+    def test_path_based_skill_contribution(self, tmp_path: Path):
+        """Manifest with path-based skill should load from SKILL.md."""
+        # Create SKILL.md
+        skill_dir = tmp_path / "skills" / "my-skill"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            textwrap.dedent("""\
+        ---
+        name: path-skill
+        description: Skill loaded via path
+        version: "1.0.0"
+        ---
+        # Path Skill
+        """)
+        )
+
+        manifest = {
+            "id": "test.path",
+            "version": "1.0.0",
+            "name": "Path Test",
+            "description": "Test path-based skill contributions",
+            "contributions": {
+                "skills": [
+                    {
+                        "id": "path-skill",
+                        "description": "Ignored (SKILL.md takes precedence)",
+                        "path": "skills/my-skill/SKILL.md",
+                    }
+                ],
+            },
+        }
+        manifest_path = tmp_path / "simpleskill.json"
+        manifest_path.write_text(json.dumps(manifest))
+
+        registry = SkillRegistry()
+        registered = registry.register_from_manifest(manifest_path)
+
+        assert registered == ["path-skill"]
+        skill = registry.get("path-skill")
+        assert skill is not None
+        assert skill.version == "1.0.0"
+        assert skill.description == "Skill loaded via path"
+
+    def test_mixed_contributions(self, tmp_path: Path):
+        """Manifest with both inline and path-based skills."""
+        # Create SKILL.md for path-based skill
+        skill_dir = tmp_path / "skills" / "file-skill"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            textwrap.dedent("""\
+        ---
+        name: file-skill
+        description: From file
+        ---
+        # File Skill
+        """)
+        )
+
+        manifest = {
+            "id": "test.mixed",
+            "version": "1.0.0",
+            "name": "Mixed",
+            "description": "Mixed contributions",
+            "contributions": {
+                "skills": [
+                    {"id": "inline-one", "description": "Inline"},
+                    {
+                        "id": "file-skill",
+                        "description": "Via path",
+                        "path": "skills/file-skill/SKILL.md",
+                    },
+                ],
+            },
+        }
+        manifest_path = tmp_path / "simpleskill.json"
+        manifest_path.write_text(json.dumps(manifest))
+
+        registry = SkillRegistry()
+        registered = registry.register_from_manifest(manifest_path)
+
+        assert len(registered) == 2
+        assert "inline-one" in registered
+        assert "file-skill" in registered
+
+    def test_invalid_path_logs_warning(self, tmp_path: Path):
+        """Manifest with bad path should warn and continue, not crash."""
+        manifest = {
+            "id": "test.bad",
+            "version": "1.0.0",
+            "name": "Bad Path",
+            "description": "Bad path test",
+            "contributions": {
+                "skills": [
+                    {
+                        "id": "ghost-skill",
+                        "description": "Path does not exist",
+                        "path": "nonexistent/SKILL.md",
+                    },
+                    {"id": "good-skill", "description": "Should still register"},
+                ],
+            },
+        }
+        manifest_path = tmp_path / "simpleskill.json"
+        manifest_path.write_text(json.dumps(manifest))
+
+        registry = SkillRegistry()
+        registered = registry.register_from_manifest(manifest_path)
+
+        # Bad path should be skipped, good skill should register
+        assert registered == ["good-skill"]

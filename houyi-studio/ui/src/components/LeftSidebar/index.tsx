@@ -1,3 +1,6 @@
+/**
+ * Primary Sidebar — collapsible sidebar for workflow, conversations, skills, etc.
+ */
 import React from 'react';
 import { useLeftSidebarLogic } from './useLeftSidebarLogic';
 import { NodePalette } from './NodePalette';
@@ -8,17 +11,26 @@ import { LoadWorkflowDialog } from './LoadWorkflowDialog';
 import { KnowledgePanel } from './KnowledgePanel';
 import { KnowledgeConfigDialog } from './KnowledgeConfigDialog';
 import { KnowledgeSearch } from './KnowledgeSearch';
+import { SkillsList } from './SkillsList';
 import { ConversationRail } from '../Chat/ConversationRail';
 import { useChatStore } from '@/stores/useChatStore';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
+import type { SkillSummary } from '../../types/websocket';
+import type { SidebarTab } from '../../stores/useConsoleStore';
 
 interface LeftSidebarProps {
-  activeTab: 'workflow' | 'chat' | 'knowledge' | 'skills';
+  activeTab: SidebarTab;
   isCollapsed: boolean;
   onToggleCollapse: () => void;
   onResetWidth: () => void;
   onOpenChatSettings?: (conversationId: string) => void;
   onOpenGlobalSettings?: () => void;
+  // Skills props
+  skills?: SkillSummary[];
+  isLoadingSkills?: boolean;
+  selectedSkill?: string | null;
+  onSelectSkill?: (skillName: string) => void;
+  onRefreshSkills?: () => void;
 }
 
 export const LeftSidebar: React.FC<LeftSidebarProps> = ({
@@ -28,6 +40,11 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
   onResetWidth: _onResetWidth,
   onOpenChatSettings,
   // onOpenGlobalSettings is available via props but currently only used in Header
+  skills = [],
+  isLoadingSkills = false,
+  selectedSkill = null,
+  onSelectSkill = () => {},
+  onRefreshSkills = () => {},
 }) => {
   const logic = useLeftSidebarLogic();
   const [isKnowledgeDialogOpen, setIsKnowledgeDialogOpen] = React.useState(false);
@@ -37,8 +54,8 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
     switch (activeTab) {
       case 'workflow':
         return 'Workflow';
-      case 'chat':
-        return 'Chat';
+      case 'conversations':
+        return 'Conversations';
       case 'knowledge':
         return 'Knowledge';
       case 'skills':
@@ -75,10 +92,10 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
   const chatDelete = useChatStore((s) => s.deleteConversation);
   const chatUpdate = useChatStore((s) => s.updateConversation);
 
-  // Fetch conversations when chat tab is first shown
+  // Fetch conversations when conversations tab is first shown
   const chatFetchedRef = React.useRef(false);
   React.useEffect(() => {
-    if (activeTab === 'chat' && !chatFetchedRef.current) {
+    if (activeTab === 'conversations' && !chatFetchedRef.current) {
       chatFetchedRef.current = true;
       chatFetch();
     }
@@ -95,14 +112,13 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
 
   const renderSkillsEntry = () => {
     return (
-      <div className="p-3 text-xs text-gray-300">
-        <div className="text-xs font-semibold text-gray-200">Skills</div>
-        <div className="text-[11px] text-gray-500 mt-1">MVP placeholder</div>
-        <div className="mt-3 bg-gray-900 border border-gray-700 rounded p-2">
-          <div className="text-[11px] text-gray-400">Installed</div>
-          <div className="text-[11px] text-gray-500 mt-1">No skills installed</div>
-        </div>
-      </div>
+      <SkillsList
+        skills={skills}
+        isLoading={isLoadingSkills}
+        selectedSkill={selectedSkill}
+        onSelectSkill={onSelectSkill}
+        onRefresh={onRefreshSkills}
+      />
     );
   };
 
@@ -156,7 +172,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
           </>
         )}
 
-        {activeTab === 'chat' && (
+        {activeTab === 'conversations' && (
           <ConversationRail
             conversations={chatConversations}
             activeConversationId={chatActiveId}

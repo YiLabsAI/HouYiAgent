@@ -67,6 +67,10 @@ class SkillSpec(BaseModel):
         default=None,
         description="Skill version (SemVer)",
     )
+    author: str | None = Field(
+        default=None,
+        description="Skill author",
+    )
     user_invocable: bool = Field(
         default=True,
         description="Whether user can directly invoke this skill",
@@ -75,9 +79,26 @@ class SkillSpec(BaseModel):
         default_factory=list,
         description="List of tools this skill is allowed to use",
     )
+    preprocessors: list[Any] = Field(
+        default_factory=list,
+        description="Preprocessor specs (PreprocessorSpec objects) for pre-LLM execution",
+    )
     hooks: list[Any] = Field(
         default_factory=list,
         description="Lifecycle hooks (SkillHook objects)",
+    )
+    invocation_policy: Any | None = Field(
+        default=None,
+        description="Invocation policy (InvocationPolicy object or dict)",
+    )
+    permissions: Any | None = Field(
+        default=None,
+        description="Permission declarations (Permissions object or dict)",
+    )
+    # Extra frontmatter fields not in the standard schema are preserved here
+    extra_frontmatter: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Additional frontmatter fields for forward compatibility",
     )
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -131,6 +152,65 @@ class SkillSpec(BaseModel):
             # Fallback to legacy parser
             parsed = cls._parse_skill_md(content)
 
+        # Parse invocation policy from frontmatter
+        invocation_policy = None
+        raw_policy = parsed.get("invocationPolicy", parsed.get("invocation_policy"))
+        if isinstance(raw_policy, dict):
+            try:
+                from houyi.core.skill.policy import InvocationPolicy
+
+                invocation_policy = InvocationPolicy.from_dict(raw_policy)
+            except (ImportError, Exception):
+                invocation_policy = raw_policy
+
+        # Parse permissions from frontmatter
+        permissions = None
+        raw_perms = parsed.get("permissions")
+        if isinstance(raw_perms, dict):
+            try:
+                from houyi.core.skill.policy import Permissions
+
+                permissions = Permissions.from_dict(raw_perms)
+            except (ImportError, Exception):
+                permissions = raw_perms
+
+        # Handle disable-model-invocation (Claude standard field)
+        disable_model_invocation = parsed.get(
+            "disable-model-invocation",
+            parsed.get("disable_model_invocation"),
+        )
+        if disable_model_invocation is True and invocation_policy is None:
+            try:
+                from houyi.core.skill.policy import InvocationPolicy, ModelAutoInvoke
+
+                invocation_policy = InvocationPolicy(
+                    model_auto_invoke=ModelAutoInvoke.DENY,
+                )
+            except ImportError:
+                pass
+
+        # Collect extra frontmatter fields for forward compatibility
+        known_keys = {
+            "name",
+            "description",
+            "version",
+            "author",
+            "user-invocable",
+            "user_invocable",
+            "allowed-tools",
+            "allowed_tools",
+            "hooks",
+            "invocationPolicy",
+            "invocation_policy",
+            "permissions",
+            "constraints",
+            "input_schema",
+            "output_schema",
+            "disable-model-invocation",
+            "disable_model_invocation",
+        }
+        extra_frontmatter = {k: v for k, v in parsed.items() if k not in known_keys}
+
         # Build SkillSpec
         return cls(
             name=parsed.get("name", "unknown"),
@@ -142,9 +222,14 @@ class SkillSpec(BaseModel):
             skill_dir=detected_skill_dir,
             constraints=parsed.get("constraints", {}),
             version=parsed.get("version"),
+            author=parsed.get("author"),
             user_invocable=parsed.get("user-invocable", parsed.get("user_invocable", True)),
             allowed_tools=parsed.get("allowed-tools", parsed.get("allowed_tools", [])),
+            preprocessors=_parse_preprocessors(parsed.get("preprocessors", [])),
             hooks=parsed.get("hooks", []),
+            invocation_policy=invocation_policy,
+            permissions=permissions,
+            extra_frontmatter=extra_frontmatter,
         )
 
     @classmethod
@@ -192,6 +277,65 @@ class SkillSpec(BaseModel):
                 with open(cache_path, "w", encoding="utf-8") as f:
                     f.write(content)
 
+            # Parse invocation policy
+            invocation_policy = None
+            raw_policy = parsed.get("invocationPolicy", parsed.get("invocation_policy"))
+            if isinstance(raw_policy, dict):
+                try:
+                    from houyi.core.skill.policy import InvocationPolicy
+
+                    invocation_policy = InvocationPolicy.from_dict(raw_policy)
+                except (ImportError, Exception):
+                    invocation_policy = raw_policy
+
+            # Parse permissions
+            permissions = None
+            raw_perms = parsed.get("permissions")
+            if isinstance(raw_perms, dict):
+                try:
+                    from houyi.core.skill.policy import Permissions
+
+                    permissions = Permissions.from_dict(raw_perms)
+                except (ImportError, Exception):
+                    permissions = raw_perms
+
+            # Handle disable-model-invocation
+            disable_model_invocation = parsed.get(
+                "disable-model-invocation",
+                parsed.get("disable_model_invocation"),
+            )
+            if disable_model_invocation is True and invocation_policy is None:
+                try:
+                    from houyi.core.skill.policy import InvocationPolicy, ModelAutoInvoke
+
+                    invocation_policy = InvocationPolicy(
+                        model_auto_invoke=ModelAutoInvoke.DENY,
+                    )
+                except ImportError:
+                    pass
+
+            # Collect extra frontmatter fields
+            known_keys = {
+                "name",
+                "description",
+                "version",
+                "author",
+                "user-invocable",
+                "user_invocable",
+                "allowed-tools",
+                "allowed_tools",
+                "hooks",
+                "invocationPolicy",
+                "invocation_policy",
+                "permissions",
+                "constraints",
+                "input_schema",
+                "output_schema",
+                "disable-model-invocation",
+                "disable_model_invocation",
+            }
+            extra_frontmatter = {k: v for k, v in parsed.items() if k not in known_keys}
+
             return cls(
                 name=parsed.get("name", "unknown"),
                 description=parsed.get("description", ""),
@@ -201,9 +345,14 @@ class SkillSpec(BaseModel):
                 skill_md_path=cache_path or url,
                 constraints=parsed.get("constraints", {}),
                 version=parsed.get("version"),
+                author=parsed.get("author"),
                 user_invocable=parsed.get("user-invocable", parsed.get("user_invocable", True)),
                 allowed_tools=parsed.get("allowed-tools", parsed.get("allowed_tools", [])),
+                preprocessors=_parse_preprocessors(parsed.get("preprocessors", [])),
                 hooks=parsed.get("hooks", []),
+                invocation_policy=invocation_policy,
+                permissions=permissions,
+                extra_frontmatter=extra_frontmatter,
             )
         except urllib.error.URLError as e:
             raise urllib.error.URLError(f"Failed to load skill from {url}: {e}") from e
@@ -359,3 +508,23 @@ class SkillSpec(BaseModel):
         # Write to file
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         Path(path).write_text(content)
+
+
+def _parse_preprocessors(raw: list[Any]) -> list[Any]:
+    """Parse preprocessor entries from manifest frontmatter.
+
+    Each entry can be a dict (parsed to PreprocessorSpec) or already a
+    PreprocessorSpec instance.  Returns a list of PreprocessorSpec objects.
+    """
+    if not raw:
+        return []
+    from houyi.core.skill.preprocessor import PreprocessorSpec
+
+    result: list[Any] = []
+    for item in raw:
+        if isinstance(item, dict):
+            result.append(PreprocessorSpec.from_dict(item))
+        elif isinstance(item, PreprocessorSpec):
+            result.append(item)
+        # else: skip unknown types
+    return result

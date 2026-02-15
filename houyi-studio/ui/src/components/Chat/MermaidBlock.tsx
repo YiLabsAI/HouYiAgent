@@ -62,31 +62,8 @@ function normalizeMermaidSvg(svgStr: string): string {
   return s;
 }
 
-// Multi-pass sanitization for Mermaid code that fails to parse.
-function sanitizeMermaidCode(code: string): string {
-  let safe = code;
-
-  // 1. Quote node labels containing parentheses:
-  //    [text (with parens)] → ["text (with parens)"]
-  safe = safe.replace(
-    /\[([^\]"]*\([^\]]*)](?!\])/g,
-    (_match, inner) => `["${inner}"]`,
-  );
-
-  // 2. Quote edge labels containing dots, Chinese chars, or parentheses:
-  //    -- label with dots --> → -- "label with dots" -->
-  safe = safe.replace(
-    /--\s+([^"\-\n][^\-\n]*?)\s+-->/g,
-    (_match, label) => {
-      if (/[.()\u4e00-\u9fff\uff08\uff09]/.test(label)) {
-        return `-- "${label.trim()}" -->`;
-      }
-      return _match;
-    },
-  );
-
-  return safe;
-}
+// Sanitization logic extracted to utils/mermaidSanitize.ts for testability.
+import { normalizeFullWidthPunctuation, sanitizeMermaidCode } from '@/utils/mermaidSanitize';
 
 interface MermaidBlockProps {
   children: string;
@@ -175,21 +152,24 @@ export const MermaidBlock: React.FC<MermaidBlockProps> = ({ children }) => {
 
         const id = `mermaid-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
-        // Multi-pass rendering: try original, then progressively sanitize
+        // Phase 0: always normalize full-width punctuation before any parsing.
+        const normalizedCode = normalizeFullWidthPunctuation(code);
+
+        // Multi-pass rendering: try normalized, then progressively sanitize
         let rendered = '';
-        const parseOk = await mermaid.parse(code, { suppressErrors: true });
+        const parseOk = await mermaid.parse(normalizedCode, { suppressErrors: true });
 
         if (parseOk) {
-          ({ svg: rendered } = await mermaid.render(id, code));
+          ({ svg: rendered } = await mermaid.render(id, normalizedCode));
         } else {
-          // Try sanitized code
+          // Try deeper sanitization (quoting labels, etc.)
           const safeCode = sanitizeMermaidCode(code);
           const safeId = `${id}-safe`;
           try {
             ({ svg: rendered } = await mermaid.render(safeId, safeCode));
           } catch {
-            // Last resort: try original code anyway (parse may be overly strict)
-            ({ svg: rendered } = await mermaid.render(`${id}-orig`, code));
+            // Last resort: try normalized code anyway (parse may be overly strict)
+            ({ svg: rendered } = await mermaid.render(`${id}-orig`, normalizedCode));
           }
         }
         if (!cancelledRef.current) {

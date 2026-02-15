@@ -51,6 +51,19 @@ class EventType(str, Enum):
     CHUNK_LIST = "chunk_list"
     CHUNK_PREVIEW = "chunk_preview"
 
+    # SimpleSkill Console integration events
+    SKILL_LIST = "skill_list"
+    SKILL_DETAIL = "skill_detail"
+    SKILL_METRICS = "skill_metrics"
+    SKILL_LOADED = "skill_loaded"
+    SKILL_UNLOADED = "skill_unloaded"
+    SKILL_ERROR = "skill_error"
+    CONSENT_REQUESTED = "consent_requested"
+    CONSENT_RESULT = "consent_result"
+    SKILL_CONFIGURED = "skill_configured"
+    SKILL_BLOCKED = "skill_blocked"
+    DRY_RUN_RESULT = "dry_run_result"
+
 
 class ServerEvent(BaseModel):
     """Base class for server events."""
@@ -404,7 +417,9 @@ class KnowledgeSearchResultsEvent(ServerEvent):
     )
     mode_used: str = Field(default="", description="RAG mode used for search")
     total_results: int = Field(default=0, description="Total number of results")
-    quality: dict[str, Any] | None = Field(default=None, description="Quality assessment summary (v1.1)")
+    quality: dict[str, Any] | None = Field(
+        default=None, description="Quality assessment summary (v1.1)"
+    )
 
 
 class KnowledgeErrorEvent(ServerEvent):
@@ -508,3 +523,199 @@ class ChunkPreviewEvent(ServerEvent):
     chunk_size: int = Field(..., description="Chunk size used")
     chunk_overlap: int = Field(..., description="Chunk overlap used")
     strategy: str = Field(..., description="Chunking strategy used")
+
+
+# =============================================================================
+# SimpleSkill Console Integration Events
+# =============================================================================
+
+
+class SkillSummary(BaseModel):
+    """Summary of a skill for list view."""
+
+    name: str = Field(..., description="Skill unique identifier")
+    display_name: str = Field(..., description="Human-readable name")
+    description: str | None = Field(default=None, description="Short description")
+    tools: list[str] = Field(default_factory=list, description="Tools provided by skill")
+    policy_action: str = Field(
+        default="allow",
+        description="Default policy action (allow/allow_with_consent/deny)",
+    )
+    side_effect: str = Field(default="none", description="Side effect type")
+    certification: str = Field(
+        default="unverified",
+        description="Certification level (unverified/bronze/silver/gold)",
+    )
+
+
+class SkillListEvent(ServerEvent):
+    """Event containing list of registered skills."""
+
+    event_type: EventType = Field(default=EventType.SKILL_LIST)
+    skills: list[SkillSummary] = Field(
+        default_factory=list,
+        description="List of skill summaries",
+    )
+
+
+class SkillPermission(BaseModel):
+    """A permission required by a skill."""
+
+    name: str = Field(..., description="Permission name")
+    description: str | None = Field(default=None, description="Why permission is needed")
+    is_sensitive: bool = Field(default=False, description="Whether this is a sensitive permission")
+
+
+class SkillDetail(BaseModel):
+    """Full detail of a single skill."""
+
+    name: str = Field(..., description="Skill unique identifier")
+    display_name: str = Field(..., description="Human-readable name")
+    description: str | None = Field(default=None, description="Full description")
+    version: str = Field(default="0.0.0", description="Skill version")
+    author: str | None = Field(default=None, description="Skill author")
+    tools: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="Tools with full schema",
+    )
+    permissions: list[SkillPermission] = Field(
+        default_factory=list,
+        description="Required permissions",
+    )
+    policy: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Invocation policy details",
+    )
+    hooks: list[str] = Field(default_factory=list, description="Registered hook names")
+    certification: str = Field(default="unverified", description="Certification level")
+    side_effect: str = Field(default="none", description="Side effect type")
+
+
+class SkillDetailEvent(ServerEvent):
+    """Event containing full detail of a skill."""
+
+    event_type: EventType = Field(default=EventType.SKILL_DETAIL)
+    skill: SkillDetail = Field(..., description="Skill detail")
+
+
+class SkillMetricsData(BaseModel):
+    """Metrics data for a skill."""
+
+    skill_name: str = Field(..., description="Skill name")
+    total_calls: int = Field(default=0, description="Total invocations")
+    success_count: int = Field(default=0, description="Successful invocations")
+    failure_count: int = Field(default=0, description="Failed invocations")
+    avg_latency_ms: float = Field(default=0.0, description="Average latency in milliseconds")
+    p50_latency_ms: float = Field(default=0.0, description="P50 latency")
+    p99_latency_ms: float = Field(default=0.0, description="P99 latency")
+    success_rate: float = Field(default=0.0, description="Success rate (0.0-1.0)")
+    last_invoked: datetime | None = Field(default=None, description="Last invocation time")
+
+
+class SkillMetricsEvent(ServerEvent):
+    """Event containing metrics for a skill."""
+
+    event_type: EventType = Field(default=EventType.SKILL_METRICS)
+    metrics: SkillMetricsData = Field(..., description="Skill metrics")
+
+
+class SkillLoadedEvent(ServerEvent):
+    """Event when a skill is successfully loaded."""
+
+    event_type: EventType = Field(default=EventType.SKILL_LOADED)
+    skill_name: str = Field(..., description="Loaded skill name")
+    message: str | None = Field(default=None, description="Optional success message")
+
+
+class SkillUnloadedEvent(ServerEvent):
+    """Event when a skill is unloaded."""
+
+    event_type: EventType = Field(default=EventType.SKILL_UNLOADED)
+    skill_name: str = Field(..., description="Unloaded skill name")
+
+
+class SkillConfiguredEvent(ServerEvent):
+    """Event when a skill configuration is updated."""
+
+    event_type: EventType = Field(default=EventType.SKILL_CONFIGURED)
+    skill_name: str = Field(..., description="Configured skill name")
+    policy_action: str | None = Field(default=None, description="New policy action")
+    auto_invoke: bool | None = Field(default=None, description="New auto-invoke setting")
+    message: str = Field(default="", description="Success message")
+
+
+class SkillErrorEvent(ServerEvent):
+    """Event when a skill operation fails."""
+
+    event_type: EventType = Field(default=EventType.SKILL_ERROR)
+    skill_name: str | None = Field(default=None, description="Skill name (if applicable)")
+    error_code: str = Field(..., description="Error code (skill_not_found, load_failed, etc.)")
+    message: str = Field(..., description="Human-readable error message")
+    suggestions: list[str] = Field(
+        default_factory=list,
+        description="Suggested actions",
+    )
+
+
+class ConsentRequestedEvent(ServerEvent):
+    """Event when user consent is required for a skill operation."""
+
+    event_type: EventType = Field(default=EventType.CONSENT_REQUESTED)
+    request_id: str = Field(..., description="Unique consent request identifier")
+    skill_name: str = Field(..., description="Skill requesting consent")
+    tool_name: str = Field(..., description="Specific tool requiring consent")
+    reason: str = Field(..., description="Why consent is needed")
+    permissions: list[str] = Field(
+        default_factory=list,
+        description="Permissions being requested",
+    )
+    timeout_seconds: int = Field(default=60, description="Consent request timeout")
+
+
+class ConsentResultEvent(ServerEvent):
+    """Event reporting the outcome of a consent request."""
+
+    event_type: EventType = Field(default=EventType.CONSENT_RESULT)
+    request_id: str = Field(..., description="Consent request identifier")
+    granted: bool = Field(..., description="Whether consent was granted")
+    remembered: bool = Field(default=False, description="Whether choice was remembered")
+
+
+class SkillBlockedEvent(ServerEvent):
+    """Event when a skill invocation is blocked by policy."""
+
+    event_type: EventType = Field(default=EventType.SKILL_BLOCKED)
+    skill_name: str = Field(..., description="Blocked skill name")
+    tool_name: str = Field(..., description="Blocked tool name")
+    policy_action: str = Field(..., description="Policy action that blocked (deny)")
+    reason: str = Field(..., description="Reason for blocking")
+
+
+class DryRunResult(BaseModel):
+    """Result of a dry-run validation."""
+
+    valid: bool = Field(..., description="Whether input passes validation")
+    schema_errors: list[str] = Field(
+        default_factory=list,
+        description="Schema validation errors",
+    )
+    policy_result: str = Field(
+        default="allow",
+        description="Policy evaluation result",
+    )
+    capability_gaps: list[str] = Field(
+        default_factory=list,
+        description="Missing host capabilities",
+    )
+    estimated_side_effects: list[str] = Field(
+        default_factory=list,
+        description="Predicted side effects",
+    )
+
+
+class DryRunResultEvent(ServerEvent):
+    """Event containing dry-run validation result."""
+
+    event_type: EventType = Field(default=EventType.DRY_RUN_RESULT)
+    skill_name: str = Field(..., description="Skill name")
+    result: DryRunResult = Field(..., description="Dry-run result")

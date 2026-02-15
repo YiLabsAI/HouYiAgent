@@ -1,3 +1,6 @@
+/**
+ * Panel — bottom tabbed panel for execution replay, observability, logs, etc.
+ */
 import React from 'react';
 import { ComparePanel } from './panels/ComparePanel';
 import { KnowledgeResultsPanel } from './panels/KnowledgeResultsPanel';
@@ -7,7 +10,7 @@ import { ObsFullView } from './panels/ObsFullView';
 import { TimelineWaterfall } from './panels/TimelineWaterfall';
 import { useConsoleStore } from '../stores/useConsoleStore';
 import { diffExecutions } from '@/utils/diff';
-import { ChevronUp, ChevronDown, Activity, Flag, FileText } from 'lucide-react';
+import { ChevronUp, ChevronDown, Activity, Flag, FileText, Maximize2, ArrowLeft } from 'lucide-react';
 
 interface ExecTreeNode {
   execId: string;
@@ -29,6 +32,10 @@ interface ExecTreeNodeViewProps {
   getCheckpointNodeChips: (cp: any) => string[];
   /** Set of node IDs that are the last node in the plan — used to detect terminal checkpoints */
   lastNodeIds: Set<string>;
+  /** Callback to toggle a checkpoint's checked state for compare mode. */
+  onToggleCheck?: (checkpointId: string, executionId: string) => void;
+  /** Currently checked checkpoints for compare selection. */
+  checkedCheckpoints?: Array<{ checkpointId: string; executionId: string }>;
 }
 
 const ExecTreeNodeView: React.FC<ExecTreeNodeViewProps> = ({
@@ -41,6 +48,8 @@ const ExecTreeNodeView: React.FC<ExecTreeNodeViewProps> = ({
   handleRestoreCheckpoint,
   getCheckpointNodeChips,
   lastNodeIds,
+  onToggleCheck,
+  checkedCheckpoints = [],
 }) => {
   const expanded = isCheckpointGroupExpanded(node.execId);
   const { parentExecId, replayMode, parentCheckpointId } = node;
@@ -86,6 +95,9 @@ const ExecTreeNodeView: React.FC<ExecTreeNodeViewProps> = ({
               : false;
             const triggerNodeId = cp.metadata?.trigger_node_id as string | undefined;
             const isTerminal = Boolean(triggerNodeId && lastNodeIds.has(triggerNodeId));
+            const isChecked = checkedCheckpoints.some(
+              (c) => c.checkpointId === cp.checkpoint_id && c.executionId === cp.execution_id,
+            );
             return (
               <div
                 key={`${cp.execution_id}:${cp.checkpoint_id}`}
@@ -100,10 +112,25 @@ const ExecTreeNodeView: React.FC<ExecTreeNodeViewProps> = ({
                 }`}
               >
                 <div className="flex justify-between items-center gap-3">
-                  <span className="text-sm font-medium">
-                    Checkpoint #{cp.sequence_number || '?'}
-                    {isTerminal && <span className="ml-1 text-[10px] text-amber-400">(terminal)</span>}
-                  </span>
+                  <div className="flex items-center gap-2">
+                    {/* Checkbox for compare selection */}
+                    <input
+                      type="checkbox"
+                      checked={isChecked}
+                      onChange={(e) => {
+                        e.stopPropagation();
+                        onToggleCheck?.(cp.checkpoint_id, cp.execution_id);
+                      }}
+                      onClick={(e) => e.stopPropagation()}
+                      className="w-3.5 h-3.5 rounded border-gray-500 bg-gray-800 text-blue-500 focus:ring-blue-500 focus:ring-offset-0 cursor-pointer shrink-0"
+                      title="Select for compare"
+                      aria-label={`Select checkpoint #${cp.sequence_number || '?'} for compare`}
+                    />
+                    <span className="text-sm font-medium">
+                      Checkpoint #{cp.sequence_number || '?'}
+                      {isTerminal && <span className="ml-1 text-[10px] text-amber-400">(terminal)</span>}
+                    </span>
+                  </div>
                   <div className="flex items-center gap-2 shrink-0">
                     <button
                       type="button"
@@ -188,6 +215,8 @@ const ExecTreeNodeView: React.FC<ExecTreeNodeViewProps> = ({
               handleRestoreCheckpoint={handleRestoreCheckpoint}
               getCheckpointNodeChips={getCheckpointNodeChips}
               lastNodeIds={lastNodeIds}
+              onToggleCheck={onToggleCheck}
+              checkedCheckpoints={checkedCheckpoints}
             />
           ))}
         </div>
@@ -199,14 +228,16 @@ const ExecTreeNodeView: React.FC<ExecTreeNodeViewProps> = ({
 interface BottomPanelProps {
   isCollapsed: boolean;
   onToggleCollapse: () => void;
-  activeTab?: 'observability' | 'checkpoints' | 'logs' | 'context' | 'compare' | 'knowledge';
+  activeTab?: 'observability' | 'checkpoints' | 'context' | 'logs' | 'knowledge';
   onTabChange?: (
-    tab: 'observability' | 'checkpoints' | 'logs' | 'context' | 'compare' | 'knowledge',
+    tab: 'observability' | 'checkpoints' | 'context' | 'logs' | 'knowledge',
   ) => void;
   height?: number;
+  /** Called when user clicks expand button to open current tab in Center Stage L. */
+  onExpandTab?: (tab: string) => void;
 }
 
-type TabType = 'observability' | 'checkpoints' | 'logs' | 'context' | 'compare' | 'knowledge';
+type TabType = 'observability' | 'checkpoints' | 'context' | 'logs' | 'knowledge';
 
 export const BottomPanel: React.FC<BottomPanelProps> = ({
   isCollapsed,
@@ -214,9 +245,13 @@ export const BottomPanel: React.FC<BottomPanelProps> = ({
   activeTab: controlledActiveTab,
   onTabChange,
   height = 280,
+  onExpandTab,
 }) => {
   const [uncontrolledActiveTab, setUncontrolledActiveTab] = React.useState<TabType>('observability');
   const [showObsFullView, setShowObsFullView] = React.useState(false);
+  // Checkpoints: internal dual-view (list / compare)
+  const [replayView, setReplayView] = React.useState<'list' | 'compare'>('list');
+  const [checkedCheckpoints, setCheckedCheckpoints] = React.useState<Array<{ checkpointId: string; executionId: string }>>([]);
   const activeTab = controlledActiveTab ?? uncontrolledActiveTab;
   const setActiveTab = (tab: TabType) => {
     if (onTabChange) {
@@ -442,11 +477,41 @@ export const BottomPanel: React.FC<BottomPanelProps> = ({
   const tabs: { id: TabType; label: string }[] = [
     { id: 'observability', label: 'Observability' },
     { id: 'checkpoints', label: 'Checkpoints' },
-    { id: 'logs', label: 'Logs' },
     { id: 'context', label: 'Context' },
-    { id: 'compare', label: 'Compare' },
+    { id: 'logs', label: 'Logs' },
     { id: 'knowledge', label: 'Knowledge' },
   ];
+
+  // Auto-switch to compare view when 2 checkpoints are checked
+  React.useEffect(() => {
+    if (checkedCheckpoints.length >= 2) {
+      setReplayView('compare');
+    }
+  }, [checkedCheckpoints]);
+
+  const handleToggleCheckpointCheck = React.useCallback(
+    (checkpointId: string, executionId: string) => {
+      setCheckedCheckpoints((prev) => {
+        const exists = prev.some(
+          (c) => c.checkpointId === checkpointId && c.executionId === executionId,
+        );
+        if (exists) {
+          return prev.filter(
+            (c) => !(c.checkpointId === checkpointId && c.executionId === executionId),
+          );
+        }
+        // Keep only last 2
+        const next = [...prev, { checkpointId, executionId }];
+        return next.length > 2 ? next.slice(-2) : next;
+      });
+    },
+    [],
+  );
+
+  const handleBackToList = React.useCallback(() => {
+    setReplayView('list');
+    setCheckedCheckpoints([]);
+  }, []);
 
   return (
     <div
@@ -456,9 +521,9 @@ export const BottomPanel: React.FC<BottomPanelProps> = ({
       {isCollapsed ? (
         <div className="h-full flex items-center justify-between px-4">
           <div className="flex gap-2 text-xs text-gray-400">
-            <span>Observability</span>
-            <span>•</span>
             <span>Checkpoints</span>
+            <span>•</span>
+            <span>Observability</span>
             <span>•</span>
             <span>Context</span>
           </div>
@@ -490,13 +555,46 @@ export const BottomPanel: React.FC<BottomPanelProps> = ({
             </div>
             <div className="flex items-center gap-2 pr-2">
               <button
-                onClick={() => setShowObsFullView(true)}
+                onClick={() => onExpandTab?.(activeTab)}
                 className="p-1.5 rounded hover:bg-gray-700 text-gray-400 hover:text-gray-200 transition-colors"
-                title="Open full observability view (waterfall + metrics)"
+                title="Expand to Center Stage"
                 type="button"
               >
-                <Activity size={16} />
+                <Maximize2 size={14} />
               </button>
+              {activeTab === 'observability' && (
+                <button
+                  onClick={() => setShowObsFullView(true)}
+                  className="p-1.5 rounded hover:bg-gray-700 text-gray-400 hover:text-gray-200 transition-colors"
+                  title="Open full observability view (waterfall + metrics)"
+                  type="button"
+                >
+                  <Activity size={16} />
+                </button>
+              )}
+              {activeTab === 'checkpoints' && checkedCheckpoints.length >= 2 && replayView === 'list' && (
+                <button
+                  onClick={() => setReplayView('compare')}
+                  className="px-2 py-1 text-[11px] rounded border border-blue-500 text-blue-300 hover:bg-blue-600/20 transition-colors"
+                  title={`Compare ${checkedCheckpoints.length} selected checkpoints`}
+                  type="button"
+                >
+                  Compare ({checkedCheckpoints.length})
+                </button>
+              )}
+              {activeTab === 'checkpoints' && checkedCheckpoints.length > 0 && (
+                <button
+                  onClick={() => {
+                    setCheckedCheckpoints([]);
+                    setReplayView('list');
+                  }}
+                  className="px-2 py-1 text-[11px] rounded border border-gray-600 text-gray-400 hover:text-gray-200 hover:bg-gray-700 transition-colors"
+                  title="Clear checkpoint selection"
+                  type="button"
+                >
+                  Clear
+                </button>
+              )}
               {viewMode === 'checkpoint' && (
                 <button
                   onClick={exitCheckpointView}
@@ -531,30 +629,65 @@ export const BottomPanel: React.FC<BottomPanelProps> = ({
             )}
 
             {activeTab === 'checkpoints' && (
-              <div className="space-y-2">
-                {checkpointTree.length === 0 ? (
-                  <div className="flex items-center justify-center h-full">
-                    <div className="text-center text-gray-500">
-                      <Flag size={32} className="mx-auto mb-2 opacity-50" />
-                      <div className="text-sm">No checkpoints created yet</div>
-                      <div className="text-xs mt-1">Checkpoints will appear here during execution</div>
+              <div className="h-full">
+                {replayView === 'compare' ? (
+                  <div className="h-full flex flex-col">
+                    <div className="flex items-center gap-2 mb-3">
+                      <button
+                        type="button"
+                        onClick={handleBackToList}
+                        className="flex items-center gap-1 px-2 py-1 text-xs text-gray-300 hover:text-gray-100 hover:bg-gray-700 rounded transition-colors"
+                      >
+                        <ArrowLeft size={12} />
+                        Back to List
+                      </button>
+                      <span className="text-[10px] text-gray-500">
+                        Comparing {checkedCheckpoints.length} checkpoints
+                      </span>
+                    </div>
+                    <div className="flex-1 min-h-0">
+                      <ComparePanel preSelectedCheckpoints={checkedCheckpoints} />
                     </div>
                   </div>
                 ) : (
-                  checkpointTree.map((rootNode) => (
-                    <ExecTreeNodeView
-                      key={rootNode.execId}
-                      node={rootNode}
-                      depth={0}
-                      isCheckpointGroupExpanded={isCheckpointGroupExpanded}
-                      setExpandedCheckpointExecutions={setExpandedCheckpointExecutions}
-                      effectiveSelectedKey={effectiveSelectedKey}
-                      loadCheckpoint={loadCheckpoint}
-                      handleRestoreCheckpoint={handleRestoreCheckpoint}
-                      getCheckpointNodeChips={getCheckpointNodeChips}
-                      lastNodeIds={lastNodeIds}
-                    />
-                  ))
+                  <div className="space-y-2">
+                    {checkpointTree.length === 0 ? (
+                      <div className="flex items-center justify-center h-full">
+                        <div className="text-center text-gray-500">
+                          <Flag size={32} className="mx-auto mb-2 opacity-50" />
+                          <div className="text-sm">No checkpoints created yet</div>
+                          <div className="text-xs mt-1">Checkpoints will appear here during execution</div>
+                          <div className="text-[10px] mt-2 text-gray-600">
+                            Check any 2 checkpoints to enter Compare mode
+                          </div>
+                        </div>
+                      </div>
+                    ) : (
+                      <>
+                        {checkedCheckpoints.length > 0 && checkedCheckpoints.length < 2 && (
+                          <div className="text-[10px] text-blue-400 mb-1">
+                            Select {2 - checkedCheckpoints.length} more checkpoint{checkedCheckpoints.length === 0 ? 's' : ''} to compare
+                          </div>
+                        )}
+                        {checkpointTree.map((rootNode) => (
+                          <ExecTreeNodeView
+                            key={rootNode.execId}
+                            node={rootNode}
+                            depth={0}
+                            isCheckpointGroupExpanded={isCheckpointGroupExpanded}
+                            setExpandedCheckpointExecutions={setExpandedCheckpointExecutions}
+                            effectiveSelectedKey={effectiveSelectedKey}
+                            loadCheckpoint={loadCheckpoint}
+                            handleRestoreCheckpoint={handleRestoreCheckpoint}
+                            getCheckpointNodeChips={getCheckpointNodeChips}
+                            lastNodeIds={lastNodeIds}
+                            onToggleCheck={handleToggleCheckpointCheck}
+                            checkedCheckpoints={checkedCheckpoints}
+                          />
+                        ))}
+                      </>
+                    )}
+                  </div>
                 )}
               </div>
             )}
@@ -679,14 +812,10 @@ export const BottomPanel: React.FC<BottomPanelProps> = ({
 
             {activeTab === 'logs' && <LogsPanel viewExecution={viewExecution} />}
 
-            {activeTab === 'compare' && <ComparePanel />}
-
             {activeTab === 'knowledge' && <KnowledgeResultsPanel />}
           </div>
 
-          {showObsFullView && (
-            <ObsFullView onClose={() => setShowObsFullView(false)} />
-          )}
+          <ObsFullView isOpen={showObsFullView} onClose={() => setShowObsFullView(false)} />
 
           {showRestoreDialog && (
             <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">

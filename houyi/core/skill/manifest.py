@@ -1,6 +1,6 @@
 """SimpleSkill Manifest parser and validator.
 
-This module implements Layer A (Manifest) of SimpleSkill v0.1:
+This module implements Layer A (Manifest) of SimpleSkill:
 - simpleskill.json schema parsing
 - Contributions index (tools/skills/resources)
 - Activation events
@@ -128,13 +128,20 @@ class ToolContribution:
 
 @dataclass
 class SkillContribution:
-    """Skill contribution specification."""
+    """Skill contribution specification.
+
+    A skill contribution can reference an external SKILL.md file via ``path``,
+    or provide inline metadata when no path is given.
+    """
 
     id: str
     """Unique skill identifier."""
 
     description: str
     """Human-readable description."""
+
+    path: str = ""
+    """Relative path to SKILL.md (empty if metadata is inline)."""
 
     invocation_policy: InvocationPolicy = field(default_factory=InvocationPolicy)
     """Invocation policy for this skill."""
@@ -155,6 +162,7 @@ class SkillContribution:
         return cls(
             id=data.get("id", ""),
             description=data.get("description", ""),
+            path=data.get("path", ""),
             invocation_policy=policy,
             tool_refs=data.get("toolRefs", []),
             resources=data.get("resources", []),
@@ -380,6 +388,7 @@ class SkillManifest:
                     {
                         "id": s.id,
                         "description": s.description,
+                        **({"path": s.path} if s.path else {}),
                         "invocationPolicy": s.invocation_policy.to_dict(),
                         "toolRefs": s.tool_refs,
                         "resources": s.resources,

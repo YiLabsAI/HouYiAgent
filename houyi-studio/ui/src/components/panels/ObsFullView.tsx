@@ -3,8 +3,10 @@ import { useConsoleStore } from '@/stores/useConsoleStore';
 import { ExecutionLineageTree } from './ExecutionLineageTree';
 import { TimelineWaterfall } from './TimelineWaterfall';
 import { MetricsPanel } from './MetricsPanel';
+import { CenterStage } from '@/components/CenterStage';
 
 export interface ObsFullViewProps {
+  isOpen: boolean;
   onClose: () => void;
 }
 
@@ -18,7 +20,7 @@ export interface ObsFullViewProps {
  *
  * Triggered from the Logs tab "Expand" button. Occupies 90% viewport as overlay.
  */
-export const ObsFullView: React.FC<ObsFullViewProps> = ({ onClose }) => {
+export const ObsFullView: React.FC<ObsFullViewProps> = ({ isOpen, onClose }) => {
   const { spanStore, currentExecution, liveExecution } = useConsoleStore();
   const getSpanTree = useConsoleStore((s) => s.getSpanTree);
 
@@ -57,33 +59,14 @@ export const ObsFullView: React.FC<ObsFullViewProps> = ({ onClose }) => {
     document.addEventListener('mouseup', handleMouseUp);
   }, [leftWidth]);
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-      <div
-        className="bg-gray-900 border border-gray-700 rounded-lg shadow-2xl flex flex-col"
-        style={{ width: '92vw', height: '90vh' }}
-      >
-        {/* Header */}
-        <div className="flex items-center justify-between px-4 py-2 border-b border-gray-700 shrink-0">
-          <div className="flex items-center gap-3">
-            <span className="text-sm font-medium text-gray-200">Observability Full View</span>
-            {effectiveExecId && (
-              <span className="text-[10px] text-gray-500 font-mono">
-                {effectiveExecId.length > 24 ? effectiveExecId.slice(0, 12) + '…' + effectiveExecId.slice(-6) : effectiveExecId}
-              </span>
-            )}
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="px-3 py-1 text-xs bg-gray-700 hover:bg-gray-600 text-gray-300 hover:text-white rounded transition-colors"
-          >
-            Close
-          </button>
-        </div>
+  const titleSuffix = effectiveExecId
+    ? ` — ${effectiveExecId.length > 24 ? effectiveExecId.slice(0, 12) + '…' + effectiveExecId.slice(-6) : effectiveExecId}`
+    : '';
 
-        {/* Main content: split pane */}
-        <div className="flex flex-1 min-h-0 overflow-hidden">
+  return (
+    <CenterStage isOpen={isOpen} onClose={onClose} size="L" title={`Observability${titleSuffix}`}>
+      {/* Main content: split pane */}
+      <div className="flex flex-1 min-h-0 overflow-hidden -m-4" style={{ height: 'calc(85vh - 60px)' }}>
           {/* Left: Execution Tree */}
           <div
             className="shrink-0 overflow-y-auto border-r border-gray-700 p-2"
@@ -124,8 +107,7 @@ export const ObsFullView: React.FC<ObsFullViewProps> = ({ onClose }) => {
               <MetricsPanel executionId={effectiveExecId || undefined} />
             </div>
           </div>
-        </div>
       </div>
-    </div>
+    </CenterStage>
   );
 };

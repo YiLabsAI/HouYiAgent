@@ -6,10 +6,11 @@
  *
  */
 import React from 'react';
-import { X, RotateCcw } from 'lucide-react';
+import { RotateCcw } from 'lucide-react';
 import { useChatStore } from '@/stores/useChatStore';
 import { DEFAULT_MODEL } from '@/constants/models';
 import { useAvailableModels } from '@/hooks/useAvailableModels';
+import { CenterStage } from '@/components/CenterStage';
 
 interface ConversationSettingsDrawerProps {
   isOpen: boolean;
@@ -69,8 +70,6 @@ export const ConversationSettingsDrawer: React.FC<ConversationSettingsDrawerProp
     }
   }, [activeConversation?.conversation_id, isOpen]);
 
-  if (!isOpen) return null;
-
   const handleSave = async () => {
     if (!activeConversation) return;
     const parsedMaxTokens = maxTokens ? Math.min(parseInt(maxTokens), 131072) : undefined;
@@ -106,32 +105,11 @@ export const ConversationSettingsDrawer: React.FC<ConversationSettingsDrawerProp
   };
 
   return (
-    <>
-      {/* Backdrop */}
-      <div
-        className="fixed inset-0 bg-black/40 z-40"
-        onClick={onClose}
-      />
-
-      {/* Drawer */}
-      <div className="fixed right-0 top-0 h-full w-[380px] bg-gray-900 border-l border-gray-700 z-50 flex flex-col shadow-2xl">
-        {/* Header */}
-        <div className="flex items-center justify-between px-4 py-3 border-b border-gray-700">
-          <h2 className="text-sm font-semibold text-gray-200">Conversation Settings</h2>
-          <button
-            onClick={onClose}
-            className="p-1 hover:bg-gray-700 rounded text-gray-400 hover:text-gray-200 transition-colors"
-            type="button"
-          >
-            <X size={16} />
-          </button>
-        </div>
-
-        {/* Content */}
-        <div className="flex-1 overflow-y-auto px-4 py-3 space-y-4">
-          {!activeConversation ? (
-            <div className="text-[12px] text-gray-500">No active conversation</div>
-          ) : (
+    <CenterStage isOpen={isOpen} onClose={onClose} size="M" title="Conversation Settings">
+      <div className="space-y-4">
+        {!activeConversation ? (
+          <div className="text-[12px] text-gray-500">No active conversation</div>
+        ) : (
             <>
               {/* Title */}
               <div>
@@ -315,9 +293,8 @@ export const ConversationSettingsDrawer: React.FC<ConversationSettingsDrawerProp
                 Global Settings...
               </button>
             </>
-          )}
-        </div>
+        )}
       </div>
-    </>
+    </CenterStage>
   );
 };

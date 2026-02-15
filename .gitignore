@@ -82,3 +82,6 @@ CLAUDE.md
 # Houyi runtime data
 .houyi/
 knowledge/
+
+# pnpm store cache
+.pnpm-store/

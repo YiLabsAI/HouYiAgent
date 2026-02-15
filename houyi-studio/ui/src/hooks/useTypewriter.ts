@@ -19,7 +19,15 @@ const TICK_INTERVAL_MS = 16; // ~60fps
 const CATCH_UP_MULTIPLIER = 3;
 
 export function useTypewriter(targetText: string, isStreaming: boolean): string {
-  const [displayedLen, setDisplayedLen] = useState(0);
+  // When mounting mid-stream (e.g. switching back to a conversation that is
+  // still streaming), skip to near the end so we don't re-animate everything
+  // from scratch.  Show at most the last ~40 chars as typewriter reveal.
+  const [displayedLen, setDisplayedLen] = useState(() => {
+    if (isStreaming && targetText.length > 40) {
+      return targetText.length - 40;
+    }
+    return isStreaming ? 0 : targetText.length;
+  });
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const targetLenRef = useRef(targetText.length);
 

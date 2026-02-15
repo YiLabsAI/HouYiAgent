@@ -80,7 +80,9 @@ get_changed_python_files() {
         git ls-files --others --exclude-standard
     } 2>/dev/null | awk '
         ($0 ~ /\.pyi?$/) { print $0 }
-    ' | sort -u
+    ' | sort -u | while read -r file; do
+        [ -f "$file" ] && echo "$file"
+    done
 }
 
 CHANGED_PY_FILES=$(get_changed_python_files)

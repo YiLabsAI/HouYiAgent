@@ -43,6 +43,21 @@ class ToolCallRunner:
         self._consent_cache: dict[str, bool] = {}  # skill_name -> consent_granted
         self._metrics_collectors: dict[str, Any] = {}  # skill_name -> MetricsCollector
 
+    async def _trigger_stop_hook(self, tool_trace: list[dict[str, Any]]) -> None:
+        """Trigger the Stop hook at the end of a tool-calling session."""
+        if not self.skill_hooks_manager:
+            return
+        from houyi.core.skill.hooks import HookContext, HookEvent
+
+        stop_ctx = HookContext(
+            tool_name="__session__",
+            tool_args={"tool_trace_length": len(tool_trace)},
+        )
+        try:
+            await self.skill_hooks_manager.trigger_hook(HookEvent.STOP, stop_ctx)
+        except Exception:
+            logger.debug("Stop hook error (non-fatal)", exc_info=True)
+
     def get_skill_metrics(self, skill_name: str) -> Any:
         """Get aggregated metrics for a skill.
 
@@ -101,8 +116,62 @@ class ToolCallRunner:
         allow_tool_replace: bool = False,
         tool_cache: dict[str, dict[str, Any]] | None = None,
         llm_cache: dict[str, Any] | None = None,
+        preprocessors: list[Any] | None = None,
     ) -> tuple[Any, list[dict[str, Any]]]:
-        """Run tool-calling loop until no tool calls are returned."""
+        """Run tool-calling loop until no tool calls are returned.
+
+        Args:
+            preprocessors: Optional list of PreprocessorSpec objects.  When
+                provided, a :class:`PreprocessorPipeline` executes them
+                **before** the first LLM call and injects their outputs into
+                the message context.
+        """
+        from houyi.core.skill.hooks import HookContext, HookEvent
+
+        # --- Preprocessors: deterministic pre-LLM execution (M8) ---
+        if preprocessors:
+            from houyi.core.skill.preprocessor import PreprocessorPipeline
+
+            pipeline = PreprocessorPipeline(preprocessors)
+            try:
+                pp_results = await pipeline.run()
+                messages = pipeline.inject(messages, pp_results)
+                logger.debug(
+                    "Preprocessors executed: %d total, %d successful",
+                    len(pp_results),
+                    sum(1 for r in pp_results if r.success),
+                )
+            except Exception:
+                logger.warning("Preprocessor pipeline error (non-fatal)", exc_info=True)
+
+        # --- SessionStart hook ---
+        if self.skill_hooks_manager:
+            session_ctx = HookContext(
+                tool_name="__session__",
+                tool_args={
+                    "max_rounds": max_rounds,
+                    "tool_count": len(tools),
+                    "skill_count": len(skills),
+                },
+            )
+            try:
+                await self.skill_hooks_manager.trigger_hook(HookEvent.SESSION_START, session_ctx)
+            except Exception:
+                logger.debug("SessionStart hook error (non-fatal)", exc_info=True)
+
+        # --- Tool Router: allowed-tools whitelist enforcement (M9) ---
+        from houyi.core.skill.tool_router import ToolRouter
+
+        tool_router = ToolRouter(skills, self.policy_enforcer)
+        if tool_router.has_restrictions:
+            original_count = len(tools)
+            tools = tool_router.filter_tools(tools)
+            logger.debug(
+                "ToolRouter: filtered %d → %d tools",
+                original_count,
+                len(tools),
+            )
+
         timing_enabled = os.getenv("HOUYI_TOOLCALL_TIMING") == "1"
         skills_by_name = {skill.name: skill for skill in skills}
         all_tool_names = {name for name in skills_by_name if name}
@@ -192,6 +261,7 @@ class ToolCallRunner:
                         round_index + 1,
                         time.perf_counter() - loop_start,
                     )
+                await self._trigger_stop_hook(tool_trace)
                 return response, tool_trace
 
             messages.append(
@@ -619,6 +689,7 @@ class ToolCallRunner:
                             "[ToolCallRunner] fast_path=early_exit round=%s",
                             round_index + 1,
                         )
+                    await self._trigger_stop_hook(tool_trace)
                     return response, tool_trace
                 if timing_enabled:
                     logger.info(
@@ -646,6 +717,7 @@ class ToolCallRunner:
                     time.perf_counter() - round_start,
                 )
 
+        await self._trigger_stop_hook(tool_trace)
         return response, tool_trace
 
     def _clone_llm_response(self, response: Any) -> Any:

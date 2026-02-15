@@ -158,15 +158,34 @@ class SkillRegistry:
         # Register skills from contributions
         if manifest.contributions and manifest.contributions.skills:
             for skill_contrib in manifest.contributions.skills:
-                skill_path = base_dir / skill_contrib.path
                 try:
-                    skill = SkillSpec.from_file(str(skill_path))
+                    if skill_contrib.path:
+                        # Path-based: load SKILL.md from relative path
+                        skill_path = base_dir / skill_contrib.path
+                        skill = SkillSpec.from_file(str(skill_path))
+                    else:
+                        # Inline: create SkillSpec from contribution metadata
+                        from pydantic import BaseModel as _BaseModel
+
+                        _empty = type(
+                            f"Empty_{skill_contrib.id.replace('-', '_')}",
+                            (_BaseModel,),
+                            {},
+                        )
+                        skill = SkillSpec(
+                            name=skill_contrib.id,
+                            description=skill_contrib.description,
+                            input_schema=_empty,
+                            output_schema=_empty,
+                            invocation_policy=skill_contrib.invocation_policy,
+                        )
                     self.register(skill, overwrite=overwrite)
                     registered.append(skill.name)
                 except Exception as e:
                     logger.warning(
-                        "Failed to load skill from %s: %s",
-                        skill_path,
+                        "Failed to load skill '%s' from manifest %s: %s",
+                        skill_contrib.id,
+                        manifest_path,
                         e,
                     )
 

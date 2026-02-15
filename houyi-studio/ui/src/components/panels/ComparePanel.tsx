@@ -4,7 +4,13 @@ import type { ExecutionIR } from '@/types/ir';
 import { diffExecutions, type NodeExecutionChangeSet } from '@/utils/diff';
 import { GitCompareArrows } from 'lucide-react';
 
-export const ComparePanel: React.FC = () => {
+interface ComparePanelProps {
+  /** Pre-selected checkpoint IDs from the fused Checkpoints tab.
+   *  When provided with exactly 2 entries, auto-sets before/after. */
+  preSelectedCheckpoints?: Array<{ checkpointId: string; executionId: string }>;
+}
+
+export const ComparePanel: React.FC<ComparePanelProps> = ({ preSelectedCheckpoints }) => {
   const { checkpoints, currentExecution, liveExecution, checkpointExecution, viewMode } = useConsoleStore();
 
   const buildChangeBadges = (changes: NodeExecutionChangeSet) => {
@@ -93,10 +99,26 @@ export const ComparePanel: React.FC = () => {
   );
 
   React.useEffect(() => {
+    // When pre-selected checkpoints are provided (from fusion), map to indices.
+    if (preSelectedCheckpoints && preSelectedCheckpoints.length >= 2) {
+      const findIndex = (cpId: string, execId: string) =>
+        executionScopedCheckpoints.findIndex(
+          (cp) => cp.checkpoint_id === cpId && cp.execution_id === execId,
+        );
+      const idx0 = findIndex(preSelectedCheckpoints[0].checkpointId, preSelectedCheckpoints[0].executionId);
+      const idx1 = findIndex(preSelectedCheckpoints[1].checkpointId, preSelectedCheckpoints[1].executionId);
+      if (idx0 >= 0 && idx1 >= 0) {
+        // Earlier checkpoint as before, later as after.
+        setBeforeIndex(Math.min(idx0, idx1));
+        setAfterIndex(Math.max(idx0, idx1));
+        return;
+      }
+    }
+    // Default: latest two checkpoints.
     const lastIndex = Math.max(executionScopedCheckpoints.length - 1, 0);
     setAfterIndex(lastIndex);
     setBeforeIndex(Math.max(lastIndex - 1, 0));
-  }, [executionScopedCheckpoints.length, effectiveScopeExecutionId]);
+  }, [executionScopedCheckpoints.length, effectiveScopeExecutionId, preSelectedCheckpoints, executionScopedCheckpoints]);
   const beforeCheckpoint = executionScopedCheckpoints[beforeIndex];
   const afterCheckpoint = executionScopedCheckpoints[afterIndex];
   const beforeExec = beforeCheckpoint?.execution_snapshot as ExecutionIR | undefined;

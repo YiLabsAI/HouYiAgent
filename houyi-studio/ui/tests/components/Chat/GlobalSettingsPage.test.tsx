@@ -35,7 +35,10 @@ const defaultSettings = {
 
 describe('GlobalSettingsPage', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    // resetAllMocks clears both call history AND the implementation queue
+    // (clearAllMocks only clears call history, leaving unconsumed mockResolvedValueOnce entries)
+    vi.resetAllMocks();
+    global.fetch = mockFetch;
   });
 
   it('returns null when not open', () => {
@@ -115,9 +118,14 @@ describe('GlobalSettingsPage', () => {
 
     render(<GlobalSettingsPage isOpen={true} onClose={vi.fn()} />);
 
+    // Wait for settings to load (model input appears)
     await waitFor(() => {
-      expect(screen.getByText('Save')).toBeInTheDocument();
+      expect(screen.getByPlaceholderText('deepseek-ai/DeepSeek-V3')).toBeInTheDocument();
     });
+
+    // Make the form dirty by changing the default model
+    const modelInput = screen.getByPlaceholderText('deepseek-ai/DeepSeek-V3');
+    fireEvent.change(modelInput, { target: { value: 'gpt-4' } });
 
     fireEvent.click(screen.getByText('Save'));
 

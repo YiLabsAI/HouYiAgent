@@ -8,7 +8,7 @@
  * - Context usage indicator
  */
 import React from 'react';
-import { Send, Square, Paperclip, Brain, Globe } from 'lucide-react';
+import { Send, Square, Paperclip, Brain, Globe, Search } from 'lucide-react';
 import { useConsoleStore } from '@/stores/useConsoleStore';
 
 interface ComposerProps {
@@ -105,6 +105,7 @@ export const Composer: React.FC<ComposerProps> = ({
   const [text, setText] = React.useState('');
   const [enableReasoning, setEnableReasoning] = React.useState(false);
   const [enableWebSearch, setEnableWebSearch] = React.useState(false);
+  const [enableDeepResearch, setEnableDeepResearch] = React.useState(false);
   const showToast = useConsoleStore((s) => s.showToast);
   const [attachments, setAttachments] = React.useState<File[]>([]);
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
@@ -267,6 +268,21 @@ export const Composer: React.FC<ComposerProps> = ({
               type="button"
             >
               <Globe size={14} />
+            </button>
+
+            {/* Deep Research mode toggle */}
+            <button
+              onClick={() => setEnableDeepResearch((v) => !v)}
+              className={`p-1 rounded transition-colors ${
+                enableDeepResearch
+                  ? 'bg-green-600/20 text-green-400 hover:bg-green-600/30'
+                  : 'hover:bg-gray-800 text-gray-500 hover:text-gray-300'
+              }`}
+              title={enableDeepResearch ? 'Deep Research ON — multi-step search & synthesis' : 'Deep Research OFF'}
+              type="button"
+              data-testid="deep-research-toggle"
+            >
+              <Search size={14} />
             </button>
           </div>
         </div>

@@ -8,7 +8,8 @@
  *
  */
 import React from 'react';
-import { X, Plus, Trash2, ChevronDown, ChevronRight, Wifi, WifiOff, RefreshCw, Eye, EyeOff, Check } from 'lucide-react';
+import { Plus, Trash2, ChevronDown, ChevronRight, Wifi, WifiOff, RefreshCw, Eye, EyeOff, Check, X } from 'lucide-react';
+import { CenterStage } from '@/components/CenterStage';
 import {
   PROVIDER_DISPLAY_NAMES,
   PROVIDER_SILICONFLOW,
@@ -260,24 +261,9 @@ export const GlobalSettingsPage: React.FC<GlobalSettingsPageProps> = ({ isOpen, 
     });
   };
 
-  if (!isOpen) return null;
-
   return (
-    <div className="fixed inset-0 z-50 bg-gray-900 flex flex-col">
-      {/* Header */}
-      <div className="flex items-center justify-between px-6 py-3 border-b border-gray-700">
-        <h1 className="text-base font-semibold text-gray-200">Global Settings</h1>
-        <button
-          onClick={onClose}
-          className="p-1.5 hover:bg-gray-700 rounded text-gray-400 hover:text-gray-200 transition-colors"
-          type="button"
-        >
-          <X size={18} />
-        </button>
-      </div>
-
-      {/* Content */}
-      <div className="flex-1 overflow-y-auto px-6 py-4">
+    <CenterStage isOpen={isOpen} onClose={onClose} size="L" title="Global Settings">
+      <div>
         {loading && <div className="text-[12px] text-gray-500">Loading settings...</div>}
         {error && <div className="text-[12px] text-red-400 mb-3">{error}</div>}
 
@@ -736,6 +722,6 @@ export const GlobalSettingsPage: React.FC<GlobalSettingsPageProps> = ({ isOpen, 
           </span>
         )}
       </div>
-    </div>
+    </CenterStage>
   );
 };

@@ -36,24 +36,34 @@ export const createWsActions = (set: StoreSet, get: StoreGet) => ({
       get().handleEvent(event);
     });
 
+    // Track whether we ever successfully connected.  Only show the
+    // "not connected" toast after a previously successful connection is
+    // lost — not during the initial handshake (avoids a flash on page
+    // refresh where the old WS fires 'close' before the new one opens).
+    let everConnected = false;
+
     ws.onStatus((status) => {
       const toastKey = 'backend-connection';
       if (status === 'connected') {
+        everConnected = true;
         set({ connectionStatus: 'connected' });
         get().removeToastByKey(toastKey);
         return;
       }
 
       if (status === 'disconnected') {
-        // ReconnectingWebSocket will auto-reconnect; don't abort execution
-        // on transient disconnects. Only show toast as a warning.
         set({ connectionStatus: 'disconnected' });
-        get().showToastOnce(toastKey, 'Backend not connected. Please start the server.', 'error');
+        // Only show warning after we were previously connected
+        if (everConnected) {
+          get().showToastOnce(toastKey, 'Backend not connected. Please start the server.', 'error');
+        }
         return;
       }
 
       set({ connectionStatus: 'error' });
-      get().showToastOnce(toastKey, 'Backend not connected. Please start the server.', 'error');
+      if (everConnected) {
+        get().showToastOnce(toastKey, 'Backend not connected. Please start the server.', 'error');
+      }
     });
 
     ws.connect();
@@ -610,6 +620,33 @@ export const createWsActions = (set: StoreSet, get: StoreGet) => ({
         {
           // Update span store for Timeline visualization
           get().updateSpan(event);
+        }
+        break;
+
+      // ====================================================================
+      // Skill Events (routed to registered handlers via subscription API)
+      // ====================================================================
+      case 'skill_list':
+      case 'skill_detail':
+      case 'skill_metrics':
+      case 'skill_loaded':
+      case 'skill_unloaded':
+      case 'skill_error':
+      case 'consent_requested':
+      case 'consent_result':
+      case 'skill_blocked':
+      case 'dry_run_result':
+        {
+          const handlers = get()._skillEventHandlers?.get(eventType);
+          if (handlers) {
+            handlers.forEach((handler: (event: unknown) => void) => {
+              try {
+                handler(event);
+              } catch (err) {
+                console.error('[Store] Skill event handler error:', err);
+              }
+            });
+          }
         }
         break;
 

@@ -86,8 +86,15 @@ from houyi.core.skill.policy import (
     ResourceLimits,
     SideEffect,
 )
+from houyi.core.skill.preprocessor import (
+    PreprocessorPipeline,
+    PreprocessorResult,
+    PreprocessorSpec,
+    PreprocessorType,
+)
 from houyi.core.skill.schema import parse_hooks_config, parse_skill_md
 from houyi.core.skill.spec import ExecutionMode, SkillSpec
+from houyi.core.skill.tool_router import ToolRouter, ToolRouteResult
 
 __all__ = [
     # spec.py
@@ -157,4 +164,12 @@ __all__ = [
     "MetricsCollector",
     "MetricsExporter",
     "MetricsStore",
+    # preprocessor.py
+    "PreprocessorType",
+    "PreprocessorSpec",
+    "PreprocessorResult",
+    "PreprocessorPipeline",
+    # tool_router.py
+    "ToolRouter",
+    "ToolRouteResult",
 ]

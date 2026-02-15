@@ -1,65 +1,52 @@
+/**
+ * Activity Bar — vertical tab strip for Primary Sidebar content.
+ */
 import React from 'react';
-import { BookOpen, FolderTree, Puzzle, Settings } from 'lucide-react';
+import { BookOpen, FolderTree, MessageSquare, Puzzle, Settings } from 'lucide-react';
+import type { PrimaryMode, SidebarTab } from '../stores/useConsoleStore';
 
 interface ActivityBarProps {
-  activeTab: 'workflow' | 'chat' | 'knowledge' | 'skills';
-  onSelectTab: (tab: 'workflow' | 'chat' | 'knowledge' | 'skills') => void;
+  primaryMode: PrimaryMode;
+  sidebarTab: SidebarTab;
+  onSelectTab: (tab: SidebarTab) => void;
   onOpenSettings: () => void;
 }
 
 export const ActivityBar: React.FC<ActivityBarProps> = ({
-  activeTab,
+  primaryMode,
+  sidebarTab,
   onSelectTab,
   onOpenSettings,
 }) => {
+  // The first tab depends on primaryMode (workflow vs conversations).
+  const modeTab: SidebarTab = primaryMode === 'graph' ? 'workflow' : 'conversations';
+  const modeIcon = primaryMode === 'graph' ? <FolderTree size={18} /> : <MessageSquare size={18} />;
+  const modeLabel = primaryMode === 'graph' ? 'Workflow' : 'Conversations';
+
+  const tabButton = (tab: SidebarTab, icon: React.ReactNode, label: string) => (
+    <button
+      onClick={() => onSelectTab(tab)}
+      className={`mx-1 h-10 rounded text-xs font-semibold transition-colors ${
+        sidebarTab === tab
+          ? 'bg-gray-700 text-gray-50'
+          : 'text-gray-400 hover:bg-gray-800 hover:text-gray-200'
+      }`}
+      title={label}
+      aria-label={label}
+      type="button"
+    >
+      <div className="flex items-center justify-center">
+        {icon}
+      </div>
+    </button>
+  );
+
   return (
     <div className="bg-gray-900 border-r border-gray-800 flex flex-col w-12 shrink-0">
       <div className="flex-1 flex flex-col py-2 gap-1">
-        <button
-          onClick={() => onSelectTab('workflow')}
-          className={`mx-1 h-10 rounded text-xs font-semibold transition-colors ${
-            activeTab === 'workflow'
-              ? 'bg-gray-700 text-gray-50'
-              : 'text-gray-400 hover:bg-gray-800 hover:text-gray-200'
-          }`}
-          title="Workflow"
-          aria-label="Workflow"
-          type="button"
-        >
-          <div className="flex items-center justify-center">
-            <FolderTree size={18} />
-          </div>
-        </button>
-        <button
-          onClick={() => onSelectTab('knowledge')}
-          className={`mx-1 h-10 rounded text-xs font-semibold transition-colors ${
-            activeTab === 'knowledge'
-              ? 'bg-gray-700 text-gray-50'
-              : 'text-gray-400 hover:bg-gray-800 hover:text-gray-200'
-          }`}
-          title="Knowledge"
-          aria-label="Knowledge"
-          type="button"
-        >
-          <div className="flex items-center justify-center">
-            <BookOpen size={18} />
-          </div>
-        </button>
-        <button
-          onClick={() => onSelectTab('skills')}
-          className={`mx-1 h-10 rounded text-xs font-semibold transition-colors ${
-            activeTab === 'skills'
-              ? 'bg-gray-700 text-gray-50'
-              : 'text-gray-400 hover:bg-gray-800 hover:text-gray-200'
-          }`}
-          title="Skills"
-          aria-label="Skills"
-          type="button"
-        >
-          <div className="flex items-center justify-center">
-            <Puzzle size={18} />
-          </div>
-        </button>
+        {tabButton(modeTab, modeIcon, modeLabel)}
+        {tabButton('knowledge', <BookOpen size={18} />, 'Knowledge')}
+        {tabButton('skills', <Puzzle size={18} />, 'Skills')}
       </div>
 
       <div className="pb-2">

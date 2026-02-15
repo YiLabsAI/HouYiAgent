@@ -321,7 +321,7 @@ class CherryStudioImporter:
 class ChatExporter:
     """Exports all conversations as HouyiChatWorkspace JSON.
 
-    Output format follows docs/design/chatbox-design.md §6.3:
+    Output format uses the HouYiChatWorkspace schema:
     {
       "version": 1,
       "exported_at": ISO timestamp,

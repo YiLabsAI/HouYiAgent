@@ -22,6 +22,16 @@ class CommandType(str, Enum):
     RESTORE_CHECKPOINT = "restore_checkpoint"
     SET_LOG_LEVEL = "set_log_level"
 
+    # SimpleSkill Console integration commands
+    LIST_SKILLS = "list_skills"
+    GET_SKILL_DETAIL = "get_skill_detail"
+    GET_SKILL_METRICS = "get_skill_metrics"
+    LOAD_SKILL = "load_skill"
+    UNLOAD_SKILL = "unload_skill"
+    DRY_RUN_SKILL = "dry_run_skill"
+    CONFIGURE_SKILL = "configure_skill"
+    CONSENT_RESPONSE = "consent_response"
+
 
 class ClientCommand(BaseModel):
     """Base class for client commands."""
@@ -125,3 +135,104 @@ class SetLogLevelCommand(ClientCommand):
 
     command_type: CommandType = Field(default=CommandType.SET_LOG_LEVEL)
     level: str = Field(..., description="Requested log level")
+
+
+# =============================================================================
+# SimpleSkill Console Integration Commands
+# =============================================================================
+
+
+class ListSkillsCommand(ClientCommand):
+    """Command to list all registered skills."""
+
+    command_type: CommandType = Field(default=CommandType.LIST_SKILLS)
+
+
+class GetSkillDetailCommand(ClientCommand):
+    """Command to get full detail of a specific skill."""
+
+    command_type: CommandType = Field(default=CommandType.GET_SKILL_DETAIL)
+    skill_name: str = Field(..., description="Skill name to get detail for")
+
+
+class GetSkillMetricsCommand(ClientCommand):
+    """Command to get metrics for a specific skill."""
+
+    command_type: CommandType = Field(default=CommandType.GET_SKILL_METRICS)
+    skill_name: str = Field(..., description="Skill name to get metrics for")
+
+
+class LoadSkillCommand(ClientCommand):
+    """Command to load a skill from a file path, URL, or directory.
+
+    Accepts any of:
+    - Local file path to SKILL.md or simpleskill.json
+    - URL (http/https) pointing to a SKILL.md file
+    - Directory path containing SKILL.md files
+    """
+
+    command_type: CommandType = Field(default=CommandType.LOAD_SKILL)
+    path: str = Field(
+        default="",
+        description="(Deprecated) File path — use 'source' instead",
+    )
+    source: str = Field(
+        default="",
+        description="File path, URL, or directory path to load skill(s) from",
+    )
+
+    @property
+    def resolved_source(self) -> str:
+        """Return the effective source, preferring 'source' over legacy 'path'."""
+        return self.source or self.path
+
+
+class UnloadSkillCommand(ClientCommand):
+    """Command to unload a skill."""
+
+    command_type: CommandType = Field(default=CommandType.UNLOAD_SKILL)
+    skill_name: str = Field(..., description="Skill name to unload")
+
+
+class DryRunSkillCommand(ClientCommand):
+    """Command to perform a dry-run validation of a skill invocation."""
+
+    command_type: CommandType = Field(default=CommandType.DRY_RUN_SKILL)
+    skill_name: str = Field(..., description="Skill name")
+    tool_name: str = Field(..., description="Tool name within the skill")
+    input: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Input to validate",
+    )
+
+
+class ConfigureSkillCommand(ClientCommand):
+    """Command to update runtime configuration for a skill.
+
+    Supports changing:
+    - policy_action: 'allow' | 'allow_with_consent' | 'deny'
+    - auto_invoke: whether LLM can auto-trigger (True/False)
+    """
+
+    command_type: CommandType = Field(default=CommandType.CONFIGURE_SKILL)
+    skill_name: str = Field(..., description="Skill to configure")
+    policy_action: str | None = Field(
+        default=None,
+        description="New policy action: 'allow', 'allow_with_consent', or 'deny'",
+    )
+    auto_invoke: bool | None = Field(
+        default=None,
+        description="Whether LLM can auto-invoke this skill",
+    )
+
+
+class ConsentResponseCommand(ClientCommand):
+    """Command to respond to a consent request."""
+
+    command_type: CommandType = Field(default=CommandType.CONSENT_RESPONSE)
+    request_id: str = Field(..., description="Consent request ID to respond to")
+    granted: bool = Field(..., description="Whether consent is granted")
+    remember: bool = Field(
+        default=False,
+        description="Whether to remember this decision",
+    )

@@ -36,7 +36,18 @@ export type EventType =
   | 'document_deleted'
   | 'document_status_changed'
   | 'chunk_list'
-  | 'chunk_preview';
+  | 'chunk_preview'
+  // SimpleSkill Console integration events
+  | 'skill_list'
+  | 'skill_detail'
+  | 'skill_metrics'
+  | 'skill_loaded'
+  | 'skill_unloaded'
+  | 'skill_error'
+  | 'consent_requested'
+  | 'consent_result'
+  | 'skill_blocked'
+  | 'dry_run_result';
 
 export interface ServerEvent {
   event_type: EventType;
@@ -287,6 +298,131 @@ export interface ChunkPreviewEvent extends ServerEvent {
   strategy: string;
 }
 
+// =============================================================================
+// SimpleSkill Console Integration Events
+// =============================================================================
+
+export interface SkillSummary {
+  name: string;
+  display_name: string;
+  description?: string;
+  tools: string[];
+  policy_action: 'allow' | 'allow_with_consent' | 'deny';
+  side_effect: 'none' | 'network' | 'filesystem' | 'exec';
+  certification: 'unverified' | 'bronze' | 'silver' | 'gold';
+}
+
+export interface SkillListEvent extends ServerEvent {
+  event_type: 'skill_list';
+  skills: SkillSummary[];
+}
+
+export interface SkillPermission {
+  name: string;
+  description?: string;
+  is_sensitive: boolean;
+}
+
+export interface SkillTool {
+  name: string;
+  description?: string;
+  input_schema?: Record<string, any>;
+}
+
+export interface SkillDetail {
+  name: string;
+  display_name: string;
+  description?: string;
+  version: string;
+  author?: string;
+  tools: SkillTool[];
+  permissions: SkillPermission[];
+  policy: Record<string, any>;
+  hooks: string[];
+  certification: 'unverified' | 'bronze' | 'silver' | 'gold';
+  side_effect: 'none' | 'network' | 'filesystem' | 'exec';
+}
+
+export interface SkillDetailEvent extends ServerEvent {
+  event_type: 'skill_detail';
+  skill: SkillDetail;
+}
+
+export interface SkillMetricsData {
+  skill_name: string;
+  total_calls: number;
+  success_count: number;
+  failure_count: number;
+  avg_latency_ms: number;
+  p50_latency_ms: number;
+  p99_latency_ms: number;
+  success_rate: number;
+  last_invoked?: string;
+}
+
+export interface SkillMetricsEvent extends ServerEvent {
+  event_type: 'skill_metrics';
+  metrics: SkillMetricsData;
+}
+
+export interface SkillLoadedEvent extends ServerEvent {
+  event_type: 'skill_loaded';
+  skill_name: string;
+  message?: string;
+}
+
+export interface SkillUnloadedEvent extends ServerEvent {
+  event_type: 'skill_unloaded';
+  skill_name: string;
+}
+
+export interface SkillErrorEvent extends ServerEvent {
+  event_type: 'skill_error';
+  skill_name?: string;
+  error_code: string;
+  message: string;
+  suggestions: string[];
+}
+
+export interface ConsentRequestedEvent extends ServerEvent {
+  event_type: 'consent_requested';
+  request_id: string;
+  skill_name: string;
+  tool_name: string;
+  reason: string;
+  permissions: string[];
+  timeout_seconds: number;
+}
+
+export interface ConsentResultEvent extends ServerEvent {
+  event_type: 'consent_result';
+  request_id: string;
+  granted: boolean;
+  remembered: boolean;
+}
+
+export interface SkillBlockedEvent extends ServerEvent {
+  event_type: 'skill_blocked';
+  skill_name: string;
+  tool_name: string;
+  policy_action: string;
+  reason: string;
+}
+
+export interface DryRunResult {
+  valid: boolean;
+  schema_errors: string[];
+  policy_result: 'allow' | 'allow_with_consent' | 'deny';
+  capability_gaps: string[];
+  estimated_side_effects: string[];
+}
+
+export interface DryRunResultEvent extends ServerEvent {
+  event_type: 'dry_run_result';
+  skill_name: string;
+  result: DryRunResult;
+}
+
 export type AnyServerEvent =
   | PlanCreatedEvent
   | PlanUpdatedEvent
@@ -315,7 +451,18 @@ export type AnyServerEvent =
   | DocumentDeletedEvent
   | DocumentStatusChangedEvent
   | ChunkListEvent
-  | ChunkPreviewEvent;
+  | ChunkPreviewEvent
+  // SimpleSkill events
+  | SkillListEvent
+  | SkillDetailEvent
+  | SkillMetricsEvent
+  | SkillLoadedEvent
+  | SkillUnloadedEvent
+  | SkillErrorEvent
+  | ConsentRequestedEvent
+  | ConsentResultEvent
+  | SkillBlockedEvent
+  | DryRunResultEvent;
 
 // Command types (client -> server)
 export type CommandType =
@@ -343,7 +490,15 @@ export type CommandType =
   | 'disable_document'
   | 'enable_document'
   | 'list_chunks'
-  | 'preview_chunks';
+  | 'preview_chunks'
+  // SimpleSkill commands
+  | 'list_skills'
+  | 'get_skill_detail'
+  | 'get_skill_metrics'
+  | 'load_skill'
+  | 'unload_skill'
+  | 'dry_run_skill'
+  | 'consent_response';
 
 export interface ClientCommand {
   command_type: CommandType;
@@ -503,6 +658,48 @@ export interface PreviewChunksCommand extends ClientCommand {
   strategy: string;
 }
 
+// =============================================================================
+// SimpleSkill Commands
+// =============================================================================
+
+export interface ListSkillsCommand extends ClientCommand {
+  command_type: 'list_skills';
+}
+
+export interface GetSkillDetailCommand extends ClientCommand {
+  command_type: 'get_skill_detail';
+  skill_name: string;
+}
+
+export interface GetSkillMetricsCommand extends ClientCommand {
+  command_type: 'get_skill_metrics';
+  skill_name: string;
+}
+
+export interface LoadSkillCommand extends ClientCommand {
+  command_type: 'load_skill';
+  path: string;
+}
+
+export interface UnloadSkillCommand extends ClientCommand {
+  command_type: 'unload_skill';
+  skill_name: string;
+}
+
+export interface DryRunSkillCommand extends ClientCommand {
+  command_type: 'dry_run_skill';
+  skill_name: string;
+  tool_name: string;
+  input: Record<string, any>;
+}
+
+export interface ConsentResponseCommand extends ClientCommand {
+  command_type: 'consent_response';
+  request_id: string;
+  granted: boolean;
+  remember: boolean;
+}
+
 export type AnyClientCommand =
   | StartExecutionCommand
   | PauseCommand
@@ -526,4 +723,12 @@ export type AnyClientCommand =
   | DisableDocumentCommand
   | EnableDocumentCommand
   | ListChunksCommand
-  | PreviewChunksCommand;
+  | PreviewChunksCommand
+  // SimpleSkill commands
+  | ListSkillsCommand
+  | GetSkillDetailCommand
+  | GetSkillMetricsCommand
+  | LoadSkillCommand
+  | UnloadSkillCommand
+  | DryRunSkillCommand
+  | ConsentResponseCommand;

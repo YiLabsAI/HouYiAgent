@@ -43,17 +43,17 @@ describe('SearchModal', () => {
   it('calls onClose when backdrop clicked', () => {
     const onClose = vi.fn();
     render(<SearchModal isOpen={true} onClose={onClose} />);
-    // The backdrop is the first fixed div
-    const backdrop = document.querySelector('.fixed.inset-0');
-    fireEvent.click(backdrop!);
+    // CenterStage backdrop uses data-testid
+    const backdrop = screen.getByTestId('center-stage-backdrop');
+    fireEvent.click(backdrop);
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
   it('calls onClose on Escape key', () => {
     const onClose = vi.fn();
     render(<SearchModal isOpen={true} onClose={onClose} />);
-    const modal = document.querySelector('.fixed.top-\\[10\\%\\]');
-    fireEvent.keyDown(modal!, { key: 'Escape' });
+    // CenterStage handles Escape via window keydown
+    fireEvent.keyDown(window, { key: 'Escape' });
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
@@ -90,10 +90,10 @@ describe('SearchModal', () => {
     });
 
     await waitFor(() => {
-      // highlightText splits text into <mark> + plain nodes, so use container query
-      const container = document.querySelector('.overflow-y-auto');
-      expect(container?.textContent).toContain('Test Conv');
-      expect(container?.textContent).toContain('hello world');
+      // CenterStage wraps content in a scrollable body
+      const panel = screen.getByTestId('center-stage-panel');
+      expect(panel.textContent).toContain('Test Conv');
+      expect(panel.textContent).toContain('hello world');
     });
   });
 
@@ -123,14 +123,20 @@ describe('SearchModal', () => {
     await vi.advanceTimersByTimeAsync(300);
 
     await waitFor(() => {
-      const results = document.querySelector('.overflow-y-auto');
-      expect(results?.textContent).toContain('Test Conv');
+      const panel = screen.getByTestId('center-stage-panel');
+      expect(panel.textContent).toContain('Test Conv');
     });
 
-    // Click the result button
-    const resultBtn = document.querySelector('.overflow-y-auto button');
+    // Click the result button — find inside the CenterStage body
+    // (highlightText wraps query match in <mark>, so getByText won't match the full string)
+    const panel = screen.getByTestId('center-stage-panel');
+    const allButtons = panel.querySelectorAll('button[type="button"]');
+    // Result button is the one whose text includes "Conv" (not close/sort buttons)
+    const resultBtn = Array.from(allButtons).find((btn) => btn.textContent?.includes('Conv'));
+    expect(resultBtn).toBeTruthy();
     fireEvent.click(resultBtn!);
-    expect(mockLoadConversation).toHaveBeenCalledWith('c1');
+    // loadConversation may receive a second arg (message_id or undefined)
+    expect(mockLoadConversation.mock.calls[0][0]).toBe('c1');
     expect(onClose).toHaveBeenCalled();
   });
 

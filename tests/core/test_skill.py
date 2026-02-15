@@ -13,19 +13,19 @@ class TestSkillFromFile:
     """Test SkillSpec.from_file() method."""
 
     def test_from_file_basic(self):
-        """Test loading a skill from a local file."""
-        skill = SkillSpec.from_file("skills/web_search.md")
+        """Test loading a skill from a local SKILL.md file."""
+        skill = SkillSpec.from_file("skills/planning-with-files/SKILL.md")
 
-        assert skill.name == "web_search"
+        assert skill.name == "planning-with-files"
         assert skill.description is not None
         assert skill.input_schema is not None
         assert skill.output_schema is not None
         assert skill.executor is None  # Executor not bound yet
-        assert skill.skill_md_path == "skills/web_search.md"
+        assert skill.skill_md_path == "skills/planning-with-files/SKILL.md"
 
     def test_from_file_calculator(self):
-        """Test loading calculator skill."""
-        skill = SkillSpec.from_file("skills/calculator.md")
+        """Test loading community skill."""
+        skill = SkillSpec.from_file("skills/skill-creator/SKILL.md")
 
         # Verify it loaded successfully
         assert skill.name is not None

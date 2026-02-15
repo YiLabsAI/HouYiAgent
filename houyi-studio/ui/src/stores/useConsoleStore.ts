@@ -60,7 +60,40 @@ interface RunSettings {
   };
 }
 
+/** Editor Area mode — controlled by Title Bar (Header) */
+export type PrimaryMode = 'graph' | 'chat';
+
+/** Primary Sidebar tab — constrained by primaryMode.
+ *  graph → workflow | knowledge | skills
+ *  chat  → conversations | knowledge | skills
+ */
+export type SidebarTab = 'workflow' | 'conversations' | 'knowledge' | 'skills';
+
+/**
+ * Secondary Sidebar content mode — derived from selection context.
+ *
+ * Routing priority:
+ *   1. Graph mode + node selected  → 'node'
+ *   2. Skill selected              → 'skill'
+ *   3. Knowledge library selected  → 'knowledge'
+ *   4. Chat mode + conversations   → 'conversation'
+ *   5. Otherwise                   → 'empty'
+ */
+export type SecondaryContentMode =
+  | 'node'
+  | 'skill'
+  | 'knowledge'
+  | 'conversation'
+  | 'empty';
+
 interface ConsoleState {
+  primaryMode: PrimaryMode;
+  sidebarTab: SidebarTab;
+  /** Switch editor mode and keep sidebar tab valid. */
+  setPrimaryMode: (mode: PrimaryMode) => void;
+  /** Switch Primary Sidebar tab (must be valid for current primaryMode). */
+  setSidebarTab: (tab: SidebarTab) => void;
+
   // WebSocket
   ws: ConsoleWebSocket | null;
   connectionStatus: 'disconnected' | 'connecting' | 'connected' | 'error';
@@ -99,13 +132,20 @@ interface ConsoleState {
   loadingWorkflowName: string | null; // Track which workflow is being loaded
   workflows: WorkflowSummary[];
   isLoadingWorkflows: boolean;
-  bottomPanelTab: 'observability' | 'checkpoints' | 'context' | 'logs' | 'compare' | 'knowledge';
-  setBottomPanelTab: (tab: 'observability' | 'checkpoints' | 'context' | 'logs' | 'compare' | 'knowledge') => void;
+  bottomPanelTab: 'observability' | 'checkpoints' | 'context' | 'logs' | 'knowledge';
+  setBottomPanelTab: (tab: 'observability' | 'checkpoints' | 'context' | 'logs' | 'knowledge') => void;
 
   // React Flow state
   nodes: any[];
   edges: any[];
   selectedNodeId: string | null;
+
+  // Skill selection (for Secondary Sidebar routing)
+  selectedSkillId: string | null;
+  selectSkill: (skillId: string | null) => void;
+
+  /** Derive which content the Secondary Sidebar should display. */
+  getSecondaryContentMode: () => SecondaryContentMode;
 
   // Actions
   connect: (sessionId: string) => void;
@@ -230,6 +270,10 @@ interface ConsoleState {
   cancelIngest: () => void;
   clearKnowledgeSearch: () => void;
   handleKnowledgeError: (error: string, operation: string) => void;
+  // Skill event subscription API (for useSkillsLogic hook)
+  _skillEventHandlers: Map<string, Set<(event: unknown) => void>>;
+  registerSkillEventHandler: (eventType: string, handler: (event: unknown) => void) => () => void;
+
   // Document management state
   documents: KnowledgeDocument[];
   selectedDocumentId: string | null;
@@ -255,6 +299,30 @@ interface ConsoleState {
 }
 
 export const useConsoleStore = create<ConsoleState>((set, get) => ({
+  primaryMode: 'graph' as PrimaryMode,
+  sidebarTab: 'workflow' as SidebarTab,
+
+  setPrimaryMode: (mode: PrimaryMode) => {
+    const prev = get().sidebarTab;
+    let next = prev;
+    if (mode === 'chat') {
+      // workflow is graph-only → remap to conversations
+      if (prev === 'workflow') next = 'conversations';
+    } else {
+      // conversations is chat-only → remap to workflow
+      if (prev === 'conversations') next = 'workflow';
+    }
+    set({ primaryMode: mode, sidebarTab: next });
+  },
+
+  setSidebarTab: (tab: SidebarTab) => {
+    // Guard: enforce mode-specific constraints
+    const mode = get().primaryMode;
+    if (mode === 'graph' && tab === 'conversations') return;
+    if (mode === 'chat' && tab === 'workflow') return;
+    set({ sidebarTab: tab });
+  },
+
   // Initial state
   ws: null,
   connectionStatus: 'disconnected',
@@ -293,6 +361,41 @@ export const useConsoleStore = create<ConsoleState>((set, get) => ({
   nodes: [],
   edges: [],
   selectedNodeId: null,
+
+  selectedSkillId: null,
+  selectSkill: (skillId: string | null) => set({ selectedSkillId: skillId }),
+
+  getSecondaryContentMode: (): SecondaryContentMode => {
+    const { primaryMode, selectedNodeId, selectedSkillId, selectedLibraryId, sidebarTab } = get();
+    // Priority 1: Graph mode + node selected → node properties
+    if (primaryMode === 'graph' && selectedNodeId) return 'node';
+    // Priority 2: Skill selected (any mode)
+    if (selectedSkillId) return 'skill';
+    // Priority 3: Knowledge library selected (any mode)
+    if (selectedLibraryId && sidebarTab === 'knowledge') return 'knowledge';
+    // Priority 4: Chat mode + conversations tab → conversation settings
+    if (primaryMode === 'chat' && sidebarTab === 'conversations') return 'conversation';
+    // Default
+    return 'empty';
+  },
+
+  // Skill event subscription (for useSkillsLogic)
+  _skillEventHandlers: new Map(),
+  registerSkillEventHandler: (eventType: string, handler: (event: unknown) => void) => {
+    const handlers = get()._skillEventHandlers;
+    if (!handlers.has(eventType)) {
+      handlers.set(eventType, new Set());
+    }
+    handlers.get(eventType)!.add(handler);
+    // Return unsubscribe function
+    return () => {
+      const set = handlers.get(eventType);
+      if (set) {
+        set.delete(handler);
+        if (set.size === 0) handlers.delete(eventType);
+      }
+    };
+  },
 
   // Knowledge Base state
   ...initialKnowledgeState,
