@@ -27,6 +27,7 @@ export const RunSettingsDrawer: React.FC = () => {
   const [defaultRetriesDraft, setDefaultRetriesDraft] = React.useState(
     String(runSettings.retry_policy.default_retries ?? 0),
   );
+  const [showAdvancedRetry, setShowAdvancedRetry] = React.useState(false);
   const [timeoutRetriesDraft, setTimeoutRetriesDraft] = React.useState(
     runSettings.retry_policy.timeout_retries === null
       ? ''
@@ -274,9 +275,9 @@ export const RunSettingsDrawer: React.FC = () => {
               </div>
             </div>
 
-            <div className="mt-3 grid grid-cols-2 gap-3">
+            <div className="mt-3 space-y-3">
               <div>
-                <label className="mb-1 block text-xs font-medium text-gray-400">Default retries</label>
+                <label className="mb-1 block text-xs font-medium text-gray-400">Max retries</label>
                 <input
                   type="number"
                   className="w-full rounded border border-gray-600 bg-gray-700 px-2 py-1 text-sm text-gray-200 focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
@@ -284,67 +285,49 @@ export const RunSettingsDrawer: React.FC = () => {
                   onChange={(event) => setDefaultRetriesDraft(event.target.value)}
                   min="0"
                 />
+                <p className="mt-1 text-[10px] text-gray-500">
+                  Applied to all error types unless overridden below.
+                </p>
               </div>
-              <div>
-                <label className="mb-1 block text-xs font-medium text-gray-400">Timeout retries</label>
-                <input
-                  type="number"
-                  className="w-full rounded border border-gray-600 bg-gray-700 px-2 py-1 text-sm text-gray-200 focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
-                  value={timeoutRetriesDraft}
-                  onChange={(event) => setTimeoutRetriesDraft(event.target.value)}
-                  min="0"
-                />
-              </div>
-              <div>
-                <label className="mb-1 block text-xs font-medium text-gray-400">Rate limit retries</label>
-                <input
-                  type="number"
-                  className="w-full rounded border border-gray-600 bg-gray-700 px-2 py-1 text-sm text-gray-200 focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
-                  value={rateLimitRetriesDraft}
-                  onChange={(event) => setRateLimitRetriesDraft(event.target.value)}
-                  min="0"
-                />
-              </div>
-              <div>
-                <label className="mb-1 block text-xs font-medium text-gray-400">Auth retries</label>
-                <input
-                  type="number"
-                  className="w-full rounded border border-gray-600 bg-gray-700 px-2 py-1 text-sm text-gray-200 focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
-                  value={authRetriesDraft}
-                  onChange={(event) => setAuthRetriesDraft(event.target.value)}
-                  min="0"
-                />
-              </div>
-              <div>
-                <label className="mb-1 block text-xs font-medium text-gray-400">Bad request retries</label>
-                <input
-                  type="number"
-                  className="w-full rounded border border-gray-600 bg-gray-700 px-2 py-1 text-sm text-gray-200 focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
-                  value={badRequestRetriesDraft}
-                  onChange={(event) => setBadRequestRetriesDraft(event.target.value)}
-                  min="0"
-                />
-              </div>
-              <div>
-                <label className="mb-1 block text-xs font-medium text-gray-400">Content policy retries</label>
-                <input
-                  type="number"
-                  className="w-full rounded border border-gray-600 bg-gray-700 px-2 py-1 text-sm text-gray-200 focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
-                  value={contentPolicyRetriesDraft}
-                  onChange={(event) => setContentPolicyRetriesDraft(event.target.value)}
-                  min="0"
-                />
-              </div>
-              <div>
-                <label className="mb-1 block text-xs font-medium text-gray-400">Internal error retries</label>
-                <input
-                  type="number"
-                  className="w-full rounded border border-gray-600 bg-gray-700 px-2 py-1 text-sm text-gray-200 focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
-                  value={internalErrorRetriesDraft}
-                  onChange={(event) => setInternalErrorRetriesDraft(event.target.value)}
-                  min="0"
-                />
-              </div>
+
+              <button
+                type="button"
+                onClick={() => setShowAdvancedRetry(!showAdvancedRetry)}
+                className="flex items-center gap-1 text-[11px] text-gray-400 hover:text-gray-200"
+              >
+                <span className={`transition-transform ${showAdvancedRetry ? 'rotate-90' : ''}`}>
+                  &#9654;
+                </span>
+                Per-error-type overrides
+              </button>
+
+              {showAdvancedRetry && (
+                <div className="grid grid-cols-2 gap-3 rounded border border-gray-700/50 bg-gray-800/30 p-2">
+                  {[
+                    { label: 'Timeout', value: timeoutRetriesDraft, setter: setTimeoutRetriesDraft },
+                    { label: 'Rate limit', value: rateLimitRetriesDraft, setter: setRateLimitRetriesDraft },
+                    { label: 'Auth', value: authRetriesDraft, setter: setAuthRetriesDraft },
+                    { label: 'Bad request', value: badRequestRetriesDraft, setter: setBadRequestRetriesDraft },
+                    { label: 'Content policy', value: contentPolicyRetriesDraft, setter: setContentPolicyRetriesDraft },
+                    { label: 'Internal error', value: internalErrorRetriesDraft, setter: setInternalErrorRetriesDraft },
+                  ].map(({ label, value, setter }) => (
+                    <div key={label}>
+                      <label className="mb-1 block text-[11px] font-medium text-gray-500">{label}</label>
+                      <input
+                        type="number"
+                        className="w-full rounded border border-gray-600 bg-gray-700 px-2 py-1 text-xs text-gray-300 focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+                        value={value}
+                        onChange={(event) => setter(event.target.value)}
+                        min="0"
+                        placeholder="inherit"
+                      />
+                    </div>
+                  ))}
+                  <p className="col-span-2 text-[10px] text-gray-500">
+                    Empty fields inherit the max retries value above.
+                  </p>
+                </div>
+              )}
             </div>
           </div>
         </div>

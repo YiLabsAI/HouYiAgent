@@ -21,7 +21,7 @@ def register_console_skills() -> None:
 
     Registers the following skills:
     - Web search: web_search
-    - Weather: get_date, get_weather, get_weather_live
+    - Weather: get_date, get_weather (real Open-Meteo API, with hooks)
     - Location: get_location
     - RAG: kb-search (if available)
 
@@ -45,12 +45,11 @@ def register_console_skills() -> None:
 
     # 2. Weather tools (each @tool is a SkillSpec)
     try:
-        from houyi.skills.weather import get_date, get_weather, get_weather_live
+        from houyi.skills.weather import get_date, get_weather
 
         DEFAULT_SKILL_REGISTRY.register(get_date, overwrite=True)
         DEFAULT_SKILL_REGISTRY.register(get_weather, overwrite=True)
-        DEFAULT_SKILL_REGISTRY.register(get_weather_live, overwrite=True)
-        registered_skills.extend(["get_date", "get_weather", "get_weather_live"])
+        registered_skills.extend(["get_date", "get_weather"])
     except ImportError as e:
         logger.warning("Weather skills not available: %s", e)
 
@@ -148,9 +147,8 @@ def _load_external_skills(registered_skills: list[str]) -> None:
     )
     registered_skills.extend(loaded)
     if loaded:
-        logger.info(
-            "Loaded %d external skills from %s: %s", len(loaded), skills_dir, ", ".join(loaded)
-        )
+        logger.info("Loaded %d external skills from %s", len(loaded), skills_dir)
+        logger.debug("External skills: %s", ", ".join(loaded))
 
 
 def _init_skill_service() -> None:
@@ -165,7 +163,7 @@ def _init_skill_service() -> None:
         from houyi.core.skill.metrics import InMemoryMetricsStore
 
         metrics_store = InMemoryMetricsStore()
-        logger.info("Initialized MetricsStore for skill metrics collection")
+        logger.debug("Initialized MetricsStore for skill metrics collection")
     except ImportError:
         metrics_store = None
         logger.debug("MetricsStore not available")
@@ -186,7 +184,7 @@ def _init_skill_service() -> None:
             from houyi.core.skill.policy import PolicyEnforcer
 
             policy_enforcer = PolicyEnforcer()
-            logger.info("Initialized PolicyEnforcer for skill governance")
+            logger.debug("Initialized PolicyEnforcer for skill governance")
         except ImportError:
             logger.debug("PolicyEnforcer not available")
 
@@ -204,7 +202,7 @@ def _init_skill_service() -> None:
                 handler=consent_handler,
                 interactive=True,
             )
-            logger.info("Initialized ConsentManager for UI consent flow")
+            logger.debug("Initialized ConsentManager for UI consent flow")
         except ImportError:
             logger.debug("ConsentManager components not available")
 
@@ -216,4 +214,4 @@ def _init_skill_service() -> None:
         consent_manager=consent_manager,
     )
     set_skill_service(skill_service)
-    logger.info("SkillService initialized with Console integration")
+    logger.debug("SkillService initialized with Console integration")

@@ -233,8 +233,13 @@ interface BottomPanelProps {
     tab: 'observability' | 'checkpoints' | 'context' | 'logs' | 'knowledge',
   ) => void;
   height?: number;
+  /** When true, ignores `height` and stretches to fill the parent container. */
+  fillHeight?: boolean;
   /** Called when user clicks expand button to open current tab in Center Stage L. */
   onExpandTab?: (tab: string) => void;
+  /** Controlled checked checkpoints (shared between bottom panel and CenterStage). */
+  checkedCheckpoints?: Array<{ checkpointId: string; executionId: string }>;
+  onCheckedCheckpointsChange?: (checks: Array<{ checkpointId: string; executionId: string }>) => void;
 }
 
 type TabType = 'observability' | 'checkpoints' | 'context' | 'logs' | 'knowledge';
@@ -245,13 +250,25 @@ export const BottomPanel: React.FC<BottomPanelProps> = ({
   activeTab: controlledActiveTab,
   onTabChange,
   height = 280,
+  fillHeight = false,
   onExpandTab,
+  checkedCheckpoints: controlledChecks,
+  onCheckedCheckpointsChange,
 }) => {
   const [uncontrolledActiveTab, setUncontrolledActiveTab] = React.useState<TabType>('observability');
   const [showObsFullView, setShowObsFullView] = React.useState(false);
   // Checkpoints: internal dual-view (list / compare)
   const [replayView, setReplayView] = React.useState<'list' | 'compare'>('list');
-  const [checkedCheckpoints, setCheckedCheckpoints] = React.useState<Array<{ checkpointId: string; executionId: string }>>([]);
+  const [internalChecks, setInternalChecks] = React.useState<Array<{ checkpointId: string; executionId: string }>>([]);
+  const checkedCheckpoints = controlledChecks ?? internalChecks;
+  const setCheckedCheckpoints = (val: Array<{ checkpointId: string; executionId: string }> | ((prev: Array<{ checkpointId: string; executionId: string }>) => Array<{ checkpointId: string; executionId: string }>)) => {
+    if (onCheckedCheckpointsChange) {
+      const next = typeof val === 'function' ? val(checkedCheckpoints) : val;
+      onCheckedCheckpointsChange(next);
+    } else {
+      setInternalChecks(val as any);
+    }
+  };
   const activeTab = controlledActiveTab ?? uncontrolledActiveTab;
   const setActiveTab = (tab: TabType) => {
     if (onTabChange) {
@@ -515,8 +532,8 @@ export const BottomPanel: React.FC<BottomPanelProps> = ({
 
   return (
     <div
-      className="bg-gray-800 border-t border-gray-700 flex flex-col"
-      style={{ height: isCollapsed ? 32 : height }}
+      className={`bg-gray-800 border-t border-gray-700 flex flex-col ${fillHeight ? 'h-full' : ''}`}
+      style={fillHeight ? undefined : { height: isCollapsed ? 32 : height }}
     >
       {isCollapsed ? (
         <div className="h-full flex items-center justify-between px-4">
@@ -554,14 +571,16 @@ export const BottomPanel: React.FC<BottomPanelProps> = ({
               ))}
             </div>
             <div className="flex items-center gap-2 pr-2">
-              <button
-                onClick={() => onExpandTab?.(activeTab)}
-                className="p-1.5 rounded hover:bg-gray-700 text-gray-400 hover:text-gray-200 transition-colors"
-                title="Expand to Center Stage"
-                type="button"
-              >
-                <Maximize2 size={14} />
-              </button>
+              {onExpandTab && (
+                <button
+                  onClick={() => onExpandTab(activeTab)}
+                  className="p-1.5 rounded hover:bg-gray-700 text-gray-400 hover:text-gray-200 transition-colors"
+                  title="Expand to Center Stage"
+                  type="button"
+                >
+                  <Maximize2 size={14} />
+                </button>
+              )}
               {activeTab === 'observability' && (
                 <button
                   onClick={() => setShowObsFullView(true)}

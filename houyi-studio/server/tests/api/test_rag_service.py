@@ -1,4 +1,9 @@
-"""Unit tests for RAG service - tests real backend logic, not mocks."""
+"""Unit tests for RAG service - tests real backend logic, not mocks.
+
+IMPORTANT: Every test receives an isolated ``tmp_path`` directory via the
+``knowledge_service`` fixture.  No test ever touches the real
+``.houyi/knowledge`` production directory.
+"""
 
 import asyncio
 import os
@@ -6,28 +11,14 @@ import tempfile
 from pathlib import Path
 
 import pytest
-
-# Set test storage directory before importing
-TEST_STORAGE_DIR = tempfile.mkdtemp()
-os.environ["HOUYI_KNOWLEDGE_STORAGE"] = TEST_STORAGE_DIR
-
-from houyi_studio.server.rag_service import KnowledgeService  # noqa: E402
+from houyi_studio.server.rag_service import KnowledgeService
 
 
 @pytest.fixture
-def knowledge_service():
-    """Create a fresh KnowledgeService for each test."""
-    # Clear any existing data
-    storage_file = Path(TEST_STORAGE_DIR) / "libraries.json"
-    if storage_file.exists():
-        storage_file.unlink()
-
-    svc = KnowledgeService()
+def knowledge_service(tmp_path: Path):
+    """Create a fresh KnowledgeService with isolated tmp_path storage."""
+    svc = KnowledgeService(storage_dir=tmp_path)
     yield svc
-
-    # Cleanup
-    if storage_file.exists():
-        storage_file.unlink()
 
 
 class TestLibraryManagement:
@@ -135,6 +126,53 @@ class TestLibraryManagement:
         lib = knowledge_service.get_library(lib_id)
         assert lib["metadata"]["chunk_size"] == 1024
         assert lib["metadata"]["top_k"] == 20
+
+
+class TestDeleteLibrarySafety:
+    """Tests for delete_library path-safety guards.
+
+    These tests ensure ``delete_library`` refuses to delete directories
+    that are outside the storage root, have malformed IDs, or are nested
+    deeper than expected.
+    """
+
+    def test_delete_nonexistent_returns_false(self, knowledge_service):
+        assert knowledge_service.delete_library("lib_nonexistent") is False
+
+    def test_delete_normal_library_succeeds(self, knowledge_service):
+        lib = knowledge_service.create_library(name="Safe", description="", mode="auto")
+        lib_id = lib["library_id"]
+        assert knowledge_service.delete_library(lib_id) is True
+        assert knowledge_service.get_library(lib_id) is None
+
+    def test_delete_rejects_bad_id_format(self, knowledge_service):
+        """IDs that don't start with 'lib_' are refused."""
+        knowledge_service._libraries["evil"] = {"library_id": "evil", "name": "bad"}
+        assert knowledge_service.delete_library("evil") is False
+        # The entry must remain (not deleted)
+        assert "evil" in knowledge_service._libraries
+
+    def test_delete_rejects_path_traversal(self, knowledge_service):
+        """IDs containing '..' that escape storage root are refused."""
+        bad_id = "lib_x/../../etc"
+        knowledge_service._libraries[bad_id] = {"library_id": bad_id, "name": "bad"}
+        assert knowledge_service.delete_library(bad_id) is False
+        assert bad_id in knowledge_service._libraries
+
+    def test_storage_dir_is_injected(self, tmp_path):
+        """KnowledgeService(storage_dir=...) must use the given path."""
+        svc = KnowledgeService(storage_dir=tmp_path / "custom")
+        assert svc.storage_dir == (tmp_path / "custom").resolve()
+        assert svc.storage_dir.exists()
+
+    def test_library_dirs_respect_storage_dir(self, tmp_path):
+        """Instance methods return paths under the injected storage dir."""
+        svc = KnowledgeService(storage_dir=tmp_path / "iso")
+        lib = svc.create_library(name="Isolated", description="", mode="auto")
+        lib_id = lib["library_id"]
+        assert str(svc.library_storage_dir(lib_id)).startswith(str(svc.storage_dir))
+        assert str(svc.library_upload_dir(lib_id)).startswith(str(svc.storage_dir))
+        assert str(svc.library_index_dir(lib_id)).startswith(str(svc.storage_dir))
 
 
 class TestFileIngest:
@@ -364,6 +402,8 @@ class TestEmbeddingProviderDetection:
     def test_no_embedding_provider_sets_degraded_status(self, knowledge_service):
         """When no embedding provider is available, ingest should set status='degraded'
         instead of 'ready' when chunks=0."""
+        from unittest.mock import patch
+
         created = knowledge_service.create_library(name="NoProv", description="", mode="auto")
         lib_id = created["library_id"]
 
@@ -372,12 +412,29 @@ class TestEmbeddingProviderDetection:
             temp_path = f.name
 
         try:
-            # Clear embedding-related env vars to force fallback
+            # Clear ALL embedding-related env vars to force "no provider" fallback
             env_backup = {}
-            for key in ("VERTEX_PROJECT", "GOOGLE_CLOUD_PROJECT", "OPENAI_API_KEY"):
+            for key in (
+                "GOOGLE_CLOUD_PROJECT",
+                "GOOGLE_API_KEY",
+                "GOOGLE_APPLICATION_CREDENTIALS",
+                "OPENAI_API_KEY",
+                "EMBEDDING_PROVIDER",
+                "EMBEDDING_MODEL",
+            ):
                 env_backup[key] = os.environ.pop(key, None)
 
-            asyncio.run(knowledge_service.ingest_files(lib_id, [temp_path]))
+            # Also block fastembed import so local fallback doesn't kick in
+            def _block_fastembed(name, *a, **kw):
+                if name == "fastembed" or name.startswith("fastembed."):
+                    raise ImportError("blocked for test")
+                return original_import(name, *a, **kw)
+
+            import builtins
+
+            original_import = builtins.__import__
+            with patch("builtins.__import__", side_effect=_block_fastembed):
+                asyncio.run(knowledge_service.ingest_files(lib_id, [temp_path]))
 
             lib = knowledge_service.get_library(lib_id)
             # Files should be counted but no chunks created
@@ -396,17 +453,10 @@ class TestEmbeddingProviderDetection:
 
     def test_google_cloud_project_env_enables_gemini_embedding(self):
         """GOOGLE_CLOUD_PROJECT env var should be checked for Gemini embedding."""
-        # This test verifies the detection logic, not actual embedding
         env_backup = os.environ.get("GOOGLE_CLOUD_PROJECT")
         try:
             os.environ["GOOGLE_CLOUD_PROJECT"] = "test-project-123"
-            # The RAG ingest code checks os.environ.get("GOOGLE_CLOUD_PROJECT")
-            # Verify the env var is accessible
             assert os.environ.get("GOOGLE_CLOUD_PROJECT") == "test-project-123"
-            vertex_project = os.environ.get("VERTEX_PROJECT") or os.environ.get(
-                "GOOGLE_CLOUD_PROJECT"
-            )
-            assert vertex_project == "test-project-123"
         finally:
             if env_backup is not None:
                 os.environ["GOOGLE_CLOUD_PROJECT"] = env_backup

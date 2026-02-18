@@ -13,7 +13,10 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from houyi.core.skill import SkillSpec
+from houyi.execution.arg_coercion import coerce_args
+from houyi.execution.placeholder_resolver import PlaceholderResolver
 from houyi.execution.skill_executor import SkillExecutionError
+from houyi.execution.tool_result import ToolResultBuilder
 
 if TYPE_CHECKING:
     from houyi.core.skill.consent import ConsentManager
@@ -172,7 +175,13 @@ class ToolCallRunner:
                 len(tools),
             )
 
-        timing_enabled = os.getenv("HOUYI_TOOLCALL_TIMING") == "1"
+        from houyi.config.env_config import (
+            ENV_TOOLCALL_FAST_PATH,
+            ENV_TOOLCALL_TIMING,
+            ENV_TOOLCALL_TOOL_LATENCY_MS,
+        )
+
+        timing_enabled = os.getenv(ENV_TOOLCALL_TIMING) == "1"
         skills_by_name = {skill.name: skill for skill in skills}
         all_tool_names = {name for name in skills_by_name if name}
         called_tools: set[str] = set()
@@ -185,11 +194,11 @@ class ToolCallRunner:
             and not tool_hooks
             and not allow_tool_replace
         )
-        fast_path_flag = (os.getenv("HOUYI_TOOLCALL_FAST_PATH") or "").strip().lower()
+        fast_path_flag = (os.getenv(ENV_TOOLCALL_FAST_PATH) or "").strip().lower()
         fast_path_enabled = fast_path_flag in {"1", "true", "yes", "on"}
         tool_outputs: dict[str, Any] = {}
         tool_latency_seconds: float | None = None
-        tool_latency_env = os.getenv("HOUYI_TOOLCALL_TOOL_LATENCY_MS")
+        tool_latency_env = os.getenv(ENV_TOOLCALL_TOOL_LATENCY_MS)
         if tool_latency_env:
             try:
                 tool_latency_ms = float(tool_latency_env)
@@ -291,12 +300,12 @@ class ToolCallRunner:
                 args = (
                     parsed_args
                     if parsed_args is not None
-                    else self._parse_tool_arguments(tool_payload.get("arguments"))
+                    else ToolResultBuilder.parse_arguments(tool_payload.get("arguments"))
                 )
                 if resolved_outputs is not None:
-                    args = self._resolve_tool_placeholders(args, resolved_outputs)
-                    if tool_name == "get_weather_live":
-                        args = self._coerce_weather_live_args(args, resolved_outputs)
+                    args = PlaceholderResolver.resolve(args, resolved_outputs)
+                    if tool_name:
+                        args = coerce_args(tool_name, args, resolved_outputs)
                 requested_tool_name = tool_name
                 attempted_tool_name: str | None = None
                 skill = skills_by_name.get(tool_name) if tool_name else None
@@ -342,7 +351,7 @@ class ToolCallRunner:
                                     "reason": "consent_denied",
                                 },
                             )
-                            error_result = self._build_tool_result(
+                            error_result = ToolResultBuilder.build(
                                 {
                                     "error": "consent_denied",
                                     "message": f"User denied consent for tool '{tool_name}'",
@@ -363,7 +372,7 @@ class ToolCallRunner:
                                 "role": "tool",
                                 "tool_call_id": tool_call_id,
                                 "name": tool_name,
-                                "content": self._format_tool_result(error_result),
+                                "content": ToolResultBuilder.format(error_result),
                             }
                             return index, trace_entry, tool_message, 0.0
 
@@ -377,7 +386,7 @@ class ToolCallRunner:
                                 "reason": decision.reason or "policy_denied",
                             },
                         )
-                        error_result = self._build_tool_result(
+                        error_result = ToolResultBuilder.build(
                             {
                                 "error": "policy_denied",
                                 "message": decision.reason
@@ -399,7 +408,7 @@ class ToolCallRunner:
                             "role": "tool",
                             "tool_call_id": tool_call_id,
                             "name": tool_name,
-                            "content": self._format_tool_result(error_result),
+                            "content": ToolResultBuilder.format(error_result),
                         }
                         return index, trace_entry, tool_message, 0.0
 
@@ -500,7 +509,11 @@ class ToolCallRunner:
                         executor=executor,
                         tool_call_id=tool_call_id,
                     )
-                    if tool_cache is not None and cache_key and not self._is_tool_error(result):
+                    if (
+                        tool_cache is not None
+                        and cache_key
+                        and not ToolResultBuilder.is_error(result)
+                    ):
                         tool_cache[cache_key] = result
                 raw_result = result.get("raw")
                 raw_metadata = raw_result.get("metadata") if isinstance(raw_result, dict) else None
@@ -539,7 +552,7 @@ class ToolCallRunner:
                 if tool_name:
                     called_tools.add(tool_name)
                 if resolved_outputs is not None and tool_name:
-                    raw_payload = self._coerce_tool_payload(result.get("raw"))
+                    raw_payload = ToolResultBuilder.coerce_payload(result.get("raw"))
                     resolved_value = raw_payload.get("result", raw_payload)
                     resolved_outputs[tool_name] = resolved_value
                     if tool_call_id:
@@ -552,7 +565,7 @@ class ToolCallRunner:
                     result_metadata.get("latency_ms") if isinstance(result_metadata, dict) else None
                 )
 
-                if self._is_tool_error(result):
+                if ToolResultBuilder.is_error(result):
                     self._emit_tool_event(
                         "ToolUsageError",
                         {
@@ -629,7 +642,7 @@ class ToolCallRunner:
                     "role": "tool",
                     "tool_call_id": tool_call_id,
                     "name": tool_name,
-                    "content": self._format_tool_result(result),
+                    "content": ToolResultBuilder.format(result),
                 }
                 return index, trace_entry, tool_message, tool_elapsed
 
@@ -640,9 +653,9 @@ class ToolCallRunner:
                     tool_payload = (
                         tool_call.get("function", {}) if isinstance(tool_call, dict) else {}
                     )
-                    args = self._parse_tool_arguments(tool_payload.get("arguments"))
+                    args = ToolResultBuilder.parse_arguments(tool_payload.get("arguments"))
                     parsed_tool_calls.append((tool_call, args))
-                    if self._contains_tool_placeholders(args):
+                    if PlaceholderResolver.contains(args):
                         has_placeholders = True
             else:
                 parsed_tool_calls = [(tool_call, None) for tool_call in response.tool_calls]
@@ -795,14 +808,6 @@ class ToolCallRunner:
         except Exception:
             pass
 
-    def _is_tool_error(self, result: Any) -> bool:
-        if not isinstance(result, dict):
-            return False
-        if result.get("is_error"):
-            return True
-        raw = result.get("raw")
-        return isinstance(raw, dict) and "error" in raw
-
     def _get_metrics_collector(self, skill_name: str) -> Any:
         """Get or create a MetricsCollector for a skill."""
         if skill_name not in self._metrics_collectors:
@@ -842,7 +847,7 @@ class ToolCallRunner:
     ) -> dict[str, Any]:
         """Execute a single tool call using SkillExecutor."""
         if not tool_name:
-            return self._build_tool_result(
+            return ToolResultBuilder.build(
                 {"error": "tool_name_missing"},
                 call_id=tool_call_id,
                 metadata={"tool_name": tool_name},
@@ -850,7 +855,7 @@ class ToolCallRunner:
 
         skill = skills_by_name.get(tool_name)
         if not skill:
-            return self._build_tool_result(
+            return ToolResultBuilder.build(
                 {"error": f"tool_not_found: {tool_name}"},
                 call_id=tool_call_id,
                 metadata={"tool_name": tool_name},
@@ -861,7 +866,7 @@ class ToolCallRunner:
             raw_result = await executor.execute(skill, args)
             latency_ms = (time.time() - start_time) * 1000
             self._record_metrics(tool_name, latency_ms, success=True)
-            return self._build_tool_result(
+            return ToolResultBuilder.build(
                 raw_result,
                 call_id=tool_call_id,
                 metadata={"tool_name": tool_name, "latency_ms": latency_ms},
@@ -871,7 +876,7 @@ class ToolCallRunner:
             is_timeout = isinstance(exc.original_error, asyncio.TimeoutError)
             self._record_metrics(tool_name, latency_ms, success=False, is_timeout=is_timeout)
             error_type = "timeout" if is_timeout else "execution_error"
-            return self._build_tool_result(
+            return ToolResultBuilder.build(
                 {
                     "error": "tool_execution_failed",
                     "error_type": error_type,
@@ -888,7 +893,7 @@ class ToolCallRunner:
             latency_ms = (time.time() - start_time) * 1000
             if tool_name:
                 self._record_metrics(tool_name, latency_ms, success=False)
-            return self._build_tool_result(
+            return ToolResultBuilder.build(
                 {
                     "error": "tool_execution_failed",
                     "error_type": exc.__class__.__name__,
@@ -899,141 +904,3 @@ class ToolCallRunner:
                 call_id=tool_call_id,
                 metadata={"tool_name": tool_name, "latency_ms": latency_ms},
             )
-
-    def _parse_tool_arguments(self, raw_args: Any) -> dict[str, Any]:
-        """Parse tool arguments from model response."""
-        if raw_args is None:
-            return {}
-        if isinstance(raw_args, dict):
-            return raw_args
-        if isinstance(raw_args, str):
-            try:
-                return json.loads(raw_args)
-            except json.JSONDecodeError:
-                return {}
-        return {}
-
-    @staticmethod
-    def _coerce_tool_payload(raw: Any) -> dict[str, Any]:
-        if isinstance(raw, dict):
-            return raw
-        if hasattr(raw, "model_dump"):
-            return raw.model_dump()
-        return {"result": raw}
-
-    def _contains_tool_placeholders(self, value: Any) -> bool:
-        if isinstance(value, str):
-            return value.startswith("$tool.") or value.startswith("$call.")
-        if isinstance(value, dict):
-            return any(self._contains_tool_placeholders(item) for item in value.values())
-        if isinstance(value, list):
-            return any(self._contains_tool_placeholders(item) for item in value)
-        return False
-
-    def _resolve_tool_placeholders(
-        self,
-        value: Any,
-        resolved_outputs: dict[str, Any],
-    ) -> Any:
-        if isinstance(value, str):
-            placeholder = self._extract_placeholder(value)
-            if placeholder is None:
-                return value
-            root_key, path = placeholder
-            payload = resolved_outputs.get(root_key)
-            if payload is None:
-                return value
-            return self._resolve_payload_path(payload, path)
-        if isinstance(value, dict):
-            return {
-                key: self._resolve_tool_placeholders(item, resolved_outputs)
-                for key, item in value.items()
-            }
-        if isinstance(value, list):
-            return [self._resolve_tool_placeholders(item, resolved_outputs) for item in value]
-        return value
-
-    @staticmethod
-    def _extract_placeholder(value: str) -> tuple[str, list[str]] | None:
-        if value.startswith("$tool."):
-            path = value[len("$tool.") :]
-        elif value.startswith("$call."):
-            path = value[len("$call.") :]
-        else:
-            return None
-        parts = [segment for segment in path.split(".") if segment]
-        if not parts:
-            return None
-        return parts[0], parts[1:]
-
-    @staticmethod
-    def _resolve_payload_path(payload: Any, path: list[str]) -> Any:
-        current = payload
-        for segment in path:
-            if isinstance(current, dict) and segment in current:
-                current = current[segment]
-                continue
-            if isinstance(current, list):
-                try:
-                    index = int(segment)
-                except ValueError:
-                    return payload
-                if 0 <= index < len(current):
-                    current = current[index]
-                    continue
-            return payload
-        return current
-
-    @staticmethod
-    def _coerce_weather_live_args(
-        args: dict[str, Any] | None,
-        resolved_outputs: dict[str, Any],
-    ) -> dict[str, Any] | None:
-        if not isinstance(args, dict):
-            return args
-        updated = dict(args)
-        fallback_date = resolved_outputs.get("get_date")
-        if isinstance(fallback_date, str):
-            updated["date"] = fallback_date
-        location = resolved_outputs.get("get_location")
-        if isinstance(location, dict):
-            if "lat" in location:
-                updated["lat"] = location["lat"]
-            if "lon" in location:
-                updated["lon"] = location["lon"]
-        return updated
-
-    def _build_tool_result(
-        self,
-        raw: Any,
-        call_id: str | None = None,
-        metadata: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        """Build tool result payload with raw + serialized content."""
-        if isinstance(raw, dict):
-            raw_payload = raw
-        elif hasattr(raw, "model_dump"):
-            raw_payload = raw.model_dump()
-        else:
-            raw_payload = {"result": raw}
-        is_error = isinstance(raw_payload, dict) and "error" in raw_payload
-
-        return {
-            "call_id": call_id,
-            "raw": raw_payload,
-            "content": self._serialize_tool_payload(raw_payload),
-            "is_error": is_error,
-            "metadata": metadata or {},
-        }
-
-    def _format_tool_result(self, result: dict[str, Any]) -> str:
-        """Format tool result for tool message content."""
-        if isinstance(result, dict) and "content" in result:
-            return result["content"]
-        return self._serialize_tool_payload(result)
-
-    def _serialize_tool_payload(self, payload: Any) -> str:
-        try:
-            return json.dumps(payload, ensure_ascii=True, sort_keys=True)
-        except TypeError:
-            return json.dumps({"result": str(payload)}, ensure_ascii=True, sort_keys=True)

@@ -124,8 +124,8 @@ async def test_openai_compat_adapter_stream(monkeypatch) -> None:
 
     adapter = OpenAICompatibleAdapter(model="test-model")
     chunks = []
-    async for chunk in adapter.stream_chat([{"role": "user", "content": "hi"}]):
-        chunks.append(chunk)
+    async for content, _reasoning in adapter.stream_chat([{"role": "user", "content": "hi"}]):
+        chunks.append(content)
 
     assert chunks == ["hello", "world"]
 

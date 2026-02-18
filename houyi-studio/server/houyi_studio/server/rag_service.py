@@ -13,40 +13,62 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-logger = logging.getLogger(__name__)
+from houyi.config.env_config import (
+    ENV_EMBEDDING_MODEL,
+    ENV_EMBEDDING_PROVIDER,
+    ENV_GOOGLE_API_KEY,
+    ENV_GOOGLE_APPLICATION_CREDENTIALS,
+    ENV_GOOGLE_CLOUD_PROJECT,
+    ENV_KNOWLEDGE_STORAGE,
+    ENV_OPENAI_API_KEY,
+)
 
-# Storage directory for knowledge library metadata and data
-# Use absolute path to avoid issues with relative paths
-KNOWLEDGE_STORAGE_DIR = Path(os.getenv("HOUYI_KNOWLEDGE_STORAGE", ".houyi/knowledge")).resolve()
+logger = logging.getLogger(__name__)
 
 # Subdirectory names (constants to avoid hardcoding)
 UPLOADS_SUBDIR = "uploads"
 INDEX_SUBDIR = "index"
 
+# Library ID format prefix for path safety validation
+_LIB_ID_PREFIX = "lib_"
+
+
+# Default storage root — re-exported for backward compat with tests.
+# ``_default_storage_dir()`` is the canonical source.
+KNOWLEDGE_STORAGE_DIR: Path = Path(os.getenv(ENV_KNOWLEDGE_STORAGE, ".houyi/knowledge")).resolve()
+
+
+def _default_storage_dir() -> Path:
+    """Lazily resolve the default storage directory.
+
+    This is a function (not a module-level constant) so that:
+    1. Tests can set HOUYI_KNOWLEDGE_STORAGE env var before importing
+    2. The path is resolved at call time, not at module import time
+    """
+    return Path(os.getenv(ENV_KNOWLEDGE_STORAGE, ".houyi/knowledge")).resolve()
+
 
 def get_library_storage_dir(library_id: str) -> Path:
-    """Get the storage directory for a specific library.
+    """Get the storage directory for a specific library (module-level helper).
 
-    Each library has its own isolated storage:
-    - {STORAGE}/{library_id}/{UPLOADS_SUBDIR}/  - Uploaded files
-    - {STORAGE}/{library_id}/{INDEX_SUBDIR}/    - Vector/sparse/graph indexes
-
-    Args:
-        library_id: Library identifier
-
-    Returns:
-        Absolute path to library storage directory
+    For test isolation, prefer using KnowledgeService instance methods instead.
     """
-    return KNOWLEDGE_STORAGE_DIR / library_id
+    return _default_storage_dir() / library_id
 
 
 def get_library_upload_dir(library_id: str) -> Path:
-    """Get the upload directory for a specific library."""
+    """Get the upload directory for a specific library (module-level helper).
+
+    For test isolation, prefer using KnowledgeService instance methods instead.
+    """
     return get_library_storage_dir(library_id) / UPLOADS_SUBDIR
 
 
 def get_library_index_dir(library_id: str) -> Path:
-    """Get the index directory for a specific library."""
+    """Get the index directory for a specific library (module-level helper).
+
+    For test isolation, prefer using KnowledgeService instance methods instead.
+    """
     return get_library_storage_dir(library_id) / INDEX_SUBDIR
 
 
@@ -79,82 +101,179 @@ class RAGService:
         return []
 
 
-def _detect_embedding_config() -> tuple[Any, str] | tuple[None, str]:
-    """Detect the best available embedding provider from environment.
+# Provider → default model/dimension lookup
+_PROVIDER_DEFAULTS: dict[str, tuple[str, int]] = {
+    "local": ("BAAI/bge-small-en-v1.5", 384),
+    "gemini": ("text-embedding-004", 768),
+    "vertex": ("text-embedding-004", 768),
+    "openai": ("text-embedding-3-small", 1536),
+}
 
-    Tries providers in order: Gemini/Vertex > OpenAI > local fastembed.
 
-    Returns:
-        (EmbeddingConfig, provider_name) or (None, reason) if none available.
-    """
+def _make_embedding_config(
+    provider: str,
+    model: str | None = None,
+    dimension: int | None = None,
+) -> Any:
+    """Create an ``EmbeddingConfig`` using provider defaults when needed."""
     from houyi.rag.config import EmbeddingConfig
 
-    # 1. Check for Vertex/Gemini
-    vertex_project = (
-        os.environ.get("VERTEX_PROJECT")
-        or os.environ.get("GOOGLE_CLOUD_PROJECT")
-        or os.environ.get("GOOGLE_PROJECT_ID")
+    defaults = _PROVIDER_DEFAULTS.get(provider, ("text-embedding-3-small", 1536))
+    return EmbeddingConfig(
+        provider=provider,
+        model=model or defaults[0],
+        dimension=dimension or defaults[1],
     )
-    if not vertex_project:
-        creds_file = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "")
-        if creds_file:
-            try:
-                with open(creds_file) as f:
-                    vertex_project = json.load(f).get("project_id", "")
-            except Exception:
-                pass
-    if vertex_project:
+
+
+def resolve_embedding_config(
+    *,
+    preferred_provider: str | None = None,
+    preferred_model: str | None = None,
+    preferred_dimension: int | None = None,
+) -> tuple[Any, str] | tuple[None, str]:
+    """Resolve the embedding config using a clear priority chain.
+
+    Priority (highest → lowest):
+    1. **Explicit override** (``preferred_provider`` — from library metadata / UI choice)
+    2. **Environment variable** ``EMBEDDING_PROVIDER`` / ``EMBEDDING_MODEL``
+    3. **Auto-detection** (Gemini → OpenAI → local fastembed)
+
+    Returns:
+        ``(EmbeddingConfig, provider_name)`` or ``(None, "no_provider")``.
+    """
+    # ── 1. Explicit override (from UI / library metadata) ───────────
+    if preferred_provider:
+        cfg = _make_embedding_config(
+            preferred_provider,
+            preferred_model,
+            preferred_dimension,
+        )
+        logger.debug("Embedding: using explicit provider '%s'", preferred_provider)
+        return cfg, preferred_provider
+
+    # ── 2. Environment variables ────────────────────────────────────
+    env_provider = os.environ.get(ENV_EMBEDDING_PROVIDER)
+    env_model = os.environ.get(ENV_EMBEDDING_MODEL)
+    if env_provider:
+        cfg = _make_embedding_config(env_provider, env_model)
+        logger.debug("Embedding: using env var provider '%s'", env_provider)
+        return cfg, env_provider
+
+    # ── 3. Auto-detection ───────────────────────────────────────────
+    return _auto_detect_embedding()
+
+
+def _auto_detect_embedding() -> tuple[Any, str] | tuple[None, str]:
+    """Auto-detect the best available embedding provider.
+
+    Order: Gemini (GOOGLE_API_KEY / GOOGLE_CLOUD_PROJECT) → OpenAI → local fastembed.
+    """
+    # Gemini: API key auth
+    if os.environ.get(ENV_GOOGLE_API_KEY):
         try:
             from google import genai  # noqa: F401
 
-            return EmbeddingConfig(
-                provider="gemini",
-                model="text-embedding-004",
-                dimension=768,
-            ), "gemini"
+            cfg = _make_embedding_config("gemini")
+            logger.debug("Embedding auto-detect: gemini (GOOGLE_API_KEY)")
+            return cfg, "gemini"
         except ImportError:
-            logger.debug("google-genai not installed, trying other providers")
+            logger.debug("google-genai not installed, skipping Gemini")
 
-    # 2. OpenAI
-    if os.environ.get("OPENAI_API_KEY"):
-        return EmbeddingConfig(
-            provider="openai",
-            model="text-embedding-3-small",
-            dimension=1536,
-        ), "openai"
+    # Gemini: Vertex AI auth
+    google_project = os.environ.get(ENV_GOOGLE_CLOUD_PROJECT)
+    if not google_project:
+        creds_file = os.environ.get(ENV_GOOGLE_APPLICATION_CREDENTIALS, "")
+        if creds_file:
+            try:
+                with open(creds_file) as f:
+                    google_project = json.load(f).get("project_id", "")
+            except Exception:
+                pass
+    if google_project:
+        try:
+            from google import genai  # noqa: F401
 
-    # 3. Local fastembed
+            cfg = _make_embedding_config("gemini")
+            logger.debug("Embedding auto-detect: gemini (GOOGLE_CLOUD_PROJECT)")
+            return cfg, "gemini"
+        except ImportError:
+            logger.debug("google-genai not installed, skipping Gemini")
+
+    # OpenAI
+    if os.environ.get(ENV_OPENAI_API_KEY):
+        cfg = _make_embedding_config("openai")
+        logger.debug("Embedding auto-detect: openai")
+        return cfg, "openai"
+
+    # Local fastembed
     try:
         import fastembed  # noqa: F401
 
-        return EmbeddingConfig(
-            provider="local",
-            model="BAAI/bge-small-en-v1.5",
-            dimension=384,
-        ), "local"
+        cfg = _make_embedding_config("local")
+        logger.debug("Embedding auto-detect: local (fastembed)")
+        return cfg, "local"
     except ImportError:
         pass
 
     return None, "no_provider"
 
 
-class KnowledgeService:
-    """Service for managing knowledge libraries and RAG operations."""
+# Backward-compat alias
+def _detect_embedding_config() -> tuple[Any, str] | tuple[None, str]:
+    """Alias — prefer ``resolve_embedding_config()``."""
+    return resolve_embedding_config()
 
-    def __init__(self) -> None:
+
+class KnowledgeService:
+    """Service for managing knowledge libraries and RAG operations.
+
+    Args:
+        storage_dir: Override the storage directory. If None, uses the
+            HOUYI_KNOWLEDGE_STORAGE env var or the default ``.houyi/knowledge``.
+            **Always** provide an explicit ``storage_dir`` in tests to prevent
+            test data from leaking into the production directory.
+    """
+
+    def __init__(self, storage_dir: Path | str | None = None) -> None:
         """Initialize the knowledge service."""
+        if storage_dir is not None:
+            self._storage_dir = Path(storage_dir).resolve()
+        else:
+            self._storage_dir = _default_storage_dir()
         self._libraries: dict[str, dict[str, Any]] = {}
         self._cancel_flags: dict[str, bool] = {}
         self._ensure_storage_dir()
         self._load_libraries()
 
+    # ── Storage path helpers (instance-level) ─────────────────
+
+    @property
+    def storage_dir(self) -> Path:
+        """The root storage directory for this service instance."""
+        return self._storage_dir
+
+    def library_storage_dir(self, library_id: str) -> Path:
+        """Get the storage directory for a specific library."""
+        return self._storage_dir / library_id
+
+    def library_upload_dir(self, library_id: str) -> Path:
+        """Get the upload directory for a specific library."""
+        return self.library_storage_dir(library_id) / UPLOADS_SUBDIR
+
+    def library_index_dir(self, library_id: str) -> Path:
+        """Get the index directory for a specific library."""
+        return self.library_storage_dir(library_id) / INDEX_SUBDIR
+
+    # ── Internal helpers ──────────────────────────────────────
+
     def _ensure_storage_dir(self) -> None:
         """Ensure the storage directory exists."""
-        KNOWLEDGE_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
+        self._storage_dir.mkdir(parents=True, exist_ok=True)
 
     def _load_libraries(self) -> None:
         """Load libraries from storage."""
-        metadata_file = KNOWLEDGE_STORAGE_DIR / "libraries.json"
+        metadata_file = self._storage_dir / "libraries.json"
         if metadata_file.exists():
             try:
                 with open(metadata_file) as f:
@@ -233,7 +352,7 @@ class KnowledgeService:
 
     def _save_libraries(self) -> None:
         """Save libraries to storage."""
-        metadata_file = KNOWLEDGE_STORAGE_DIR / "libraries.json"
+        metadata_file = self._storage_dir / "libraries.json"
         try:
             with open(metadata_file, "w") as f:
                 json.dump(self._libraries, f, indent=2)
@@ -306,9 +425,9 @@ class KnowledgeService:
             library["doc_count"] = doc_count
 
         # Create library storage directories
-        storage_dir = get_library_storage_dir(library_id)
-        get_library_upload_dir(library_id).mkdir(parents=True, exist_ok=True)
-        get_library_index_dir(library_id).mkdir(parents=True, exist_ok=True)
+        storage_dir = self.library_storage_dir(library_id)
+        self.library_upload_dir(library_id).mkdir(parents=True, exist_ok=True)
+        self.library_index_dir(library_id).mkdir(parents=True, exist_ok=True)
         logger.debug("Created library storage at: %s", storage_dir)
 
         self._libraries[library_id] = library
@@ -325,6 +444,11 @@ class KnowledgeService:
         - Uploaded files in {STORAGE}/{library_id}/uploads/
         - Index files in {STORAGE}/{library_id}/index/
 
+        Safety:
+        - Only deletes directories that are strict children of ``self._storage_dir``
+        - Validates library_id format to prevent path-traversal attacks
+        - Refuses to delete if the resolved path escapes the storage root
+
         Args:
             library_id: Library ID to delete
 
@@ -334,8 +458,39 @@ class KnowledgeService:
         if library_id not in self._libraries:
             return False
 
-        # Delete library storage directory (uploads, index, etc.)
-        storage_dir = get_library_storage_dir(library_id)
+        # ── Path safety checks ────────────────────────────────
+        if not library_id.startswith(_LIB_ID_PREFIX):
+            logger.error(
+                "Refusing to delete library with unexpected ID format: %s",
+                library_id,
+            )
+            return False
+
+        storage_dir = self.library_storage_dir(library_id)
+        resolved = storage_dir.resolve()
+
+        # Ensure the target is strictly inside _storage_dir (prevent traversal)
+        try:
+            resolved.relative_to(self._storage_dir.resolve())
+        except ValueError:
+            logger.error(
+                "SECURITY: Refusing to delete path outside storage root. "
+                "target=%s, storage_root=%s",
+                resolved,
+                self._storage_dir.resolve(),
+            )
+            return False
+
+        # Additional sanity: must be exactly one level deep
+        if resolved.parent != self._storage_dir.resolve():
+            logger.error(
+                "SECURITY: Refusing to delete nested path. target=%s, expected_parent=%s",
+                resolved,
+                self._storage_dir.resolve(),
+            )
+            return False
+
+        # ── Perform deletion ──────────────────────────────────
         if storage_dir.exists():
             try:
                 shutil.rmtree(storage_dir)
@@ -465,7 +620,11 @@ class KnowledgeService:
             # Include embedding provider/model/dimension so switching
             # embedding providers triggers a full re-index.
             metadata = library.get("metadata", {})
-            emb_cfg, _ = _detect_embedding_config()
+            emb_cfg, _ = resolve_embedding_config(
+                preferred_provider=metadata.get("embedding_provider"),
+                preferred_model=metadata.get("embedding_model"),
+                preferred_dimension=metadata.get("embedding_dimension"),
+            )
             current_config = {
                 "chunk_size": metadata.get("chunk_size", 512),
                 "chunk_overlap": metadata.get("chunk_overlap", 50),
@@ -570,14 +729,24 @@ class KnowledgeService:
 
             knowledge_dir = library.get("knowledge_dir", "./knowledge")
 
-            # Detect embedding provider (centralized helper)
-            embedding_config, provider_name = _detect_embedding_config()
+            # Resolve embedding: library metadata (UI choice) → env vars → auto-detect
+            lib_metadata = library.get("metadata", {})
+            embedding_config, provider_name = resolve_embedding_config(
+                preferred_provider=lib_metadata.get("embedding_provider"),
+                preferred_model=lib_metadata.get("embedding_model"),
+                preferred_dimension=lib_metadata.get("embedding_dimension"),
+            )
             if embedding_config is None:
                 logger.warning(
                     "No embedding provider available, falling back to simple file counting"
                 )
                 raise ImportError("No embedding provider available") from None
-            logger.debug("Using %s embedding for ingest", provider_name)
+            logger.info(
+                "Using %s embedding for ingest (model=%s, dim=%d)",
+                provider_name,
+                embedding_config.model,
+                embedding_config.dimension,
+            )
 
             # Save embedding config to library metadata so search uses the same provider
             library.setdefault("metadata", {})["embedding_provider"] = embedding_config.provider
@@ -592,7 +761,7 @@ class KnowledgeService:
                 mode="indexed",
                 knowledge_dir=knowledge_dir,
                 # Use library-specific index directory to avoid conflicts
-                index_dir=str(get_library_index_dir(library_id)),
+                index_dir=str(self.library_index_dir(library_id)),
                 embedding=embedding_config,
                 contextual_retrieval=contextual_retrieval,
             )
@@ -858,10 +1027,21 @@ class KnowledgeService:
                 "stats": stats,
             }
 
-        return {
+        result: dict[str, Any] = {
             "success": True,
             "stats": stats,
         }
+
+        # Attach structured warning when library is degraded (no embedding provider)
+        if library["status"] == "degraded":
+            result["warning"] = (
+                "No embedding provider configured — files were imported but "
+                "semantic search is unavailable. Install an embedding provider "
+                "(set OPENAI_API_KEY, or install fastembed for local embeddings) "
+                "and rebuild the index."
+            )
+
+        return result
 
     async def search_knowledge(
         self,
@@ -904,8 +1084,8 @@ class KnowledgeService:
         # If library exists, use the library's upload directory for knowledge and index directory for indexes
         if library_id:
             # For libraries with uploaded files, use the library-specific directories
-            knowledge_dir = str(get_library_upload_dir(library_id))
-            index_dir = str(get_library_index_dir(library_id))
+            knowledge_dir = str(self.library_upload_dir(library_id))
+            index_dir = str(self.library_index_dir(library_id))
         else:
             # Fallback for search without library
             knowledge_dir = "./knowledge"
@@ -914,7 +1094,7 @@ class KnowledgeService:
         try:
             # Try to use the RAG service
             from houyi.rag import RAG as HouyiRAG
-            from houyi.rag.config import EmbeddingConfig, GraphConfig, IndexedConfig, RAGConfig
+            from houyi.rag.config import GraphConfig, IndexedConfig, RAGConfig
             from houyi.rag.types import RetrievalStrategy
 
             # Determine embedding config for indexed mode.
@@ -925,33 +1105,25 @@ class KnowledgeService:
             if effective_mode in ("indexed", "auto"):
                 logger.debug("Search mode=%s, checking embedding providers...", effective_mode)
 
-                # Try library's saved embedding config first
+                # Resolve: library metadata → env vars → auto-detect
                 lib_meta = library.get("metadata", {}) if library else {}
-                saved_provider = lib_meta.get("embedding_provider")
-                saved_model = lib_meta.get("embedding_model")
-                saved_dim = lib_meta.get("embedding_dimension")
-                if saved_provider and saved_model and saved_dim:
-                    embedding_config = EmbeddingConfig(
-                        provider=saved_provider,
-                        model=saved_model,
-                        dimension=saved_dim,
-                    )
+                embedding_config, provider_name = resolve_embedding_config(
+                    preferred_provider=lib_meta.get("embedding_provider"),
+                    preferred_model=lib_meta.get("embedding_model"),
+                    preferred_dimension=lib_meta.get("embedding_dimension"),
+                )
+                if embedding_config:
                     logger.debug(
-                        "Using library's saved embedding config: %s/%s (dim=%d)",
-                        saved_provider,
-                        saved_model,
-                        saved_dim,
+                        "Embedding for search: %s/%s (dim=%d)",
+                        embedding_config.provider,
+                        embedding_config.model,
+                        embedding_config.dimension,
                     )
                 else:
-                    # Auto-detect from environment
-                    embedding_config, provider_name = _detect_embedding_config()
-                    if embedding_config:
-                        logger.debug("Using auto-detected %s embedding for search", provider_name)
-                    else:
-                        logger.warning(
-                            "No embedding provider for indexed mode, falling back to agentic"
-                        )
-                        effective_mode = "agentic"
+                    logger.warning(
+                        "No embedding provider for indexed mode, falling back to agentic"
+                    )
+                    effective_mode = "agentic"
 
                 logger.debug(
                     "Final effective_mode=%s, embedding_config=%s", effective_mode, embedding_config

@@ -24,20 +24,20 @@ logger = logging.getLogger(__name__)
 
 
 class SkillRegistry:
-    """Central registry for skills with hooks and policy integration."""
+    """Central registry for skills with hooks, policy, and namespace support.
+
+    Skills are indexed by plain name **and** by qualified name
+    (``provider/name``) when a provider is set.  Lookups via :meth:`get` check
+    the qualified form first, then fall back to plain name.
+    """
 
     def __init__(
         self,
         hooks_manager: SkillHooksManager | None = None,
         policy_enforcer: PolicyEnforcer | None = None,
     ) -> None:
-        """Initialize skill registry.
-
-        Args:
-            hooks_manager: Optional hooks manager for automatic hooks registration
-            policy_enforcer: Optional policy enforcer for automatic policy setup
-        """
         self._skills: dict[str, SkillSpec] = {}
+        self._qualified: dict[str, SkillSpec] = {}
         self._hooks_manager = hooks_manager
         self._policy_enforcer = policy_enforcer
 
@@ -52,74 +52,102 @@ class SkillRegistry:
     def register(self, skill: SkillSpec, *, overwrite: bool = False) -> None:
         """Register a skill with automatic hooks and policy integration.
 
-        Args:
-            skill: The skill specification to register
-            overwrite: Whether to overwrite existing skill with same name
+        When a skill has a ``provider``, the qualified name
+        (``provider/name``) is also indexed.  Two skills with the same
+        ``name`` but different ``provider`` values can coexist; plain-name
+        lookups will return whichever was registered first (or the one that
+        overwrote it).
 
         Raises:
-            ValueError: If skill name is empty or already registered (when not overwriting)
+            ValueError: If skill name is empty or already registered
+                (when not overwriting and same provider).
         """
         name = str(getattr(skill, "name", "") or "").strip()
         if not name:
             raise ValueError("Skill name is required")
-        if not overwrite and name in self._skills:
-            raise ValueError(f"Skill already registered: {name}")
 
-        # Unregister old hooks if overwriting
+        existing = self._skills.get(name)
+        if not overwrite and existing is not None:
+            existing_provider = getattr(existing, "provider", None) or ""
+            new_provider = getattr(skill, "provider", None) or ""
+            if existing_provider == new_provider:
+                raise ValueError(f"Skill already registered: {name}")
+            # Different provider — store under qualified name only;
+            # the plain-name slot keeps the earlier registration.
+            qname = skill.qualified_name
+            self._qualified[qname] = skill
+            self._register_hooks(skill, qname)
+            logger.debug(
+                "Registered skill %s (provider=%s) as namespaced; "
+                "plain-name slot kept for provider=%s",
+                qname,
+                new_provider,
+                existing_provider,
+            )
+            return
+
         if overwrite and name in self._skills and self._hooks_manager:
             self._hooks_manager.unregister_hooks(name)
 
-        # Register skill
         self._skills[name] = skill
+        if skill.provider:
+            self._qualified[skill.qualified_name] = skill
+        self._register_hooks(skill, name)
+        logger.debug("Registered skill: %s", skill.qualified_name)
 
-        # Auto-register hooks if available
+    def _register_hooks(self, skill: SkillSpec, key: str) -> None:
         if self._hooks_manager and hasattr(skill, "hooks") and skill.hooks:
             self._hooks_manager.register_hooks(skill)
-            logger.debug("Registered %d hooks for skill: %s", len(skill.hooks), name)
-
-        logger.info("Registered skill: %s", name)
+            logger.debug("Registered %d hooks for skill: %s", len(skill.hooks), key)
 
     def unregister(self, name: str) -> bool:
-        """Unregister a skill and its hooks.
-
-        Args:
-            name: Name of the skill to unregister
-
-        Returns:
-            True if skill was unregistered, False if not found
-        """
-        if name not in self._skills:
+        """Unregister a skill by plain or qualified name."""
+        skill = self._qualified.get(name) or self._skills.get(name)
+        if skill is None:
             return False
-
-        # Unregister hooks
+        self._qualified.pop(name, None)
+        if skill.provider:
+            self._qualified.pop(skill.qualified_name, None)
+        if self._skills.get(skill.name) is skill:
+            del self._skills[skill.name]
         if self._hooks_manager:
-            self._hooks_manager.unregister_hooks(name)
-
-        del self._skills[name]
-        logger.info("Unregistered skill: %s", name)
+            self._hooks_manager.unregister_hooks(skill.name)
+        logger.info("Unregistered skill: %s", skill.qualified_name)
         return True
 
     def get(self, name: str) -> SkillSpec | None:
-        """Get a skill by name."""
-        return self._skills.get(name)
+        """Get a skill by plain or qualified (``provider/name``) key."""
+        return self._qualified.get(name) or self._skills.get(name)
 
     def list(self) -> list[SkillSpec]:
-        """List all registered skills."""
-        return list(self._skills.values())
+        """List all registered skills (deduplicated)."""
+        seen: set[int] = set()
+        result: list[SkillSpec] = []
+        for skill in list(self._skills.values()) + list(self._qualified.values()):
+            sid = id(skill)
+            if sid not in seen:
+                seen.add(sid)
+                result.append(skill)
+        return result
 
     def list_names(self) -> list[str]:
-        """List all registered skill names."""
+        """List all registered skill names (plain names)."""
         return list(self._skills.keys())
+
+    def list_qualified_names(self) -> list[str]:
+        """List all qualified skill names (``provider/name``)."""
+        return [s.qualified_name for s in self.list()]
 
     def as_tool_schemas(self) -> list[dict[str, Any]]:
         """Convert all skills to OpenAI function calling schemas."""
-        return [skill.to_tool_schema() for skill in self._skills.values()]
+        return [skill.to_tool_schema() for skill in self.list()]
 
     def clear(self) -> None:
         """Clear all registered skills and their hooks."""
         if self._hooks_manager:
             self._hooks_manager.clear()
         self._skills.clear()
+        self._qualified.clear()
         logger.info("Cleared all skills")
 
     def register_from_manifest(
@@ -251,6 +279,24 @@ class SkillRegistry:
                     overwrite=overwrite,
                 )
                 registered.append(skill_name)
+            except ValueError as e:
+                if "already registered" in str(e):
+                    # Parse the duplicate skill name from the error message
+                    dup_name = str(e).replace("Skill already registered: ", "")
+                    logger.warning(
+                        "Skill '%s' from %s skipped: already registered "
+                        "(built-in takes priority over external SKILL.md). "
+                        "To override, use overwrite=True or remove the "
+                        "duplicate from the skills/ directory.",
+                        dup_name,
+                        skill_path,
+                    )
+                else:
+                    logger.warning(
+                        "Failed to load skill from %s: %s",
+                        skill_path,
+                        e,
+                    )
             except Exception as e:
                 logger.warning(
                     "Failed to load skill from %s: %s",
@@ -258,7 +304,7 @@ class SkillRegistry:
                     e,
                 )
 
-        logger.info(
+        logger.debug(
             "Discovered and registered %d skills from: %s",
             len(registered),
             directory,

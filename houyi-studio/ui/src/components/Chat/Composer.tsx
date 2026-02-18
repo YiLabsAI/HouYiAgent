@@ -45,7 +45,6 @@ const ALLOWED_MIME_EXACT = new Set([
   'application/vnd.ms-excel',  // .xls
 ]);
 // Allowed extensions (fallback when MIME is empty or generic).
-// Referenced from CherryStudio's textExts + documentExts.
 const ALLOWED_EXTENSIONS = new Set([
   '.txt', '.md', '.markdown', '.csv', '.tsv', '.json', '.jsonl',
   '.xml', '.html', '.htm', '.css', '.js', '.ts', '.jsx', '.tsx',

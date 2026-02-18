@@ -34,11 +34,11 @@ class TestWeatherRegistration:
         registry.register(get_weather, overwrite=True)
         assert "get_weather" in [s.name for s in registry.list()]
 
-    def test_get_weather_live(self, registry: SkillRegistry):
-        from houyi.skills.weather import get_weather_live
+    def test_get_weather_has_hooks(self, registry: SkillRegistry):
+        from houyi.skills.weather import get_weather
 
-        registry.register(get_weather_live, overwrite=True)
-        assert "get_weather_live" in [s.name for s in registry.list()]
+        registry.register(get_weather, overwrite=True)
+        assert len(get_weather.hooks) == 2, "get_weather should have PreToolUse + PostToolUse hooks"
 
     def test_get_date(self, registry: SkillRegistry):
         from houyi.skills.weather import get_date
@@ -197,11 +197,11 @@ class TestFullSkillInventory:
         from houyi.rag.skills.kb_search import kb_search_skill
         from houyi.skills.location import get_location
         from houyi.skills.planning import PlanningSkill
-        from houyi.skills.weather import get_date, get_weather, get_weather_live
+        from houyi.skills.weather import get_date, get_weather
         from houyi.web_search.skill import build_web_search_skill
 
-        # @tool built-in (5)
-        for s in [get_weather, get_weather_live, get_date, get_location, build_web_search_skill()]:
+        # @tool built-in (4)
+        for s in [get_weather, get_date, get_location, build_web_search_skill()]:
             registry.register(s, overwrite=True)
 
         # Planning (1)

@@ -2,13 +2,12 @@
  * Mermaid rendering regression tests (baseline).
  *
  * Coverage:
- * - Node-level assertions: every expected label must appear in the SVG
- * - Font-size: diagram text ≤ 15px (matches body text, no bloat)
- * - SVG normalization: viewBox present, no fixed width/height, no upscaling
- * - Sanitization: diagrams with parentheses / special edge labels render
- * - Subgraphs: complex multi-node diagrams render all nodes
- * - Scroll position preserved across conversation switches
- * - No large jitter/flicker on Mermaid conversation switch
+ *  1-7. Node labels, font-size, SVG normalization, sanitization, subgraphs
+ *  8.   Scroll position preserved across 10 conversation switches (stress)
+ *  9.   Wheel-scrolled position preserved across conversation switch
+ * 10.   First-render: no visible temporary DOM from mermaid.render()
+ * 11.   Drag-scrolled position preserved across conversation switch
+ *  8b.  Mermaid conversation switch no large scroll jumps / jitter
  */
 import { test, expect } from '@playwright/test';
 
@@ -221,6 +220,8 @@ test.describe('Mermaid Diagnostics', () => {
   test('narrow diagram is not upscaled beyond its viewBox width', async ({ page }) => {
     // A simple 2-node LR diagram produces a narrow SVG (~250-400px viewBox width).
     // It must NOT be stretched to the full container width (~700px).
+    // The matching Mermaid background (#030712 = bg-gray-950) ensures the
+    // unused space on the right is invisible — no "nested rectangles".
     const code = `flowchart LR
     A[Input] --> B[Output]`;
 
@@ -569,5 +570,338 @@ test.describe('Mermaid Diagnostics', () => {
     expect(jitterData.span).toBeLessThan(300);
     // Final position should be close to before
     expect(Math.abs(jitterData.final - beforeSwitch)).toBeLessThan(400);
+  });
+
+  // ── 9. Mouse-wheel scroll preservation (regression: onWheel handler) ──
+  // Previously, scrolling via mouse wheel did NOT save scroll snapshots
+  // because the post-restore guard only recognised pointerdown (drag).
+  // The onWheel handler now marks wheel events as user-initiated so the
+  // snapshot is saved correctly.
+  test('wheel-scrolled position preserved across conversation switch', async ({ page }) => {
+    await page.goto('/');
+    await switchToChat(page);
+
+    const convA = await page.evaluate(async () => {
+      const res = await fetch('/api/chat/conversations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: 'wheel-scroll-A' }),
+      });
+      return res.json();
+    });
+
+    const convB = await page.evaluate(async () => {
+      const res = await fetch('/api/chat/conversations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: 'wheel-scroll-B' }),
+      });
+      return res.json();
+    });
+
+    testCreatedConvIds.push(convA.conversation_id, convB.conversation_id);
+
+    // Seed A with many messages (some with Mermaid diagrams)
+    await page.evaluate(async (cid: string) => {
+      const messages = Array.from({ length: 30 }).flatMap((_, i) => {
+        const idx = i + 1;
+        const mermaid = idx % 10 === 0
+          ? `\n\n\`\`\`mermaid\nflowchart TD\n  A${idx}-->B${idx}-->C${idx}\n\`\`\`\n`
+          : '';
+        return [
+          { role: 'user', content: `Wheel question ${idx}` },
+          { role: 'assistant', content: `Wheel answer ${idx}${mermaid}` },
+        ];
+      });
+      await fetch(`/api/chat/conversations/${cid}/_seed-messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messages }),
+      });
+    }, convA.conversation_id);
+
+    await page.evaluate(async (cid: string) => {
+      const messages = [
+        { role: 'user', content: 'Short' },
+        { role: 'assistant', content: 'OK' },
+      ];
+      await fetch(`/api/chat/conversations/${cid}/_seed-messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messages }),
+      });
+    }, convB.conversation_id);
+
+    await page.goto('/');
+    await switchToChat(page);
+
+    // Open conv A and wait for messages
+    await page.locator('text=wheel-scroll-A').first().click();
+    await expect(page.getByTestId('chat-page')).toBeVisible({ timeout: 5000 });
+    await expect(page.getByTestId('message-bubble')).toHaveCount(60, { timeout: 10000 });
+    await page.waitForTimeout(2000);
+
+    const scroller = page.getByTestId('chat-timeline');
+    await expect(scroller).toBeVisible();
+
+    // Scroll UP using mouse wheel ONLY (no pointer drag)
+    await scroller.hover();
+    for (let i = 0; i < 25; i++) {
+      await page.mouse.wheel(0, -120);
+      await page.waitForTimeout(40);
+    }
+    await page.waitForTimeout(600);
+
+    // Record anchor message and its position
+    const anchorBefore = await scroller.evaluate((el) => {
+      const bubbles = el.querySelectorAll('[data-testid="message-bubble"]');
+      const containerRect = el.getBoundingClientRect();
+      const viewportCenter = containerRect.top + containerRect.height / 2;
+      let closest: Element | null = null;
+      let closestDist = Infinity;
+      for (const b of bubbles) {
+        const r = b.getBoundingClientRect();
+        const dist = Math.abs(r.top + r.height / 2 - viewportCenter);
+        if (dist < closestDist) {
+          closestDist = dist;
+          closest = b;
+        }
+      }
+      if (!closest) return null;
+      const idx = Array.from(bubbles).indexOf(closest);
+      return {
+        messageIndex: idx,
+        offsetFromContainerTop: closest.getBoundingClientRect().top - containerRect.top,
+        scrollTop: Math.abs(el.scrollTop),
+      };
+    });
+
+    console.log('[wheel-scroll] anchor before:', JSON.stringify(anchorBefore));
+    expect(anchorBefore).not.toBeNull();
+
+    // Switch to B
+    await page.locator('text=wheel-scroll-B').first().click();
+    await expect(page.getByTestId('message-bubble')).toHaveCount(2, { timeout: 5000 });
+    await page.waitForTimeout(200);
+
+    // Switch back to A
+    await page.locator('text=wheel-scroll-A').first().click();
+    await expect(page.getByTestId('message-bubble')).toHaveCount(60, { timeout: 5000 });
+    await page.waitForTimeout(1000);
+
+    // Measure anchor position after restore
+    const anchorAfter = await scroller.evaluate((el, idx) => {
+      const bubbles = el.querySelectorAll('[data-testid="message-bubble"]');
+      const target = bubbles[idx];
+      if (!target) return null;
+      const containerRect = el.getBoundingClientRect();
+      return {
+        offsetFromContainerTop: target.getBoundingClientRect().top - containerRect.top,
+        scrollTop: Math.abs(el.scrollTop),
+      };
+    }, anchorBefore!.messageIndex);
+
+    console.log('[wheel-scroll] anchor after:', JSON.stringify(anchorAfter));
+    expect(anchorAfter).not.toBeNull();
+
+    const visualDrift = Math.abs(
+      anchorAfter!.offsetFromContainerTop - anchorBefore!.offsetFromContainerTop,
+    );
+    console.log('[wheel-scroll] visual drift:', visualDrift.toFixed(0), 'px');
+
+    // Wheel-scrolled position must be preserved within 300px
+    expect(visualDrift).toBeLessThan(300);
+  });
+
+  // ── 10. First-render: no visible temporary DOM from mermaid.render() ──
+  // Regression: Mermaid internally creates temporary elements in the document.
+  // Without the off-screen container fix, these elements flash visibly in the
+  // viewport.  This test monitors document.body for any added child elements
+  // during the rendering window and asserts none of them are visible.
+  test('mermaid first render produces no visible temporary DOM elements', async ({ page }) => {
+    await page.goto('/');
+    await switchToChat(page);
+
+    const conv = await page.evaluate(async () => {
+      const res = await fetch('/api/chat/conversations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: 'flicker-regression' }),
+      });
+      return res.json();
+    });
+    testCreatedConvIds.push(conv.conversation_id);
+
+    // Install a MutationObserver on document.body BEFORE we navigate to the
+    // conversation.  It records every temporarily-added child that is visible
+    // (not hidden/off-screen).
+    await page.evaluate(() => {
+      (window as any).__mermaidFlickerHits = [];
+      const observer = new MutationObserver((mutations) => {
+        for (const m of mutations) {
+          for (const node of m.addedNodes) {
+            if (!(node instanceof HTMLElement)) continue;
+            // Ignore nodes that are properly hidden (our off-screen container)
+            const style = window.getComputedStyle(node);
+            if (
+              style.visibility === 'hidden' ||
+              style.display === 'none' ||
+              style.opacity === '0'
+            ) continue;
+            const rect = node.getBoundingClientRect();
+            // Ignore off-screen elements (left < -1000)
+            if (rect.left < -1000 || rect.top < -1000) continue;
+            // Ignore zero-size elements
+            if (rect.width === 0 && rect.height === 0) continue;
+            // If it contains an SVG with mermaid content, it's a temporary render element
+            if (node.querySelector('svg') || node.id?.startsWith('d') || node.classList.contains('mermaid')) {
+              (window as any).__mermaidFlickerHits.push({
+                tag: node.tagName,
+                id: node.id,
+                className: String(node.className).slice(0, 80),
+                rect: { left: rect.left, top: rect.top, width: rect.width, height: rect.height },
+              });
+            }
+          }
+        }
+      });
+      observer.observe(document.body, { childList: true, subtree: false });
+      (window as any).__mermaidFlickerObserver = observer;
+    });
+
+    // Seed a conversation with a mermaid diagram
+    await page.evaluate(async (cid: string) => {
+      const messages = [
+        { role: 'user', content: 'Draw a diagram' },
+        { role: 'assistant', content: '```mermaid\nflowchart TD\n  A[Start] --> B[Process]\n  B --> C[End]\n```' },
+      ];
+      await fetch(`/api/chat/conversations/${cid}/_seed-messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messages }),
+      });
+    }, conv.conversation_id);
+
+    // Navigate to the conversation — this triggers first render
+    await page.goto('/');
+    await switchToChat(page);
+    await page.locator('text=flicker-regression').first().click();
+    await expect(page.getByTestId('chat-page')).toBeVisible({ timeout: 5000 });
+
+    // Wait for Mermaid to render (debounce + render time)
+    await page.waitForTimeout(3000);
+
+    // Check if any visible temporary DOM elements were detected
+    const flickerHits = await page.evaluate(() => {
+      const observer = (window as any).__mermaidFlickerObserver;
+      if (observer) observer.disconnect();
+      return (window as any).__mermaidFlickerHits || [];
+    });
+
+    console.log('[flicker-regression] hits:', JSON.stringify(flickerHits));
+
+    // The rendered SVG should be inside the chat timeline, not as a direct
+    // body child.  Any hits here indicate temporary DOM leaking to viewport.
+    expect(flickerHits.length).toBe(0);
+  });
+
+  // ── 11. Scroll: drag scrollbar position also preserved ──
+  // Complementary to test 9 (wheel) — verifies pointer-drag scrollbar works.
+  test('drag-scrolled position preserved across conversation switch', async ({ page }) => {
+    await page.goto('/');
+    await switchToChat(page);
+
+    const convA = await page.evaluate(async () => {
+      const res = await fetch('/api/chat/conversations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: 'drag-scroll-A' }),
+      });
+      return res.json();
+    });
+
+    const convB = await page.evaluate(async () => {
+      const res = await fetch('/api/chat/conversations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: 'drag-scroll-B' }),
+      });
+      return res.json();
+    });
+
+    testCreatedConvIds.push(convA.conversation_id, convB.conversation_id);
+
+    await page.evaluate(async (cid: string) => {
+      const messages = Array.from({ length: 30 }).flatMap((_, i) => [
+        { role: 'user', content: `Drag question ${i + 1}` },
+        { role: 'assistant', content: `Drag answer ${i + 1}` },
+      ]);
+      await fetch(`/api/chat/conversations/${cid}/_seed-messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messages }),
+      });
+    }, convA.conversation_id);
+
+    await page.evaluate(async (cid: string) => {
+      const messages = [
+        { role: 'user', content: 'Short' },
+        { role: 'assistant', content: 'OK' },
+      ];
+      await fetch(`/api/chat/conversations/${cid}/_seed-messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messages }),
+      });
+    }, convB.conversation_id);
+
+    await page.goto('/');
+    await switchToChat(page);
+
+    await page.locator('text=drag-scroll-A').first().click();
+    await expect(page.getByTestId('chat-page')).toBeVisible({ timeout: 5000 });
+    await expect(page.getByTestId('message-bubble')).toHaveCount(60, { timeout: 10000 });
+    await page.waitForTimeout(1500);
+
+    const scroller = page.getByTestId('chat-timeline');
+
+    // Scroll UP using pointer drag on the scrollbar track area
+    const scrollerBox = await scroller.boundingBox();
+    expect(scrollerBox).not.toBeNull();
+
+    // Simulate drag scroll by using mouse pointer down + move in the scrollbar area
+    const scrollBarX = scrollerBox!.x + scrollerBox!.width - 5; // right edge
+    const startY = scrollerBox!.y + scrollerBox!.height * 0.8;
+    const endY = scrollerBox!.y + scrollerBox!.height * 0.3;
+
+    await page.mouse.move(scrollBarX, startY);
+    await page.mouse.down();
+    // Move in small steps to simulate drag
+    const steps = 10;
+    for (let i = 1; i <= steps; i++) {
+      const y = startY + (endY - startY) * (i / steps);
+      await page.mouse.move(scrollBarX, y, { steps: 1 });
+      await page.waitForTimeout(30);
+    }
+    await page.mouse.up();
+    await page.waitForTimeout(600);
+
+    const scrollTopBefore = await scroller.evaluate((el) => Math.abs(el.scrollTop));
+
+    // Switch to B then back
+    await page.locator('text=drag-scroll-B').first().click();
+    await expect(page.getByTestId('message-bubble')).toHaveCount(2, { timeout: 5000 });
+    await page.waitForTimeout(200);
+
+    await page.locator('text=drag-scroll-A').first().click();
+    await expect(page.getByTestId('message-bubble')).toHaveCount(60, { timeout: 5000 });
+    await page.waitForTimeout(1000);
+
+    const scrollTopAfter = await scroller.evaluate((el) => Math.abs(el.scrollTop));
+    const drift = Math.abs(scrollTopAfter - scrollTopBefore);
+    console.log('[drag-scroll] before:', scrollTopBefore, 'after:', scrollTopAfter, 'drift:', drift);
+
+    // Scroll position should be preserved within 300px
+    expect(drift).toBeLessThan(300);
   });
 });

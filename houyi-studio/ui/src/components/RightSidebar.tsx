@@ -28,7 +28,7 @@ interface RightSidebarProps {
   skillMetrics?: import('../types/websocket').SkillMetricsData | null;
   isLoadingSkillDetail?: boolean;
   onConfigureSkill?: () => void;
-  onDryRunSkill?: (toolName: string) => void;
+  onDryRunSkill?: () => void;
   onUnloadSkill?: (skillName: string) => void;
   /** Called when user clicks [Full Settings...] in ConversationSettingsPanel. */
   onOpenChatSettings?: () => void;
@@ -65,7 +65,7 @@ interface SecondaryContentProps {
   skillMetrics?: import('../types/websocket').SkillMetricsData | null;
   isLoadingSkillDetail?: boolean;
   onConfigureSkill?: () => void;
-  onDryRunSkill?: (toolName: string) => void;
+  onDryRunSkill?: () => void;
   onUnloadSkill?: (skillName: string) => void;
   onOpenChatSettings?: () => void;
   onConfigureKnowledge?: (libraryId: string) => void;

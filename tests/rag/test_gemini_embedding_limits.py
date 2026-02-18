@@ -1,6 +1,7 @@
 """Test Gemini embedding API limits."""
 
-from unittest.mock import AsyncMock, MagicMock
+import os
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -52,6 +53,42 @@ class TestGeminiEmbedderConfig:
         assert embedder.batch_size == 5
         assert embedder.delay_seconds == 2.0
 
+
+class TestGeminiEmbedderAuth:
+    """Test GeminiEmbedder dual-auth support (API key vs Vertex AI)."""
+
+    def test_api_key_auth_preferred(self):
+        """GOOGLE_API_KEY should be used when available (no project needed)."""
+        from houyi.rag.indexed.embedding.base import GeminiEmbedder
+
+        embedder = GeminiEmbedder(model="text-embedding-004", dimension=768)
+        with patch.dict(os.environ, {"GOOGLE_API_KEY": "test-api-key"}):
+            mock_genai = MagicMock()
+            with patch.dict("sys.modules", {"google": MagicMock(), "google.genai": mock_genai}):
+                with patch(
+                    "houyi.rag.indexed.embedding.base.GeminiEmbedder._ensure_client"
+                ) as mock_init:
+                    embedder._ensure_client()
+
+    def test_error_message_mentions_both_auth_methods(self):
+        """Error message should mention GOOGLE_API_KEY and GOOGLE_CLOUD_PROJECT."""
+        from houyi.rag.indexed.embedding.base import GeminiEmbedder
+
+        embedder = GeminiEmbedder(model="text-embedding-004", dimension=768)
+        env_override = {
+            "GOOGLE_API_KEY": "",
+            "GOOGLE_CLOUD_PROJECT": "",
+        }
+        with patch.dict(os.environ, env_override):
+            mock_genai_module = MagicMock()
+            with patch.dict(
+                "sys.modules",
+                {"google": MagicMock(genai=mock_genai_module), "google.genai": mock_genai_module},
+            ):
+                with pytest.raises(ValueError, match="GOOGLE_API_KEY"):
+                    embedder._client = None
+                    embedder._ensure_client()
+
     @pytest.mark.asyncio
     async def test_embed_batch_respects_batch_size(self):
         """Test that embed_batch splits into correct batch sizes."""
@@ -93,7 +130,7 @@ class TestGeminiEmbedderConfig:
 
         # Verify batch sizes
         calls = mock_client.aio.models.embed_content.call_args_list
-        batch_sizes = [len(call.kwargs['contents']) for call in calls]
+        batch_sizes = [len(call.kwargs["contents"]) for call in calls]
         assert batch_sizes == [2, 2, 1], f"Expected [2, 2, 1], got {batch_sizes}"
 
     @pytest.mark.asyncio
@@ -118,6 +155,7 @@ class TestGeminiEmbedderConfig:
 
         # Track progress calls
         progress_calls = []
+
         def progress_callback(processed, total, batch_size):
             progress_calls.append((processed, total, batch_size))
 
@@ -143,11 +181,12 @@ class TestGeminiEmbedderConfig:
         )
 
         call_count = 0
+
         async def mock_embed_batch_single(batch):
             nonlocal call_count
             call_count += 1
             # Simulate rate limiting on first batch
-            rate_limited = (call_count == 1)
+            rate_limited = call_count == 1
             return [[0.1] * 768 for _ in batch], rate_limited
 
         embedder._embed_batch_single = mock_embed_batch_single
@@ -204,6 +243,7 @@ class TestVectorIndexDimensionValidation:
 
         # Check metadata contains dimension
         import json
+
         meta_path = tmp_path / ".houyi" / "vector_meta.json"
         with open(meta_path) as f:
             meta = json.load(f)
@@ -247,6 +287,7 @@ class TestLibraryStorageIsolation:
     def test_get_library_storage_dir(self):
         """Test that storage directories are library-specific."""
         import sys
+
         sys.path.insert(0, "houyi-studio/server")
         from houyi_studio.server.rag_service import (
             get_library_index_dir,
@@ -264,6 +305,7 @@ class TestLibraryStorageIsolation:
 
         # Uploads should be under library storage (use os.sep for cross-platform)
         import os
+
         lib1_uploads = get_library_upload_dir("lib_001")
         assert str(lib1_uploads).endswith(os.path.join("lib_001", "uploads"))
 
@@ -274,6 +316,7 @@ class TestLibraryStorageIsolation:
     def test_different_libraries_isolated(self):
         """Test that libraries don't share any directories."""
         import sys
+
         sys.path.insert(0, "houyi-studio/server")
         from houyi_studio.server.rag_service import (
             get_library_index_dir,

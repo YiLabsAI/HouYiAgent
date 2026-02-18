@@ -4,9 +4,9 @@ These tests require:
 1. Google Cloud project with Vertex AI enabled
 2. Application Default Credentials or service account key
 3. Environment variables:
-   - VERTEX_PROJECT: GCP project ID
-   - VERTEX_LOCATION: Region (default: us-central1)
-   - VERTEX_GEMINI_MODEL: Model name (default: gemini-1.5-flash)
+   - GOOGLE_CLOUD_PROJECT: GCP project ID
+   - GOOGLE_CLOUD_LOCATION: Region (default: us-central1)
+   - GEMINI_MODEL: Model name (default: gemini-2.5-pro)
 
 Run with: pytest tests/rag/test_vertex_integration.py -v -s
 """
@@ -25,7 +25,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Check if Vertex AI is configured
-VERTEX_PROJECT = os.getenv("VERTEX_PROJECT") or os.getenv("GOOGLE_CLOUD_PROJECT")
+VERTEX_PROJECT = os.getenv("GOOGLE_CLOUD_PROJECT")
 VERTEX_AVAILABLE = VERTEX_PROJECT is not None
 
 # Check if Vertex AI SDK is installed
@@ -34,7 +34,7 @@ VERTEX_SDK_INSTALLED = importlib.util.find_spec("vertexai") is not None
 skip_if_no_vertex = pytest.mark.skipif(
     not (VERTEX_AVAILABLE and VERTEX_SDK_INSTALLED),
     reason="Vertex AI not configured or SDK not installed. "
-    "Set VERTEX_PROJECT and install google-cloud-aiplatform",
+    "Set GOOGLE_CLOUD_PROJECT and install google-cloud-aiplatform",
 )
 
 
@@ -298,8 +298,8 @@ if __name__ == "__main__":
 
     async def quick_test():
         if not VERTEX_AVAILABLE:
-            print("❌ VERTEX_PROJECT not set")
-            print("Set environment variable: export VERTEX_PROJECT=your-project-id")
+            print("❌ GOOGLE_CLOUD_PROJECT not set")
+            print("Set environment variable: export GOOGLE_CLOUD_PROJECT=your-project-id")
             return
 
         if not VERTEX_SDK_INSTALLED:

@@ -18,7 +18,6 @@ from pydantic import BaseModel, Field
 logger = logging.getLogger(__name__)
 
 # MIME types / extensions whose base64 payload is decodable as UTF-8 text.
-# Referenced from CherryStudio's constant.ts textExts + documentExts.
 _TEXT_MIME_PREFIXES = ("text/",)
 _TEXT_MIME_EXACT = frozenset(
     {
@@ -163,7 +162,7 @@ class Message(BaseModel):
     def to_llm_message(self, *, vision: bool = True) -> dict[str, Any]:
         """Convert to LLM-compatible message dict.
 
-        Attachment handling strategy (referenced from CherryStudio):
+        Attachment handling strategy:
 
         * **Images** – vision models receive ``image_url`` parts; non-vision
           models get a ``[Image: filename]`` text placeholder.

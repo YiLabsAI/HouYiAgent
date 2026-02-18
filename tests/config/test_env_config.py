@@ -1,13 +1,12 @@
 """Unit tests for houyi.config.env_config — EnvConfig singleton.
 
 Tests cover:
-- Singleton behavior (get returns same instance)
-- Default values when no env vars set
+- Singleton behavior
+- Default values
 - Env var overrides for all properties
 - reload() re-reads env vars
 - summary() masks API keys
-- RAG knowledge dir reads from RAG_KNOWLEDGE_DIR
-- Google/Vertex AI env var fallback chain
+- Google env vars follow google-genai SDK conventions
 """
 
 from __future__ import annotations
@@ -70,11 +69,7 @@ class TestEnvConfigDefaults:
             assert cfg.default_llm_provider == "siliconflow"
 
     def test_google_location_default(self):
-        env_clean = {
-            k: v
-            for k, v in os.environ.items()
-            if k not in ("VERTEX_LOCATION", "GOOGLE_LOCATION", "GOOGLE_CLOUD_LOCATION")
-        }
+        env_clean = {k: v for k, v in os.environ.items() if k != "GOOGLE_CLOUD_LOCATION"}
         with patch.dict(os.environ, env_clean, clear=True):
             EnvConfig._reset()
             cfg = EnvConfig.get()
@@ -87,17 +82,24 @@ class TestEnvConfigDefaults:
             cfg = EnvConfig.get()
             assert cfg.rag_knowledge_dir == "knowledge/"
 
-    def test_rag_embedding_defaults(self):
+    def test_embedding_defaults(self):
         env_clean = {
             k: v
             for k, v in os.environ.items()
-            if k not in ("RAG_EMBEDDING_PROVIDER", "RAG_EMBEDDING_MODEL")
+            if k not in ("EMBEDDING_PROVIDER", "EMBEDDING_MODEL")
         }
         with patch.dict(os.environ, env_clean, clear=True):
             EnvConfig._reset()
             cfg = EnvConfig.get()
-            assert cfg.rag_embedding_provider == "openai"
-            assert cfg.rag_embedding_model == "text-embedding-3-small"
+            assert cfg.embedding_provider == "local"
+            assert cfg.embedding_model == "BAAI/bge-small-en-v1.5"
+
+    def test_google_api_key_none_by_default(self):
+        env_clean = {k: v for k, v in os.environ.items() if k != "GOOGLE_API_KEY"}
+        with patch.dict(os.environ, env_clean, clear=True):
+            EnvConfig._reset()
+            cfg = EnvConfig.get()
+            assert cfg.google_api_key is None
 
 
 class TestEnvConfigOverrides:
@@ -133,9 +135,21 @@ class TestEnvConfigOverrides:
             cfg = EnvConfig.get()
             assert cfg.default_llm_provider == "vertex"
 
+    def test_embedding_provider_override(self):
+        with patch.dict(os.environ, {"EMBEDDING_PROVIDER": "gemini"}):
+            EnvConfig._reset()
+            cfg = EnvConfig.get()
+            assert cfg.embedding_provider == "gemini"
 
-class TestEnvConfigVertexFallbackChain:
-    """Google/Vertex AI env vars have a fallback chain."""
+    def test_embedding_model_override(self):
+        with patch.dict(os.environ, {"EMBEDDING_MODEL": "text-embedding-004"}):
+            EnvConfig._reset()
+            cfg = EnvConfig.get()
+            assert cfg.embedding_model == "text-embedding-004"
+
+
+class TestEnvConfigGoogle:
+    """Google env vars follow google-genai SDK conventions."""
 
     def setup_method(self):
         EnvConfig._reset()
@@ -143,51 +157,28 @@ class TestEnvConfigVertexFallbackChain:
     def teardown_method(self):
         EnvConfig._reset()
 
-    def test_vertex_project_takes_precedence(self):
-        with patch.dict(
-            os.environ,
-            {
-                "VERTEX_PROJECT": "proj-a",
-                "GOOGLE_PROJECT_ID": "proj-b",
-                "GOOGLE_CLOUD_PROJECT": "proj-c",
-            },
-        ):
+    def test_google_cloud_project(self):
+        with patch.dict(os.environ, {"GOOGLE_CLOUD_PROJECT": "my-project"}):
             EnvConfig._reset()
             cfg = EnvConfig.get()
-            assert cfg.google_project_id == "proj-a"
+            assert cfg.google_project == "my-project"
+            # Backward compat alias
+            assert cfg.google_project_id == "my-project"
 
-    def test_google_project_id_fallback(self):
-        env_clean = {
-            k: v
-            for k, v in os.environ.items()
-            if k not in ("VERTEX_PROJECT", "GOOGLE_PROJECT_ID", "GOOGLE_CLOUD_PROJECT")
-        }
-        env_clean["GOOGLE_PROJECT_ID"] = "proj-b"
-        with patch.dict(os.environ, env_clean, clear=True):
-            EnvConfig._reset()
-            cfg = EnvConfig.get()
-            assert cfg.google_project_id == "proj-b"
-
-    def test_vertex_location_takes_precedence(self):
-        with patch.dict(
-            os.environ,
-            {
-                "VERTEX_LOCATION": "europe-west1",
-                "GOOGLE_LOCATION": "asia-east1",
-            },
-        ):
+    def test_google_cloud_location(self):
+        with patch.dict(os.environ, {"GOOGLE_CLOUD_LOCATION": "europe-west1"}):
             EnvConfig._reset()
             cfg = EnvConfig.get()
             assert cfg.google_location == "europe-west1"
 
-    def test_vertex_gemini_model_takes_precedence(self):
-        with patch.dict(
-            os.environ,
-            {
-                "VERTEX_GEMINI_MODEL": "gemini-2.0-flash",
-                "GEMINI_MODEL": "gemini-1.5-pro",
-            },
-        ):
+    def test_google_api_key(self):
+        with patch.dict(os.environ, {"GOOGLE_API_KEY": "AIza-test-key"}):
+            EnvConfig._reset()
+            cfg = EnvConfig.get()
+            assert cfg.google_api_key == "AIza-test-key"
+
+    def test_gemini_model(self):
+        with patch.dict(os.environ, {"GEMINI_MODEL": "gemini-2.0-flash"}):
             EnvConfig._reset()
             cfg = EnvConfig.get()
             assert cfg.gemini_model == "gemini-2.0-flash"
@@ -204,13 +195,11 @@ class TestEnvConfigReload:
 
     def test_reload_picks_up_new_values(self):
         cfg = EnvConfig.get()
-        original = cfg.rag_knowledge_dir
 
         with patch.dict(os.environ, {"RAG_KNOWLEDGE_DIR": "/new/path/"}):
             cfg.reload()
             assert cfg.rag_knowledge_dir == "/new/path/"
 
-        # Reload again without the env var to restore
         cfg.reload()
 
 
@@ -232,6 +221,14 @@ class TestEnvConfigSummary:
             assert s["siliconflow_api_key"].startswith("sk-a")
             assert s["siliconflow_api_key"].endswith("3456")
 
+    def test_summary_masks_google_api_key(self):
+        with patch.dict(os.environ, {"GOOGLE_API_KEY": "AIzaSyDabcdef123456"}):
+            EnvConfig._reset()
+            cfg = EnvConfig.get()
+            s = cfg.summary()
+            assert "abcdef" not in s["google_api_key"]
+            assert s["google_api_key"].startswith("AIza")
+
     def test_summary_shows_not_set_for_missing(self):
         env_clean = {k: v for k, v in os.environ.items() if k != "SILICONFLOW_API_KEY"}
         with patch.dict(os.environ, env_clean, clear=True):
@@ -249,13 +246,14 @@ class TestEnvConfigSummary:
             "siliconflow_base_url",
             "deepseek_model",
             "default_llm_provider",
-            "gemini_model",
+            "google_api_key",
             "google_credentials_path",
-            "google_project_id",
+            "google_project",
             "google_location",
+            "gemini_model",
             "rag_knowledge_dir",
-            "rag_embedding_provider",
-            "rag_embedding_model",
+            "embedding_provider",
+            "embedding_model",
         }
         assert set(s.keys()) == expected_keys
 
@@ -265,4 +263,4 @@ class TestEnvConfigSummary:
         r = repr(cfg)
         assert "EnvConfig" in r
         assert "provider=" in r
-        assert "rag_dir=" in r
+        assert "embedding=" in r

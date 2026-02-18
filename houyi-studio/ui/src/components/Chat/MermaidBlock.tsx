@@ -4,14 +4,28 @@
  * Dynamically imports mermaid library only when a mermaid code block is detected.
  * Uses debounced rendering to avoid flickering during streaming.
  * Shows a gentle loading state while code is still arriving.
+ *
+ * scroll-safe, flicker-free rendering:
+ *   - UNIFIED container (single DOM element) for loading/SVG states.
+ *     Avoids DOM unmount/mount during transitions which disrupts scroll
+ *     anchoring in the parent ChatTimeline.
+ *   - FIXED height on the container (from cache or heuristic) prevents
+ *     layout shifts during the loading → SVG swap.  Height is measured
+ *     synchronously in useLayoutEffect (before paint) and cached for
+ *     subsequent renders.
+ *   - Mermaid background matches container bg-gray-950 (#030712) so the
+ *     SVG blends seamlessly — no "nested rectangles" even with max-width cap.
+ *   - SVG max-width capped at viewBox width (no upscaling), unused space
+ *     invisible thanks to matching backgrounds.
  */
 import React from 'react';
 import { useThemeStore } from '@/stores/useThemeStore';
 
-const mermaidMinHeightCache = new Map<string, number>();
+// Module-level caches — survive re-renders and re-mounts.
+const mermaidHeightCache = new Map<string, number>();
 const mermaidSvgCache = new Map<string, string>();
 
-function heuristicMinHeightFromCode(code: string): number {
+function heuristicHeightFromCode(code: string): number {
   const lines = Math.max(1, code.split('\n').filter((l) => l.trim()).length);
   const estimated = 160 + lines * 18;
   return Math.min(720, Math.max(240, estimated));
@@ -44,6 +58,9 @@ function normalizeMermaidSvg(svgStr: string): string {
   s = s.replace(/(<svg\b[^>]*?)\s+height\s*=\s*"[^"]*"/g, '$1');
 
   // 4. Set style on <svg>: width:100% + max-width capped at viewBox width.
+  // This prevents the SVG from upscaling beyond its natural size.
+  // The matching Mermaid background (#030712 = bg-gray-950) makes any
+  // unused space on the right invisible — no "nested rectangles".
   const maxW = viewBoxW > 0 ? `min(100%, ${viewBoxW}px)` : '100%';
   const newStyle = `display:block;width:100%;max-width:${maxW};height:auto;`;
   if (/(<svg\b[^>]*?)\bstyle\s*=\s*"/.test(s)) {
@@ -75,32 +92,42 @@ export const MermaidBlock: React.FC<MermaidBlockProps> = ({ children }) => {
   const theme = useThemeStore((s) => s.theme);
   const cacheKey = React.useMemo(() => `${theme}:${code}`, [theme, code]);
 
-  // Initialize from SVG cache — zero flash on conversation switch
+  // Initialize from caches — zero flash on conversation switch.
   const [svg, setSvg] = React.useState<string | null>(() => mermaidSvgCache.get(cacheKey) ?? null);
   const [error, setError] = React.useState<string | null>(null);
   const [rendering, setRendering] = React.useState(false);
   const [expanded, setExpanded] = React.useState(false);
+  // Fixed container height: from cache (exact) or heuristic (estimated).
+  // Using `height` (not `minHeight`) prevents layout shifts.
+  const [containerHeight, setContainerHeight] = React.useState<number>(() =>
+    mermaidHeightCache.get(cacheKey) ?? heuristicHeightFromCode(code),
+  );
   const renderTimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   // Use a ref for cancellation so StrictMode double-invocation doesn't
   // permanently cancel the render (closure var gets stuck as true).
   const cancelledRef = React.useRef(false);
 
-  const cachedMinHeight = React.useMemo(() => {
-    const v = mermaidMinHeightCache.get(cacheKey);
-    return typeof v === 'number' ? v : heuristicMinHeightFromCode(code);
+  // When cacheKey changes, update container height from cache/heuristic
+  // BEFORE paint — so the container renders at the correct height on the
+  // very first frame after a conversation switch.
+  React.useLayoutEffect(() => {
+    setContainerHeight(mermaidHeightCache.get(cacheKey) ?? heuristicHeightFromCode(code));
   }, [cacheKey, code]);
 
-  // After a successful render, measure the real DOM height and cache it.
+  // After SVG renders, measure its natural height and update the container
+  // height synchronously (before paint).  The user never sees a clipped or
+  // overflowing intermediate state.
   React.useLayoutEffect(() => {
     if (!containerRef.current || !svg || rendering) return;
-    const el = containerRef.current;
-    const raf = requestAnimationFrame(() => {
-      const h = el.getBoundingClientRect().height;
-      if (Number.isFinite(h) && h > 0) {
-        mermaidMinHeightCache.set(cacheKey, Math.min(1200, Math.max(180, h)));
-      }
-    });
-    return () => cancelAnimationFrame(raf);
+    const svgEl = containerRef.current.querySelector('svg');
+    if (!svgEl) return;
+    const svgH = svgEl.getBoundingClientRect().height;
+    if (Number.isFinite(svgH) && svgH > 0) {
+      // Container has p-3 (12px * 2 = 24px padding) + border (1px * 2 = 2px)
+      const totalH = Math.min(1200, Math.max(180, Math.ceil(svgH + 26)));
+      mermaidHeightCache.set(cacheKey, totalH);
+      setContainerHeight(totalH);
+    }
   }, [cacheKey, svg, rendering]);
 
   React.useEffect(() => {
@@ -143,7 +170,9 @@ export const MermaidBlock: React.FC<MermaidBlockProps> = ({ children }) => {
               }
             : {
                 darkMode: true,
-                background: '#1a1a2e',
+                // Must match the container bg-gray-950 (#030712) so the
+                // SVG background blends seamlessly — no "nested rectangles".
+                background: '#030712',
                 primaryColor: '#3b82f6',
                 primaryTextColor: '#e5e7eb',
                 lineColor: '#6b7280',
@@ -152,25 +181,37 @@ export const MermaidBlock: React.FC<MermaidBlockProps> = ({ children }) => {
 
         const id = `mermaid-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
-        // Phase 0: always normalize full-width punctuation before any parsing.
+        // Hidden off-screen container for Mermaid rendering.
+        // Mermaid.render() creates temporary DOM elements; without a hidden
+        // container they flash visibly in the viewport (first-render flicker).
+        const offscreen = document.createElement('div');
+        offscreen.style.cssText = 'position:fixed;left:-9999px;top:-9999px;width:900px;visibility:hidden;pointer-events:none;';
+        document.body.appendChild(offscreen);
+
+        // Always normalize full-width punctuation before any parsing.
         const normalizedCode = normalizeFullWidthPunctuation(code);
 
         // Multi-pass rendering: try normalized, then progressively sanitize
         let rendered = '';
-        const parseOk = await mermaid.parse(normalizedCode, { suppressErrors: true });
+        try {
+          const parseOk = await mermaid.parse(normalizedCode, { suppressErrors: true });
 
-        if (parseOk) {
-          ({ svg: rendered } = await mermaid.render(id, normalizedCode));
-        } else {
-          // Try deeper sanitization (quoting labels, etc.)
-          const safeCode = sanitizeMermaidCode(code);
-          const safeId = `${id}-safe`;
-          try {
-            ({ svg: rendered } = await mermaid.render(safeId, safeCode));
-          } catch {
-            // Last resort: try normalized code anyway (parse may be overly strict)
-            ({ svg: rendered } = await mermaid.render(`${id}-orig`, normalizedCode));
+          if (parseOk) {
+            ({ svg: rendered } = await mermaid.render(id, normalizedCode, offscreen));
+          } else {
+            // Try deeper sanitization (quoting labels, etc.)
+            const safeCode = sanitizeMermaidCode(code);
+            const safeId = `${id}-safe`;
+            try {
+              ({ svg: rendered } = await mermaid.render(safeId, safeCode, offscreen));
+            } catch {
+              // Last resort: try normalized code anyway (parse may be overly strict)
+              ({ svg: rendered } = await mermaid.render(`${id}-orig`, normalizedCode, offscreen));
+            }
           }
+        } finally {
+          // Always clean up the off-screen container
+          offscreen.remove();
         }
         if (!cancelledRef.current) {
           const normalized = normalizeMermaidSvg(rendered);
@@ -200,36 +241,7 @@ export const MermaidBlock: React.FC<MermaidBlockProps> = ({ children }) => {
     };
   }, [code, theme, cacheKey]);
 
-  // Loading / streaming placeholder — show only when no previous SVG exists.
-  // If we already rendered a diagram, keep showing the old one while re-rendering.
-  if (rendering && !svg) {
-    return (
-      <div
-        className="my-2 p-3 bg-gray-950 border border-gray-700/50 rounded-md overflow-hidden relative w-full"
-        style={{ minHeight: cachedMinHeight }}
-      >
-        <div className="w-full flex items-center justify-center gap-2">
-          <div className="w-3 h-3 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
-          <span className="text-[11px] text-gray-500">Rendering diagram...</span>
-        </div>
-      </div>
-    );
-  }
-
-  // If re-rendering with existing SVG, keep showing the old one at full
-  // opacity to avoid a flash (e.g. during theme switch).  The new SVG will
-  // atomically replace it once doRender completes.
-  if (rendering && svg) {
-    return (
-      <div
-        ref={containerRef}
-        className="my-2 p-3 bg-gray-950 border border-gray-700/50 rounded-md overflow-hidden relative w-full"
-        style={{ minHeight: cachedMinHeight }}
-        dangerouslySetInnerHTML={{ __html: svg }}
-      />
-    );
-  }
-
+  // Error state: separate container (rare transition, different visual style)
   if (error && !rendering) {
     return (
       <div className="my-2 rounded-md overflow-hidden bg-gray-950 border border-amber-800/30">
@@ -243,19 +255,33 @@ export const MermaidBlock: React.FC<MermaidBlockProps> = ({ children }) => {
     );
   }
 
+  // ── Unified container for loading → SVG transitions ──
+  // A SINGLE DOM element hosts both the loading spinner and the rendered SVG.
+  // Fixed `height` (not minHeight) prevents layout shifts that disrupt the
+  // ChatTimeline's scroll-position anchoring.
   return (
     <>
       <div
         ref={containerRef}
-        className="my-2 p-3 bg-gray-950 border border-gray-700/50 rounded-md overflow-hidden cursor-zoom-in relative w-full"
-        title="Click to enlarge"
+        className="my-2 p-3 bg-gray-950 border border-gray-700/50 rounded-md overflow-hidden relative w-full"
+        style={{ height: containerHeight }}
       >
-        <div dangerouslySetInnerHTML={{ __html: svg || '' }} />
-        {/* Transparent click overlay — SVG internals swallow clicks */}
-        <div
-          className="absolute inset-0"
-          onClick={() => setExpanded(true)}
-        />
+        {svg ? (
+          <>
+            <div dangerouslySetInnerHTML={{ __html: svg }} />
+            {/* Transparent click overlay — SVG internals swallow clicks */}
+            <div
+              className="absolute inset-0 cursor-zoom-in"
+              onClick={() => setExpanded(true)}
+              title="Click to enlarge"
+            />
+          </>
+        ) : (
+          <div className="w-full h-full flex items-center justify-center gap-2">
+            <div className="w-3 h-3 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+            <span className="text-[11px] text-gray-500">Rendering diagram...</span>
+          </div>
+        )}
       </div>
 
       {/* Lightbox overlay */}

@@ -14,8 +14,10 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 from houyi.context import ContextPlanner, ContextRenderer, TokenEstimator
-from houyi.llm.llm_adapter import LLMAdapter, LLMAdapterFactory, SiliconFlowAdapter, VertexAIAdapter
+from houyi.llm.base import LLMAdapter
+from houyi.llm.factory import LLMAdapterFactory, _create_vertex_adapter
 from houyi.llm.models import DEFAULT_MODEL
+from houyi.llm.siliconflow_adapter import SiliconFlowAdapter
 from houyi.memory import MemoryStore
 from houyi.observability.context import TraceContext
 from houyi.observability.trace_manager import Span
@@ -129,9 +131,9 @@ class ChatService:
                     or provider.id.startswith("vertex")
                 )
                 if is_vertex:
-                    adapter = VertexAIAdapter()
+                    adapter = _create_vertex_adapter()
                     logger.info(
-                        "Model '%s' routed to VertexAIAdapter (provider='%s')", model, provider.name
+                        "Model '%s' routed to Gemini adapter (provider='%s')", model, provider.name
                     )
                 elif provider_url and "/v1" in provider_url:
                     adapter = SiliconFlowAdapter(

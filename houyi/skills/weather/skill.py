@@ -2,6 +2,14 @@
 
 Provides weather query capabilities using Open-Meteo API.
 Each function decorated with @tool becomes a separate skill.
+
+Tools:
+- get_date: Get current or offset date (pure, no network)
+- get_weather: Get real weather data from Open-Meteo API (network call)
+
+Default hooks:
+- PreToolUse: Validate coordinates before API call
+- PostToolUse: Log result summary after API call
 """
 
 from __future__ import annotations
@@ -155,28 +163,6 @@ def get_date(offset_days: int | str = 0) -> str:
 
 @tool
 def get_weather(lat: float, lon: float, date: str) -> str:
-    """Get mock weather data for coordinates and date (use get_weather_live for real data).
-
-    Args:
-        lat: Latitude coordinate (-90 to 90).
-        lon: Longitude coordinate (-180 to 180).
-        date: ISO format date string.
-
-    Returns:
-        Mock weather description string.
-    """
-    is_valid, error = _validate_coordinates(lat, lon)
-    if not is_valid:
-        return f"Error: {error}"
-
-    if not date or not isinstance(date, str):
-        date = get_date._original_func()
-
-    return f"Mock weather for ({lat:.4f}, {lon:.4f}) on {date}: Sunny, 20°C"
-
-
-@tool
-def get_weather_live(lat: float, lon: float, date: str) -> str:
     """Get real weather data from Open-Meteo API.
 
     Fetches actual weather forecast data for the specified location and date.
@@ -233,5 +219,58 @@ def get_weather_live(lat: float, lon: float, date: str) -> str:
         return f"Weather unavailable for ({lat:.4f}, {lon:.4f}) on {date}: {type(e).__name__}"
 
 
-# Export all tools (each is a SkillSpec)
-__all__ = ["get_date", "get_weather", "get_weather_live"]
+# ── Default lifecycle hooks ──────────────────────────────────────────
+# These demonstrate the hooks system and provide useful default behaviour.
+# Users can extend or replace these hooks in their own SKILL.md or code.
+
+from houyi.core.skill.hooks import HookEvent, HookType, SkillHook  # noqa: E402
+
+
+def _weather_pre_tool_use(context: Any) -> dict[str, Any]:
+    """PreToolUse hook: validate coordinates before making the API call."""
+    args = context.tool_args or {}
+    lat = args.get("lat", 0)
+    lon = args.get("lon", 0)
+    ok, err = _validate_coordinates(lat, lon)
+    if not ok:
+        return {
+            "success": False,
+            "output": f"[PreToolUse] Blocked: {err}",
+            "should_block": True,
+        }
+    date_val = args.get("date", "")
+    return {
+        "success": True,
+        "output": (f"[PreToolUse] ✓ Coordinates ({lat}, {lon}) validated, date={date_val}"),
+    }
+
+
+def _weather_post_tool_use(context: Any) -> dict[str, Any]:
+    """PostToolUse hook: log a summary of the weather result."""
+    result_str = str(context.tool_result or "")[:200]
+    return {
+        "success": True,
+        "output": f"[PostToolUse] Weather result: {result_str}",
+        "inject_to_prompt": True,
+    }
+
+
+# Attach hooks to the get_weather SkillSpec
+get_weather.hooks = [
+    SkillHook(
+        event=HookEvent.PRE_TOOL_USE,
+        hook_type=HookType.HANDLER,
+        handler=_weather_pre_tool_use,
+        matcher="get_weather",
+    ),
+    SkillHook(
+        event=HookEvent.POST_TOOL_USE,
+        hook_type=HookType.HANDLER,
+        handler=_weather_post_tool_use,
+        matcher="get_weather",
+    ),
+]
+
+
+# Export tools (each is a SkillSpec)
+__all__ = ["get_date", "get_weather"]

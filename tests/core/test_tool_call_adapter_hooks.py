@@ -3,24 +3,30 @@
 from __future__ import annotations
 
 import json
-import sys
 from datetime import datetime, timezone
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from houyi.core.tool_call_adapter_hooks import (
     _ADAPTER_HOOKS,
-    FakeToolCallAdapter,
     ToolCallAdapterContext,
     resolve_tool_call_adapter,
 )
+from houyi.llm.models import (
+    ADAPTER_FAKE,
+    ADAPTER_REAL,
+    PROVIDER_OPENAI_COMPAT,
+    PROVIDER_SILICONFLOW,
+)
+from houyi.testkit.fake_adapter import FakeToolCallAdapter
 
 
 def test_resolve_tool_call_adapter_fake() -> None:
     """Resolve should return fake adapter when adapter_name matches."""
 
     context = ToolCallAdapterContext(
-        adapter_name="fake",
+        adapter_name=ADAPTER_FAKE,
         tool_names=[],
         skills=[],
         tool_sequence=["get_date"],
@@ -64,7 +70,7 @@ def test_resolve_tool_call_adapter_handles_hook_error() -> None:
     try:
         _ADAPTER_HOOKS.insert(0, _bad_hook)
         context = ToolCallAdapterContext(
-            adapter_name="fake",
+            adapter_name=ADAPTER_FAKE,
             tool_names=[],
             skills=[],
             tool_sequence=["get_date"],
@@ -77,20 +83,29 @@ def test_resolve_tool_call_adapter_handles_hook_error() -> None:
         _ADAPTER_HOOKS[:] = original_hooks
 
 
-def test_resolve_tool_call_adapter_openai_compat(monkeypatch) -> None:
-    """Resolve should return openai_compat adapter when configured."""
+def test_resolve_delegates_to_factory_for_known_provider() -> None:
+    """Non-fake adapter_name should delegate to LLMAdapterFactory.create()."""
 
-    class _Adapter:
-        def __init__(self, *args, **kwargs) -> None:
-            self.args = args
+    sentinel = MagicMock(name="FactoryAdapter")
+    with patch("houyi.llm.factory.LLMAdapterFactory.create", return_value=sentinel) as mock_create:
+        context = ToolCallAdapterContext(
+            adapter_name=PROVIDER_SILICONFLOW,
+            tool_names=[],
+            skills=[],
+            tool_sequence=[],
+            parallel_tool_calls=None,
+            now=datetime.now(timezone.utc),
+        )
+        adapter = resolve_tool_call_adapter(context)
+        mock_create.assert_called_once_with(PROVIDER_SILICONFLOW)
+        assert adapter is sentinel
 
-    monkeypatch.setitem(
-        sys.modules,
-        "houyi.llm.openai_compat_adapter",
-        type("_mod", (), {"OpenAICompatibleAdapter": _Adapter}),
-    )
+
+def test_resolve_returns_none_for_real() -> None:
+    """adapter_name='real' should return None (caller provides its own adapter)."""
+
     context = ToolCallAdapterContext(
-        adapter_name="openai_compat",
+        adapter_name=ADAPTER_REAL,
         tool_names=[],
         skills=[],
         tool_sequence=[],
@@ -98,29 +113,23 @@ def test_resolve_tool_call_adapter_openai_compat(monkeypatch) -> None:
         now=datetime.now(timezone.utc),
     )
     adapter = resolve_tool_call_adapter(context)
-    assert isinstance(adapter, _Adapter)
+    assert adapter is None
 
 
-def test_resolve_tool_call_adapter_vertex(monkeypatch) -> None:
-    """Resolve should return Vertex adapter via from_env hook."""
+def test_resolve_returns_none_when_factory_fails() -> None:
+    """If the factory raises, resolve should return None gracefully."""
 
-    class _Adapter:
-        @classmethod
-        def from_env(cls):
-            return "vertex"
-
-    monkeypatch.setitem(
-        sys.modules,
-        "houyi.llm.vertex_gemini_adapter",
-        type("_mod", (), {"GoogleVertexGeminiAdapter": _Adapter}),
-    )
-    context = ToolCallAdapterContext(
-        adapter_name="vertex_gemini",
-        tool_names=[],
-        skills=[],
-        tool_sequence=[],
-        parallel_tool_calls=None,
-        now=datetime.now(timezone.utc),
-    )
-    adapter = resolve_tool_call_adapter(context)
-    assert adapter == "vertex"
+    with patch(
+        "houyi.llm.factory.LLMAdapterFactory.create",
+        side_effect=ValueError("no key"),
+    ):
+        context = ToolCallAdapterContext(
+            adapter_name=PROVIDER_OPENAI_COMPAT,
+            tool_names=[],
+            skills=[],
+            tool_sequence=[],
+            parallel_tool_calls=None,
+            now=datetime.now(timezone.utc),
+        )
+        adapter = resolve_tool_call_adapter(context)
+        assert adapter is None

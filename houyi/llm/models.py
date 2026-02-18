@@ -49,15 +49,21 @@ GEMINI_25_PRO = "gemini-2.5-pro"
 # ---------------------------------------------------------------------------
 PROVIDER_SILICONFLOW = "siliconflow"
 PROVIDER_OPENAI = "openai"
+PROVIDER_OPENAI_COMPAT = "openai_compat"  # generic OpenAI-compatible endpoint
 PROVIDER_ANTHROPIC = "anthropic"
 PROVIDER_DEEPSEEK = "deepseek"
 PROVIDER_GOOGLE_AI = "google_ai"  # Gemini API (direct, API key)
 PROVIDER_VERTEX = "vertex"  # Vertex AI (GCP project)
 
+# Adapter mode identifiers (tool-call subsystem)
+ADAPTER_REAL = "real"  # use live LLM adapter
+ADAPTER_FAKE = "fake"  # deterministic stub for E2E tests
+
 # Human-readable display names for UI rendering
 PROVIDER_DISPLAY_NAMES: dict[str, str] = {
     PROVIDER_SILICONFLOW: "SiliconFlow",
     PROVIDER_OPENAI: "OpenAI",
+    PROVIDER_OPENAI_COMPAT: "OpenAI Compatible",
     PROVIDER_ANTHROPIC: "Anthropic",
     PROVIDER_DEEPSEEK: "DeepSeek",
     PROVIDER_GOOGLE_AI: "Google AI (Gemini)",

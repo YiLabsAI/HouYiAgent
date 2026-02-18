@@ -1,5 +1,5 @@
 import React from 'react';
-import { Package, RefreshCw, ChevronRight, Shield, Zap, AlertTriangle, Check } from 'lucide-react';
+import { Package, RefreshCw, ChevronRight, Shield, Zap, AlertTriangle, Check, Plus } from 'lucide-react';
 import type { SkillSummary } from '../../types/websocket';
 
 interface SkillsListProps {
@@ -8,6 +8,7 @@ interface SkillsListProps {
   selectedSkill: string | null;
   onSelectSkill: (skillName: string) => void;
   onRefresh: () => void;
+  onLoadSkill?: () => void;
 }
 
 const PolicyBadge: React.FC<{ action: string }> = ({ action }) => {
@@ -79,20 +80,31 @@ export const SkillsList: React.FC<SkillsListProps> = ({
   selectedSkill,
   onSelectSkill,
   onRefresh,
+  onLoadSkill,
 }) => {
   return (
     <div className="p-3">
       {/* Header */}
       <div className="flex items-center justify-between mb-3">
         <div className="text-xs font-semibold text-gray-200">Registered Skills</div>
-        <button
-          onClick={onRefresh}
-          className="p-1 hover:bg-gray-700 rounded text-gray-400 hover:text-gray-200 transition-colors"
-          title="Refresh skills"
-          disabled={isLoading}
-        >
-          <RefreshCw size={14} className={isLoading ? 'animate-spin' : ''} />
-        </button>
+        <div className="flex items-center gap-1">
+          <button
+            onClick={onLoadSkill}
+            className="p-1 hover:bg-gray-700 rounded text-gray-400 hover:text-gray-200 transition-colors"
+            title="Load skill"
+            data-testid="load-skill-button"
+          >
+            <Plus size={14} />
+          </button>
+          <button
+            onClick={onRefresh}
+            className="p-1 hover:bg-gray-700 rounded text-gray-400 hover:text-gray-200 transition-colors"
+            title="Refresh skills"
+            disabled={isLoading}
+          >
+            <RefreshCw size={14} className={isLoading ? 'animate-spin' : ''} />
+          </button>
+        </div>
       </div>
 
       {/* Skills List */}

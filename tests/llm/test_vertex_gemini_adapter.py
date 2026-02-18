@@ -2,15 +2,23 @@
 
 from __future__ import annotations
 
+from unittest.mock import patch
+
 import pytest
 
-from houyi.llm.vertex_gemini_adapter import GoogleVertexGeminiAdapter
+from houyi.llm.vertex_gemini_adapter import (
+    GoogleVertexGeminiAdapter,
+    _build_proxy_http_options,
+    _detect_proxy,
+)
 
 
 def _build_adapter() -> GoogleVertexGeminiAdapter:
     # Bypass __init__ to avoid optional runtime dependency.
     adapter = GoogleVertexGeminiAdapter.__new__(GoogleVertexGeminiAdapter)
     adapter.model = "test-model"
+    adapter._auth_mode = "developer_api"
+    adapter._proxy_url = None
     return adapter
 
 
@@ -86,32 +94,75 @@ def test_vertex_gemini_convert_tools_empty() -> None:
 def test_vertex_gemini_from_env(monkeypatch) -> None:
     """from_env should read configuration from environment variables."""
 
-    created: dict[str, str] = {}
+    created: dict[str, object] = {}
 
-    def _fake_init(self, *, project: str, location: str, model: str, credentials_path=None) -> None:
+    def _fake_init(
+        self, *, model, api_key=None, project=None, location="us-central1", credentials_path=None
+    ) -> None:
         created["project"] = project
         created["location"] = location
         created["model"] = model
-        created["credentials_path"] = credentials_path
+        created["api_key"] = api_key
 
-    monkeypatch.setenv("VERTEX_PROJECT", "proj")
-    monkeypatch.setenv("VERTEX_LOCATION", "loc")
-    monkeypatch.setenv("VERTEX_GEMINI_MODEL", "gemini-test")
+    monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "proj")
+    monkeypatch.setenv("GOOGLE_CLOUD_LOCATION", "loc")
+    monkeypatch.setenv("GEMINI_MODEL", "gemini-test")
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
     monkeypatch.setattr(GoogleVertexGeminiAdapter, "__init__", _fake_init, raising=True)
 
-    GoogleVertexGeminiAdapter.from_env()
+    from houyi.config.env_config import EnvConfig
+
+    EnvConfig._reset()
+    try:
+        GoogleVertexGeminiAdapter.from_env()
+    finally:
+        EnvConfig._reset()
     assert created["project"] == "proj"
     assert created["location"] == "loc"
     assert created["model"] == "gemini-test"
 
 
-def test_vertex_gemini_from_env_requires_project(monkeypatch) -> None:
-    """from_env should raise when project is missing."""
+def test_vertex_gemini_from_env_api_key(monkeypatch) -> None:
+    """from_env should use GOOGLE_API_KEY when set."""
 
-    monkeypatch.delenv("VERTEX_PROJECT", raising=False)
+    created: dict[str, object] = {}
+
+    def _fake_init(
+        self, *, model, api_key=None, project=None, location="us-central1", credentials_path=None
+    ) -> None:
+        created["api_key"] = api_key
+        created["model"] = model
+
+    monkeypatch.setenv("GOOGLE_API_KEY", "test-key")
+    monkeypatch.setenv("GEMINI_MODEL", "gemini-test")
     monkeypatch.delenv("GOOGLE_CLOUD_PROJECT", raising=False)
-    with pytest.raises(ValueError):
+    monkeypatch.setattr(GoogleVertexGeminiAdapter, "__init__", _fake_init, raising=True)
+
+    from houyi.config.env_config import EnvConfig
+
+    EnvConfig._reset()
+    try:
         GoogleVertexGeminiAdapter.from_env()
+    finally:
+        EnvConfig._reset()
+    assert created["api_key"] == "test-key"
+
+
+def test_vertex_gemini_from_env_requires_auth(monkeypatch) -> None:
+    """from_env should raise when neither API key nor project is set."""
+
+    monkeypatch.delenv("GOOGLE_CLOUD_PROJECT", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_APPLICATION_CREDENTIALS", raising=False)
+
+    from houyi.config.env_config import EnvConfig
+
+    EnvConfig._reset()
+    try:
+        with pytest.raises(ValueError, match="Either GOOGLE_CLOUD_PROJECT or GOOGLE_API_KEY"):
+            GoogleVertexGeminiAdapter.from_env()
+    finally:
+        EnvConfig._reset()
 
 
 @pytest.mark.asyncio
@@ -202,7 +253,82 @@ async def test_vertex_gemini_stream_chat() -> None:
     adapter._client = type("FakeClient", (), {"aio": _Aio()})()
 
     chunks = []
-    async for chunk in adapter.stream_chat([{"role": "user", "content": "hi"}]):
-        chunks.append(chunk)
+    async for content, reasoning in adapter.stream_chat([{"role": "user", "content": "hi"}]):
+        chunks.append((content, reasoning))
 
-    assert chunks == ["hello", " world"]
+    assert chunks == [("hello", None), (" world", None)]
+
+
+# ── Proxy detection tests ────────────────────────────────────────────
+
+
+class TestDetectProxy:
+    """Tests for _detect_proxy (cross-platform via urllib.request.getproxies)."""
+
+    def test_returns_https_proxy(self):
+        with patch(
+            "houyi.llm.vertex_gemini_adapter.getproxies",
+            return_value={"https": "http://127.0.0.1:7890", "http": "http://127.0.0.1:7890"},
+        ):
+            assert _detect_proxy() == "http://127.0.0.1:7890"
+
+    def test_falls_back_to_http(self):
+        with patch(
+            "houyi.llm.vertex_gemini_adapter.getproxies",
+            return_value={"http": "http://127.0.0.1:1087"},
+        ):
+            assert _detect_proxy() == "http://127.0.0.1:1087"
+
+    def test_returns_none_when_no_proxy(self):
+        with patch(
+            "houyi.llm.vertex_gemini_adapter.getproxies",
+            return_value={},
+        ):
+            assert _detect_proxy() is None
+
+    def test_ignores_socks_only(self):
+        with patch(
+            "houyi.llm.vertex_gemini_adapter.getproxies",
+            return_value={"socks": "socks5://127.0.0.1:1080"},
+        ):
+            assert _detect_proxy() is None
+
+
+class TestBuildProxyHttpOptions:
+    """Tests for _build_proxy_http_options."""
+
+    def test_creates_httpx_clients_with_proxy(self):
+        opts = _build_proxy_http_options("http://127.0.0.1:7890")
+        assert "httpx_client" in opts
+        assert "httpx_async_client" in opts
+
+    def test_clients_are_httpx_instances(self):
+        import httpx
+
+        opts = _build_proxy_http_options("http://127.0.0.1:8118")
+        assert isinstance(opts["httpx_client"], httpx.Client)
+        assert isinstance(opts["httpx_async_client"], httpx.AsyncClient)
+
+
+class TestWrapSdkErrorRegion:
+    """_wrap_sdk_error should explain account-level region restriction."""
+
+    def test_region_error_explains_vpn_restriction(self):
+        adapter = _build_adapter()
+        adapter._proxy_url = "http://127.0.0.1:8118"
+        exc = adapter._wrap_sdk_error(
+            Exception("400 FAILED_PRECONDITION: User location is not supported")
+        )
+        msg = str(exc)
+        assert "VPN/proxy/datacenter" in msg
+        assert "Vertex AI" in msg
+
+    def test_region_error_vertex_ai_mode(self):
+        adapter = _build_adapter()
+        adapter._auth_mode = "vertex_ai"
+        adapter._proxy_url = None
+        exc = adapter._wrap_sdk_error(
+            Exception("400 FAILED_PRECONDITION: User location is not supported")
+        )
+        msg = str(exc)
+        assert "GOOGLE_CLOUD_LOCATION" in msg

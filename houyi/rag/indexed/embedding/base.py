@@ -200,7 +200,14 @@ class GeminiEmbedder(BaseEmbedder):
         self.delay_seconds = delay_seconds or self.DEFAULT_DELAY_SECONDS
 
     def _ensure_client(self) -> None:
-        """Ensure Gemini client is initialized."""
+        """Ensure Gemini client is initialized.
+
+        Supports two authentication modes (following ``google-genai`` SDK conventions):
+        1. **GOOGLE_API_KEY** — direct Gemini API access (no GCP project needed).
+        2. **Vertex AI** — ``GOOGLE_CLOUD_PROJECT`` + ``GOOGLE_APPLICATION_CREDENTIALS``.
+
+        Tries API-key auth first (simpler), then falls back to Vertex AI.
+        """
         if self._client is not None:
             return
 
@@ -214,17 +221,22 @@ class GeminiEmbedder(BaseEmbedder):
 
         import os
 
-        project = self._project or os.getenv("VERTEX_PROJECT") or os.getenv("GOOGLE_CLOUD_PROJECT")
-        location = (
-            self._location
-            or os.getenv("VERTEX_LOCATION")
-            or os.getenv("GOOGLE_CLOUD_LOCATION")
-            or "us-central1"
-        )
+        # 1. API-key auth (no project required)
+        api_key = os.getenv("GOOGLE_API_KEY")
+        if api_key:
+            self._client = genai.Client(api_key=api_key)
+            logger.info("GeminiEmbedder: using GOOGLE_API_KEY auth")
+            return
+
+        # 2. Vertex AI auth (requires project)
+        project = self._project or os.getenv("GOOGLE_CLOUD_PROJECT")
+        location = self._location or os.getenv("GOOGLE_CLOUD_LOCATION") or "us-central1"
 
         if not project:
             raise ValueError(
-                "VERTEX_PROJECT or GOOGLE_CLOUD_PROJECT must be set for Gemini embedding"
+                "Gemini embedding requires either:\n"
+                "  - GOOGLE_API_KEY for direct API access, or\n"
+                "  - GOOGLE_CLOUD_PROJECT for Vertex AI"
             )
 
         self._client = genai.Client(
@@ -232,6 +244,7 @@ class GeminiEmbedder(BaseEmbedder):
             project=project,
             location=location,
         )
+        logger.info("GeminiEmbedder: using Vertex AI auth (project=%s)", project)
 
     async def embed(self, text: str) -> list[float]:
         """Embed using Gemini API with retry logic."""

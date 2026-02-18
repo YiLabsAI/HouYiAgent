@@ -34,6 +34,14 @@ class SkillSpec(BaseModel):
     """
 
     name: str = Field(..., description="Unique skill identifier")
+    provider: str | None = Field(
+        default=None,
+        description=(
+            "Skill provider namespace (e.g. 'houyi', 'openclaw'). "
+            "When set, the registry can distinguish same-named skills "
+            "from different providers via 'provider/name' lookups."
+        ),
+    )
     description: str = Field(..., description="Human-readable description for LLM")
     input_schema: type[BaseModel] = Field(..., description="Pydantic model for input validation")
     output_schema: type[BaseModel] = Field(..., description="Pydantic model for output validation")
@@ -102,6 +110,13 @@ class SkillSpec(BaseModel):
     )
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    @property
+    def qualified_name(self) -> str:
+        """Return ``provider/name`` if provider is set, else plain ``name``."""
+        if self.provider:
+            return f"{self.provider}/{self.name}"
+        return self.name
 
     def to_tool_schema(self) -> dict[str, Any]:
         """Convert to OpenAI function calling schema."""

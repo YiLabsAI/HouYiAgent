@@ -16,6 +16,20 @@ from fastapi import FastAPI, File, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from houyi.config.env_config import (
+    ENV_CHAT_DATA_DIR,
+    ENV_CHAT_SETTINGS_PATH,
+    ENV_CHAT_SYSTEM_PROMPT,
+    ENV_DEEPSEEK_MODEL,
+    ENV_DEFAULT_LLM_PROVIDER,
+    ENV_GEMINI_MODEL,
+    ENV_GOOGLE_API_KEY,
+    ENV_GOOGLE_APPLICATION_CREDENTIALS,
+    ENV_GOOGLE_CLOUD_PROJECT,
+    ENV_HOUYI_PORT,
+    ENV_SILICONFLOW_API_KEY,
+    ENV_SILICONFLOW_BASE_URL,
+)
 from houyi.core.skill_registry import DEFAULT_SKILL_REGISTRY
 from houyi.llm.models import DEFAULT_MODEL
 from houyi.protocol.ir import ExecutionStatus, PlanIR
@@ -263,14 +277,14 @@ async def lifespan(app: FastAPI):
     register_console_skills()
 
     # Initialize Chat subsystem
-    chat_data_dir = os.getenv("HOUYI_CHAT_DATA_DIR", "data/conversations")
-    settings_path = os.getenv("HOUYI_CHAT_SETTINGS_PATH", "data/settings.json")
+    chat_data_dir = os.getenv(ENV_CHAT_DATA_DIR, "data/conversations")
+    settings_path = os.getenv(ENV_CHAT_SETTINGS_PATH, "data/settings.json")
     json_store = JsonStore(data_dir=chat_data_dir)
     settings_store = SettingsStore(settings_path=settings_path)
     chat_service = ChatService(
         json_store=json_store,
-        default_model=os.getenv("DEEPSEEK_MODEL", DEFAULT_MODEL),
-        default_system_instructions=os.getenv("HOUYI_CHAT_SYSTEM_PROMPT", ""),
+        default_model=os.getenv(ENV_DEEPSEEK_MODEL, DEFAULT_MODEL),
+        default_system_instructions=os.getenv(ENV_CHAT_SYSTEM_PROMPT, ""),
         settings_store=settings_store,
     )
     chat_router = register_chat_routes(chat_service, settings_store=settings_store)
@@ -284,48 +298,50 @@ async def lifespan(app: FastAPI):
     logger.info("Logging level: %s", LOG_LEVEL)
     logger.info("=" * 60)
 
-    # Log environment configuration
-    logger.info("Environment Configuration:")
-    logger.info("  LLM Provider: %s", os.getenv("DEFAULT_LLM_PROVIDER", "siliconflow"))
-    siliconflow_key = os.getenv("SILICONFLOW_API_KEY", "")
-    logger.info("  SiliconFlow API Key: %s", "✓ Configured" if siliconflow_key else "✗ Not Set")
-    logger.info(
-        "  SiliconFlow Base URL: %s",
-        os.getenv("SILICONFLOW_BASE_URL", "https://api.siliconflow.cn/v1"),
-    )
-    logger.info("  DeepSeek Model: %s", os.getenv("DEEPSEEK_MODEL", "deepseek-chat"))
+    # Log active LLM provider — only show the configured provider at INFO level.
+    # Other providers are logged at DEBUG to reduce startup noise.
+    active_provider = os.getenv(ENV_DEFAULT_LLM_PROVIDER, "siliconflow")
+    logger.info("LLM Provider: %s", active_provider)
 
-    # Check Google/Vertex AI configuration (auto-detect from service account)
-    google_project = os.getenv("GOOGLE_PROJECT_ID", "")
-    google_creds_file = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "")
-
-    if not google_project and google_creds_file:
-        # Auto-detect project_id from service account credentials file
-        try:
-            import json
-
-            with open(google_creds_file) as f:
-                creds = json.load(f)
-                google_project = creds.get("project_id", "")
-        except Exception:
-            pass
-
-    if google_project:
-        logger.info("  Google Project: ✓ %s", google_project)
-        # Ensure GOOGLE_CLOUD_PROJECT is set so downstream services (RAG
-        # embedding, etc.) can detect Vertex AI / Gemini availability.
-        if not os.environ.get("GOOGLE_CLOUD_PROJECT"):
-            os.environ["GOOGLE_CLOUD_PROJECT"] = google_project
+    if active_provider == "siliconflow":
+        siliconflow_key = os.getenv(ENV_SILICONFLOW_API_KEY, "")
+        logger.info("  API Key: %s", "configured" if siliconflow_key else "NOT SET")
+        logger.info(
+            "  Base URL: %s",
+            os.getenv(ENV_SILICONFLOW_BASE_URL, "https://api.siliconflow.cn/v1"),
+        )
+        logger.info("  Model: %s", os.getenv(ENV_DEEPSEEK_MODEL, "deepseek-chat"))
+    elif active_provider in ("vertex", "google", "vertex_ai", "gemini"):
+        google_project = os.getenv(ENV_GOOGLE_CLOUD_PROJECT, "")
+        google_creds = os.getenv(ENV_GOOGLE_APPLICATION_CREDENTIALS, "")
+        google_api_key = os.getenv(ENV_GOOGLE_API_KEY, "")
+        if google_project:
+            logger.info("  Auth: Vertex AI (project=%s)", google_project)
+        elif google_creds:
+            logger.info("  Auth: service account (%s) — project auto-detect pending", google_creds)
+        elif google_api_key:
+            logger.info("  Auth: API key (Gemini Developer API — public GA models only)")
+        else:
+            logger.warning("  Auth: NONE — set GOOGLE_CLOUD_PROJECT or GOOGLE_API_KEY")
+        logger.info("  Model: %s", os.getenv(ENV_GEMINI_MODEL, "gemini-2.5-pro"))
     else:
-        logger.info("  Google Project: ✗ Not configured")
+        logger.info("  Provider details: check environment variables")
 
-    if google_creds_file:
-        creds_name = os.path.basename(google_creds_file)
-        logger.info("  Google Credentials: ✓ %s", creds_name)
-    else:
-        logger.info("  Google Credentials: ✗ Not set")
+    # Auto-detect Google project from service account credentials
+    if not os.environ.get(ENV_GOOGLE_CLOUD_PROJECT):
+        creds_file = os.getenv(ENV_GOOGLE_APPLICATION_CREDENTIALS, "")
+        if creds_file:
+            try:
+                import json
 
-    logger.info("  Gemini Model: %s", os.getenv("GEMINI_MODEL", "gemini-2.5-pro"))
+                with open(creds_file, encoding="utf-8") as f:
+                    project = json.load(f).get("project_id", "")
+                if project:
+                    os.environ[ENV_GOOGLE_CLOUD_PROJECT] = project
+                    logger.debug("Auto-detected Google project: %s", project)
+            except Exception:
+                pass
+
     logger.info("=" * 60)
     yield
 
@@ -361,13 +377,46 @@ async def list_sessions() -> dict[str, list[str]]:
 
 
 @app.get("/api/tools")
-async def list_tools() -> dict[str, list[dict[str, str]]]:
-    """List registered tools for console debugging."""
+async def list_tools() -> dict:
+    """List registered skills and their tools for the Title Bar pill.
+
+    Returns both a flat skill list (for the dropdown) and aggregate
+    counts so the Header can display "N skills (M tools)".
+    """
+    skills = DEFAULT_SKILL_REGISTRY.list()
+    items = []
+    total_tools = 0
+    for skill in skills:
+        tool_count = len(skill.tools) if hasattr(skill, "tools") and skill.tools else 1
+        total_tools += tool_count
+
+        # Classify skill type:
+        #   "executable"   — has a bound Python executor (can run directly)
+        #   "instruction"  — SKILL.md with allowed_tools/hooks (guides LLM behavior)
+        has_executor = hasattr(skill, "executor") and skill.executor is not None
+        has_tools = (hasattr(skill, "allowed_tools") and skill.allowed_tools) or (
+            hasattr(skill, "hooks") and skill.hooks
+        )
+        if has_executor:
+            skill_type = "executable"
+        elif has_tools:
+            skill_type = "instruction"
+        else:
+            skill_type = "instruction"
+
+        items.append(
+            {
+                "name": skill.name,
+                "description": skill.description,
+                "type": skill_type,
+                "tool_count": tool_count,
+                "has_executor": has_executor,
+            }
+        )
     return {
-        "tools": [
-            {"name": skill.name, "description": skill.description}
-            for skill in DEFAULT_SKILL_REGISTRY.list()
-        ]
+        "tools": items,
+        "skill_count": len(items),
+        "tool_count": total_tools,
     }
 
 
@@ -384,6 +433,41 @@ _CLIENT_TIMEOUT_S = 90
 # ReconnectingWebSocket reconnects within 500ms-2s on first attempt;
 # 15s covers several retry cycles with exponential back-off.
 _DISCONNECT_GRACE_S = 15
+
+
+@app.get("/api/knowledge/embedding-status")
+async def get_embedding_status() -> JSONResponse:
+    """Check which embedding provider is available.
+
+    Returns the detected provider or instructions for installing one.
+    The frontend uses this to show proactive guidance in the Knowledge panel.
+    """
+    from .rag_service import _detect_embedding_config
+
+    config, provider_name = _detect_embedding_config()
+    if config is not None:
+        return JSONResponse(
+            content={
+                "available": True,
+                "provider": provider_name,
+                "model": config.model,
+                "dimension": config.dimension,
+            }
+        )
+    return JSONResponse(
+        content={
+            "available": False,
+            "provider": None,
+            "reason": provider_name,
+            "instructions": (
+                "No embedding provider detected. To enable semantic search, "
+                "choose one of:\n"
+                "1. Set OPENAI_API_KEY environment variable (OpenAI embeddings)\n"
+                "2. pip install fastembed (local embeddings, no API key needed)\n"
+                "3. Set GOOGLE_CLOUD_PROJECT + install google-genai (Gemini embeddings)"
+            ),
+        }
+    )
 
 
 @app.post("/api/knowledge/{library_id}/upload")
@@ -405,8 +489,6 @@ async def upload_knowledge_files(
     """
     import aiofiles
 
-    from .rag_service import get_library_upload_dir
-
     knowledge_service = get_knowledge_service()
     library = knowledge_service.get_library(library_id)
 
@@ -416,8 +498,8 @@ async def upload_knowledge_files(
             content={"error": f"Library {library_id} not found"},
         )
 
-    # Use library-specific upload directory
-    upload_dir = get_library_upload_dir(library_id)
+    # Use library-specific upload directory (via service instance for isolation)
+    upload_dir = knowledge_service.library_upload_dir(library_id)
     upload_dir.mkdir(parents=True, exist_ok=True)
 
     saved_paths: list[str] = []
@@ -717,7 +799,7 @@ if __name__ == "__main__":
     uvicorn.run(
         "houyi_studio.server.app:app",
         host="0.0.0.0",
-        port=int(os.environ.get("HOUYI_PORT", "8000")),
+        port=int(os.environ.get(ENV_HOUYI_PORT, "8000")),
         reload=True,
         reload_dirs=reload_dirs,
         log_level=LOG_LEVEL.lower(),

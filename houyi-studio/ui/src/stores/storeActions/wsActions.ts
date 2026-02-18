@@ -723,6 +723,7 @@ export const createWsActions = (set: StoreSet, get: StoreGet) => ({
             success: event.success,
             stats: event.stats || {},
             message: event.message || '',
+            warning: event.warning ?? undefined,
           });
           console.log('[Store] Ingest complete:', event.success);
         }

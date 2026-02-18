@@ -1,8 +1,19 @@
 """Tests for llm/base.py"""
 
+from __future__ import annotations
+
+from collections.abc import AsyncIterator
+from typing import Any
+
 import pytest
 
-from houyi.llm.base import LLMAdapter, LLMMessage, LLMResponse, MessageRole
+from houyi.llm.base import (
+    DEFAULT_TEMPERATURE,
+    LLMAdapter,
+    LLMMessage,
+    LLMResponse,
+    MessageRole,
+)
 
 
 def test_message_role_enum():
@@ -130,3 +141,85 @@ def test_llm_response_with_tool_calls():
     assert len(response.tool_calls) == 1
     assert response.tool_calls[0]["function"]["name"] == "search"
     assert response.finish_reason == "tool_calls"
+
+
+# ---------------------------------------------------------------------------
+# Tests for the abstract LLMAdapter base class behaviour (stream_completion)
+# ---------------------------------------------------------------------------
+
+
+class StubAdapter(LLMAdapter):
+    """Minimal concrete adapter for testing base class stream_completion."""
+
+    def __init__(self):
+        self.received_messages: list[list[dict]] = []
+
+    async def chat(
+        self,
+        messages: list[LLMMessage | dict],
+        tools: list[dict] | None = None,
+        temperature: float = DEFAULT_TEMPERATURE,
+        max_tokens: int | None = None,
+        **kwargs: Any,
+    ) -> LLMResponse:
+        return LLMResponse(
+            content="stub", tool_calls=[], finish_reason="stop", usage={}, model="stub"
+        )
+
+    async def stream_chat(
+        self,
+        messages: list[LLMMessage | dict],
+        tools: list[dict] | None = None,
+        temperature: float = DEFAULT_TEMPERATURE,
+        max_tokens: int | None = None,
+        **kwargs: Any,
+    ) -> AsyncIterator[tuple[str, str | None]]:
+        normalized = self._normalize_messages(messages)
+        self.received_messages.append(normalized)
+        last_user = ""
+        for msg in reversed(normalized):
+            if msg.get("role") == "user":
+                last_user = msg.get("content", "")
+                break
+        for word in last_user.split():
+            yield (word, None)
+
+
+class TestLLMAdapterBaseStreamCompletion:
+    """Test the base class stream_completion convenience wrapper."""
+
+    @pytest.mark.asyncio
+    async def test_stream_completion_delegates_to_stream_chat(self):
+        """stream_completion wraps prompt as user message and calls stream_chat."""
+        adapter = StubAdapter()
+        chunks = []
+        async for content, reasoning in adapter.stream_completion("Hello world"):
+            chunks.append((content, reasoning))
+
+        assert len(chunks) == 2
+        assert chunks[0] == ("Hello", None)
+        assert chunks[1] == ("world", None)
+        assert len(adapter.received_messages) == 1
+        assert adapter.received_messages[0][0]["content"] == "Hello world"
+
+    @pytest.mark.asyncio
+    async def test_stream_completion_empty_prompt(self):
+        adapter = StubAdapter()
+        chunks = []
+        async for content, _reasoning in adapter.stream_completion(""):
+            chunks.append(content)
+        assert chunks == []
+
+    @pytest.mark.asyncio
+    async def test_normalize_messages_with_llm_message(self):
+        """_normalize_messages converts LLMMessage to dict."""
+        adapter = StubAdapter()
+
+        messages = [
+            LLMMessage(role=MessageRole.USER, content="hello"),
+            {"role": "assistant", "content": "hi"},
+        ]
+        chunks = []
+        async for content, _reasoning in adapter.stream_chat(messages):
+            chunks.append(content)
+        assert len(chunks) > 0

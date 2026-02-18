@@ -204,6 +204,11 @@ class DryRunSkillCommand(ClientCommand):
         default_factory=dict,
         description="Input to validate",
     )
+    live: bool = Field(
+        default=False,
+        description="If True, also verify with a real LLM call to check "
+        "the skill produces a valid tool invocation",
+    )
 
 
 class ConfigureSkillCommand(ClientCommand):

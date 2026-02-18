@@ -207,7 +207,7 @@ export const KnowledgePanel: React.FC<KnowledgePanelProps> = ({ onOpenCreateDial
       case 'ready':
         return { icon: CheckCircle, color: 'text-green-400', label: 'Ready' };
       case 'degraded':
-        return { icon: AlertCircle, color: 'text-amber-400', label: 'No Embed' };
+        return { icon: AlertCircle, color: 'text-amber-400', label: 'No Embedding', tooltip: 'Files imported but semantic search unavailable. Install an embedding provider (OPENAI_API_KEY or fastembed) and rebuild index.' };
       case 'error':
         return { icon: AlertCircle, color: 'text-red-400', label: 'Error' };
       default:
@@ -239,6 +239,23 @@ export const KnowledgePanel: React.FC<KnowledgePanelProps> = ({ onOpenCreateDial
           </button>
         </div>
       </div>
+
+      {/* Degraded embedding warning banner */}
+      {knowledgeLibraries.some((lib: KnowledgeLibrary) =>
+        (lib.status === 'degraded') || (lib.chunk_count === 0 && (lib.doc_count ?? 0) > 0)
+      ) && (
+        <div className="mb-2 p-2 bg-amber-900/30 border border-amber-700/50 rounded text-[10px] text-amber-300 leading-relaxed">
+          <div className="flex items-start gap-1.5">
+            <AlertCircle size={12} className="mt-0.5 flex-shrink-0" />
+            <div>
+              <span className="font-medium">No embedding provider</span> — files are imported but semantic search is unavailable.
+              <div className="mt-1 text-amber-400/80">
+                Install one: <code className="bg-gray-800/50 px-1 rounded">pip install fastembed</code> (local) or set <code className="bg-gray-800/50 px-1 rounded">OPENAI_API_KEY</code>, then rebuild index.
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Library List */}
       <div className="space-y-2">
@@ -292,7 +309,7 @@ export const KnowledgePanel: React.FC<KnowledgePanelProps> = ({ onOpenCreateDial
                     </div>
                   )}
                   <div className="flex items-center gap-2 mt-1 text-[10px] text-gray-500 flex-wrap">
-                    <div className="flex items-center gap-1" title={statusInfo.label}>
+                    <div className="flex items-center gap-1" title={statusInfo.tooltip || statusInfo.label}>
                       <StatusIcon size={10} className={statusInfo.color} />
                       <span className={statusInfo.color}>{statusInfo.label}</span>
                     </div>

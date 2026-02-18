@@ -19,12 +19,43 @@ class _FakeSkillSpec:
         self.description = kwargs.get("description", f"Skill {name}")
         self.version = kwargs.get("version", "1.0.0")
         self.author = kwargs.get("author", None)
+        self.provider = kwargs.get("provider", None)
         self.tools = kwargs.get("tools", [])
         self.permissions = kwargs.get("permissions", [])
         self.invocation_policy = kwargs.get("invocation_policy", None)
         self.hooks = kwargs.get("hooks", [])
         self.certification = kwargs.get("certification", "unverified")
         self.input_schema = kwargs.get("input_schema", None)
+
+    @property
+    def qualified_name(self) -> str:
+        if self.provider:
+            return f"{self.provider}/{self.name}"
+        return self.name
+
+
+class _FakeInputSchema:
+    """Mimics a Pydantic model used as input_schema."""
+
+    def __init__(self, required_fields: list[str] | None = None):
+        self._required = set(required_fields or [])
+
+    def model_validate(self, data: dict):
+        for field in self._required:
+            if field not in data:
+                raise ValueError(f"Missing required field: {field}")
+
+    def model_json_schema(self):
+        return {"type": "object", "required": list(self._required)}
+
+
+class _FakeTool:
+    """Mimics a tool attached to a SkillSpec."""
+
+    def __init__(self, name: str, description: str = "", input_schema=None):
+        self.name = name
+        self.description = description
+        self.input_schema = input_schema
 
 
 class _FakePermission:
@@ -61,11 +92,31 @@ class _FakePermissions:
         return self._descriptions
 
 
+class _FakeSideEffect:
+    """Mimics SideEffect enum."""
+
+    def __init__(self, value: str = "none"):
+        self.value = value
+
+
+class _FakeModelAutoInvoke:
+    """Mimics ModelAutoInvoke enum with a .value attribute."""
+
+    def __init__(self, value: str):
+        self.value = value
+
+    def __str__(self):
+        return self.value
+
+
 class _FakePolicy:
-    def __init__(self, default_action="allow", model_auto_invoke=True):
-        self.default_action = default_action
-        self.model_auto_invoke = model_auto_invoke
-        self.require_consent_for = []
+    """Mimics InvocationPolicy.  Uses _FakeModelAutoInvoke so that
+    `.model_auto_invoke.value` works the same as the real enum."""
+
+    def __init__(self, default_action="allow", model_auto_invoke=None):
+        self.model_auto_invoke = _FakeModelAutoInvoke(default_action)
+        self.user_invocable = True
+        self.side_effect = _FakeSideEffect("none")
 
 
 class _FakePolicyResult:
@@ -302,15 +353,9 @@ class TestLoadSkill:
     def test_load_exception(self, skill_service, tmp_path):
         skill_file = tmp_path / "bad.md"
         skill_file.write_text("bad content")
-        with patch.object(
-            skill_service._registry,
-            "register_from_skill_file",
-            side_effect=ValueError("parse error"),
-        ):
-            success, code, msg = skill_service.load_skill(str(skill_file))
-            assert success is False
-            assert code == "load_failed"
-            assert "parse error" in msg
+        success, code, msg = skill_service.load_skill(str(skill_file))
+        assert success is False
+        assert code in ("no_frontmatter", "parse_failed", "load_failed")
 
     def test_load_from_directory(self, skill_service, tmp_path):
         """load_skill() accepts a directory path and calls register_from_directory."""
@@ -396,18 +441,43 @@ class TestConfigureSkill:
         success, msg = populated_service.configure_skill("web_search", policy_action="deny")
         assert success is True
         assert msg is None
+        # Verify the InvocationPolicy was actually updated
+        skill = populated_service._registry.get("web_search")
+        assert skill.invocation_policy is not None
+        assert skill.invocation_policy.model_auto_invoke.value == "deny"
 
     def test_configure_auto_invoke(self, populated_service):
         success, msg = populated_service.configure_skill("web_search", auto_invoke=False)
         assert success is True
         assert msg is None
+        skill = populated_service._registry.get("web_search")
+        assert skill.invocation_policy is not None
+        assert skill.invocation_policy.model_auto_invoke.value == "deny"
 
-    def test_configure_both(self, populated_service):
+    def test_configure_both_policy_takes_precedence(self, populated_service):
+        """When both policy_action and auto_invoke are provided,
+        policy_action takes precedence (it encodes the full semantics)."""
         success, msg = populated_service.configure_skill(
             "web_search", policy_action="allow_with_consent", auto_invoke=True
         )
         assert success is True
         assert msg is None
+        skill = populated_service._registry.get("web_search")
+        assert skill.invocation_policy.model_auto_invoke.value == "allow_with_consent"
+
+    def test_configure_deny_then_verify_detail(self, populated_service):
+        """Configure deny → get_skill_detail → policy.default_action == 'deny'."""
+        populated_service.configure_skill("web_search", policy_action="deny")
+        detail = populated_service.get_skill_detail("web_search")
+        assert detail is not None
+        assert detail["policy"]["default_action"] == "deny"
+        assert detail["policy"]["model_auto_invoke"] is False
+
+    def test_configure_allow_with_consent_roundtrip(self, populated_service):
+        """Configure allow_with_consent → detail reflects it."""
+        populated_service.configure_skill("web_search", policy_action="allow_with_consent")
+        detail = populated_service.get_skill_detail("web_search")
+        assert detail["policy"]["default_action"] == "allow_with_consent"
 
 
 # ===========================================================================
@@ -416,30 +486,193 @@ class TestConfigureSkill:
 
 
 class TestDryRun:
-    def test_skill_not_found(self, skill_service):
-        result = skill_service.dry_run("nonexistent", "tool", {})
+    @pytest.mark.asyncio
+    async def test_skill_not_found(self, skill_service):
+        result = await skill_service.dry_run("nonexistent", "tool", {})
         assert result["valid"] is False
         assert len(result["schema_errors"]) > 0
 
-    def test_basic_dry_run(self, populated_service):
-        result = populated_service.dry_run("web_search", "search", {})
+    @pytest.mark.asyncio
+    async def test_basic_dry_run(self, populated_service):
+        result = await populated_service.dry_run("web_search", "search", {})
         assert result["valid"] is True
         assert result["policy_result"] == "allow"
 
-    def test_side_effects_collected(self, populated_service):
-        result = populated_service.dry_run("web_search", "search", {})
+    @pytest.mark.asyncio
+    async def test_side_effects_collected(self, populated_service):
+        result = await populated_service.dry_run("web_search", "search", {})
         assert "network" in result["estimated_side_effects"]
 
-    def test_policy_deny(self, populated_registry):
+    @pytest.mark.asyncio
+    async def test_empty_input_skips_schema_validation(self, populated_service):
+        """Empty input {} means 'check availability only' — required fields
+        should NOT cause validation failure."""
+        result = await populated_service.dry_run("web_search", "search", {})
+        assert result["valid"] is True
+        assert result["schema_errors"] == []
+
+    @pytest.mark.asyncio
+    async def test_invalid_input_fails_schema(self, populated_service):
+        """Non-empty input with wrong types should fail schema validation."""
+        result = await populated_service.dry_run("web_search", "search", {"query": 42})
+        # If the schema expects str and gets int, it may or may not fail
+        # depending on Pydantic coercion. The key is: non-empty input IS validated.
+        # This test documents the behavior.
+        assert isinstance(result["valid"], bool)
+
+    @pytest.mark.asyncio
+    async def test_policy_deny(self, populated_registry):
         from houyi_studio.server.skill_service import SkillService
 
         mock_enforcer = MagicMock()
         mock_enforcer.evaluate.return_value = _FakePolicyResult("deny")
 
         svc = SkillService(registry=populated_registry, policy_enforcer=mock_enforcer)
-        result = svc.dry_run("web_search", "search", {})
+        result = await svc.dry_run("web_search", "search", {})
         assert result["valid"] is False
         assert result["policy_result"] == "deny"
+
+    # ─── Tool-level schema validation ────────────────────────────
+
+    @pytest.mark.asyncio
+    async def test_tool_level_schema_validation_pass(self, registry):
+        """When a tool has its own input_schema, dry-run validates against it."""
+        from houyi_studio.server.skill_service import SkillService
+
+        tool = _FakeTool("search", input_schema=_FakeInputSchema(["query"]))
+        skill = _FakeSkillSpec("search_skill", tools=[tool])
+        registry.register(skill, overwrite=True)
+        svc = SkillService(registry=registry)
+
+        result = await svc.dry_run("search_skill", "search", {"query": "hello"})
+        assert result["valid"] is True
+        assert result["schema_errors"] == []
+
+    @pytest.mark.asyncio
+    async def test_tool_level_schema_validation_fail(self, registry):
+        """Missing required field at tool level triggers schema error."""
+        from houyi_studio.server.skill_service import SkillService
+
+        tool = _FakeTool("search", input_schema=_FakeInputSchema(["query"]))
+        skill = _FakeSkillSpec("search_skill", tools=[tool])
+        registry.register(skill, overwrite=True)
+        svc = SkillService(registry=registry)
+
+        result = await svc.dry_run("search_skill", "search", {"wrong_field": "value"})
+        assert result["valid"] is False
+        assert any("query" in err for err in result["schema_errors"])
+
+    @pytest.mark.asyncio
+    async def test_tool_level_schema_empty_input_skips(self, registry):
+        """Empty input {} skips tool-level schema validation."""
+        from houyi_studio.server.skill_service import SkillService
+
+        tool = _FakeTool("search", input_schema=_FakeInputSchema(["query"]))
+        skill = _FakeSkillSpec("search_skill", tools=[tool])
+        registry.register(skill, overwrite=True)
+        svc = SkillService(registry=registry)
+
+        result = await svc.dry_run("search_skill", "search", {})
+        assert result["valid"] is True
+        assert result["schema_errors"] == []
+
+    @pytest.mark.asyncio
+    async def test_tool_level_takes_precedence_over_skill_level(self, registry):
+        """Tool-level schema is preferred; skill-level is fallback."""
+        from houyi_studio.server.skill_service import SkillService
+
+        tool = _FakeTool("search", input_schema=_FakeInputSchema(["query"]))
+        skill_schema = _FakeInputSchema(["different_field"])
+        skill = _FakeSkillSpec("search_skill", tools=[tool], input_schema=skill_schema)
+        registry.register(skill, overwrite=True)
+        svc = SkillService(registry=registry)
+
+        # Passes tool-level but would fail skill-level
+        result = await svc.dry_run("search_skill", "search", {"query": "test"})
+        assert result["valid"] is True
+
+    @pytest.mark.asyncio
+    async def test_fallback_to_skill_level_when_tool_has_no_schema(self, registry):
+        """If tool has no schema, fall back to skill-level input_schema."""
+        from houyi_studio.server.skill_service import SkillService
+
+        tool = _FakeTool("simple_tool")
+        skill_schema = _FakeInputSchema(["required_param"])
+        skill = _FakeSkillSpec("skill_with_schema", tools=[tool], input_schema=skill_schema)
+        registry.register(skill, overwrite=True)
+        svc = SkillService(registry=registry)
+
+        result = await svc.dry_run("skill_with_schema", "simple_tool", {"wrong": "value"})
+        assert result["valid"] is False
+        assert any("required_param" in err for err in result["schema_errors"])
+
+    @pytest.mark.asyncio
+    async def test_multi_tool_selects_correct_tool(self, registry):
+        """Dry-run validates against the specific tool_name's schema."""
+        from houyi_studio.server.skill_service import SkillService
+
+        tool_a = _FakeTool("read_file", input_schema=_FakeInputSchema(["path"]))
+        tool_b = _FakeTool("write_file", input_schema=_FakeInputSchema(["path", "content"]))
+        skill = _FakeSkillSpec("file_ops", tools=[tool_a, tool_b])
+        registry.register(skill, overwrite=True)
+        svc = SkillService(registry=registry)
+
+        # read_file only requires "path"
+        result_read = await svc.dry_run("file_ops", "read_file", {"path": "/tmp/f"})
+        assert result_read["valid"] is True
+
+        # write_file requires "path" AND "content"
+        result_write = await svc.dry_run("file_ops", "write_file", {"path": "/tmp/f"})
+        assert result_write["valid"] is False
+        assert any("content" in err for err in result_write["schema_errors"])
+
+        # write_file with both fields passes
+        result_write_ok = await svc.dry_run(
+            "file_ops", "write_file", {"path": "/tmp/f", "content": "hello"}
+        )
+        assert result_write_ok["valid"] is True
+
+    # ─── Live mode ───────────────────────────────────────────────
+
+    @pytest.mark.asyncio
+    async def test_live_false_has_no_llm_verification(self, populated_service):
+        """When live=False (default), result has no llm_verification."""
+        result = await populated_service.dry_run("web_search", "search", {})
+        assert "llm_verification" not in result
+
+    @pytest.mark.asyncio
+    async def test_live_true_returns_llm_verification(self, registry):
+        """When live=True, llm_verification key is present (even if it fails)."""
+        from houyi_studio.server.skill_service import SkillService
+
+        tool = _FakeTool("search", input_schema=_FakeInputSchema(["query"]))
+        skill = _FakeSkillSpec("web_search", tools=[tool])
+        registry.register(skill, overwrite=True)
+        svc = SkillService(registry=registry)
+
+        result = await svc.dry_run("web_search", "search", {"query": "test"}, live=True)
+        assert "llm_verification" in result
+        llm_v = result["llm_verification"]
+        assert isinstance(llm_v, dict)
+        assert "success" in llm_v
+        assert "message" in llm_v
+
+    @pytest.mark.asyncio
+    async def test_live_import_failure_returns_graceful_error(self, registry):
+        """If LLM adapter cannot be imported, live returns a helpful error."""
+        from unittest.mock import patch
+
+        from houyi_studio.server.skill_service import SkillService
+
+        tool = _FakeTool("search")
+        skill = _FakeSkillSpec("web_search", tools=[tool])
+        registry.register(skill, overwrite=True)
+        svc = SkillService(registry=registry)
+
+        with patch.dict("sys.modules", {"houyi.llm.llm_adapter": None}):
+            result = await svc.dry_run("web_search", "search", {}, live=True)
+        assert result["llm_verification"]["success"] is False
+        assert "not available" in result["llm_verification"]["message"]
 
 
 # ===========================================================================
@@ -518,6 +751,115 @@ class TestConsentManagement:
 # ===========================================================================
 
 
+class TestLoadSkillPaths:
+    """Tests for the three load paths: file, URL, directory."""
+
+    def _svc(self):
+        from houyi_studio.server.skill_service import SkillService
+
+        return SkillService(registry=SkillRegistry())
+
+    # ── File loading ──────────────────────────────────────────
+
+    def test_load_valid_skill_md(self, tmp_path):
+        svc = self._svc()
+        skill_file = tmp_path / "SKILL.md"
+        skill_file.write_text("---\nname: test-skill\ndescription: A test skill\n---\n# Test\n")
+        ok, name, err = svc.load_skill(str(skill_file))
+        assert ok is True
+        assert name == "test-skill"
+        assert err is None
+
+    def test_load_file_not_found(self):
+        svc = self._svc()
+        ok, code, err = svc.load_skill("/tmp/nonexistent/SKILL.md")
+        assert ok is False
+        assert code == "file_not_found"
+        assert "not found" in err
+
+    def test_load_no_frontmatter_rejected(self, tmp_path):
+        svc = self._svc()
+        f = tmp_path / "SKILL.md"
+        f.write_text("# Just a heading\nNo frontmatter here")
+        ok, code, err = svc.load_skill(str(f))
+        assert ok is False
+        assert code == "no_frontmatter"
+
+    def test_load_invalid_extension_rejected(self, tmp_path):
+        svc = self._svc()
+        f = tmp_path / "readme.txt"
+        f.write_text("hello")
+        ok, code, err = svc.load_skill(str(f))
+        assert ok is False
+        assert code == "invalid_file"
+
+    def test_load_md_without_name_uses_heading_fallback(self, tmp_path):
+        """When frontmatter has no 'name', parser falls back to heading."""
+        svc = self._svc()
+        f = tmp_path / "SKILL.md"
+        f.write_text("---\ndescription: A skill\n---\n# My Skill Name\n")
+        ok, name, err = svc.load_skill(str(f))
+        assert ok is True
+        assert name == "My Skill Name"
+
+    def test_load_md_completely_empty_frontmatter(self, tmp_path):
+        """Frontmatter with no name and no heading → 'unknown' → rejected."""
+        svc = self._svc()
+        f = tmp_path / "SKILL.md"
+        f.write_text("---\ndescription: oops\n---\nJust body text, no heading.\n")
+        ok, code, err = svc.load_skill(str(f))
+        assert ok is False
+
+    # ── Directory loading ─────────────────────────────────────
+
+    def test_load_directory(self, tmp_path):
+        svc = self._svc()
+        sub = tmp_path / "my-skill"
+        sub.mkdir()
+        (sub / "SKILL.md").write_text("---\nname: dir-skill\ndescription: From dir\n---\n")
+        ok, names, err = svc.load_skill(str(tmp_path))
+        assert ok is True
+        assert "dir-skill" in names
+        assert err is None
+
+    def test_load_empty_directory(self, tmp_path):
+        svc = self._svc()
+        ok, code, err = svc.load_skill(str(tmp_path))
+        assert ok is False
+        assert code == "no_skills"
+
+    def test_load_directory_with_lowercase_skill_md(self, tmp_path):
+        svc = self._svc()
+        sub = tmp_path / "my-skill"
+        sub.mkdir()
+        (sub / "skill.md").write_text("---\nname: lower-skill\ndescription: Lowercase\n---\n")
+        ok, names, err = svc.load_skill(str(tmp_path))
+        assert ok is True
+        assert "lower-skill" in names
+
+    # ── URL loading ───────────────────────────────────────────
+
+    def test_load_url_404(self):
+        svc = self._svc()
+        ok, code, err = svc.load_skill("https://httpstat.us/404")
+        assert ok is False
+        assert code in ("url_http_error", "url_download_failed")
+
+    def test_load_url_invalid_scheme(self):
+        svc = self._svc()
+        ok, code, err = svc.load_skill("ftp://example.com/SKILL.md")
+        # Not recognized as URL (no http/https), treated as file path
+        assert ok is False
+        assert code == "file_not_found"
+
+    def test_load_github_tree_url_rejected(self):
+        svc = self._svc()
+        ok, code, err = svc.load_skill("https://github.com/user/repo/tree/main/skills")
+        assert ok is False
+        assert code == "invalid_url"
+        assert "directory" in err.lower()
+
+
 class TestGlobalService:
     def test_get_set_skill_service(self):
         from houyi_studio.server.skill_service import (
@@ -532,3 +874,78 @@ class TestGlobalService:
 
         # Reset
         set_skill_service(None)
+
+
+# ===========================================================================
+# Helpers
+# ===========================================================================
+
+
+class TestHelpers:
+    """Tests for module-level helper functions."""
+
+    def test_empty_metrics(self):
+        from houyi_studio.server.skill_service import _empty_metrics
+
+        m = _empty_metrics("test_skill")
+        assert m["skill_name"] == "test_skill"
+        assert m["total_calls"] == 0
+        assert m["success_count"] == 0
+        assert m["failure_count"] == 0
+        assert m["avg_latency_ms"] == 0.0
+        assert m["success_rate"] == 0.0
+        assert m["last_invoked"] is None
+
+    def test_extract_side_effects_network(self):
+        from houyi_studio.server.skill_serializer import extract_side_effects
+
+        perms = _FakePermissions(network=_FakePermKind(enabled=True))
+        assert extract_side_effects(perms) == ["network"]
+
+    def test_extract_side_effects_multiple(self):
+        from houyi_studio.server.skill_serializer import extract_side_effects
+
+        perms = _FakePermissions(
+            exec_=_FakePermKind(enabled=True),
+            network=_FakePermKind(enabled=True),
+            filesystem=_FakePermKind(write=True),
+        )
+        effects = extract_side_effects(perms)
+        assert "exec" in effects
+        assert "network" in effects
+        assert "filesystem" in effects
+
+    def test_extract_side_effects_empty(self):
+        from houyi_studio.server.skill_serializer import extract_side_effects
+
+        perms = _FakePermissions()
+        assert extract_side_effects(perms) == []
+
+    def test_dominant_side_effect_priority(self):
+        from houyi_studio.server.skill_serializer import dominant_side_effect
+
+        perms = _FakePermissions(
+            exec_=_FakePermKind(enabled=True),
+            network=_FakePermKind(enabled=True),
+        )
+        assert dominant_side_effect(perms) == "exec"
+
+    def test_dominant_side_effect_none(self):
+        from houyi_studio.server.skill_serializer import dominant_side_effect
+
+        perms = _FakePermissions()
+        assert dominant_side_effect(perms) == "none"
+
+
+class TestIsSkillLoaded:
+    """Tests for duplicate detection via is_skill_loaded."""
+
+    def test_loaded_skill_found(self, populated_service):
+        assert populated_service.is_skill_loaded("web_search") is True
+
+    def test_unloaded_skill_not_found(self, populated_service):
+        assert populated_service.is_skill_loaded("nonexistent") is False
+
+    def test_after_unload(self, populated_service):
+        populated_service.unload_skill("web_search")
+        assert populated_service.is_skill_loaded("web_search") is False

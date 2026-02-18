@@ -252,6 +252,7 @@ export interface KnowledgeIngestCompleteEvent extends ServerEvent {
   success: boolean;
   stats: Record<string, any>;
   message: string;
+  warning?: string | null;
 }
 
 // ============================================================================

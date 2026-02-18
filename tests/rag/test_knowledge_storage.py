@@ -52,6 +52,7 @@ class TestFileFiltering:
     def knowledge_service(self):
         """Create a KnowledgeService instance."""
         from houyi_studio.server.rag_service import KnowledgeService
+
         return KnowledgeService()
 
     @pytest.fixture
@@ -67,29 +68,34 @@ class TestFileFiltering:
 
     @pytest.mark.asyncio
     async def test_uploaded_files_not_skipped(self, knowledge_service, test_library):
-        """Files in uploads/ directory should NOT be skipped during ingest."""
+        """Files in uploads/ directory should NOT be skipped during ingest.
+
+        This test verifies the *file-filtering* logic only: the file must not
+        be classified as ``skipped``.
+        """
         from houyi_studio.server.rag_service import get_library_upload_dir
 
         lib_id = test_library["library_id"]
 
-        # Create a test file in the uploads directory
         upload_dir = get_library_upload_dir(lib_id)
         upload_dir.mkdir(parents=True, exist_ok=True)
         test_file = upload_dir / "test.md"
         test_file.write_text("# Test\n\nThis is test content.")
 
-        # Verify it's in the uploads directory
         assert "/uploads/" in str(test_file) or "\\uploads\\" in str(test_file)
 
-        # Run ingest - this should find the file
         result = await knowledge_service.ingest_files(
             library_id=lib_id,
             paths=[str(test_file)],
         )
 
-        # The file should be found, not skipped
-        assert result.get("success") is True or result.get("stats", {}).get("files_found", 0) > 0, (
+        stats = result.get("stats", {})
+        assert stats.get("files_skipped", 0) == 0, (
             f"Uploaded file should not be skipped. Result: {result}"
+        )
+        files_seen = stats.get("files_processed", 0) + stats.get("files_failed", 0)
+        assert files_seen > 0, (
+            f"Uploaded file was not seen by the ingest pipeline. Result: {result}"
         )
 
     @pytest.mark.asyncio
@@ -106,14 +112,20 @@ class TestFileFiltering:
 
         # Test that is_index_path correctly identifies production index paths
         # Use os.sep for cross-platform compatibility
-        index_path = Path(os.path.join("/home", ".houyi", "knowledge", "lib_001", "index", "vectors.bin"))
+        index_path = Path(
+            os.path.join("/home", ".houyi", "knowledge", "lib_001", "index", "vectors.bin")
+        )
         assert is_index_path(index_path), f"Should identify index path: {index_path}"
 
-        index_path2 = Path(os.path.join("/Users", "test", ".houyi", "knowledge", "lib_001", "index", "meta.json"))
+        index_path2 = Path(
+            os.path.join("/Users", "test", ".houyi", "knowledge", "lib_001", "index", "meta.json")
+        )
         assert is_index_path(index_path2), f"Should identify index path: {index_path2}"
 
         # Upload paths should NOT be marked as index
-        upload_path = Path(os.path.join("/home", ".houyi", "knowledge", "lib_001", "uploads", "doc.md"))
+        upload_path = Path(
+            os.path.join("/home", ".houyi", "knowledge", "lib_001", "uploads", "doc.md")
+        )
         assert not is_index_path(upload_path), f"Upload path should not be index: {upload_path}"
 
         regular_path = Path(os.path.join("/home", "user", "documents", "readme.md"))
@@ -179,7 +191,7 @@ class TestLibraryDeletion:
         index_dir.mkdir(parents=True, exist_ok=True)
 
         (upload_dir / "test.md").write_text("# Test")
-        (index_dir / "test.json").write_text('{}')
+        (index_dir / "test.json").write_text("{}")
 
         # Verify files exist
         assert (upload_dir / "test.md").exists()

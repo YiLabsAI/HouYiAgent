@@ -12,6 +12,21 @@ from collections.abc import Callable
 from datetime import datetime, timezone
 from typing import Any
 
+from houyi.config.env_config import (
+    ENV_DEEPSEEK_MODEL,
+    ENV_FRESH_REPLAY_USE_TOOL_CACHE,
+    ENV_FRESH_REPLAY_USE_WEB_SEARCH_CACHE,
+    ENV_OPENAI_API_KEY,
+    ENV_OPENAI_BASE_URL,
+    ENV_SILICONFLOW_API_KEY,
+    ENV_SILICONFLOW_BASE_URL,
+    ENV_TOOLCALL_ADAPTER,
+    ENV_TOOLCALL_FAST_PATH,
+    ENV_TOOLCALL_MAX_RETRIES,
+    ENV_TOOLCALL_MAX_TOKENS,
+    ENV_TOOLCALL_MODEL,
+    ENV_TOOLCALL_TIMEOUT,
+)
 from houyi.core.skill.hooks import DEFAULT_HOOKS_MANAGER
 from houyi.core.skill_registry import DEFAULT_SKILL_REGISTRY, SkillRegistry
 from houyi.core.tool_call_adapter import normalize_adapter_error
@@ -118,23 +133,20 @@ class ToolCallService:
             return False
 
         tools = [skill.to_tool_schema() for skill in skills]
-        api_key = os.getenv("SILICONFLOW_API_KEY") or os.getenv("OPENAI_API_KEY")
-        base_url = os.getenv("SILICONFLOW_BASE_URL") or os.getenv("OPENAI_BASE_URL")
+        api_key = os.getenv(ENV_SILICONFLOW_API_KEY) or os.getenv(ENV_OPENAI_API_KEY)
+        base_url = os.getenv(ENV_SILICONFLOW_BASE_URL) or os.getenv(ENV_OPENAI_BASE_URL)
         tool_model = (
-            os.getenv("HOUYI_TOOLCALL_MODEL")
-            or model
-            or os.getenv("DEEPSEEK_MODEL")
-            or DEFAULT_MODEL
+            os.getenv(ENV_TOOLCALL_MODEL) or model or os.getenv(ENV_DEEPSEEK_MODEL) or DEFAULT_MODEL
         )
-        toolcall_adapter = (os.getenv("HOUYI_TOOLCALL_ADAPTER") or "real").strip().lower()
-        toolcall_max_tokens = os.getenv("HOUYI_TOOLCALL_MAX_TOKENS")
+        toolcall_adapter = (os.getenv(ENV_TOOLCALL_ADAPTER) or "real").strip().lower()
+        toolcall_max_tokens = os.getenv(ENV_TOOLCALL_MAX_TOKENS)
         if toolcall_max_tokens:
             try:
                 max_tokens = max(1, int(toolcall_max_tokens))
             except ValueError:
                 logger.warning("Invalid HOUYI_TOOLCALL_MAX_TOKENS=%s", toolcall_max_tokens)
 
-        fast_path_flag = (os.getenv("HOUYI_TOOLCALL_FAST_PATH") or "").strip().lower()
+        fast_path_flag = (os.getenv(ENV_TOOLCALL_FAST_PATH) or "").strip().lower()
         fast_path_enabled = fast_path_flag in {"1", "true", "yes", "on"}
         fast_path_prompt = build_fast_path_prompt(tool_names=tool_names, skills=skills)
 
@@ -163,7 +175,7 @@ class ToolCallService:
             execution.metadata.get("replay_mode") if isinstance(execution.metadata, dict) else None
         )
         allow_fresh_web_search_cache = (
-            os.getenv("HOUYI_FRESH_REPLAY_USE_WEB_SEARCH_CACHE") or ""
+            os.getenv(ENV_FRESH_REPLAY_USE_WEB_SEARCH_CACHE) or ""
         ).strip().lower() in {"1", "true", "yes", "on"}
         tool_hooks = build_web_search_tool_hooks(
             web_search_provider=web_search_provider
@@ -268,14 +280,14 @@ class ToolCallService:
         )
 
         max_retries = 3
-        retry_env = os.getenv("HOUYI_TOOLCALL_MAX_RETRIES")
+        retry_env = os.getenv(ENV_TOOLCALL_MAX_RETRIES)
         if retry_env:
             try:
                 max_retries = max(1, int(retry_env))
             except ValueError:
                 logger.warning("Invalid HOUYI_TOOLCALL_MAX_RETRIES=%s", retry_env)
         timeout = 30.0
-        timeout_env = os.getenv("HOUYI_TOOLCALL_TIMEOUT")
+        timeout_env = os.getenv(ENV_TOOLCALL_TIMEOUT)
         if timeout_env:
             try:
                 timeout = float(timeout_env)
@@ -285,7 +297,7 @@ class ToolCallService:
         executor = SkillExecutor(max_retries=max_retries, timeout=timeout)
 
         allow_fresh_tool_cache = (
-            os.getenv("HOUYI_FRESH_REPLAY_USE_TOOL_CACHE") or ""
+            os.getenv(ENV_FRESH_REPLAY_USE_TOOL_CACHE) or ""
         ).strip().lower() in {
             "1",
             "true",

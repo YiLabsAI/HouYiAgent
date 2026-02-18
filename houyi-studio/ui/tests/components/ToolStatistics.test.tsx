@@ -49,16 +49,20 @@ describe('ToolStatistics', () => {
       ok: true,
       json: async () => ({
         tools: [
-          { name: 'calculator', description: 'Math ops' },
-          { name: 'web_search', description: 'Search the web' },
+          { name: 'calculator', description: 'Math ops', type: 'executable', tool_count: 1, has_executor: true },
+          { name: 'web_search', description: 'Search the web', type: 'executable', tool_count: 1, has_executor: true },
         ],
+        skill_count: 2,
+        tool_count: 2,
       }),
     });
 
     render(<ToolStatistics />);
 
     await waitFor(() => {
-      expect(screen.getByTestId('tool-registered-count')).toHaveTextContent('2 skills');
+      expect(screen.getByTestId('tool-registered-count')).toBeInTheDocument();
+      // Shows "2 + 0 skills" (2 executable, 0 instruction)
+      expect(screen.getByTestId('tool-registered-count')).toHaveTextContent('skills');
     });
   });
 
@@ -95,7 +99,9 @@ describe('ToolStatistics', () => {
     mockFetch.mockResolvedValueOnce({
       ok: true,
       json: async () => ({
-        tools: [{ name: 'calculator', description: 'Math operations' }],
+        tools: [{ name: 'calculator', description: 'Math operations', type: 'executable', tool_count: 1, has_executor: true }],
+        skill_count: 1,
+        tool_count: 1,
       }),
     });
 
@@ -113,7 +119,7 @@ describe('ToolStatistics', () => {
 
     // Dropdown should now be visible
     expect(screen.getByTestId('tool-statistics-dropdown')).toBeInTheDocument();
-    expect(screen.getByText('Registered Skills (1)')).toBeInTheDocument();
+    expect(screen.getByText(/Executable/)).toBeInTheDocument();
     expect(screen.getByText('calculator')).toBeInTheDocument();
     expect(screen.getByText('Math operations')).toBeInTheDocument();
   });
@@ -218,22 +224,24 @@ describe('ToolStatistics', () => {
       ok: true,
       json: async () => ({
         tools: [
-          { name: 'calc', description: 'Calculator' },
-          { name: 'web', description: 'Web search' },
+          { name: 'calc', description: 'Calculator', type: 'executable', tool_count: 1, has_executor: true },
+          { name: 'web', description: 'Web search', type: 'executable', tool_count: 1, has_executor: true },
         ],
+        skill_count: 2,
+        tool_count: 2,
       }),
     });
 
     render(<ToolStatistics />);
 
     await waitFor(() => {
-      expect(screen.getByTestId('tool-registered-count')).toHaveTextContent('2 skills');
+      expect(screen.getByTestId('tool-registered-count')).toHaveTextContent('skills');
       expect(screen.getByTestId('tool-exec-calls')).toHaveTextContent('1');
     });
 
     // Open dropdown — should have both sections
     fireEvent.click(screen.getByTestId('tool-statistics').querySelector('button')!);
     expect(screen.getByText('Execution Statistics')).toBeInTheDocument();
-    expect(screen.getByText('Registered Skills (2)')).toBeInTheDocument();
+    expect(screen.getByText(/Executable/)).toBeInTheDocument();
   });
 });

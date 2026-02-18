@@ -173,7 +173,7 @@ class SkillCommandHandler:
             skills=skill_summaries,
         )
         await self._send_event(session_id, event)
-        self._logger.info("Sent skill list with %d skills", len(skill_summaries))
+        self._logger.debug("Sent skill list with %d skills", len(skill_summaries))
 
     async def _handle_get_skill_detail(
         self, command: GetSkillDetailCommand, session_id: str
@@ -185,7 +185,7 @@ class SkillCommandHandler:
                 name=detail_data["name"],
                 display_name=detail_data.get("display_name", detail_data["name"]),
                 description=detail_data.get("description"),
-                version=detail_data.get("version") or "0.0.0",
+                version=detail_data.get("version") or None,
                 author=detail_data.get("author"),
                 tools=detail_data.get("tools", []),
                 permissions=[
@@ -263,13 +263,26 @@ class SkillCommandHandler:
             await self._send_event(session_id, error_event)
             return
 
+        # Snapshot existing skill names for duplicate detection
+        existing_names = {s["name"] for s in skill_service.list_skills()}
+
         success, name_or_code, error_msg = skill_service.load_skill(source)
         if success:
+            loaded_names = [n.strip() for n in name_or_code.split(",")]
+            reloaded = [n for n in loaded_names if n in existing_names]
+            if reloaded:
+                msg = (
+                    f"Skill '{name_or_code}' reloaded (was already loaded). "
+                    f"Previous version has been replaced."
+                )
+            else:
+                msg = f"Skill '{name_or_code}' loaded successfully"
+
             event = SkillLoadedEvent(
                 event_id=f"evt_{uuid4().hex[:8]}",
                 session_id=session_id,
                 skill_name=name_or_code,
-                message=f"Skill '{name_or_code}' loaded successfully from {source}",
+                message=msg,
             )
             await self._send_event(session_id, event)
             self._logger.info("Loaded skill '%s' from: %s", name_or_code, source)
@@ -346,13 +359,39 @@ class SkillCommandHandler:
 
     async def _handle_dry_run_skill(self, command: DryRunSkillCommand, session_id: str) -> None:
         skill_service = self._skill_service_getter()
-        result_data = skill_service.dry_run(command.skill_name, command.tool_name, command.input)
+        result_data = await skill_service.dry_run(
+            command.skill_name,
+            command.tool_name,
+            command.input,
+            live=command.live,
+        )
+        # Build llm_verification sub-model with full progressive disclosure data
+        llm_v = result_data.get("llm_verification")
+        llm_verification = None
+        if llm_v:
+            from .events import DisclosurePhase, LlmVerificationResult
+
+            phases = [DisclosurePhase(**p) for p in llm_v.get("phases", [])]
+            llm_verification = LlmVerificationResult(
+                success=llm_v.get("success", False),
+                message=llm_v.get("message", ""),
+                tool_call=llm_v.get("tool_call"),
+                probe_prompt=llm_v.get("probe_prompt"),
+                system_prompt=llm_v.get("system_prompt"),
+                tool_definitions=llm_v.get("tool_definitions"),
+                model_name=llm_v.get("model_name"),
+                raw_content=llm_v.get("raw_content"),
+                usage=llm_v.get("usage"),
+                phases=phases,
+            )
+
         result = DryRunResult(
             valid=result_data["valid"],
             schema_errors=result_data.get("schema_errors", []),
             policy_result=result_data.get("policy_result", "allow"),
             capability_gaps=result_data.get("capability_gaps", []),
             estimated_side_effects=result_data.get("estimated_side_effects", []),
+            llm_verification=llm_verification,
         )
         event = DryRunResultEvent(
             event_id=f"evt_{uuid4().hex[:8]}",

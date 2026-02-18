@@ -6,7 +6,7 @@ import os
 from collections.abc import AsyncIterator
 from typing import Any
 
-from houyi.llm.base import LLMAdapter, LLMMessage, LLMResponse
+from houyi.llm.base import DEFAULT_TEMPERATURE, LLMAdapter, LLMMessage, LLMResponse
 
 
 class OpenAIAdapter(LLMAdapter):
@@ -52,7 +52,7 @@ class OpenAIAdapter(LLMAdapter):
         self,
         messages: list[LLMMessage | dict],
         tools: list[dict] | None = None,
-        temperature: float = 0.7,
+        temperature: float = DEFAULT_TEMPERATURE,
         max_tokens: int | None = None,
         **kwargs: Any,
     ) -> LLMResponse:
@@ -96,10 +96,10 @@ class OpenAIAdapter(LLMAdapter):
         self,
         messages: list[LLMMessage | dict],
         tools: list[dict] | None = None,
-        temperature: float = 0.7,
+        temperature: float = DEFAULT_TEMPERATURE,
         max_tokens: int | None = None,
         **kwargs: Any,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[tuple[str, str | None]]:
         """Streaming chat completion with OpenAI.
 
         Args:
@@ -110,12 +110,10 @@ class OpenAIAdapter(LLMAdapter):
             **kwargs: Additional OpenAI parameters
 
         Yields:
-            Response chunks
+            ``(content_delta, None)`` tuples (OpenAI does not expose reasoning).
         """
-        # Normalize messages
         normalized_messages = self._normalize_messages(messages)
 
-        # Build request parameters
         params = {
             "model": self.model,
             "messages": normalized_messages,
@@ -129,12 +127,10 @@ class OpenAIAdapter(LLMAdapter):
         if tools:
             params["tools"] = tools
 
-        # Add any additional parameters
         params.update(kwargs)
 
-        # Make streaming API call
         stream = await self.client.chat.completions.create(**params)
 
         async for chunk in stream:
             if chunk.choices[0].delta.content:
-                yield chunk.choices[0].delta.content
+                yield (chunk.choices[0].delta.content, None)

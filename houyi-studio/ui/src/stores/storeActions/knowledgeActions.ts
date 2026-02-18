@@ -282,6 +282,7 @@ export const createKnowledgeActions = (set: StoreSet, get: StoreGet) => ({
     success: boolean;
     stats: Record<string, any>;
     message: string;
+    warning?: string;
   }) => {
     const { ingestLibraryId, ingestLibraryName, ingestPaths } = get();
 
@@ -306,20 +307,30 @@ export const createKnowledgeActions = (set: StoreSet, get: StoreGet) => ({
         addSuccessfulImport(ingestPaths, libId, ingestLibraryName);
       }
 
-      let message = `Import complete: ${filesProcessed} files, ${chunksCreated} chunks`;
-      if (filesSkipped > 0) {
-        message += `, ${filesSkipped} skipped`;
-      }
-      if (filesFailed > 0) {
-        message += ` (${filesFailed} failed)`;
+      // Check for degraded state (warning from backend)
+      if (data.warning) {
+        const message = `Imported ${filesProcessed} files — but no embedding provider found. Semantic search is unavailable. Install an embedding provider and rebuild the index.`;
         get().showToast(message, 'warning');
       } else {
-        get().showToast(message, 'success');
+        let message = `Import complete: ${filesProcessed} files, ${chunksCreated} chunks`;
+        if (filesSkipped > 0) {
+          message += `, ${filesSkipped} skipped`;
+        }
+        if (filesFailed > 0) {
+          message += ` (${filesFailed} failed)`;
+          get().showToast(message, 'warning');
+        } else {
+          get().showToast(message, 'success');
+        }
       }
     } else if (data.success) {
       // Success but no files processed (e.g., incremental rebuild with no changes)
-      const message = data.message || 'No changes detected';
-      get().showToast(message, 'info');
+      if (data.warning) {
+        get().showToast(data.warning, 'warning');
+      } else {
+        const message = data.message || 'No changes detected';
+        get().showToast(message, 'info');
+      }
     } else {
       const errorMsg = data.message || `All ${filesFailed} files failed to process`;
       get().showToast(`Import failed: ${errorMsg}`, 'error');

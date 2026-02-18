@@ -8,12 +8,10 @@ when HOUYI_DISABLE_E2E_TOOLS is not set.
 from __future__ import annotations
 
 import atexit
-import json
 import os
 import signal
 import sys
 import tempfile
-import urllib.request
 from datetime import date, timedelta
 
 from houyi_studio.server.app import app
@@ -88,36 +86,6 @@ def get_weather(lat: float, lon: float, date: str) -> str:
 
 
 @tool
-def get_weather_live(lat: float, lon: float, date: str) -> str:
-    """Fetch real weather data from Open-Meteo (call after location/date tools)."""
-    disable_flag = (os.getenv("HOUYI_DISABLE_LIVE_WEATHER") or "").strip().lower()
-    if disable_flag in {"1", "true", "yes", "on"}:
-        print(
-            f"[console_e2e_server] Live weather disabled via HOUYI_DISABLE_LIVE_WEATHER={disable_flag}"
-        )
-        return f"Mock live weather for {lat},{lon} on {date}: max=25, min=15"
-    if isinstance(date, str):
-        date_func = getattr(get_date, "_original_func", get_date)
-        normalized_date = date_func(date) if callable(date_func) else date
-    else:
-        normalized_date = date
-    url = (
-        "https://api.open-meteo.com/v1/forecast"
-        f"?latitude={lat}&longitude={lon}"
-        "&daily=temperature_2m_max,temperature_2m_min"
-        "&timezone=UTC"
-        f"&start_date={normalized_date}&end_date={normalized_date}"
-    )
-    print(f"[console_e2e_server] Fetching live weather: {url}")
-    with urllib.request.urlopen(url, timeout=10) as response:
-        payload = json.loads(response.read().decode("utf-8"))
-    daily = payload.get("daily", {})
-    tmax = (daily.get("temperature_2m_max") or [None])[0]
-    tmin = (daily.get("temperature_2m_min") or [None])[0]
-    return f"Real weather for {lat},{lon} on {date}: max={tmax}, min={tmin}"
-
-
-@tool
 def boom() -> str:
     """Always fail for error flow coverage."""
     raise ValueError("boom")
@@ -127,7 +95,6 @@ DEFAULT_SKILL_REGISTRY.register(weather, overwrite=True)
 DEFAULT_SKILL_REGISTRY.register(get_location, overwrite=True)
 DEFAULT_SKILL_REGISTRY.register(get_date, overwrite=True)
 DEFAULT_SKILL_REGISTRY.register(get_weather, overwrite=True)
-DEFAULT_SKILL_REGISTRY.register(get_weather_live, overwrite=True)
 DEFAULT_SKILL_REGISTRY.register(boom, overwrite=True)
 
 

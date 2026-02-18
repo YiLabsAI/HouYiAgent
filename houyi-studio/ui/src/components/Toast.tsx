@@ -14,10 +14,15 @@ const AUTO_DISMISS_TIMES = {
 };
 
 export const Toast: React.FC<ToastProps> = ({ message, type, onClose }) => {
+  // Use a ref so the auto-dismiss timer is not reset when onClose
+  // changes identity (e.g. parent re-renders without useCallback).
+  const onCloseRef = React.useRef(onClose);
+  onCloseRef.current = onClose;
+
   React.useEffect(() => {
-    const timer = setTimeout(onClose, AUTO_DISMISS_TIMES[type]);
+    const timer = setTimeout(() => onCloseRef.current(), AUTO_DISMISS_TIMES[type]);
     return () => clearTimeout(timer);
-  }, [onClose, type]);
+  }, [type]);
 
   const bgColor = {
     success: 'bg-green-600',

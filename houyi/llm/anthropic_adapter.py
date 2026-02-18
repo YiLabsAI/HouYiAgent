@@ -6,7 +6,7 @@ import os
 from collections.abc import AsyncIterator
 from typing import Any
 
-from houyi.llm.base import LLMAdapter, LLMMessage, LLMResponse
+from houyi.llm.base import DEFAULT_TEMPERATURE, LLMAdapter, LLMMessage, LLMResponse
 
 
 class AnthropicAdapter(LLMAdapter):
@@ -49,7 +49,7 @@ class AnthropicAdapter(LLMAdapter):
         self,
         messages: list[LLMMessage | dict],
         tools: list[dict] | None = None,
-        temperature: float = 0.7,
+        temperature: float = DEFAULT_TEMPERATURE,
         max_tokens: int | None = None,
         **kwargs: Any,
     ) -> LLMResponse:
@@ -104,10 +104,10 @@ class AnthropicAdapter(LLMAdapter):
         self,
         messages: list[LLMMessage | dict],
         tools: list[dict] | None = None,
-        temperature: float = 0.7,
+        temperature: float = DEFAULT_TEMPERATURE,
         max_tokens: int | None = None,
         **kwargs: Any,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[tuple[str, str | None]]:
         """Streaming chat completion with Anthropic.
 
         Args:
@@ -118,12 +118,10 @@ class AnthropicAdapter(LLMAdapter):
             **kwargs: Additional Anthropic parameters
 
         Yields:
-            Response chunks
+            ``(content_delta, None)`` tuples (Anthropic reasoning not exposed via stream).
         """
-        # Normalize messages
         normalized_messages = self._normalize_messages(messages)
 
-        # Extract system message
         system_message = None
         filtered_messages = []
         for msg in normalized_messages:
@@ -132,7 +130,6 @@ class AnthropicAdapter(LLMAdapter):
             else:
                 filtered_messages.append(msg)
 
-        # Build request parameters
         params = {
             "model": self.model,
             "messages": filtered_messages,
@@ -147,13 +144,11 @@ class AnthropicAdapter(LLMAdapter):
         if tools:
             params["tools"] = self._convert_tools_to_anthropic(tools)
 
-        # Add any additional parameters
         params.update(kwargs)
 
-        # Make streaming API call
         async with self.client.messages.stream(**params) as stream:
             async for text in stream.text_stream:
-                yield text
+                yield (text, None)
 
     def _convert_tools_to_anthropic(self, tools: list[dict]) -> list[dict]:
         """Convert OpenAI tool format to Anthropic format.

@@ -159,5 +159,56 @@ def get_location(city: str | None = None) -> dict[str, Any]:
         }
 
 
+# ── Default lifecycle hooks ──────────────────────────────────────────
+
+from houyi.core.skill.hooks import HookEvent, HookType, SkillHook  # noqa: E402
+
+
+def _location_pre_tool_use(context: Any) -> dict[str, Any]:
+    """PreToolUse hook: validate and sanitize city name."""
+    args = context.tool_args or {}
+    city = args.get("city", DEFAULT_CITY)
+    sanitized = _sanitize_city_name(city)
+    return {
+        "success": True,
+        "output": f"[PreToolUse] ✓ Geocoding city: {sanitized}",
+    }
+
+
+def _location_post_tool_use(context: Any) -> dict[str, Any]:
+    """PostToolUse hook: log geocoding result summary."""
+    result = context.tool_result
+    if isinstance(result, dict) and result.get("found"):
+        return {
+            "success": True,
+            "output": (
+                f"[PostToolUse] Found: {result.get('city')} "
+                f"({result.get('lat')}, {result.get('lon')}) "
+                f"in {result.get('country', '?')}"
+            ),
+            "inject_to_prompt": True,
+        }
+    return {
+        "success": True,
+        "output": f"[PostToolUse] Geocoding result: {str(result)[:200]}",
+    }
+
+
+get_location.hooks = [
+    SkillHook(
+        event=HookEvent.PRE_TOOL_USE,
+        hook_type=HookType.HANDLER,
+        handler=_location_pre_tool_use,
+        matcher="get_location",
+    ),
+    SkillHook(
+        event=HookEvent.POST_TOOL_USE,
+        hook_type=HookType.HANDLER,
+        handler=_location_post_tool_use,
+        matcher="get_location",
+    ),
+]
+
+
 # Export (get_location is a SkillSpec)
 __all__ = ["get_location"]

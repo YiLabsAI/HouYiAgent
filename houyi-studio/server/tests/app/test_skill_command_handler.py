@@ -55,8 +55,12 @@ class FakeSkillService:
             return False, "Skill not found"
         return True, None
 
-    def dry_run(
-        self, skill_name: str, tool_name: str, input_data: dict[str, Any]
+    async def dry_run(
+        self,
+        skill_name: str,
+        tool_name: str,
+        input_data: dict[str, Any],
+        live: bool = False,
     ) -> dict[str, Any]:
         return {
             "valid": True,
@@ -132,7 +136,7 @@ async def test_get_skill_detail_defaults_version_when_none() -> None:
 
     assert len(events) == 1
     assert isinstance(events[0], SkillDetailEvent)
-    assert events[0].skill.version == "0.0.0"
+    assert events[0].skill.version is None
 
 
 @pytest.mark.asyncio

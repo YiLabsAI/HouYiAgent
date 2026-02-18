@@ -19,7 +19,7 @@ from houyi.execution.retry_policy import (
     calculate_retry_delay,
     get_num_retries_from_policy,
 )
-from houyi.llm.llm_adapter import LLMAdapterFactory
+from houyi.llm.factory import LLMAdapterFactory
 from houyi.observability.context import TraceContext
 from houyi.observability.trace_manager import Span
 from houyi.observability.types import SpanType

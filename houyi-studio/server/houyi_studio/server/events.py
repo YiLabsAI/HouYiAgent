@@ -459,6 +459,11 @@ class KnowledgeIngestCompleteEvent(ServerEvent):
         description="Ingest statistics (docs, chunks, errors)",
     )
     message: str = Field(default="", description="Completion message")
+    warning: str | None = Field(
+        default=None,
+        description="Warning message when operation succeeded but with degraded quality "
+        "(e.g. no embedding provider, search unavailable)",
+    )
 
 
 # ========== Document Management Events ==========
@@ -572,7 +577,7 @@ class SkillDetail(BaseModel):
     name: str = Field(..., description="Skill unique identifier")
     display_name: str = Field(..., description="Human-readable name")
     description: str | None = Field(default=None, description="Full description")
-    version: str = Field(default="0.0.0", description="Skill version")
+    version: str | None = Field(default=None, description="Skill version")
     author: str | None = Field(default=None, description="Skill author")
     tools: list[dict[str, Any]] = Field(
         default_factory=list,
@@ -691,6 +696,64 @@ class SkillBlockedEvent(ServerEvent):
     reason: str = Field(..., description="Reason for blocking")
 
 
+class DisclosurePhase(BaseModel):
+    """A single phase in the progressive disclosure timeline."""
+
+    name: str = Field(
+        ..., description="Phase identifier (discovery/activation/negotiation/execution)"
+    )
+    label: str = Field(..., description="Human-readable phase label")
+    timestamp_ms: int = Field(..., description="Wall-clock ms since dry-run start")
+    status: str = Field(default="pass", description="Phase status: pass/fail")
+    data: dict[str, Any] = Field(default_factory=dict, description="Phase-specific payload")
+
+
+class LlmVerificationResult(BaseModel):
+    """Result of live LLM verification in a dry-run.
+
+    Includes a ``phases`` timeline for progressive disclosure:
+      1. discovery   — skill metadata loaded
+      2. activation  — tool definitions built
+      3. negotiation — system + user prompt constructed
+      4. execution   — real LLM API call completed
+    """
+
+    success: bool = Field(..., description="Whether LLM produced correct tool call")
+    message: str = Field(default="", description="Verification status message")
+    tool_call: dict[str, Any] | None = Field(
+        default=None,
+        description="The tool call the LLM generated, if any",
+    )
+    probe_prompt: str | None = Field(
+        default=None,
+        description="The natural-language user query sent to the LLM",
+    )
+    system_prompt: str | None = Field(
+        default=None,
+        description="The system prompt providing skill context to the LLM",
+    )
+    tool_definitions: list[dict[str, Any]] | None = Field(
+        default=None,
+        description="OpenAI-format tool definitions sent to the LLM",
+    )
+    model_name: str | None = Field(
+        default=None,
+        description="The LLM model used for verification",
+    )
+    raw_content: str | None = Field(
+        default=None,
+        description="Raw text content from the LLM response (if any)",
+    )
+    usage: dict[str, Any] | None = Field(
+        default=None,
+        description="Token usage stats from the LLM call",
+    )
+    phases: list[DisclosurePhase] = Field(
+        default_factory=list,
+        description="Progressive disclosure timeline phases with timestamps",
+    )
+
+
 class DryRunResult(BaseModel):
     """Result of a dry-run validation."""
 
@@ -710,6 +773,10 @@ class DryRunResult(BaseModel):
     estimated_side_effects: list[str] = Field(
         default_factory=list,
         description="Predicted side effects",
+    )
+    llm_verification: LlmVerificationResult | None = Field(
+        default=None,
+        description="Live LLM verification result (only when live=True)",
     )
 
 

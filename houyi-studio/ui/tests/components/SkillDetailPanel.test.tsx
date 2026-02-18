@@ -167,18 +167,18 @@ describe('SkillDetailPanel', () => {
     expect(screen.getByText('No tools defined')).toBeInTheDocument();
   });
 
-  it('should trigger onDryRun when a tool chip is clicked', () => {
-    const onDryRun = vi.fn();
+  it('should display tool chips as informational labels', () => {
     render(
       <SkillDetailPanel
         detail={createDetail()}
         metrics={null}
         isLoading={false}
-        onDryRun={onDryRun}
       />
     );
-    fireEvent.click(screen.getByText('Read'));
-    expect(onDryRun).toHaveBeenCalledWith('Read');
+    const toolsSection = screen.getByTestId('skill-tools');
+    expect(toolsSection).toHaveTextContent('Read');
+    expect(toolsSection).toHaveTextContent('Write');
+    expect(toolsSection).toHaveTextContent('Edit');
   });
 
   // ─── Metrics section ───────────────────────────────────────────
@@ -226,7 +226,7 @@ describe('SkillDetailPanel', () => {
     expect(onConfigure).toHaveBeenCalledTimes(1);
   });
 
-  it('should trigger onDryRun with first tool when Dry-run button is clicked', () => {
+  it('should trigger onDryRun (no args) when Dry-run button is clicked', () => {
     const onDryRun = vi.fn();
     render(
       <SkillDetailPanel
@@ -237,19 +237,8 @@ describe('SkillDetailPanel', () => {
       />
     );
     fireEvent.click(screen.getByText('Dry-run'));
-    expect(onDryRun).toHaveBeenCalledWith('Read');
-  });
-
-  it('should disable Dry-run button when no tools', () => {
-    render(
-      <SkillDetailPanel
-        detail={createDetail({ tools: [] })}
-        metrics={null}
-        isLoading={false}
-      />
-    );
-    const dryRunBtn = screen.getByText('Dry-run');
-    expect(dryRunBtn).toBeDisabled();
+    expect(onDryRun).toHaveBeenCalledTimes(1);
+    expect(onDryRun).toHaveBeenCalledWith();
   });
 
   it('should show confirmation dialog when Unload is clicked', () => {

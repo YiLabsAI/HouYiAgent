@@ -18,6 +18,8 @@ import { useThemeStore } from './stores/useThemeStore';
 import { ObsFullView } from './components/panels/ObsFullView';
 import { useSkillsLogic } from './components/LeftSidebar/useSkillsLogic';
 import { SkillConfigDialog } from './components/panels/SkillConfigDialog';
+import { DryRunDialog } from './components/panels/DryRunDialog';
+import { LoadSkillDialog } from './components/panels/LoadSkillDialog';
 import type { SkillConfigValues } from './components/LeftSidebar/useSkillsLogic';
 
 // Module-level session ID: survives Vite HMR but resets on full page reload.
@@ -59,8 +61,12 @@ function App() {
   const [showSearch, setShowSearch] = React.useState(false);
   const [showBookmarks, setShowBookmarks] = React.useState(false);
   const [showSkillConfig, setShowSkillConfig] = React.useState(false);
+  const [showDryRun, setShowDryRun] = React.useState(false);
+  const [showLoadSkill, setShowLoadSkill] = React.useState(false);
   // Center Stage L state for Panel expand
   const [centerStageTab, setCenterStageTab] = React.useState<string | null>(null);
+  // Shared checkpoint selection state between BottomPanel and CenterStage
+  const [sharedCheckedCheckpoints, setSharedCheckedCheckpoints] = React.useState<Array<{ checkpointId: string; executionId: string }>>([]);
   const [bottomHeight, setBottomHeight] = React.useState(DEFAULT_BOTTOM_HEIGHT);
   const bottomHeightRef = React.useRef(bottomHeight);
   React.useEffect(() => { bottomHeightRef.current = bottomHeight; }, [bottomHeight]);
@@ -317,6 +323,7 @@ function App() {
                   setRightCollapsed(false);
                 }}
                 onRefreshSkills={skillsLogic.refreshSkills}
+                onLoadSkill={() => setShowLoadSkill(true)}
               />
             </div>
             <div
@@ -350,6 +357,8 @@ function App() {
               onTabChange={setBottomPanelTab}
               height={bottomHeight}
               onExpandTab={(tab) => setCenterStageTab(tab)}
+              checkedCheckpoints={sharedCheckedCheckpoints}
+              onCheckedCheckpointsChange={setSharedCheckedCheckpoints}
             />
           )}
         </div>
@@ -370,13 +379,7 @@ function App() {
                 skillMetrics={skillsLogic.skillMetrics}
                 isLoadingSkillDetail={skillsLogic.isLoadingDetail}
                 onConfigureSkill={() => setShowSkillConfig(true)}
-                onDryRunSkill={(toolName: string) => {
-                  // SkillDetailPanel passes only toolName; supply the selected skill name
-                  const skillName = skillsLogic.selectedSkill;
-                  if (skillName) {
-                    skillsLogic.dryRunSkill(skillName, toolName);
-                  }
-                }}
+                onDryRunSkill={() => setShowDryRun(true)}
                 onUnloadSkill={skillsLogic.unloadSkill}
                 onOpenChatSettings={() => setShowChatSettings(true)}
                 onRebuildKnowledgeIndex={(libId) => useConsoleStore.getState().rebuildKnowledgeIndex(libId)}
@@ -414,7 +417,10 @@ function App() {
               isCollapsed={false}
               onToggleCollapse={() => setCenterStageTab(null)}
               activeTab={centerStageTab as any}
-              height={9999}
+              onTabChange={(tab) => setCenterStageTab(tab)}
+              fillHeight
+              checkedCheckpoints={sharedCheckedCheckpoints}
+              onCheckedCheckpointsChange={setSharedCheckedCheckpoints}
             />
           </div>
         </CenterStage>
@@ -453,6 +459,36 @@ function App() {
           onCancel={() => setShowSkillConfig(false)}
         />
       )}
+
+      {/* Dry-run Center Stage M dialog */}
+      {skillsLogic.skillDetail && (
+        <DryRunDialog
+          isOpen={showDryRun}
+          detail={skillsLogic.skillDetail}
+          dryRunResult={skillsLogic.dryRunResult}
+          onExecute={(toolName, input, live) => {
+            const skillName = skillsLogic.selectedSkill;
+            if (skillName) {
+              skillsLogic.dryRunSkill(skillName, toolName, input, live);
+            }
+          }}
+          onClose={() => {
+            setShowDryRun(false);
+            skillsLogic.clearDryRunResult();
+          }}
+          onClearResult={skillsLogic.clearDryRunResult}
+        />
+      )}
+
+      {/* Load Skill Center Stage M dialog */}
+      <LoadSkillDialog
+        isOpen={showLoadSkill}
+        onLoad={(source) => {
+          skillsLogic.loadSkill(source);
+        }}
+        onClose={() => setShowLoadSkill(false)}
+        loadResult={skillsLogic.loadResult}
+      />
     </div>
   );
 }

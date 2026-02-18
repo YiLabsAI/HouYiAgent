@@ -146,6 +146,14 @@ export interface CheckpointIR {
 
 export type RAGMode = 'agentic' | 'indexed' | 'auto';
 
+export type KnowledgeLibraryStatus =
+  | 'empty'
+  | 'indexing'
+  | 'ready'
+  | 'degraded'
+  | 'partial'
+  | 'error';
+
 export interface KnowledgeLibrary {
   library_id: string;
   name: string;
@@ -156,6 +164,7 @@ export interface KnowledgeLibrary {
   updated_at: string;
   doc_count: number;
   chunk_count: number;
+  status?: KnowledgeLibraryStatus;
   metadata: Record<string, any>;
 }
 

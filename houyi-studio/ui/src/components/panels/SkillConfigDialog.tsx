@@ -128,7 +128,10 @@ export const SkillConfigDialog: React.FC<SkillConfigDialogProps> = ({
                       name="policy_action"
                       value={opt.value}
                       checked={policyAction === opt.value}
-                      onChange={() => setPolicyAction(opt.value)}
+                      onChange={() => {
+                        setPolicyAction(opt.value);
+                        setAutoInvoke(opt.value !== 'deny');
+                      }}
                       className="mt-0.5 accent-blue-500"
                     />
                     <div>
@@ -160,7 +163,15 @@ export const SkillConfigDialog: React.FC<SkillConfigDialogProps> = ({
                   className={`relative w-9 h-5 rounded-full transition-colors ${
                     autoInvoke ? 'bg-blue-600' : 'bg-gray-600'
                   }`}
-                  onClick={() => setAutoInvoke(!autoInvoke)}
+                  onClick={() => {
+                    const next = !autoInvoke;
+                    setAutoInvoke(next);
+                    if (!next && policyAction === 'allow') {
+                      setPolicyAction('deny');
+                    } else if (next && policyAction === 'deny') {
+                      setPolicyAction('allow');
+                    }
+                  }}
                 >
                   <div
                     className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform ${

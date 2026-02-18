@@ -49,5 +49,5 @@ Combine with weather skill to get weather for any city:
 
 ```python
 location = get_location("Shanghai")
-weather = get_weather_live(location["lat"], location["lon"], "today")
+weather = get_weather(location["lat"], location["lon"], "today")
 ```

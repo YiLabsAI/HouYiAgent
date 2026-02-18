@@ -57,6 +57,24 @@ export const KnowledgeSearch: React.FC<KnowledgeSearchProps> = ({ onSearch }) =>
     setQuery(knowledgeSearchQuery);
   }, [knowledgeSearchQuery]);
 
+  // Safety: reset stale isSearchingKnowledge after timeout.
+  // If backend never responds (e.g. WebSocket dropped mid-search),
+  // the input stays permanently disabled without this guard.
+  const connectionStatus = useConsoleStore((s) => s.connectionStatus);
+  useEffect(() => {
+    if (isSearchingKnowledge && connectionStatus === 'disconnected') {
+      clearKnowledgeSearch();
+    }
+  }, [connectionStatus, isSearchingKnowledge, clearKnowledgeSearch]);
+
+  useEffect(() => {
+    if (!isSearchingKnowledge) return;
+    const timer = setTimeout(() => {
+      clearKnowledgeSearch();
+    }, 30_000); // 30s max search wait
+    return () => clearTimeout(timer);
+  }, [isSearchingKnowledge, clearKnowledgeSearch]);
+
   // Close history dropdown when clicking outside
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -96,13 +114,11 @@ export const KnowledgeSearch: React.FC<KnowledgeSearchProps> = ({ onSearch }) =>
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (query.trim()) {
-      addToHistory(query.trim());
-      // Only pass mode if user explicitly overrode it
-      searchKnowledge(query.trim(), selectedLibraryId || undefined, modeOverride || undefined, topK);
-      onSearch?.(query.trim());
-      setShowHistory(false);
-    }
+    if (!query.trim() || isSearchingKnowledge) return;
+    addToHistory(query.trim());
+    searchKnowledge(query.trim(), selectedLibraryId || undefined, modeOverride || undefined, topK);
+    onSearch?.(query.trim());
+    setShowHistory(false);
   };
 
   const handleHistorySelect = (historyQuery: string) => {
@@ -136,7 +152,7 @@ export const KnowledgeSearch: React.FC<KnowledgeSearchProps> = ({ onSearch }) =>
   );
 
   return (
-    <div className="p-3 border-t border-gray-700">
+    <div className="p-3 border-b border-gray-700">
       <form onSubmit={handleSubmit}>
         <div className="relative" ref={historyRef}>
           {isSearchingKnowledge ? (
@@ -156,7 +172,7 @@ export const KnowledgeSearch: React.FC<KnowledgeSearchProps> = ({ onSearch }) =>
             onFocus={() => searchHistory.length > 0 && setShowHistory(true)}
             className="w-full bg-gray-900 border border-gray-700 rounded-lg pl-9 pr-16 py-2 text-xs text-gray-200 placeholder:text-gray-500 focus:border-blue-500 focus:outline-none"
             placeholder={selectedLibraryId ? 'Search knowledge...' : 'Select a library first'}
-            disabled={!selectedLibraryId || isSearchingKnowledge}
+            disabled={!selectedLibraryId}
           />
           <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1">
             {query && (

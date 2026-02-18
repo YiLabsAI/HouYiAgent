@@ -211,7 +211,7 @@ test.describe('Skill classification', () => {
     const names = body.tools.map((t: any) => t.name);
 
     // Executable skills (have Python executor bound)
-    const executableSkills = ['web_search', 'get_date', 'get_weather', 'get_weather_live', 'get_location'];
+    const executableSkills = ['web_search', 'get_date', 'get_weather', 'get_location'];
     for (const name of executableSkills) {
       expect(names).toContain(name);
     }

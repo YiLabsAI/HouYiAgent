@@ -32,7 +32,7 @@ class ScenarioAdapter:
             ("get_date", {"offset_days": "tomorrow"}),
             ("get_location", {"city": "Hangzhou Binjiang"}),
             (
-                "get_weather_live",
+                "get_weather",
                 {"lat": 39.9042, "lon": 116.4074, "date": tomorrow},
             ),
             (
@@ -107,7 +107,7 @@ async def test_llm_tool_scenario_weather_and_web_search(
     _load_console_e2e_tools()
     DEFAULT_SKILL_REGISTRY.register(build_web_search_skill(), overwrite=True)
 
-    tool_names = ["get_date", "get_location", "get_weather_live", "web_search"]
+    tool_names = ["get_date", "get_location", "get_weather", "web_search"]
     skills = [s for name in tool_names if (s := DEFAULT_SKILL_REGISTRY.get(name)) is not None]
     tools = DEFAULT_SKILL_REGISTRY.to_tool_schemas()
 

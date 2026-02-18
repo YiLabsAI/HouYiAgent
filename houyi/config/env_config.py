@@ -6,10 +6,9 @@ Design principles:
 - Singleton + snapshot: reads env once at construction; call reload() to re-read.
 - Fail-soft: missing vars produce warnings, never raise (unless explicitly noted).
 
-Industry references:
-- LangChain get_from_dict_or_env() pattern
-- litellm module-level config (litellm.api_key)
-- pydantic-settings BaseSettings (we avoid the dependency but follow the spirit)
+Env var naming follows upstream SDK conventions:
+- google-genai SDK: GOOGLE_API_KEY, GOOGLE_CLOUD_PROJECT, GOOGLE_CLOUD_LOCATION
+- openai SDK: OPENAI_API_KEY
 """
 
 from __future__ import annotations
@@ -22,39 +21,71 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Internal: env var name registry (single source of truth)
+# Env var name registry (single source of truth)
+#
+# Public constants (ENV_*) are importable by other modules so that env var
+# names never appear as raw strings elsewhere in the codebase.
 # ---------------------------------------------------------------------------
-# These are intentionally private — consumers should use EnvConfig properties,
-# not reference env var names directly.
 
-_ENV_SILICONFLOW_API_KEY = "SILICONFLOW_API_KEY"
-_ENV_SILICONFLOW_BASE_URL = "SILICONFLOW_BASE_URL"
-_ENV_DEEPSEEK_MODEL = "DEEPSEEK_MODEL"
-_ENV_DEFAULT_LLM_PROVIDER = "DEFAULT_LLM_PROVIDER"
+# SiliconFlow / DeepSeek
+ENV_SILICONFLOW_API_KEY = "SILICONFLOW_API_KEY"
+ENV_SILICONFLOW_BASE_URL = "SILICONFLOW_BASE_URL"
+ENV_DEEPSEEK_MODEL = "DEEPSEEK_MODEL"
+ENV_DEEPSEEK_API_KEY = "DEEPSEEK_API_KEY"
+ENV_DEEPSEEK_BASE_URL = "DEEPSEEK_BASE_URL"
+ENV_DEFAULT_LLM_PROVIDER = "DEFAULT_LLM_PROVIDER"
 
-_ENV_GEMINI_MODEL = "GEMINI_MODEL"
-_ENV_GOOGLE_APPLICATION_CREDENTIALS = "GOOGLE_APPLICATION_CREDENTIALS"
-_ENV_GOOGLE_PROJECT_ID = "GOOGLE_PROJECT_ID"
-_ENV_GOOGLE_LOCATION = "GOOGLE_LOCATION"
-# Vertex AI adapter also reads these alternate names
-_ENV_VERTEX_PROJECT = "VERTEX_PROJECT"
-_ENV_VERTEX_LOCATION = "VERTEX_LOCATION"
-_ENV_VERTEX_GEMINI_MODEL = "VERTEX_GEMINI_MODEL"
-_ENV_GOOGLE_CLOUD_PROJECT = "GOOGLE_CLOUD_PROJECT"
-_ENV_GOOGLE_CLOUD_LOCATION = "GOOGLE_CLOUD_LOCATION"
+# OpenAI
+ENV_OPENAI_API_KEY = "OPENAI_API_KEY"
+ENV_OPENAI_BASE_URL = "OPENAI_BASE_URL"
+ENV_OPENAI_ORG = "OPENAI_ORG"
 
-_ENV_RAG_KNOWLEDGE_DIR = "RAG_KNOWLEDGE_DIR"
-_ENV_RAG_EMBEDDING_PROVIDER = "RAG_EMBEDDING_PROVIDER"
-_ENV_RAG_EMBEDDING_MODEL = "RAG_EMBEDDING_MODEL"
+# Anthropic
+ENV_ANTHROPIC_API_KEY = "ANTHROPIC_API_KEY"
+
+# Google (follows google-genai SDK naming)
+ENV_GOOGLE_API_KEY = "GOOGLE_API_KEY"
+ENV_GOOGLE_APPLICATION_CREDENTIALS = "GOOGLE_APPLICATION_CREDENTIALS"
+ENV_GOOGLE_CLOUD_PROJECT = "GOOGLE_CLOUD_PROJECT"
+ENV_GOOGLE_CLOUD_LOCATION = "GOOGLE_CLOUD_LOCATION"
+ENV_GEMINI_MODEL = "GEMINI_MODEL"
+
+# Tool-call subsystem
+ENV_TOOLCALL_ADAPTER = "HOUYI_TOOLCALL_ADAPTER"
+ENV_TOOLCALL_MODEL = "HOUYI_TOOLCALL_MODEL"
+ENV_TOOLCALL_MAX_TOKENS = "HOUYI_TOOLCALL_MAX_TOKENS"
+ENV_TOOLCALL_TIMING = "HOUYI_TOOLCALL_TIMING"
+ENV_TOOLCALL_FAST_PATH = "HOUYI_TOOLCALL_FAST_PATH"
+ENV_TOOLCALL_TOOL_LATENCY_MS = "HOUYI_TOOLCALL_TOOL_LATENCY_MS"
+ENV_TOOLCALL_MAX_RETRIES = "HOUYI_TOOLCALL_MAX_RETRIES"
+ENV_TOOLCALL_TIMEOUT = "HOUYI_TOOLCALL_TIMEOUT"
+
+# Replay / Cache
+ENV_FRESH_REPLAY_USE_WEB_SEARCH_CACHE = "HOUYI_FRESH_REPLAY_USE_WEB_SEARCH_CACHE"
+ENV_FRESH_REPLAY_USE_TOOL_CACHE = "HOUYI_FRESH_REPLAY_USE_TOOL_CACHE"
+
+# Chat / Studio
+ENV_CHAT_SYSTEM_PROMPT = "HOUYI_CHAT_SYSTEM_PROMPT"
+ENV_CHAT_DATA_DIR = "HOUYI_CHAT_DATA_DIR"
+ENV_CHAT_SETTINGS_PATH = "HOUYI_CHAT_SETTINGS_PATH"
+
+# Server
+ENV_HOUYI_PORT = "HOUYI_PORT"
+ENV_KNOWLEDGE_STORAGE = "HOUYI_KNOWLEDGE_STORAGE"
+
+# Knowledge / Embedding
+ENV_RAG_KNOWLEDGE_DIR = "RAG_KNOWLEDGE_DIR"
+ENV_EMBEDDING_PROVIDER = "EMBEDDING_PROVIDER"
+ENV_EMBEDDING_MODEL = "EMBEDDING_MODEL"
 
 # ---------------------------------------------------------------------------
-# Defaults (kept here, not in models.py — these are config concerns)
+# Defaults
 # ---------------------------------------------------------------------------
 _DEFAULT_SILICONFLOW_BASE_URL = "https://api.siliconflow.cn/v1"
-_DEFAULT_VERTEX_LOCATION = "us-central1"
+_DEFAULT_GOOGLE_LOCATION = "us-central1"
+_DEFAULT_EMBEDDING_PROVIDER = "local"
+_DEFAULT_EMBEDDING_MODEL = "BAAI/bge-small-en-v1.5"
 _DEFAULT_RAG_KNOWLEDGE_DIR = "knowledge/"
-_DEFAULT_RAG_EMBEDDING_PROVIDER = "openai"
-_DEFAULT_RAG_EMBEDDING_MODEL = "text-embedding-3-small"
 
 
 class EnvConfig:
@@ -80,32 +111,27 @@ class EnvConfig:
     # ------------------------------------------------------------------
 
     def __new__(cls) -> EnvConfig:
-        # Allow direct construction for testing; singleton via get()
         return super().__new__(cls)
 
     def __init__(self) -> None:
-        # Attributes are initialized here to satisfy static analyzers.
-        # Actual values are loaded by _load().
         self._siliconflow_api_key: str | None = None
         self._siliconflow_base_url: str = _DEFAULT_SILICONFLOW_BASE_URL
         self._deepseek_model: str = ""
         self._default_llm_provider: str = ""
 
-        self._gemini_model: str = ""
+        self._google_api_key: str | None = None
         self._google_credentials_path: str | None = None
-        self._google_project_id: str | None = None
-        self._google_location: str = _DEFAULT_VERTEX_LOCATION
+        self._google_project: str | None = None
+        self._google_location: str = _DEFAULT_GOOGLE_LOCATION
+        self._gemini_model: str = ""
 
         self._rag_knowledge_dir: str = _DEFAULT_RAG_KNOWLEDGE_DIR
-        self._rag_embedding_provider: str = _DEFAULT_RAG_EMBEDDING_PROVIDER
-        self._rag_embedding_model: str = _DEFAULT_RAG_EMBEDDING_MODEL
+        self._embedding_provider: str = _DEFAULT_EMBEDDING_PROVIDER
+        self._embedding_model: str = _DEFAULT_EMBEDDING_MODEL
 
     @classmethod
     def get(cls) -> EnvConfig:
-        """Get or create the global singleton instance.
-
-        Thread-safe.  First call snapshots current ``os.environ``.
-        """
+        """Get or create the global singleton instance."""
         if cls._instance is None:
             with cls._lock:
                 if cls._instance is None:
@@ -129,62 +155,81 @@ class EnvConfig:
         from houyi.llm.models import DEFAULT_MODEL, GEMINI_25_PRO, PROVIDER_SILICONFLOW
 
         # --- LLM Provider ---
-        self._siliconflow_api_key = os.getenv(_ENV_SILICONFLOW_API_KEY)
+        self._siliconflow_api_key = os.getenv(ENV_SILICONFLOW_API_KEY)
         self._siliconflow_base_url = os.getenv(
-            _ENV_SILICONFLOW_BASE_URL, _DEFAULT_SILICONFLOW_BASE_URL
+            ENV_SILICONFLOW_BASE_URL, _DEFAULT_SILICONFLOW_BASE_URL
         )
-        self._deepseek_model = os.getenv(_ENV_DEEPSEEK_MODEL, DEFAULT_MODEL)
-        self._default_llm_provider = os.getenv(_ENV_DEFAULT_LLM_PROVIDER, PROVIDER_SILICONFLOW)
+        self._deepseek_model = os.getenv(ENV_DEEPSEEK_MODEL, DEFAULT_MODEL)
+        self._default_llm_provider = os.getenv(ENV_DEFAULT_LLM_PROVIDER, PROVIDER_SILICONFLOW)
 
-        # --- Google / Vertex AI ---
-        self._gemini_model = (
-            os.getenv(_ENV_VERTEX_GEMINI_MODEL) or os.getenv(_ENV_GEMINI_MODEL) or GEMINI_25_PRO
-        )
-        self._google_credentials_path = os.getenv(_ENV_GOOGLE_APPLICATION_CREDENTIALS)
-        self._google_project_id = (
-            os.getenv(_ENV_VERTEX_PROJECT)
-            or os.getenv(_ENV_GOOGLE_PROJECT_ID)
-            or os.getenv(_ENV_GOOGLE_CLOUD_PROJECT)
-        )
-        self._google_location = (
-            os.getenv(_ENV_VERTEX_LOCATION)
-            or os.getenv(_ENV_GOOGLE_LOCATION)
-            or os.getenv(_ENV_GOOGLE_CLOUD_LOCATION)
-            or _DEFAULT_VERTEX_LOCATION
-        )
+        # --- Google (aligned with google-genai SDK) ---
+        self._google_api_key = os.getenv(ENV_GOOGLE_API_KEY)
+        self._google_credentials_path = os.getenv(ENV_GOOGLE_APPLICATION_CREDENTIALS)
+        self._google_project = os.getenv(ENV_GOOGLE_CLOUD_PROJECT)
+        self._google_location = os.getenv(ENV_GOOGLE_CLOUD_LOCATION, _DEFAULT_GOOGLE_LOCATION)
+        self._gemini_model = os.getenv(ENV_GEMINI_MODEL) or GEMINI_25_PRO
 
-        # --- RAG ---
-        self._rag_knowledge_dir = os.getenv(_ENV_RAG_KNOWLEDGE_DIR, _DEFAULT_RAG_KNOWLEDGE_DIR)
-        self._rag_embedding_provider = os.getenv(
-            _ENV_RAG_EMBEDDING_PROVIDER, _DEFAULT_RAG_EMBEDDING_PROVIDER
-        )
-        self._rag_embedding_model = os.getenv(
-            _ENV_RAG_EMBEDDING_MODEL, _DEFAULT_RAG_EMBEDDING_MODEL
-        )
+        # Auto-detect project from service account credentials
+        if not self._google_project and self._google_credentials_path:
+            import json
+            import pathlib
 
-        # --- Warnings for missing critical vars ---
+            creds_path = pathlib.Path(self._google_credentials_path)
+            if not creds_path.is_absolute():
+                # Resolve relative path against workspace / .env directory
+                for base in [pathlib.Path.cwd(), pathlib.Path(__file__).resolve().parents[3]]:
+                    candidate = base / creds_path
+                    if candidate.is_file():
+                        creds_path = candidate
+                        break
+
+            if creds_path.is_file():
+                try:
+                    with open(creds_path) as f:
+                        self._google_project = json.load(f).get("project_id")
+                    if self._google_project:
+                        logger.info(
+                            "Auto-detected GOOGLE_CLOUD_PROJECT=%s from %s",
+                            self._google_project,
+                            creds_path,
+                        )
+                except Exception as exc:
+                    logger.warning("Failed to read project_id from %s: %s", creds_path, exc)
+            else:
+                logger.warning(
+                    "GOOGLE_APPLICATION_CREDENTIALS=%s — file not found "
+                    "(checked cwd=%s). Vertex AI service account mode unavailable.",
+                    self._google_credentials_path,
+                    pathlib.Path.cwd(),
+                )
+
+        # --- Knowledge / Embedding ---
+        self._rag_knowledge_dir = os.getenv(ENV_RAG_KNOWLEDGE_DIR, _DEFAULT_RAG_KNOWLEDGE_DIR)
+        self._embedding_provider = os.getenv(ENV_EMBEDDING_PROVIDER, _DEFAULT_EMBEDDING_PROVIDER)
+        self._embedding_model = os.getenv(ENV_EMBEDDING_MODEL, _DEFAULT_EMBEDDING_MODEL)
+
+        # --- Warnings ---
         if not self._siliconflow_api_key:
             logger.warning(
                 "%s not set — SiliconFlow adapter will use mock responses",
-                _ENV_SILICONFLOW_API_KEY,
+                ENV_SILICONFLOW_API_KEY,
             )
-        if not self._google_credentials_path:
+        if not self._google_api_key and not self._google_credentials_path:
             logger.debug(
-                "%s not set — Vertex AI adapter will use mock responses",
-                _ENV_GOOGLE_APPLICATION_CREDENTIALS,
+                "Neither %s nor %s set — Google adapters will not be available",
+                ENV_GOOGLE_API_KEY,
+                ENV_GOOGLE_APPLICATION_CREDENTIALS,
             )
 
         logger.info(
-            "EnvConfig loaded: provider=%s, rag_knowledge_dir=%s",
+            "EnvConfig loaded: provider=%s, embedding=%s, knowledge_dir=%s",
             self._default_llm_provider,
+            self._embedding_provider,
             self._rag_knowledge_dir,
         )
 
     def reload(self) -> None:
-        """Re-read all environment variables.
-
-        Useful in tests after patching ``os.environ``.
-        """
+        """Re-read all environment variables."""
         self._load()
 
     # ------------------------------------------------------------------
@@ -212,13 +257,13 @@ class EnvConfig:
         return self._default_llm_provider
 
     # ------------------------------------------------------------------
-    # Google / Vertex AI properties
+    # Google properties (aligned with google-genai SDK)
     # ------------------------------------------------------------------
 
     @property
-    def gemini_model(self) -> str:
-        """VERTEX_GEMINI_MODEL / GEMINI_MODEL or default ``"gemini-2.5-pro"``."""
-        return self._gemini_model
+    def google_api_key(self) -> str | None:
+        """GOOGLE_API_KEY or None."""
+        return self._google_api_key
 
     @property
     def google_credentials_path(self) -> str | None:
@@ -226,17 +271,28 @@ class EnvConfig:
         return self._google_credentials_path
 
     @property
-    def google_project_id(self) -> str | None:
-        """VERTEX_PROJECT / GOOGLE_PROJECT_ID / GOOGLE_CLOUD_PROJECT or None."""
-        return self._google_project_id
+    def google_project(self) -> str | None:
+        """GOOGLE_CLOUD_PROJECT (or auto-detected from credentials) or None."""
+        return self._google_project
 
     @property
     def google_location(self) -> str:
-        """VERTEX_LOCATION / GOOGLE_LOCATION / GOOGLE_CLOUD_LOCATION or ``"us-central1"``."""
+        """GOOGLE_CLOUD_LOCATION or ``"us-central1"``."""
         return self._google_location
 
+    @property
+    def gemini_model(self) -> str:
+        """GEMINI_MODEL or default ``"gemini-2.5-pro"``."""
+        return self._gemini_model
+
+    # Backward-compat alias used by VertexAIAdapter
+    @property
+    def google_project_id(self) -> str | None:
+        """Alias for ``google_project``."""
+        return self._google_project
+
     # ------------------------------------------------------------------
-    # RAG properties
+    # Knowledge / Embedding properties
     # ------------------------------------------------------------------
 
     @property
@@ -245,24 +301,21 @@ class EnvConfig:
         return self._rag_knowledge_dir
 
     @property
-    def rag_embedding_provider(self) -> str:
-        """RAG_EMBEDDING_PROVIDER or default ``"openai"``."""
-        return self._rag_embedding_provider
+    def embedding_provider(self) -> str:
+        """EMBEDDING_PROVIDER or default ``"local"``."""
+        return self._embedding_provider
 
     @property
-    def rag_embedding_model(self) -> str:
-        """RAG_EMBEDDING_MODEL or default ``"text-embedding-3-small"``."""
-        return self._rag_embedding_model
+    def embedding_model(self) -> str:
+        """EMBEDDING_MODEL or default ``"BAAI/bge-small-en-v1.5"``."""
+        return self._embedding_model
 
     # ------------------------------------------------------------------
     # Utilities
     # ------------------------------------------------------------------
 
     def summary(self) -> dict[str, Any]:
-        """Return a sanitized config summary for logging.
-
-        API keys are masked to avoid leaking secrets.
-        """
+        """Return a sanitized config summary for logging."""
 
         def _mask(val: str | None) -> str:
             if not val:
@@ -276,14 +329,15 @@ class EnvConfig:
             "siliconflow_base_url": self._siliconflow_base_url,
             "deepseek_model": self._deepseek_model,
             "default_llm_provider": self._default_llm_provider,
-            "gemini_model": self._gemini_model,
+            "google_api_key": _mask(self._google_api_key),
             "google_credentials_path": self._google_credentials_path or "(not set)",
-            "google_project_id": self._google_project_id or "(not set)",
+            "google_project": self._google_project or "(not set)",
             "google_location": self._google_location,
+            "gemini_model": self._gemini_model,
             "rag_knowledge_dir": self._rag_knowledge_dir,
-            "rag_embedding_provider": self._rag_embedding_provider,
-            "rag_embedding_model": self._rag_embedding_model,
+            "embedding_provider": self._embedding_provider,
+            "embedding_model": self._embedding_model,
         }
 
     def __repr__(self) -> str:
-        return f"<EnvConfig provider={self._default_llm_provider!r} rag_dir={self._rag_knowledge_dir!r}>"
+        return f"<EnvConfig provider={self._default_llm_provider!r} embedding={self._embedding_provider!r}>"

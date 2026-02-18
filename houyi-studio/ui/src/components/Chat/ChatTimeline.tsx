@@ -130,6 +130,10 @@ export const ChatTimeline: React.FC<ChatTimelineProps> = ({ messages, streamingM
   const programmaticScrollRef = React.useRef<boolean>(false);
   const lastUserScrollAtRef = React.useRef<number>(0);
   const isPointerDownInTimelineRef = React.useRef<boolean>(false);
+  // Tracks the last wheel event timestamp.  Used to distinguish user-initiated
+  // wheel scrolls from layout-shift-induced scroll events during the post-restore
+  // protection window.  Without this, wheel scrolling doesn't save snapshots.
+  const lastWheelAtRef = React.useRef<number>(0);
   const lastRestoreAtRef = React.useRef<number>(0);
   const prevMessageCountRef = React.useRef(messages.length);
   const prevConversationIdRef = React.useRef<string | null>(conversationId);
@@ -417,6 +421,13 @@ export const ChatTimeline: React.FC<ChatTimelineProps> = ({ messages, streamingM
     prevMessageCountRef.current = messages.length;
   }, [messages.length, autoScroll, streamingContent, streamingMessageId, isWaitingForResponse]);
 
+  // Mark wheel events as user-initiated scrolling.  Wheel events don't
+  // trigger pointerdown, so without this the post-restore protection guard
+  // in handleScroll would suppress snapshot saving for wheel scrolls.
+  const handleWheel = React.useCallback(() => {
+    lastWheelAtRef.current = Date.now();
+  }, []);
+
   // Detect manual scroll to disable auto-scroll.
   // In column-reverse, scrollTop is 0 at bottom and negative (or large) when scrolled up.
   const handleScroll = () => {
@@ -435,8 +446,11 @@ export const ChatTimeline: React.FC<ChatTimelineProps> = ({ messages, streamingM
     // During this window, scroll events are caused by layout shifts and React
     // re-renders, not user interaction. Don't update anything — the restore
     // already set autoScroll and the snapshot correctly.
+    // EXCEPT: if the user is actively scrolling via wheel (lastWheelAtRef)
+    // or pointer (isPointerDownInTimelineRef), honour their intent.
     const recentlyRestored = Date.now() - lastRestoreAtRef.current < 2000;
-    if (recentlyRestored && !isPointerDownInTimelineRef.current) {
+    const userWheelActive = Date.now() - lastWheelAtRef.current < 150;
+    if (recentlyRestored && !isPointerDownInTimelineRef.current && !userWheelActive) {
       return;
     }
 
@@ -475,6 +489,7 @@ export const ChatTimeline: React.FC<ChatTimelineProps> = ({ messages, streamingM
     <div
       ref={containerRef}
       onScroll={handleScroll}
+      onWheel={handleWheel}
       data-testid="chat-timeline"
       className="flex-1 overflow-y-auto min-h-0 flex flex-col-reverse"
       style={{ scrollbarGutter: 'stable' }}

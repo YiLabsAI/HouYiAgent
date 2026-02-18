@@ -10,13 +10,14 @@ from typing import Any
 from houyi.core.skill import SkillSpec
 from houyi.core.tool_call_adapter import normalize_adapter_response
 from houyi.core.tool_call_adapter_hooks import ToolCallAdapterContext, resolve_tool_call_adapter
+from houyi.llm.models import ADAPTER_REAL
 
 
 @dataclass(frozen=True)
 class ToolCallAdapterRequest:
     """Request for building a tool-call adapter."""
 
-    adapter_name: str = "real"
+    adapter_name: str = ADAPTER_REAL
     tool_names: list[str] = field(default_factory=list)
     skills: list[SkillSpec] = field(default_factory=list)
     tool_sequence: list[str] = field(default_factory=list)

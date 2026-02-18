@@ -283,3 +283,85 @@ class TestDefaultSkillRegistry:
     def test_default_registry_has_hooks_manager(self) -> None:
         """Test that default registry has hooks manager."""
         assert DEFAULT_SKILL_REGISTRY._hooks_manager is not None
+
+
+class TestProviderNamespace:
+    """Test provider namespace support in SkillRegistry."""
+
+    def _make_skill(self, name: str, provider: str | None = None) -> SkillSpec:
+        return SkillSpec(
+            name=name,
+            provider=provider,
+            description=f"{name} from {provider}",
+            input_schema=InputModel,
+            output_schema=OutputModel,
+        )
+
+    def test_qualified_name_property(self) -> None:
+        s1 = self._make_skill("weather", "houyi")
+        assert s1.qualified_name == "houyi/weather"
+
+        s2 = self._make_skill("weather")
+        assert s2.qualified_name == "weather"
+
+    def test_same_name_different_provider_coexist(self) -> None:
+        registry = SkillRegistry()
+        s1 = self._make_skill("weather", "houyi")
+        s2 = self._make_skill("weather", "openclaw")
+
+        registry.register(s1)
+        registry.register(s2)
+
+        assert registry.get("houyi/weather") is s1
+        assert registry.get("openclaw/weather") is s2
+        # Plain name returns the first-registered
+        assert registry.get("weather") is s1
+
+    def test_same_name_same_provider_raises(self) -> None:
+        registry = SkillRegistry()
+        s1 = self._make_skill("weather", "houyi")
+        s2 = self._make_skill("weather", "houyi")
+
+        registry.register(s1)
+        with pytest.raises(ValueError, match="already registered"):
+            registry.register(s2)
+
+    def test_list_deduplicates(self) -> None:
+        registry = SkillRegistry()
+        s1 = self._make_skill("weather", "houyi")
+        s2 = self._make_skill("weather", "openclaw")
+        registry.register(s1)
+        registry.register(s2)
+
+        skills = registry.list()
+        assert len(skills) == 2
+        names = {s.qualified_name for s in skills}
+        assert names == {"houyi/weather", "openclaw/weather"}
+
+    def test_list_qualified_names(self) -> None:
+        registry = SkillRegistry()
+        registry.register(self._make_skill("weather", "houyi"))
+        registry.register(self._make_skill("location"))
+
+        qnames = registry.list_qualified_names()
+        assert "houyi/weather" in qnames
+        assert "location" in qnames
+
+    def test_unregister_by_qualified_name(self) -> None:
+        registry = SkillRegistry()
+        s1 = self._make_skill("weather", "houyi")
+        s2 = self._make_skill("weather", "openclaw")
+        registry.register(s1)
+        registry.register(s2)
+
+        assert registry.unregister("openclaw/weather") is True
+        assert registry.get("openclaw/weather") is None
+        assert registry.get("weather") is s1
+
+    def test_overwrite_with_same_name(self) -> None:
+        registry = SkillRegistry()
+        s1 = self._make_skill("weather", "houyi")
+        s2 = self._make_skill("weather", "houyi")
+        registry.register(s1)
+        registry.register(s2, overwrite=True)
+        assert registry.get("weather") is s2

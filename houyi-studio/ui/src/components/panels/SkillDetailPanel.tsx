@@ -37,7 +37,7 @@ export interface SkillDetailPanelProps {
   metrics: SkillMetricsData | null;
   isLoading: boolean;
   onConfigure?: () => void;
-  onDryRun?: (toolName: string) => void;
+  onDryRun?: () => void;
   onUnload?: (skillName: string) => void;
 }
 
@@ -81,7 +81,9 @@ export const SkillDetailPanel: React.FC<SkillDetailPanelProps> = ({
             {detail.display_name || detail.name}
           </div>
           <div className="text-gray-500 mt-0.5">
-            {detail.version && <span>v{detail.version}</span>}
+            {detail.version && detail.version !== '0.0.0' && (
+              <span>v{detail.version}</span>
+            )}
             {detail.author && <span className="ml-2">by {detail.author}</span>}
           </div>
         </div>
@@ -153,15 +155,13 @@ export const SkillDetailPanel: React.FC<SkillDetailPanelProps> = ({
         ) : (
           <div className="flex flex-wrap gap-1">
             {detail.tools.map((tool) => (
-              <button
+              <span
                 key={tool.name}
-                type="button"
-                onClick={() => onDryRun?.(tool.name)}
-                className="px-1.5 py-0.5 bg-gray-700 hover:bg-gray-600 rounded text-gray-300 text-[10px] transition-colors cursor-pointer"
+                className="px-1.5 py-0.5 bg-gray-700 rounded text-gray-300 text-[10px]"
                 title={tool.description ? `${tool.name}: ${tool.description}` : tool.name}
               >
                 {tool.name}
-              </button>
+              </span>
             ))}
           </div>
         )}
@@ -203,9 +203,9 @@ export const SkillDetailPanel: React.FC<SkillDetailPanelProps> = ({
         </button>
         <button
           type="button"
-          onClick={() => detail.tools.length > 0 && onDryRun?.(detail.tools[0].name)}
-          disabled={detail.tools.length === 0}
-          className="flex-1 px-2 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-700 disabled:text-gray-500 text-white text-[11px] rounded transition-colors"
+          onClick={() => onDryRun?.()}
+          className="flex-1 px-2 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-[11px] rounded transition-colors"
+          data-testid="skill-dry-run-button"
         >
           Dry-run
         </button>

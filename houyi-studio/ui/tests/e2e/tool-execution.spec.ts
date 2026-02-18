@@ -486,15 +486,15 @@ test('LLM tool-calling live weather flow', async () => {
   const testStart = nowMs();
   const parallelToolCalls = getParallelToolCalls();
   const systemPrompt = parallelToolCalls
-    ? 'You are a tool-using assistant. In the first round, call get_location and get_date in parallel (return two tool_calls in the same response). After that, call get_weather_live once using both results, then answer. Stop calling tools after you have the results.'
-    : 'You are a tool-using assistant. Call get_location, then get_date, then get_weather_live. Use each tool once and then answer. Stop calling tools after you have the results.';
+    ? 'You are a tool-using assistant. In the first round, call get_location and get_date in parallel (return two tool_calls in the same response). After that, call get_weather once using both results, then answer. Stop calling tools after you have the results.'
+    : 'You are a tool-using assistant. Call get_location, then get_date, then get_weather. Use each tool once and then answer. Stop calling tools after you have the results.';
 
   await page.evaluate(() => {
     const store = (window as any).__consoleStore;
     store.getState().resetRunSettings();
     store.getState().updateRunSettings({
       enable_tool_calls: true,
-      tool_names: ['get_location', 'get_date', 'get_weather_live'],
+      tool_names: ['get_location', 'get_date', 'get_weather'],
       tool_choice: 'auto',
       max_tool_calls: 3,
       parallel_tool_calls: null,
@@ -544,7 +544,7 @@ test('LLM tool-calling live weather flow', async () => {
           content: '',
           tool_calls: [
             {
-              tool_name: 'get_weather_live',
+              tool_name: 'get_weather',
               result: {
                 raw: {
                   result: `${expectedWeatherText} for 39.9042,116.4074 on 2026-01-01: max=25, min=15`,
@@ -565,10 +565,10 @@ test('LLM tool-calling live weather flow', async () => {
   await startExecutionFromStore(page);
 
   await page.getByRole('button', { name: 'Outputs' }).click();
-  await openDetailsWithSummary(page, 'get_weather_live');
+  await openDetailsWithSummary(page, 'get_weather');
   const liveWeatherDetails = page
     .locator('details')
-    .filter({ has: page.locator('summary', { hasText: 'get_weather_live' }) })
+    .filter({ has: page.locator('summary', { hasText: 'get_weather' }) })
     .first();
   await measure(
     'wait_execution',
@@ -590,7 +590,7 @@ test('LLM tool-calling live weather flow', async () => {
   expect(liveOutputs?.type).toBe('llm_response');
   const liveToolCalls = liveOutputs?.tool_calls ?? [];
   const liveWeatherCall = liveToolCalls.find(
-    (call: any) => call.tool_name === 'get_weather_live',
+    (call: any) => call.tool_name === 'get_weather',
   );
   const liveWeatherResult = liveWeatherCall?.result?.raw?.result ?? '';
   if (liveWeatherDisabled) {

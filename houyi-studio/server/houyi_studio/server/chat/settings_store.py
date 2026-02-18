@@ -151,6 +151,8 @@ class SettingsStore:
         """
         import os
 
+        from houyi.config.env_config import ENV_DEEPSEEK_MODEL, ENV_SILICONFLOW_API_KEY
+
         settings = self.get()
         models = []
         has_siliconflow = False
@@ -169,10 +171,10 @@ class SettingsStore:
                 )
 
         # Auto-include env-configured SiliconFlow models if not in settings
-        if not has_siliconflow and os.getenv("SILICONFLOW_API_KEY"):
+        if not has_siliconflow and os.getenv(ENV_SILICONFLOW_API_KEY):
             from houyi.llm.models import DEFAULT_MODEL
 
-            env_model = os.getenv("DEEPSEEK_MODEL", DEFAULT_MODEL)
+            env_model = os.getenv(ENV_DEEPSEEK_MODEL, DEFAULT_MODEL)
             env_models = [env_model]
             # Add common DeepSeek models if the default is one of them
             common = [

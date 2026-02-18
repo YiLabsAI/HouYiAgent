@@ -113,7 +113,7 @@ class VertexAIProbe(ProviderProbe):
 
     def _get_adapter(self):
         """Lazy-import and instantiate VertexAIAdapter."""
-        from houyi.llm.llm_adapter import VertexAIAdapter
+        from houyi.llm.vertex_httpx_adapter import VertexAIAdapter
 
         return VertexAIAdapter()
 
@@ -177,8 +177,7 @@ class VertexAIProbe(ProviderProbe):
 
         Vertex AI's publisher models REST API requires specific IAM permissions
         and returns 404 for many project configurations.  Instead, we return a
-        curated list of generally-available Gemini models — the same approach
-        used by Cherry Studio and other clients.
+        curated list of generally-available Gemini models.
         """
         return {"models": list(_VERTEX_KNOWN_MODELS), "error": None}
 

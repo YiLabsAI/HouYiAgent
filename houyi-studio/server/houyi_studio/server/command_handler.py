@@ -437,6 +437,14 @@ class CommandHandler:
             paths=paths,
             progress_callback=progress_callback,
         )
+        # Build message: prioritise warning (degraded) over generic "success"
+        if not result.get("success"):
+            message = result.get("error", "Unknown error")
+        elif result.get("warning"):
+            message = result["warning"]
+        else:
+            message = "Ingest complete"
+
         await self._send_event(
             session_id,
             KnowledgeIngestCompleteEvent(
@@ -445,7 +453,8 @@ class CommandHandler:
                 library_id=library_id,
                 success=result.get("success", False),
                 stats=result.get("stats", {}),
-                message=result.get("error", "") if not result.get("success") else "Ingest complete",
+                message=message,
+                warning=result.get("warning"),
             ),
         )
         library = knowledge_service.get_library(library_id)
@@ -468,7 +477,6 @@ class CommandHandler:
             KnowledgeIngestProgressEvent,
             KnowledgeLibraryUpdatedEvent,
         )
-        from .rag_service import get_library_upload_dir
 
         knowledge_service = self._knowledge_service_getter()
         library_id = command.get("library_id")
@@ -513,7 +521,7 @@ class CommandHandler:
             )
 
         knowledge_dir = library.get("knowledge_dir", "./knowledge")
-        upload_dir = get_library_upload_dir(library_id)
+        upload_dir = knowledge_service.library_upload_dir(library_id)
         incremental = command.get("incremental", False)
         paths_to_index = [knowledge_dir]
         if upload_dir.exists():
@@ -526,15 +534,18 @@ class CommandHandler:
             incremental=incremental,
         )
         stats = result.get("stats", {})
-        if result.get("success"):
+        if not result.get("success"):
+            message = result.get("error", "Unknown error")
+        elif result.get("warning"):
+            # Degraded: files imported but no embedding
+            message = result["warning"]
+        else:
             files_processed = stats.get("files_processed", 0)
             chunks_created = stats.get("chunks_created", 0)
             if files_processed > 0:
                 message = f"Indexed {files_processed} files, {chunks_created} chunks"
             else:
                 message = "No changes detected"
-        else:
-            message = result.get("error", "Unknown error")
 
         await self._send_event(
             session_id,
@@ -545,6 +556,7 @@ class CommandHandler:
                 success=result.get("success", False),
                 stats=stats,
                 message=message,
+                warning=result.get("warning"),
             ),
         )
         updated_library = knowledge_service.get_library(library_id)

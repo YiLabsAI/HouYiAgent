@@ -1,5 +1,28 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import type { SkillSummary, SkillDetail, SkillMetricsData } from '../../types/websocket';
+import { useConsoleStore } from '../../stores/useConsoleStore';
+
+export interface DisclosurePhase {
+  name: string;   // discovery | activation | negotiation | execution
+  label: string;
+  timestamp_ms: number;
+  status: string;  // pass | fail
+  data: Record<string, unknown>;
+}
+
+export interface LlmVerificationResult {
+  success: boolean;
+  message?: string;
+  tool_call?: Record<string, unknown>;
+  probe_prompt?: string;
+  system_prompt?: string;
+  tool_definitions?: Array<Record<string, unknown>>;
+  model_name?: string;
+  raw_content?: string;
+  usage?: Record<string, unknown>;
+  phases?: DisclosurePhase[];
+  execution_result?: string;
+}
 
 export interface DryRunResultData {
   valid: boolean;
@@ -7,6 +30,7 @@ export interface DryRunResultData {
   policy_result: string;
   capability_gaps: string[];
   estimated_side_effects: string[];
+  llm_verification?: LlmVerificationResult;
 }
 
 export interface ConsentRequestData {
@@ -23,6 +47,11 @@ export interface SkillConfigValues {
   auto_invoke: boolean;
 }
 
+export interface LoadResultData {
+  success: boolean;
+  message: string;
+}
+
 interface UseSkillsLogicReturn {
   skills: SkillSummary[];
   selectedSkill: string | null;
@@ -34,12 +63,13 @@ interface UseSkillsLogicReturn {
   dryRunResult: DryRunResultData | null;
   pendingConsent: ConsentRequestData | null;
   blockedMessage: string | null;
+  loadResult: LoadResultData | null;
   selectSkill: (skillName: string) => void;
   refreshSkills: () => void;
   loadSkill: (path: string) => void;
   unloadSkill: (skillName: string) => void;
   configureSkill: (skillName: string, config: SkillConfigValues) => void;
-  dryRunSkill: (skillName: string, toolName: string) => void;
+  dryRunSkill: (skillName: string, toolName: string, input?: Record<string, unknown>, live?: boolean) => void;
   respondToConsent: (requestId: string, granted: boolean, remember: boolean) => void;
   clearDryRunResult: () => void;
   clearBlockedMessage: () => void;
@@ -63,6 +93,7 @@ export function useSkillsLogic(
   const [dryRunResult, setDryRunResult] = useState<DryRunResultData | null>(null);
   const [pendingConsent, setPendingConsent] = useState<ConsentRequestData | null>(null);
   const [blockedMessage, setBlockedMessage] = useState<string | null>(null);
+  const [loadResult, setLoadResult] = useState<LoadResultData | null>(null);
 
   // Ref to track selectedSkill without re-registering handlers when it changes.
   const selectedSkillRef = useRef(selectedSkill);
@@ -121,26 +152,46 @@ export function useSkillsLogic(
     });
 
     const unsubscribeError = registerEventHandler('skill_error', (event: unknown) => {
-      const e = event as { message: string };
+      const e = event as { message: string; error_code?: string };
       setError(e.message);
       setIsLoadingList(false);
       setIsLoadingDetail(false);
       clearListTimeout();
+      // Propagate load-specific errors to LoadSkillDialog
+      const loadCodes = new Set([
+        'url_load_failed', 'url_http_error', 'url_unreachable', 'url_download_failed',
+        'invalid_url', 'invalid_content', 'parse_failed', 'validation_failed',
+        'file_not_found', 'invalid_file', 'no_frontmatter', 'read_failed',
+        'no_skills', 'dir_load_failed', 'load_failed', 'missing_source',
+      ]);
+      if (e.error_code && loadCodes.has(e.error_code)) {
+        setLoadResult({ success: false, message: e.message });
+      }
+      useConsoleStore.getState().showToast(e.message, 'error');
     });
 
-    const unsubscribeLoaded = registerEventHandler('skill_loaded', (_event: unknown) => {
+    const unsubscribeLoaded = registerEventHandler('skill_loaded', (event: unknown) => {
+      const e = event as { skill_name: string; message?: string };
       refreshSkills();
+      setLoadResult({ success: true, message: e.message || `Skill "${e.skill_name}" loaded` });
+      useConsoleStore.getState().showToast(
+        `Skill "${e.skill_name}" loaded`,
+        'success',
+      );
     });
 
     const unsubscribeUnloaded = registerEventHandler('skill_unloaded', (event: unknown) => {
       refreshSkills();
       const e = event as { skill_name: string };
-      // Use ref to check current selection without re-registering on every selection change.
       if (selectedSkillRef.current === e.skill_name) {
         setSelectedSkill(null);
         setSkillDetail(null);
         setSkillMetrics(null);
       }
+      useConsoleStore.getState().showToast(
+        `Skill "${e.skill_name}" unloaded`,
+        'info',
+      );
     });
 
     const unsubscribeDryRun = registerEventHandler('dry_run_result', (event: unknown) => {
@@ -166,6 +217,10 @@ export function useSkillsLogic(
       }
       // Also refresh the skills list since policy_action badge may have changed
       refreshSkills();
+      useConsoleStore.getState().showToast(
+        `Skill "${e.skill_name}" configuration saved`,
+        'success',
+      );
     });
 
     const unsubscribeBlocked = registerEventHandler('skill_blocked', (event: unknown) => {
@@ -195,6 +250,7 @@ export function useSkillsLogic(
     setSelectedSkill(skillName);
     setIsLoadingDetail(true);
     setError(null);
+    setDryRunResult(null);
 
     sendCommand({
       command_type: 'get_skill_detail',
@@ -212,12 +268,12 @@ export function useSkillsLogic(
   }, [sendCommand, sessionId]);
 
   const loadSkill = useCallback((source: string) => {
+    setLoadResult(null);
     sendCommand({
       command_type: 'load_skill',
       command_id: `cmd_${crypto.randomUUID().slice(0, 8)}`,
       session_id: sessionId,
       source,
-      // Backward compat: also send `path` for older backends
       path: source,
     });
   }, [sendCommand, sessionId]);
@@ -242,7 +298,7 @@ export function useSkillsLogic(
     });
   }, [sendCommand, sessionId]);
 
-  const dryRunSkill = useCallback((skillName: string, toolName: string) => {
+  const dryRunSkill = useCallback((skillName: string, toolName: string, input?: Record<string, unknown>, live?: boolean) => {
     setDryRunResult(null);
     sendCommand({
       command_type: 'dry_run_skill',
@@ -250,7 +306,8 @@ export function useSkillsLogic(
       session_id: sessionId,
       skill_name: skillName,
       tool_name: toolName,
-      input: {},
+      input: input ?? {},
+      live: live ?? false,
     });
   }, [sendCommand, sessionId]);
 
@@ -280,6 +337,7 @@ export function useSkillsLogic(
     dryRunResult,
     pendingConsent,
     blockedMessage,
+    loadResult,
     selectSkill,
     refreshSkills,
     loadSkill,
