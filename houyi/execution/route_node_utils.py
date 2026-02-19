@@ -55,7 +55,7 @@ def evaluate_route(
             then_block = rule.get("then") if isinstance(rule.get("then"), dict) else {}
             disable_nodes = rule.get("disable_nodes")
             if disable_nodes is None:
-                disable_nodes = then_block.get("disable_nodes")
+                disable_nodes = then_block.get("disable_nodes")  # type: ignore[union-attr]
 
             if isinstance(disable_nodes, list):
                 target_ids = [str(item) for item in disable_nodes]

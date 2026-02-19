@@ -1,6 +1,6 @@
 """WebSocket server for console."""
 
-from .commands import (
+from .gateway.commands import (
     AbortCommand,
     ClientCommand,
     PatchPlanCommand,
@@ -10,7 +10,7 @@ from .commands import (
     RetryNodeCommand,
     StartExecutionCommand,
 )
-from .events import (
+from .gateway.events import (
     CheckpointCreatedEvent,
     ConflictEvent,
     ExecutionStatusEvent,

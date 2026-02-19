@@ -171,17 +171,17 @@ class ConsentStore(ABC):
     @abstractmethod
     def save(self, response: ConsentResponse) -> None:
         """Save a consent response."""
-        ...  # pylint: disable=unnecessary-ellipsis
+        ...
 
     @abstractmethod
     def load(self, skill_name: str, consent_type: ConsentType) -> ConsentResponse | None:
         """Load a remembered consent response."""
-        ...  # pylint: disable=unnecessary-ellipsis
+        ...
 
     @abstractmethod
     def revoke(self, skill_name: str, consent_type: ConsentType | None = None) -> None:
         """Revoke previously granted consent."""
-        ...  # pylint: disable=unnecessary-ellipsis
+        ...
 
 
 class InMemoryConsentStore(ConsentStore):

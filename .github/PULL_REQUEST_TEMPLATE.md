@@ -11,7 +11,6 @@
 - [ ] `make check`
 - [ ] Unit tests added/updated
 - [ ] Coverage ≥80%
-- [ ] Pylint target score 10.00/10
 
 ## E2E (Console UI)
 

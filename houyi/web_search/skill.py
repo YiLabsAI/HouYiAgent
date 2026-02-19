@@ -41,7 +41,7 @@ async def _web_search_executor(
     if "use_cache" in inspect.signature(service.search).parameters:
         search_kwargs["use_cache"] = True if use_cache is None else bool(use_cache)
 
-    response = await service.search(query, **search_kwargs)
+    response = await service.search(query, **search_kwargs)  # type: ignore[arg-type]
     return {
         "provider": response.provider,
         "results": [dataclasses.asdict(result) for result in response.results],

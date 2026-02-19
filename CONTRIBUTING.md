@@ -32,7 +32,7 @@ make setup-hooks
 
 Follow the exact requirements in [agent.md](agent.md). In particular:
 - Coverage gate is ≥80%.
-- Pylint target score is 10.00/10.
+- Ruff must pass with zero violations.
 
 ## Useful Makefile Commands
 

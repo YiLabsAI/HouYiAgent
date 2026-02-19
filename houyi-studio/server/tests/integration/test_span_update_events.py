@@ -17,7 +17,7 @@ def test_start_execution_emits_span_update_event(monkeypatch: pytest.MonkeyPatch
     monkeypatch.delenv("SILICONFLOW_API_KEY", raising=False)
     monkeypatch.setenv("DEFAULT_LLM_PROVIDER", "siliconflow")
 
-    from houyi_studio.server.app import app
+    from houyi_studio.server.gateway.app import app
 
     session_id = "session_test_span_update"
 

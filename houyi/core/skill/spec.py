@@ -176,7 +176,7 @@ class SkillSpec(BaseModel):
 
                 invocation_policy = InvocationPolicy.from_dict(raw_policy)
             except (ImportError, Exception):
-                invocation_policy = raw_policy
+                invocation_policy = raw_policy  # type: ignore[assignment]
 
         # Parse permissions from frontmatter
         permissions = None
@@ -187,7 +187,7 @@ class SkillSpec(BaseModel):
 
                 permissions = Permissions.from_dict(raw_perms)
             except (ImportError, Exception):
-                permissions = raw_perms
+                permissions = raw_perms  # type: ignore[assignment]
 
         # Handle disable-model-invocation (Claude standard field)
         disable_model_invocation = parsed.get(
@@ -301,7 +301,7 @@ class SkillSpec(BaseModel):
 
                     invocation_policy = InvocationPolicy.from_dict(raw_policy)
                 except (ImportError, Exception):
-                    invocation_policy = raw_policy
+                    invocation_policy = raw_policy  # type: ignore[assignment]
 
             # Parse permissions
             permissions = None
@@ -312,7 +312,7 @@ class SkillSpec(BaseModel):
 
                     permissions = Permissions.from_dict(raw_perms)
                 except (ImportError, Exception):
-                    permissions = raw_perms
+                    permissions = raw_perms  # type: ignore[assignment]
 
             # Handle disable-model-invocation
             disable_model_invocation = parsed.get(
@@ -438,7 +438,7 @@ class SkillSpec(BaseModel):
             default = ... if name in required else prop.get("default")
             fields[name] = (field_type, default)
 
-        return create_model(model_name, **fields)
+        return create_model(model_name, **fields)  # type: ignore[call-overload]
 
     @staticmethod
     def _json_type_to_python(json_type: str) -> type:

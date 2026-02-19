@@ -45,3 +45,28 @@ jobs:
         flags: unittests
         name: codecov-umbrella
         fail_ci_if_error: false
+
+  server-test:
+    runs-on: ubuntu-latest
+    env:
+      PYTHONUTF8: "1"
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python 3.11
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Set up uv
+      uses: astral-sh/setup-uv@v3
+
+    - name: Install dependencies
+      run: |
+        uv sync --extra dev --extra rag
+        uv pip install -e houyi-studio/server --quiet
+
+    - name: Run server tests
+      run: |
+        uv run pytest houyi-studio/server/tests/ -v --tb=short

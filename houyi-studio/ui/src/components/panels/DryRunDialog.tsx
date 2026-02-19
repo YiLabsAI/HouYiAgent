@@ -795,6 +795,21 @@ function computeStages(
         <LlmVerificationDetails llm={llm} />
       ) : undefined,
     });
+
+    const toolExecPhase = result?.llm_verification?.phases?.find(
+      (p: DisclosurePhase) => p.name === 'tool_execution',
+    );
+    if (toolExecPhase) {
+      stages.push({
+        id: 'tool-execution',
+        number: n++,
+        label: 'Tool Execution',
+        status: toolExecPhase.status === 'pass' ? 'pass' : toolExecPhase.status === 'fail' ? 'fail' : 'skip',
+        summary: toolExecPhase.data?.result_preview
+          ? `Result: ${String(toolExecPhase.data.result_preview).substring(0, 80)}...`
+          : String(toolExecPhase.data?.reason || toolExecPhase.data?.error || 'Skipped'),
+      });
+    }
   }
 
   return stages;
@@ -817,6 +832,7 @@ const phaseIcons: Record<string, string> = {
   activation: '②',
   negotiation: '③',
   execution: '④',
+  tool_execution: '⑤',
 };
 
 const phaseColors: Record<string, string> = {
@@ -824,6 +840,7 @@ const phaseColors: Record<string, string> = {
   activation: 'border-blue-700/40',
   negotiation: 'border-purple-700/40',
   execution: 'border-green-700/40',
+  tool_execution: 'border-cyan-400/40',
 };
 
 const LlmVerificationDetails: React.FC<{
@@ -934,8 +951,9 @@ const LlmVerificationDetails: React.FC<{
           </div>
         )}
         {llm.raw_content && (
-          <div className="mt-1 text-[10px] text-gray-500 bg-gray-900/60 rounded px-2 py-1">
-            <span className="text-gray-600">text: </span>{llm.raw_content}
+          <div className="mt-1.5 border border-gray-700/40 rounded p-2 bg-gray-900/60">
+            <div className="text-[10px] text-gray-400/70 font-medium mb-0.5">Text Response</div>
+            <div className="text-[10px] text-gray-300 leading-relaxed whitespace-pre-wrap">{llm.raw_content}</div>
           </div>
         )}
 

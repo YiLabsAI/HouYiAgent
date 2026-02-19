@@ -152,7 +152,13 @@ class EnvConfig:
 
     def _load(self) -> None:
         """Snapshot current os.environ into typed attributes."""
-        from houyi.llm.models import DEFAULT_MODEL, GEMINI_25_PRO, PROVIDER_SILICONFLOW
+        from houyi.llm.models import (
+            DEFAULT_MODEL,
+            GEMINI_25_PRO,
+            PROVIDER_GOOGLE_AI,
+            PROVIDER_SILICONFLOW,
+            PROVIDER_VERTEX,
+        )
 
         # --- LLM Provider ---
         self._siliconflow_api_key = os.getenv(ENV_SILICONFLOW_API_KEY)
@@ -210,16 +216,33 @@ class EnvConfig:
 
         # --- Warnings ---
         if not self._siliconflow_api_key:
-            logger.warning(
-                "%s not set — SiliconFlow adapter will use mock responses",
-                ENV_SILICONFLOW_API_KEY,
-            )
+            if self._default_llm_provider == PROVIDER_SILICONFLOW:
+                logger.error(
+                    "%s not set but provider is %s — will use mock responses",
+                    ENV_SILICONFLOW_API_KEY,
+                    PROVIDER_SILICONFLOW,
+                )
+            else:
+                logger.debug(
+                    "%s not set (provider=%s, not needed)",
+                    ENV_SILICONFLOW_API_KEY,
+                    self._default_llm_provider,
+                )
         if not self._google_api_key and not self._google_credentials_path:
-            logger.debug(
-                "Neither %s nor %s set — Google adapters will not be available",
-                ENV_GOOGLE_API_KEY,
-                ENV_GOOGLE_APPLICATION_CREDENTIALS,
-            )
+            if self._default_llm_provider in (PROVIDER_GOOGLE_AI, PROVIDER_VERTEX):
+                logger.error(
+                    "Neither %s nor %s set but provider is '%s' — Google adapters will fail",
+                    ENV_GOOGLE_API_KEY,
+                    ENV_GOOGLE_APPLICATION_CREDENTIALS,
+                    self._default_llm_provider,
+                )
+            else:
+                logger.debug(
+                    "Neither %s nor %s set (provider=%s, not required)",
+                    ENV_GOOGLE_API_KEY,
+                    ENV_GOOGLE_APPLICATION_CREDENTIALS,
+                    self._default_llm_provider,
+                )
 
         logger.info(
             "EnvConfig loaded: provider=%s, embedding=%s, knowledge_dir=%s",

@@ -239,15 +239,15 @@ class SkillExecutor:
             if isinstance(input_data, BaseModel) and not _should_pass_model():
                 kwargs, ok = _build_kwargs()
                 if ok and kwargs:
-                    return executor(**kwargs)
-            return executor(input_data)
+                    return executor(**kwargs)  # type: ignore[misc]
+            return executor(input_data)  # type: ignore[misc]
 
         async def _call_executor_async() -> Any:
             if isinstance(input_data, BaseModel) and not _should_pass_model():
                 kwargs, ok = _build_kwargs()
                 if ok and kwargs:
-                    return await executor(**kwargs)
-            return await executor(input_data)
+                    return await executor(**kwargs)  # type: ignore[misc]
+            return await executor(input_data)  # type: ignore[misc]
 
         # Check if executor is async
         if asyncio.iscoroutinefunction(executor):

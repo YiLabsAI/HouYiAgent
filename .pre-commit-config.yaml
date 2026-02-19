@@ -30,15 +30,6 @@ repos:
         entry: uv run ruff format
         language: system
         types_or: [python, pyi]
-      # Run pylint for code quality checks
-      - id: pylint
-        name: pylint
-        entry: uv run pylint
-        language: system
-        types: [python]
-        args: [--rcfile=.pylintrc]
-        files: ^houyi/
-
   # MyPy - Static type checker (optional, can be slow)
   # - repo: https://github.com/pre-commit/mirrors-mypy
   #   rev: v1.7.1

@@ -289,7 +289,7 @@ class TestLibraryStorageIsolation:
         import sys
 
         sys.path.insert(0, "houyi-studio/server")
-        from houyi_studio.server.rag_service import (
+        from houyi_studio.server.rag import (
             get_library_index_dir,
             get_library_storage_dir,
             get_library_upload_dir,
@@ -318,7 +318,7 @@ class TestLibraryStorageIsolation:
         import sys
 
         sys.path.insert(0, "houyi-studio/server")
-        from houyi_studio.server.rag_service import (
+        from houyi_studio.server.rag import (
             get_library_index_dir,
             get_library_upload_dir,
         )

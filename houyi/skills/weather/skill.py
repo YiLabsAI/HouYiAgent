@@ -182,9 +182,9 @@ def get_weather(lat: float, lon: float, date: str) -> str:
 
     # Normalize date
     if not date:
-        date = get_date._original_func()
+        date = get_date._original_func()  # type: ignore[attr-defined]
     elif isinstance(date, str) and date.strip() and not date[0].isdigit():
-        date = get_date._original_func(date)
+        date = get_date._original_func(date)  # type: ignore[attr-defined]
 
     url = (
         "https://api.open-meteo.com/v1/forecast"

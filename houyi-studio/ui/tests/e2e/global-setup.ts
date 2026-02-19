@@ -164,7 +164,7 @@ export default async function globalSetup(): Promise<void> {
   const e2eSettingsPath = path.join(e2eDataDir, 'settings.json');
   console.log(`[E2E] Using isolated chat data dir: ${e2eDataDir}`);
 
-  const child = spawn('uv', ['run', 'python', 'tests/integration/fixtures/console_e2e_tools.py'], {
+  const child = spawn('uv', ['run', 'python', 'tests/integration/fixtures/console_tools.py'], {
     cwd: repoRoot,
     stdio: quietLogs ? 'ignore' : 'inherit',
     env: {

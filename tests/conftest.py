@@ -7,6 +7,15 @@ from pydantic import BaseModel
 from houyi.core.skill import SkillSpec
 
 
+@pytest.fixture(autouse=True)
+def _reset_global_singletons():
+    """Reset global singletons for test isolation (required for pytest-xdist)."""
+    yield
+    from houyi.config.env_config import EnvConfig
+
+    EnvConfig._reset()
+
+
 @pytest_asyncio.fixture
 async def graph_store(tmp_path):
     """Loaded GraphStore backed by a temp directory.

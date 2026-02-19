@@ -1,7 +1,7 @@
 """Integration tests for checkpoint creation and restoration.
 
 This test requires the backend server to be running.
-Run: python -m houyi_studio.server.app
+Run: python -m houyi_studio.server
 """
 
 import asyncio
@@ -181,7 +181,7 @@ if __name__ == "__main__":
     print("=" * 60)
     print("\nPrerequisites:")
     print("1. Backend server must be running:")
-    print("   python -m houyi_studio.server.app")
+    print("   python -m houyi_studio.server")
     print("2. Server should be accessible at ws://localhost:8000")
     print("\nStarting test...")
     print("=" * 60)

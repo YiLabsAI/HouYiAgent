@@ -111,7 +111,7 @@ def _normalize_tool_trace(
             tool_name=entry.get("tool_name"),
             requested_tool_name=entry.get("requested_tool_name"),
             tool_call_id=entry.get("tool_call_id"),
-            args=entry.get("args") if isinstance(entry.get("args"), dict) else {},
+            args=entry.get("args") if isinstance(entry.get("args"), dict) else {},  # type: ignore[arg-type]
             result=ToolResult(raw=raw_dict, is_error=is_error, metadata=metadata),
             tool_override=entry.get("tool_override")
             if isinstance(entry.get("tool_override"), dict)

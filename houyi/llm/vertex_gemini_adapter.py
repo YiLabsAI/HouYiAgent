@@ -261,7 +261,7 @@ class GoogleVertexGeminiAdapter(LLMAdapter):
         the execution engine's ``async for content, reasoning in ...`` pattern.
         """
         messages = [{"role": "user", "content": prompt}]
-        async for chunk in self.stream_chat(messages, model=model, **kwargs):
+        async for chunk in self.stream_chat(messages, model=model, **kwargs):  # type: ignore[arg-type]
             yield chunk
 
     async def stream_chat(

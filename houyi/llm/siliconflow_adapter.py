@@ -58,11 +58,11 @@ class SiliconFlowAdapter(LLMAdapter):
         self._sdk_client: object | None = None
 
         if not self.api_key:
-            logger.warning("SILICONFLOW_API_KEY not set, will use mock responses")
+            logger.debug("SILICONFLOW_API_KEY not set, will use mock responses")
 
         if SiliconFlowAdapter._SDK_AVAILABLE is None:
             try:
-                import openai  # noqa: F401  # pylint: disable=unused-import
+                import openai  # noqa: F401
 
                 SiliconFlowAdapter._SDK_AVAILABLE = True
                 logger.info("openai SDK available — using SDK mode (recommended)")
@@ -312,8 +312,8 @@ class SiliconFlowAdapter(LLMAdapter):
         chunk_count = 0
         reasoning_count = 0
         self.last_usage = None
-        self.last_tool_calls: list[dict] = []
-        self.last_finish_reason: str | None = None
+        self.last_tool_calls: list[dict] = []  # type: ignore[no-redef]
+        self.last_finish_reason: str | None = None  # type: ignore[no-redef]
 
         # Accumulator for streaming tool_calls (OpenAI delta protocol)
         tool_call_accum: dict[int, dict] = {}

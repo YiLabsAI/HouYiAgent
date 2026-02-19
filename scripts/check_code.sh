@@ -28,33 +28,34 @@ if [ ! -d ".venv" ]; then
     exit 1
 fi
 
-# Check dev dependencies are installed
-check_dev_deps() {
-    local missing=()
+# Ensure all dependencies are installed
+ensure_deps() {
+    echo -e "${YELLOW}▶ Verifying dependencies...${NC}"
 
-    echo -e "${YELLOW}▶ Verifying dev dependencies...${NC}"
+    local need_sync=0
 
-    # Check critical dev tools via uv run
-    if ! uv run python -c "import pylint" 2>/dev/null; then
-        missing+=("pylint")
-    fi
-    if ! uv run python -c "import pytest" 2>/dev/null; then
-        missing+=("pytest")
-    fi
-    if ! uv run python -c "import pytest_cov" 2>/dev/null; then
-        missing+=("pytest-cov")
+    if ! uv run python -c "import pytest" 2>/dev/null; then need_sync=1; fi
+    if ! uv run python -c "import pytest_cov" 2>/dev/null; then need_sync=1; fi
+    if ! uv run python -c "import xdist" 2>/dev/null; then need_sync=1; fi
+    if ! uv run python -c "import mypy" 2>/dev/null; then need_sync=1; fi
+    if ! uv run python -c "import importlinter" 2>/dev/null; then need_sync=1; fi
+
+    if [ $need_sync -eq 1 ]; then
+        echo -e "${YELLOW}  Installing missing dev dependencies...${NC}"
+        uv sync --extra dev --quiet
     fi
 
-    if [ ${#missing[@]} -gt 0 ]; then
-        echo -e "${RED}✗ Missing dev dependencies: ${missing[*]}${NC}"
-        echo -e "${YELLOW}Run: uv sync --extra dev${NC}"
-        exit 1
+    # Studio server is installed via pip -e and uv sync may remove it
+    if ! uv run python -c "import houyi_studio" 2>/dev/null; then
+        echo -e "${YELLOW}  Installing studio server...${NC}"
+        uv pip install -e houyi-studio/server --quiet
     fi
-    echo -e "${GREEN}✓ Dev dependencies verified${NC}"
+
+    echo -e "${GREEN}✓ Dependencies verified${NC}"
     echo ""
 }
 
-check_dev_deps
+ensure_deps
 
 # Function to run a check
 run_check() {
@@ -97,18 +98,18 @@ else
     echo ""
 fi
 
-# 3. Pylint - Deep code quality check
-run_check "Pylint (source code)" "uv run pylint houyi/ --rcfile=.pylintrc"
+# 3. Type checking with mypy
+run_check "Type Check (mypy)" "uv run mypy houyi/"
 
-# 4. Type checking with MyPy (optional, can be slow)
-# run_check "MyPy" "mypy houyi/ --ignore-missing-imports"
+# 5. Run SDK unit tests
+run_check "SDK Unit Tests" "uv run pytest tests/ -v --tb=short -x -n auto"
 
-# 5. Run tests
-run_check "Unit Tests" "uv run pytest tests/ -v --tb=short -x"
+# 6. Run server tests
+run_check "Server Tests" "uv run pytest houyi-studio/server/tests/ -v --tb=short -x"
 
-# 6. Check test coverage
+# 7. Check SDK test coverage
 echo -e "${YELLOW}▶ Checking test coverage...${NC}"
-uv run pytest tests/ --cov=houyi --cov-report=term-missing --cov-fail-under=80 || {
+uv run pytest tests/ --cov=houyi --cov-report=term-missing --cov-fail-under=80 -n auto || {
     echo -e "${RED}✗ Coverage below 80%${NC}"
     FAILED=1
 }

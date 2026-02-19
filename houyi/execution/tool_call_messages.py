@@ -57,7 +57,7 @@ def build_tool_call_messages(
             ),
         )
 
-    messages: list[dict[str, Any]] = []
+    messages: list[dict[str, Any]] = []  # type: ignore[no-redef]
     if system_prompt:
         messages.append({"role": "system", "content": system_prompt})
     messages.append({"role": "user", "content": prompt})

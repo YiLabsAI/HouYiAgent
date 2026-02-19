@@ -22,7 +22,7 @@ class NodeIR(BaseModel):
 
     # Visual properties (for frontend rendering)
     position: dict[str, float] = Field(
-        default_factory=lambda: {"x": 0, "y": 0},
+        default_factory=lambda: {"x": 0.0, "y": 0.0},
         description="Node position in the visual canvas",
     )
 
@@ -136,10 +136,10 @@ class PlanIR(BaseModel):
 
         # Mirror layout back to NodeIR.position for backward compatibility with existing clients.
         for node in self.nodes:
-            pos = self.layout.positions.get(node.node_id)
-            if pos is None:
+            layout_pos = self.layout.positions.get(node.node_id)
+            if layout_pos is None:
                 continue
-            node.position = {"x": float(pos.x), "y": float(pos.y)}
+            node.position = {"x": float(layout_pos.x), "y": float(layout_pos.y)}
         return self
 
     def get_node_position(self, node_id: str) -> dict[str, float]:

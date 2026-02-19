@@ -21,11 +21,11 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 _STUDIO_SERVER_ROOT = _REPO_ROOT / "houyi-studio" / "server"
 sys.path.insert(0, str(_STUDIO_SERVER_ROOT))
 
-from houyi_studio.server.event_bus import EventBus  # noqa: E402
-from houyi_studio.server.execution_context import ExecutionContext  # noqa: E402
-from houyi_studio.server.node_execution_flow import NodeExecutionFlow  # noqa: E402
-from houyi_studio.server.node_executor_factory import NodeExecutorFactory  # noqa: E402
-from houyi_studio.server.observation_service import ObservationService  # noqa: E402
+from houyi_studio.server.execution.context import ExecutionContext  # noqa: E402
+from houyi_studio.server.execution.node_execution_flow import NodeExecutionFlow  # noqa: E402
+from houyi_studio.server.execution.node_executor_factory import NodeExecutorFactory  # noqa: E402
+from houyi_studio.server.execution.observation_service import ObservationService  # noqa: E402
+from houyi_studio.server.gateway.event_bus import EventBus  # noqa: E402
 
 from houyi.execution.config_service import ConfigService  # noqa: E402
 from houyi.protocol.ir import NodeIR, NodeType  # noqa: E402

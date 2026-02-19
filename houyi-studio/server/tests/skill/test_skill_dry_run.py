@@ -5,7 +5,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from houyi_studio.server.skill_dry_run import (
+from houyi_studio.server.skill.dry_run import (
     DryRunValidator,
     _build_tool_definitions,
     _parse_llm_response,
@@ -44,6 +44,9 @@ class _Skill:
         self.invocation_policy = policy
         self.input_schema = schema
         self.description = description
+        self.provider = ""
+        self.qualified_name = name
+        self.executor = None
 
 
 class _PermKind:
@@ -144,7 +147,7 @@ class TestValidate:
         registry.register(_Skill(name="s", tools=[_Tool("t")]), overwrite=True)
         v = self._make_validator(registry)
         with patch(
-            "houyi_studio.server.skill_dry_run._live_verify",
+            "houyi_studio.server.skill.dry_run._live_verify",
             new_callable=AsyncMock,
         ) as mock:
             mock.return_value = {"success": True, "message": "ok"}
@@ -253,7 +256,7 @@ class TestParseLlmResponse:
 # ── _live_verify integration ────────────────────────────────────────
 
 
-_FACTORY_PATCH = "houyi.llm.llm_adapter.LLMAdapterFactory"
+_FACTORY_PATCH = "houyi.llm.factory.LLMAdapterFactory"
 
 
 class TestLiveVerifyIntegration:
@@ -262,7 +265,7 @@ class TestLiveVerifyIntegration:
     @pytest.mark.asyncio
     async def test_single_tool_skill_with_schema(self):
         """Guidance/single-tool skill with input_schema can do live verify."""
-        from houyi_studio.server.skill_dry_run import _live_verify
+        from houyi_studio.server.skill.dry_run import _live_verify
 
         schema = _Schema(required=["query"])
         skill = _Skill(name="web_search", schema=schema, description="Search")
@@ -283,7 +286,7 @@ class TestLiveVerifyIntegration:
     @pytest.mark.asyncio
     async def test_single_tool_skill_no_schema(self):
         """Guidance skill without schema still generates tool definition."""
-        from houyi_studio.server.skill_dry_run import _live_verify
+        from houyi_studio.server.skill.dry_run import _live_verify
 
         skill = _Skill(name="planning-with-files", description="Plan")
         mock_response = MagicMock()
@@ -302,7 +305,7 @@ class TestLiveVerifyIntegration:
     @pytest.mark.asyncio
     async def test_multi_tool_skill(self):
         """Skill with .tools attribute uses tool list for definitions."""
-        from houyi_studio.server.skill_dry_run import _live_verify
+        from houyi_studio.server.skill.dry_run import _live_verify
 
         schema = _Schema(required=["lat", "lon"])
         skill = _Skill(
@@ -333,10 +336,10 @@ class TestLiveVerifyIntegration:
     @pytest.mark.asyncio
     async def test_llm_adapter_not_installed(self):
         """Graceful failure when LLM adapter cannot be imported."""
-        from houyi_studio.server.skill_dry_run import _live_verify
+        from houyi_studio.server.skill.dry_run import _live_verify
 
         skill = _Skill(name="test")
-        with patch.dict("sys.modules", {"houyi.llm.llm_adapter": None}):
+        with patch.dict("sys.modules", {"houyi.llm.factory": None}):
             result = await _live_verify(skill, "test", "test", {})
         assert result["success"] is False
         assert "not available" in result["message"]
@@ -344,7 +347,7 @@ class TestLiveVerifyIntegration:
     @pytest.mark.asyncio
     async def test_llm_call_exception(self):
         """Graceful failure when LLM call raises an exception."""
-        from houyi_studio.server.skill_dry_run import _live_verify
+        from houyi_studio.server.skill.dry_run import _live_verify
 
         skill = _Skill(name="test", description="Test skill")
         mock_adapter = AsyncMock()
@@ -360,7 +363,7 @@ class TestLiveVerifyIntegration:
     @pytest.mark.asyncio
     async def test_llm_wrong_tool_called(self):
         """LLM calls a different tool than expected."""
-        from houyi_studio.server.skill_dry_run import _live_verify
+        from houyi_studio.server.skill.dry_run import _live_verify
 
         skill = _Skill(name="calc", description="Calculator")
         mock_response = MagicMock()
@@ -380,7 +383,7 @@ class TestLiveVerifyIntegration:
     @pytest.mark.asyncio
     async def test_llm_no_tool_call_in_response(self):
         """LLM returns text instead of a tool call."""
-        from houyi_studio.server.skill_dry_run import _live_verify
+        from houyi_studio.server.skill.dry_run import _live_verify
 
         skill = _Skill(name="calc", description="Calculator")
         mock_response = MagicMock()

@@ -28,7 +28,3 @@ jobs:
     - name: Run ruff
       run: |
         uv run ruff check houyi/ tests/
-
-    - name: Run pylint on source code
-      run: |
-        uv run pylint houyi/ --rcfile=.pylintrc

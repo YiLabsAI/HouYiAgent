@@ -41,7 +41,7 @@ class QualityMetrics:
     """Custom quality metrics."""
 
     def to_dict(self) -> dict[str, float | None]:
-        result = {}
+        result: dict[str, float | None] = {}
         if self.accuracy is not None:
             result["accuracy"] = self.accuracy
         if self.precision is not None:
@@ -115,7 +115,7 @@ class CostMetrics:
     """Number of API calls made."""
 
     def to_dict(self) -> dict[str, Any]:
-        result = {
+        result: dict[str, Any] = {
             "tokens_input": self.tokens_input,
             "tokens_output": self.tokens_output,
             "tokens_total": self.tokens_total,

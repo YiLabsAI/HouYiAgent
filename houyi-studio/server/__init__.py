@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .app import app
+from houyi_studio.server.gateway.app import app
 
 __all__ = [
     "app",

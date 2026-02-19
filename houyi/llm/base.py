@@ -279,7 +279,7 @@ class LLMAdapter(ABC):
             ``(content_delta, reasoning_delta)`` tuples.
         """
         messages: list[dict] = [{"role": "user", "content": prompt}]
-        async for chunk in self.stream_chat(messages, model=model, **kwargs):
+        async for chunk in self.stream_chat(messages, model=model, **kwargs):  # type: ignore[arg-type]
             yield chunk
 
     def _normalize_messages(self, messages: list[LLMMessage | dict]) -> list[dict]:

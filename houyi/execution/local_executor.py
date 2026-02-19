@@ -178,7 +178,7 @@ class LocalExecutor:
                 messages = [LLMMessage(role=MessageRole.USER, content=task)]
 
                 # Call LLM
-                response = await adapter.chat(messages)
+                response = await adapter.chat(messages)  # type: ignore[arg-type]
 
                 return {"answer": response.content}
             except Exception as e:
@@ -262,8 +262,8 @@ class LocalExecutor:
                     params[field_name] = task
                     break
                 # Handle list parameters
-                if hasattr(field_type, "__origin__") and field_type.__origin__ is list:
-                    params[field_name] = [task]
+                if hasattr(field_type, "__origin__") and field_type.__origin__ is list:  # type: ignore[union-attr]
+                    params[field_name] = [task]  # type: ignore[assignment]
                     break
 
         # If no params extracted, try using original function signature
@@ -281,7 +281,7 @@ class LocalExecutor:
                     params[param_name] = task
                     break
                 if hasattr(param_type, "__origin__") and param_type.__origin__ is list:
-                    params[param_name] = [task]
+                    params[param_name] = [task]  # type: ignore[assignment]
                     break
 
         return params
@@ -312,7 +312,7 @@ class LocalExecutor:
 
         for rule in node.verification_rules:
             # Select verifier based on type
-            verifier = None
+            verifier: SQLVerifier | PythonVerifier | ConstraintChecker | None = None
             if rule.verifier_type == "sql":
                 verifier = SQLVerifier()
             elif rule.verifier_type == "python":

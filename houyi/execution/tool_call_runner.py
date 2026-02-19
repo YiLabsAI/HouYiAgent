@@ -458,10 +458,10 @@ class ToolCallRunner:
                         if "args" in updated:
                             hook_context["args"] = updated["args"]
 
-                tool_name = hook_context.get("tool_name")
-                args = hook_context.get("args", {})
-                skill = hook_context.get("skill")
-                cache_key = self._build_tool_cache_key(tool_name, args, skill)
+                tool_name = hook_context.get("tool_name")  # type: ignore[assignment]
+                args = hook_context.get("args", {})  # type: ignore[assignment]
+                skill = hook_context.get("skill")  # type: ignore[assignment]
+                cache_key = self._build_tool_cache_key(tool_name, args, skill)  # type: ignore[arg-type]
                 cached_result = None
                 if tool_cache is not None and cache_key:
                     cached_result = tool_cache.get(cache_key)
@@ -481,7 +481,7 @@ class ToolCallRunner:
                     },
                 )
                 if cache_hit:
-                    result = dict(cached_result)
+                    result = dict(cached_result)  # type: ignore[arg-type]
                     metadata = dict(result.get("metadata") or {})
                     metadata["cache_hit"] = True
                     if cache_key:
@@ -503,7 +503,7 @@ class ToolCallRunner:
                     )
                 else:
                     result = await self._execute_tool_call(
-                        tool_name=tool_name,
+                        tool_name=tool_name,  # type: ignore[arg-type]
                         args=args,
                         skills_by_name=skills_by_name,
                         executor=executor,
@@ -550,11 +550,11 @@ class ToolCallRunner:
                         tool_elapsed,
                     )
                 if tool_name:
-                    called_tools.add(tool_name)
+                    called_tools.add(tool_name)  # type: ignore[arg-type]
                 if resolved_outputs is not None and tool_name:
                     raw_payload = ToolResultBuilder.coerce_payload(result.get("raw"))
                     resolved_value = raw_payload.get("result", raw_payload)
-                    resolved_outputs[tool_name] = resolved_value
+                    resolved_outputs[tool_name] = resolved_value  # type: ignore[index]
                     if tool_call_id:
                         resolved_outputs[tool_call_id] = resolved_value
                     call_index_key = str(index + 1)
@@ -603,7 +603,7 @@ class ToolCallRunner:
                     from houyi.core.skill.hooks import HookContext, HookEvent
 
                     skill_hook_ctx = HookContext(
-                        tool_name=tool_name,
+                        tool_name=tool_name,  # type: ignore[arg-type]
                         tool_args=args,
                         tool_result=result.get("raw"),
                         skill=skill,
@@ -612,7 +612,9 @@ class ToolCallRunner:
                         skill_dir=skill.skill_dir if skill else None,
                     )
                     post_hook_result = await self.skill_hooks_manager.trigger_hook(
-                        HookEvent.POST_TOOL_USE, skill_hook_ctx, tool_name=tool_name
+                        HookEvent.POST_TOOL_USE,
+                        skill_hook_ctx,
+                        tool_name=tool_name,  # type: ignore[arg-type]
                     )
                     if post_hook_result.output:
                         logger.debug(

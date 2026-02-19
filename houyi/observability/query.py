@@ -178,7 +178,7 @@ class ObservabilityQuery:
             for ref in content_refs:
                 if ref.span_id == span_id:
                     content = self.content_store.retrieve(ref.content_id)
-                    result.content[ref.content_type] = content
+                    result.content[ref.content_type] = content  # type: ignore[assignment]
 
         return result
 

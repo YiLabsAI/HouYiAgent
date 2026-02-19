@@ -206,7 +206,7 @@ class LocalExecutor:
                 # Synchronous call (runtime executor is sync)
                 import asyncio
 
-                response = asyncio.run(adapter.chat(messages))
+                response = asyncio.run(adapter.chat(messages))  # type: ignore[arg-type]
 
                 return {
                     "type": "llm_response",

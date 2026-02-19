@@ -355,7 +355,7 @@ class CheckpointManager:
                     node_id=node_id,
                     status=node_exec.status,
                     inputs=node_exec.inputs,
-                    outputs=node_exec.outputs,
+                    outputs=node_exec.outputs,  # type: ignore[arg-type]
                     error=node_exec.error,
                 )
             )

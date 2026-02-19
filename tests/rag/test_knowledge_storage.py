@@ -18,7 +18,7 @@ class TestStorageConstants:
 
     def test_constants_defined(self):
         """Verify all path constants are defined."""
-        from houyi_studio.server.rag_service import (
+        from houyi_studio.server.rag import (
             INDEX_SUBDIR,
             KNOWLEDGE_STORAGE_DIR,
             UPLOADS_SUBDIR,
@@ -30,7 +30,7 @@ class TestStorageConstants:
 
     def test_helper_functions_use_constants(self):
         """Verify helper functions use constants."""
-        from houyi_studio.server.rag_service import (
+        from houyi_studio.server.rag import (
             INDEX_SUBDIR,
             UPLOADS_SUBDIR,
             get_library_index_dir,
@@ -51,7 +51,7 @@ class TestFileFiltering:
     @pytest.fixture
     def knowledge_service(self):
         """Create a KnowledgeService instance."""
-        from houyi_studio.server.rag_service import KnowledgeService
+        from houyi_studio.server.rag import KnowledgeService
 
         return KnowledgeService()
 
@@ -73,7 +73,7 @@ class TestFileFiltering:
         This test verifies the *file-filtering* logic only: the file must not
         be classified as ``skipped``.
         """
-        from houyi_studio.server.rag_service import get_library_upload_dir
+        from houyi_studio.server.rag import get_library_upload_dir
 
         lib_id = test_library["library_id"]
 
@@ -108,7 +108,7 @@ class TestFileFiltering:
         import os
         from pathlib import Path
 
-        from houyi_studio.server.rag_service import is_index_path
+        from houyi_studio.server.rag import is_index_path
 
         # Test that is_index_path correctly identifies production index paths
         # Use os.sep for cross-platform compatibility
@@ -141,7 +141,7 @@ class TestLibraryIsolation:
 
     def test_each_library_has_own_storage(self):
         """Each library should have its own storage directory."""
-        from houyi_studio.server.rag_service import (
+        from houyi_studio.server.rag import (
             get_library_index_dir,
             get_library_storage_dir,
             get_library_upload_dir,
@@ -165,7 +165,7 @@ class TestLibraryDeletion:
 
     def test_delete_library_removes_all_storage(self):
         """Deleting a library should remove uploads, index, and all storage."""
-        from houyi_studio.server.rag_service import (
+        from houyi_studio.server.rag import (
             KnowledgeService,
             get_library_index_dir,
             get_library_storage_dir,
@@ -211,7 +211,7 @@ class TestLibraryDeletion:
 
     def test_create_library_creates_directories(self):
         """Creating a library should immediately create storage directories."""
-        from houyi_studio.server.rag_service import (
+        from houyi_studio.server.rag import (
             KnowledgeService,
             get_library_index_dir,
             get_library_storage_dir,

@@ -9,6 +9,7 @@ import json
 import logging
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from typing import Any
 
@@ -85,7 +86,7 @@ def get_location(city: str | None = None) -> dict[str, Any]:
     city = _sanitize_city_name(city)
 
     try:
-        encoded_city = urllib.request.quote(city, safe="")
+        encoded_city = urllib.parse.quote(city, safe="")
     except Exception as e:
         logger.warning("Failed to encode city name '%s': %s", city, e)
         return {

@@ -46,7 +46,7 @@ def tool(func: Callable) -> SkillSpec:
         input_fields[param_name] = (param_type, default)
 
     input_schema = (
-        create_model(f"{name.title()}Input", **input_fields)
+        create_model(f"{name.title()}Input", **input_fields)  # type: ignore[call-overload]
         if input_fields
         else type("EmptyInput", (BaseModel,), {})
     )
@@ -65,6 +65,6 @@ def tool(func: Callable) -> SkillSpec:
     )
 
     # Attach original function for direct calling
-    skill._original_func = func
+    skill._original_func = func  # type: ignore[attr-defined]
 
     return skill

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from houyi_studio.server.skill_loader import (
+from houyi_studio.server.skill.loader import (
     ERR_FILE_NOT_FOUND,
     ERR_INVALID_FILE,
     ERR_NO_SKILLS,

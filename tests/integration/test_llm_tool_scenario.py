@@ -18,9 +18,9 @@ from houyi.llm.base import LLMResponse
 from houyi.web_search.skill import build_web_search_skill
 
 
-def _load_console_e2e_tools() -> None:
-    script_path = Path(__file__).resolve().parent / "fixtures" / "console_e2e_tools.py"
-    spec = spec_from_file_location("console_e2e_tools", script_path)
+def _load_console_tools() -> None:
+    script_path = Path(__file__).resolve().parent / "fixtures" / "console_tools.py"
+    spec = spec_from_file_location("console_tools", script_path)
     if spec and spec.loader:
         module = module_from_spec(spec)
         spec.loader.exec_module(module)
@@ -104,7 +104,7 @@ async def test_llm_tool_scenario_weather_and_web_search(
             pytest.skip(f"{base_url_key} not set; searxng requires a running instance")
     os.environ["WEB_SEARCH_PROVIDER"] = provider
 
-    _load_console_e2e_tools()
+    _load_console_tools()
     DEFAULT_SKILL_REGISTRY.register(build_web_search_skill(), overwrite=True)
 
     tool_names = ["get_date", "get_location", "get_weather", "web_search"]

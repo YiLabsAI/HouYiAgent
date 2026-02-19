@@ -392,7 +392,7 @@ class TraceManager:
 
         for exporter in self.exporters:
             try:
-                exporter.export(span_data)
+                exporter.export(span_data)  # type: ignore[union-attr]
             except Exception as e:
                 # Don't let exporter errors break execution
                 print(f"Exporter error: {e}")
@@ -401,6 +401,6 @@ class TraceManager:
         """Flush all exporters."""
         for exporter in self.exporters:
             try:
-                exporter.flush()
+                exporter.flush()  # type: ignore[union-attr]
             except Exception:
                 pass

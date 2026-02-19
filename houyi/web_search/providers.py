@@ -77,7 +77,7 @@ class TavilyWebSearchProvider:
         """Search Tavily and normalize results."""
 
         response = await asyncio.to_thread(
-            self._client.search,
+            self._client.search,  # type: ignore[attr-defined]
             query,
             max_results=max_results,
             search_depth="basic",
@@ -126,7 +126,7 @@ class SearxNGWebSearchProvider:
     async def search(self, query: str, *, max_results: int) -> list[WebSearchResult]:
         """Search SearxNG and normalize results."""
 
-        base_url = self.base_url.rstrip("/")
+        base_url = self.base_url.rstrip("/")  # type: ignore[union-attr]
         params = urlencode({"q": query, "format": "json"})
 
         def _request() -> dict:
@@ -306,7 +306,7 @@ class SerperWebSearchProvider:
         }
 
         def _request() -> dict:
-            req = request.Request(self.endpoint, data=payload, headers=headers, method="POST")
+            req = request.Request(self.endpoint, data=payload, headers=headers, method="POST")  # type: ignore[arg-type]
             try:
                 with request.urlopen(req, timeout=self.timeout) as response:
                     return json.loads(response.read().decode("utf-8"))

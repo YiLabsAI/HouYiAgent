@@ -46,7 +46,7 @@ Starts the backend and the UI in a single tmux session.
 
 Notes:
 - This script expects `tmux` to be installed.
-- The backend is started via `python -m houyi_studio.server.app`.
+- The backend is started via `python -m houyi_studio.server`.
 
 ### Split: `restart-backend.sh`
 
@@ -85,9 +85,9 @@ Restarts only the UI (useful when iterating on frontend code).
 **What it does**:
 - ✅ Ruff formatting and linting (source code)
 - ✅ Ruff basic checks (tests)
-- ✅ Pylint deep analysis (must score 10.00/10)
-- ✅ All unit tests
-- ✅ Coverage check (must be ≥80%)
+- ✅ SDK unit tests
+- ✅ Studio server tests
+- ✅ SDK coverage check (must be ≥80%)
 
 **When to use**: Before committing code, before opening PR
 

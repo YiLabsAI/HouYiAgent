@@ -1,4 +1,4 @@
-.PHONY: help install install-dev install-studio install-all dev test test-cov test-fast test-integration test-e2e lint lint-fix quick-check check clean format
+.PHONY: help install install-dev install-studio install-all dev test test-server test-cov test-fast test-integration test-e2e lint lint-fix lint-imports quick-check check clean format typecheck
 
 # Default target
 help:
@@ -15,13 +15,16 @@ help:
 	@echo "Development:"
 	@echo "  make dev              Start backend + frontend (tmux)"
 	@echo "  make quick-check      Quick checks (ruff + fast tests)"
-	@echo "  make check            Full checks (ruff + pylint + tests + coverage)"
+	@echo "  make check            Full checks (ruff + mypy + tests + coverage)"
+	@echo "  make typecheck        Run mypy type checking"
 	@echo "  make format           Auto-format code with ruff"
-	@echo "  make lint             Run all linters (ruff + pylint)"
+	@echo "  make lint             Run all linters (ruff)"
 	@echo "  make lint-fix         Run linters with auto-fix"
+	@echo "  make lint-imports     Check import layer boundaries"
 	@echo ""
 	@echo "Testing:"
 	@echo "  make test             Run SDK unit tests"
+	@echo "  make test-server      Run Studio server tests"
 	@echo "  make test-cov         Run tests with coverage report"
 	@echo "  make test-fast        Run tests (fail fast)"
 	@echo "  make test-integration Run integration tests (requires studio server deps)"
@@ -72,10 +75,16 @@ format:
 # Linting
 lint:
 	uv run ruff check .
-	uv run pylint houyi/ --rcfile=.pylintrc
 
 lint-fix:
 	uv run ruff check . --fix
+
+# Type checking
+typecheck:
+	uv run mypy houyi/
+
+lint-imports:
+	uv run lint-imports
 
 # Start dev environment (backend + frontend via tmux)
 dev:
@@ -83,13 +92,18 @@ dev:
 
 # Testing
 test:
-	uv run pytest tests/ -v
+	uv run pytest tests/ -v -n auto
 
 test-cov:
 	uv run pytest tests/ --cov=houyi --cov-report=term-missing --cov-report=html
 
 test-fast:
 	uv run pytest tests/ -x --tb=short
+
+# Studio server tests
+test-server:
+	@uv run python -c "import houyi_studio" 2>/dev/null || (echo '📦 Installing studio server...' && uv pip install -e houyi-studio/server --quiet)
+	uv run pytest houyi-studio/server/tests/ -v
 
 # Integration tests (requires studio server deps)
 test-integration:

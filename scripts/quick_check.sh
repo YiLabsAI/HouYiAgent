@@ -38,7 +38,7 @@ echo ""
 
 # 2. Quick test run (fail fast)
 echo -e "${YELLOW}▶ Quick test run...${NC}"
-if uv run pytest tests/ -x --tb=short -q; then
+if uv run pytest tests/ -x --tb=short -q -n auto; then
     echo -e "${GREEN}✓ Tests passed${NC}"
 else
     echo -e "${RED}✗ Tests failed${NC}"

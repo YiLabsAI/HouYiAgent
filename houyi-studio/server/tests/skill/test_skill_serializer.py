@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from houyi_studio.server.skill_serializer import (
+from houyi_studio.server.skill.serializer import (
     DEFAULT_VERSION,
     POLICY_ALLOW,
     SIDE_EFFECT_EXEC,

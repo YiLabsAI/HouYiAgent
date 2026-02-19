@@ -105,6 +105,7 @@ class VertexAIAdapter(LLMAdapter):
         import tempfile
         import time as _time
 
+        assert self._sa is not None
         sa = self._sa
         now = int(_time.time())
 

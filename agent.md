@@ -32,7 +32,7 @@ Industrial-grade distributed system design: always plan before implementation.
 | API Latency (P99) | < 500ms |
 | Test Coverage (Core) | ≥ 85% |
 | Test Coverage (Overall) | ≥ 80% |
-| Pylint Score | 10.00/10 |
+| Ruff | Zero violations |
 
 - **Deterministic execution**: LLM produces plans or formal artifacts (code/SQL), not execute business logic directly
 
@@ -175,7 +175,6 @@ uv sync --extra dev
 | Package manager | `uv` |
 | Dependencies | `pyproject.toml` + `uv.lock` |
 | Lint/format | `ruff` |
-| Code quality | `pylint` |
 | Type checking | `mypy` |
 | Tests | `pytest` + `pytest-asyncio` + `pytest-cov` |
 
@@ -251,7 +250,7 @@ cd houyi-studio/ui && pnpm install --frozen-lockfile
 make dev
 
 # Or manually:
-uv run python -m houyi_studio.server.app
+uv run python -m houyi_studio.server
 ```
 
 ### Makefile Commands (Recommended)
@@ -268,13 +267,14 @@ make dev              # Start backend + frontend (tmux)
 
 # Code Quality (use before committing!)
 make quick-check      # Fast checks (ruff + quick tests)
-make check            # Full checks (ruff + pylint + tests + coverage)
+make check            # Full checks (ruff + tests + coverage)
 make format           # Auto-format code
 make lint             # Run all linters
 make lint-fix         # Run linters with auto-fix
 
 # Testing
 make test             # Run SDK unit tests
+make test-server      # Run Studio server tests
 make test-cov         # Run tests with coverage report
 make test-fast        # Run tests (fail fast)
 make test-integration # Run integration tests (auto-installs studio deps)
@@ -306,9 +306,6 @@ make test
 # Lint / format
 uv run ruff check houyi/
 uv run ruff check houyi/ --fix
-
-# Code quality
-uv run pylint houyi/ --rcfile=.pylintrc
 
 # Type check
 uv run mypy houyi/
@@ -375,25 +372,17 @@ git commit --no-verify -m "emergency fix"
 
 HouYi uses a two-tier approach:
 
-#### Ruff (Fast Linting & Formatting)
+#### Ruff (Linting & Formatting)
 
-- **Purpose**: Fast code formatting and common error detection
+- **Purpose**: Fast code formatting and comprehensive error detection
 - **Usage**: `ruff check houyi/` or `ruff check houyi/ --fix`
 - **Checks**: PEP 8, import sorting, unused variables, anti-patterns
 - **Speed**: Milliseconds
 
-#### Pylint (Comprehensive)
-
-- **Purpose**: Deep code quality analysis
-- **Usage**: `pylint houyi/ --rcfile=.pylintrc`
-- **Target Score**: 10.00/10
-- **Checks**: Complexity, naming, design issues, documentation
-
-**Run both before committing:**
+**Run before committing:**
 
 ```bash
 ruff check houyi/ --fix
-pylint houyi/ --rcfile=.pylintrc
 ```
 
 ### API Stability
@@ -479,7 +468,7 @@ Core modules: `core/`, `evaluation/`, `execution/`, `orchestration/`, `observabi
 
 - [ ] Schemas/types updated; validations added
 - [ ] No breaking public API changes (or migration notes provided)
-- [ ] `make check` passes (ruff, pylint, pytest)
+- [ ] `make check` passes (ruff, pytest)
 - [ ] New critical paths include tracing/logging
 - [ ] Tool execution respects sandbox/permission boundaries
 
@@ -515,7 +504,7 @@ Before any release:
 
 1. **Coverage**: Overall ≥ 80%, Core ≥ 85%
 2. **Tests**: 100% pass rate
-3. **Quality**: `ruff` and `mypy` pass
+3. **Quality**: `ruff` and `mypy` pass (zero violations)
 4. **Docs**: CHANGELOG.md updated, README.md current
 
 ### Release Process

@@ -10,7 +10,17 @@ Usage::
 
 from houyi.config.env_config import EnvConfig
 
-# Module-level convenience accessor (lazy singleton)
-env: EnvConfig = EnvConfig.get()
+
+class _LazyEnv:
+    """Lazy proxy that defers EnvConfig initialization until first attribute access."""
+
+    def __getattr__(self, name: str):
+        return getattr(EnvConfig.get(), name)
+
+    def __repr__(self) -> str:
+        return repr(EnvConfig.get())
+
+
+env: EnvConfig = _LazyEnv()  # type: ignore[assignment]
 
 __all__ = ["EnvConfig", "env"]
