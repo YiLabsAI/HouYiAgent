@@ -28,6 +28,7 @@ class TestContextualizer:
             return await contextualizer.contextualize_chunk(chunk)
 
         import asyncio
+
         result = asyncio.run(run())
 
         assert isinstance(result, ContextualizedChunk)
@@ -56,6 +57,7 @@ class TestContextualizer:
             return await contextualizer.contextualize_chunk(chunk, document)
 
         import asyncio
+
         result = asyncio.run(run())
 
         assert "Neural Networks Guide" in result.context
@@ -73,6 +75,7 @@ class TestContextualizer:
             return await contextualizer.contextualize_chunks(chunks)
 
         import asyncio
+
         results = asyncio.run(run())
 
         assert len(results) == 2
@@ -101,8 +104,10 @@ class TestContextualizer:
             chunk_id="c1",
             doc_id="doc1",
             content="A" * 200,  # Long content
-            metadata={"section": "Very Long Section Name That Should Be Truncated",
-                      "file_path": "/very/long/path/to/document/file.md"},
+            metadata={
+                "section": "Very Long Section Name That Should Be Truncated",
+                "file_path": "/very/long/path/to/document/file.md",
+            },
         )
 
         context = contextualizer._generate_context_heuristic(chunk, None)
@@ -119,6 +124,7 @@ class TestContextualizer:
             return await contextualize_chunks(chunks)
 
         import asyncio
+
         results = asyncio.run(run())
 
         assert len(results) == 1
@@ -152,6 +158,7 @@ class TestContextualizerIntegration:
             async def chat(self, messages: list[Any], **kwargs: Any) -> Any:
                 class MockResponse:
                     content = "Context for this chunk."
+
                 return MockResponse()
 
         config = IndexedConfig()
@@ -160,7 +167,7 @@ class TestContextualizerIntegration:
             knowledge_dir="/tmp/test",
             embedding_config=EmbeddingConfig(),
             graph_config=GraphConfig(),
-            llm_adapter=FakeAdapter(),  # type: ignore
+            llm_adapter=FakeAdapter(),  # type: ignore[arg-type]
         )
 
         assert mode._contextualizer is not None

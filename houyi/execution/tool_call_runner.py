@@ -10,7 +10,7 @@ import logging
 import os
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypedDict
 
 from houyi.core.skill import SkillSpec
 from houyi.execution.arg_coercion import coerce_args
@@ -25,6 +25,13 @@ if TYPE_CHECKING:
     from houyi.core.skill.policy import PolicyEnforcer
 
 logger = logging.getLogger(__name__)
+
+
+class _HookCtx(TypedDict):
+    tool_name: str | None
+    args: dict[str, Any]
+    skill: SkillSpec | None
+    tool_call_id: str | None
 
 
 class ToolCallRunner:
@@ -412,7 +419,7 @@ class ToolCallRunner:
                         }
                         return index, trace_entry, tool_message, 0.0
 
-                hook_context = {
+                hook_context: _HookCtx = {
                     "tool_name": tool_name,
                     "args": args,
                     "skill": skill,
@@ -458,10 +465,10 @@ class ToolCallRunner:
                         if "args" in updated:
                             hook_context["args"] = updated["args"]
 
-                tool_name = hook_context.get("tool_name")  # type: ignore[assignment]
-                args = hook_context.get("args", {})  # type: ignore[assignment]
-                skill = hook_context.get("skill")  # type: ignore[assignment]
-                cache_key = self._build_tool_cache_key(tool_name, args, skill)  # type: ignore[arg-type]
+                tool_name = hook_context["tool_name"]
+                args = hook_context["args"]
+                skill = hook_context["skill"]
+                cache_key = self._build_tool_cache_key(tool_name, args, skill)
                 cached_result = None
                 if tool_cache is not None and cache_key:
                     cached_result = tool_cache.get(cache_key)
@@ -481,7 +488,8 @@ class ToolCallRunner:
                     },
                 )
                 if cache_hit:
-                    result = dict(cached_result)  # type: ignore[arg-type]
+                    assert cached_result is not None
+                    result = dict(cached_result)
                     metadata = dict(result.get("metadata") or {})
                     metadata["cache_hit"] = True
                     if cache_key:
@@ -503,7 +511,7 @@ class ToolCallRunner:
                     )
                 else:
                     result = await self._execute_tool_call(
-                        tool_name=tool_name,  # type: ignore[arg-type]
+                        tool_name=tool_name,
                         args=args,
                         skills_by_name=skills_by_name,
                         executor=executor,
@@ -550,11 +558,11 @@ class ToolCallRunner:
                         tool_elapsed,
                     )
                 if tool_name:
-                    called_tools.add(tool_name)  # type: ignore[arg-type]
+                    called_tools.add(tool_name)
                 if resolved_outputs is not None and tool_name:
                     raw_payload = ToolResultBuilder.coerce_payload(result.get("raw"))
                     resolved_value = raw_payload.get("result", raw_payload)
-                    resolved_outputs[tool_name] = resolved_value  # type: ignore[index]
+                    resolved_outputs[tool_name] = resolved_value
                     if tool_call_id:
                         resolved_outputs[tool_call_id] = resolved_value
                     call_index_key = str(index + 1)
@@ -603,7 +611,7 @@ class ToolCallRunner:
                     from houyi.core.skill.hooks import HookContext, HookEvent
 
                     skill_hook_ctx = HookContext(
-                        tool_name=tool_name,  # type: ignore[arg-type]
+                        tool_name=tool_name,
                         tool_args=args,
                         tool_result=result.get("raw"),
                         skill=skill,
@@ -614,7 +622,7 @@ class ToolCallRunner:
                     post_hook_result = await self.skill_hooks_manager.trigger_hook(
                         HookEvent.POST_TOOL_USE,
                         skill_hook_ctx,
-                        tool_name=tool_name,  # type: ignore[arg-type]
+                        tool_name=tool_name,
                     )
                     if post_hook_result.output:
                         logger.debug(

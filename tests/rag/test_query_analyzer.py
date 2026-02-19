@@ -114,9 +114,7 @@ class TestQueryAnalyzer:
         """Test strategy selection adds graph when entities present."""
         analyzer = QueryAnalyzer()
 
-        strategies = analyzer._select_strategies(
-            QueryType.KEYWORD, ["python"], ["TensorFlow"]
-        )
+        strategies = analyzer._select_strategies(QueryType.KEYWORD, ["python"], ["TensorFlow"])
         # Should add graph because entities were detected
         assert RetrievalStrategy.GRAPH in strategies
 
@@ -189,7 +187,7 @@ class TestQueryAnalyzerWithLLM:
             async def chat(self, messages: list[Any], **kwargs: Any) -> Any:
                 raise RuntimeError("LLM unavailable")
 
-        analyzer = QueryAnalyzer(adapter=FailingAdapter())  # type: ignore
+        analyzer = QueryAnalyzer(adapter=FailingAdapter())  # type: ignore[arg-type]
         result = await analyzer.analyze("how to test code")
 
         # Should fall back to heuristic
@@ -215,7 +213,7 @@ class TestQueryAnalyzerWithLLM:
 
                 return MockResponse()
 
-        analyzer = QueryAnalyzer(adapter=MockAdapter())  # type: ignore
+        analyzer = QueryAnalyzer(adapter=MockAdapter())  # type: ignore[arg-type]
         result = await analyzer.analyze("how to install python")
 
         assert result.metadata.get("analysis_method") == "llm"

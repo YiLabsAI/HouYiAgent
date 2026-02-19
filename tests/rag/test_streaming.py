@@ -69,7 +69,7 @@ class TestStreamingAnswerGenerator:
             async def stream_chat(self, messages: list[Any], **kwargs: Any):
                 yield "No data"
 
-        generator = StreamingAnswerGenerator(adapter=MockAdapter())  # type: ignore
+        generator = StreamingAnswerGenerator(adapter=MockAdapter())  # type: ignore[arg-type]
         events = []
         async for event in generator.stream_generate("test query", []):
             events.append(event)
@@ -91,7 +91,7 @@ class TestStreamingAnswerGenerator:
                 yield "is based on "
                 yield "[1] source."
 
-        generator = StreamingAnswerGenerator(adapter=MockAdapter())  # type: ignore
+        generator = StreamingAnswerGenerator(adapter=MockAdapter())  # type: ignore[arg-type]
 
         results = [
             SearchResult(
@@ -126,7 +126,7 @@ class TestStreamingAnswerGenerator:
                 yield "Starting..."
                 raise RuntimeError("Stream failed")
 
-        generator = StreamingAnswerGenerator(adapter=FailingAdapter())  # type: ignore
+        generator = StreamingAnswerGenerator(adapter=FailingAdapter())  # type: ignore[arg-type]
 
         results = [
             SearchResult(chunk_id="c1", content="Test", score=0.9),

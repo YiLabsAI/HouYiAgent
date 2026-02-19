@@ -7,8 +7,8 @@ and retriever operations with automatic span creation and AI-native field captur
 from __future__ import annotations
 
 import functools
-from collections.abc import Callable
-from typing import Any, ParamSpec, TypeVar
+from collections.abc import Awaitable, Callable
+from typing import Any, ParamSpec, TypeVar, cast
 
 from houyi.observability.context import TraceContext
 from houyi.observability.trace_manager import Span
@@ -48,16 +48,15 @@ def instrument_llm(
     """
 
     def decorator(func: Callable[P, R]) -> Callable[P, R]:
+        _awaitable = cast("Callable[P, Awaitable[R]]", func)
+
         @functools.wraps(func)
         async def async_wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
-            # Extract model from kwargs if not provided
             effective_model = kwargs.get("model", model)
 
-            # Create LLM span as child of current span
             parent = TraceContext.current()
             if parent is None:
-                # No active trace, just execute without instrumentation
-                return await func(*args, **kwargs)  # type: ignore
+                return await _awaitable(*args, **kwargs)
 
             span = Span(
                 name="llm.completion",
@@ -73,9 +72,8 @@ def instrument_llm(
 
             with TraceContext.activate(span):
                 try:
-                    result = await func(*args, **kwargs)  # type: ignore
+                    result = await _awaitable(*args, **kwargs)
 
-                    # Capture token usage if available in result
                     if capture_tokens and isinstance(result, dict):
                         usage = result.get("usage") or result.get("token_usage")
                         if isinstance(usage, dict):
@@ -85,14 +83,12 @@ def instrument_llm(
                                 or usage.get("completion_tokens", 0),
                             )
 
-                        # Check for cache hit
                         metadata = result.get("metadata", {})
                         if isinstance(metadata, dict):
                             if metadata.get("cache_hit") or metadata.get("llm_cache_hit"):
                                 span.cache_hit = True
                                 span.set_attribute("llm.cache_hit", True)
 
-                    # Capture cost if available
                     if capture_cost and isinstance(result, dict):
                         cost = result.get("cost") or result.get("cost_usd")
                         if isinstance(cost, (int, float)):
@@ -109,7 +105,6 @@ def instrument_llm(
 
         @functools.wraps(func)
         def sync_wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
-            # For sync functions, create span but don't use async context
             effective_model = kwargs.get("model", model)
 
             parent = TraceContext.current()
@@ -136,10 +131,9 @@ def instrument_llm(
                 span.end()
                 TraceContext.pop(token)
 
-        # Return appropriate wrapper based on function type
         if asyncio_iscoroutinefunction(func):
-            return async_wrapper  # type: ignore
-        return sync_wrapper  # type: ignore
+            return cast("Callable[P, R]", async_wrapper)
+        return sync_wrapper
 
     return decorator
 
@@ -170,12 +164,13 @@ def instrument_tool(
 
     def decorator(func: Callable[P, R]) -> Callable[P, R]:
         effective_name = tool_name or func.__name__
+        _awaitable = cast("Callable[P, Awaitable[R]]", func)
 
         @functools.wraps(func)
         async def async_wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
             parent = TraceContext.current()
             if parent is None:
-                return await func(*args, **kwargs)  # type: ignore
+                return await _awaitable(*args, **kwargs)
 
             span = Span(
                 name=f"tool.{effective_name}",
@@ -189,9 +184,8 @@ def instrument_tool(
 
             with TraceContext.activate(span):
                 try:
-                    result = await func(*args, **kwargs)  # type: ignore
+                    result = await _awaitable(*args, **kwargs)
 
-                    # Capture cache hit if available
                     if capture_cache and isinstance(result, dict):
                         metadata = result.get("metadata", {})
                         if isinstance(metadata, dict):
@@ -234,8 +228,8 @@ def instrument_tool(
                 TraceContext.pop(token)
 
         if asyncio_iscoroutinefunction(func):
-            return async_wrapper  # type: ignore
-        return sync_wrapper  # type: ignore
+            return cast("Callable[P, R]", async_wrapper)
+        return sync_wrapper
 
     return decorator
 
@@ -265,11 +259,13 @@ def instrument_retriever(
     """
 
     def decorator(func: Callable[P, R]) -> Callable[P, R]:
+        _awaitable = cast("Callable[P, Awaitable[R]]", func)
+
         @functools.wraps(func)
         async def async_wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
             parent = TraceContext.current()
             if parent is None:
-                return await func(*args, **kwargs)  # type: ignore
+                return await _awaitable(*args, **kwargs)
 
             top_k = kwargs.get("top_k") or kwargs.get("k")
 
@@ -286,9 +282,8 @@ def instrument_retriever(
 
             with TraceContext.activate(span):
                 try:
-                    result = await func(*args, **kwargs)  # type: ignore
+                    result = await _awaitable(*args, **kwargs)
 
-                    # Capture document count
                     if capture_docs:
                         if isinstance(result, list):
                             span.docs_count = len(result)
@@ -341,8 +336,8 @@ def instrument_retriever(
                 TraceContext.pop(token)
 
         if asyncio_iscoroutinefunction(func):
-            return async_wrapper  # type: ignore
-        return sync_wrapper  # type: ignore
+            return cast("Callable[P, R]", async_wrapper)
+        return sync_wrapper
 
     return decorator
 

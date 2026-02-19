@@ -114,7 +114,7 @@ class GoogleVertexGeminiAdapter(LLMAdapter):
         self.last_usage: dict[str, int] | None = None
 
         try:
-            from google import genai  # type: ignore[attr-defined]
+            from google import genai
         except ImportError as exc:
             raise ImportError(
                 "Google GenAI SDK not installed. Install with: pip install google-genai"
@@ -202,7 +202,7 @@ class GoogleVertexGeminiAdapter(LLMAdapter):
         **kwargs: Any,
     ) -> LLMResponse:
         try:
-            from google.genai import types  # type: ignore[import-not-found]
+            from google.genai import types
         except ImportError as exc:
             raise ImportError(
                 "Google GenAI SDK not installed. Install with: pip install google-genai"
@@ -278,7 +278,7 @@ class GoogleVertexGeminiAdapter(LLMAdapter):
         reasoning tokens in the streaming API).
         """
         try:
-            from google.genai import types  # type: ignore[import-not-found]
+            from google.genai import types
         except ImportError as exc:
             raise ImportError(
                 "Google GenAI SDK not installed. Install with: pip install google-genai"

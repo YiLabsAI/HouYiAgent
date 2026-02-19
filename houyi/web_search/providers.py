@@ -66,7 +66,7 @@ class TavilyWebSearchProvider:
         if not self.api_key:
             raise ProviderAuthError("TAVILY_API_KEY is required")
         try:
-            from tavily import TavilyClient  # type: ignore
+            from tavily import TavilyClient
         except ImportError as exc:
             raise DependencyMissingError(
                 "Missing optional dependency 'tavily-python'. Install: pip install 'houyi[websearch-tavily]'"

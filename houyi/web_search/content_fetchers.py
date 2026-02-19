@@ -43,8 +43,8 @@ class ReadabilityContentFetcher:
             ) from exc
 
     async def fetch(self, urls: list[str]) -> dict[str, str]:
-        from bs4 import BeautifulSoup  # type: ignore
-        from readability import Document  # type: ignore
+        from bs4 import BeautifulSoup
+        from readability import Document
 
         def _fetch_one(url: str) -> tuple[str, str]:
             try:

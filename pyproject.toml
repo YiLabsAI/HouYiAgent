@@ -154,6 +154,7 @@ python_version = "3.10"
 strict = false
 warn_return_any = false
 warn_unused_configs = true
+warn_unused_ignores = true
 ignore_missing_imports = true
 disable_error_code = [
     "call-arg",        # 67 errors — Pydantic models with Field() defaults (needs mypy-pydantic plugin)
