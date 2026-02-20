@@ -10,6 +10,7 @@ inherit from ``LLMAdapter`` and implement the two abstract methods.
 
 from __future__ import annotations
 
+import contextlib
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 from enum import Enum
@@ -169,7 +170,7 @@ class StreamResponse:
         self._content_parts: list[str] = []
         self._reasoning_parts: list[str] = []
 
-    def __aiter__(self):
+    def __aiter__(self) -> StreamResponse:
         return self
 
     async def __anext__(self) -> tuple[str, str | None]:
@@ -337,10 +338,8 @@ def _parse_tool_calls(raw_tool_calls: list[dict]) -> list[dict]:
         func = tc.get("function", {})
         args = func.get("arguments", "")
         if isinstance(args, str):
-            try:
+            with contextlib.suppress(json.JSONDecodeError):
                 args = json.loads(args)
-            except json.JSONDecodeError:
-                pass
         tool_calls.append(
             {
                 "id": tc.get("id", ""),

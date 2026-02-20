@@ -831,12 +831,7 @@ name = "houyi"
 version = "0.1.1"
 source = { editable = "." }
 dependencies = [
-    { name = "google-auth" },
-    { name = "opentelemetry-api" },
-    { name = "opentelemetry-sdk" },
     { name = "pydantic" },
-    { name = "sqlparse" },
-    { name = "z3-solver" },
 ]
 
 [package.optional-dependencies]
@@ -848,6 +843,7 @@ all = [
     { name = "celery" },
     { name = "fastapi" },
     { name = "fastembed" },
+    { name = "google-auth" },
     { name = "google-genai" },
     { name = "hnswlib" },
     { name = "httpx" },
@@ -856,6 +852,8 @@ all = [
     { name = "numpy" },
     { name = "openai" },
     { name = "openpyxl" },
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-sdk" },
     { name = "pandas" },
     { name = "pdfplumber" },
     { name = "pre-commit" },
@@ -870,9 +868,11 @@ all = [
     { name = "readability-lxml" },
     { name = "redis" },
     { name = "ruff" },
+    { name = "sqlparse" },
     { name = "tavily-python" },
     { name = "uvicorn", extra = ["standard"] },
     { name = "websockets" },
+    { name = "z3-solver" },
 ]
 dev = [
     { name = "fastapi" },
@@ -895,6 +895,10 @@ distributed = [
 model-adapters = [
     { name = "anthropic" },
     { name = "openai" },
+]
+observability = [
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-sdk" },
 ]
 rag = [
     { name = "bm25s" },
@@ -932,7 +936,12 @@ studio-server = [
     { name = "uvicorn", extra = ["standard"] },
     { name = "websockets" },
 ]
+verification = [
+    { name = "sqlparse" },
+    { name = "z3-solver" },
+]
 vertex-ai = [
+    { name = "google-auth" },
     { name = "google-genai" },
 ]
 websearch-readability = [
@@ -953,10 +962,10 @@ requires-dist = [
     { name = "fastapi", marker = "extra == 'dev'", specifier = ">=0.104.0" },
     { name = "fastapi", marker = "extra == 'studio-server'", specifier = ">=0.104.0" },
     { name = "fastembed", marker = "extra == 'rag-embedding'", specifier = ">=0.3.0" },
-    { name = "google-auth", specifier = ">=2.48.0" },
+    { name = "google-auth", marker = "extra == 'vertex-ai'", specifier = ">=2.48.0" },
     { name = "google-genai", marker = "extra == 'vertex-ai'", specifier = ">=1.0.0" },
     { name = "hnswlib", marker = "extra == 'rag'", specifier = ">=0.8.0" },
-    { name = "houyi", extras = ["dev", "studio-server", "distributed", "model-adapters", "vertex-ai", "rag-full", "websearch-tavily", "websearch-readability", "skill-yaml"], marker = "extra == 'all'" },
+    { name = "houyi", extras = ["dev", "studio-server", "distributed", "model-adapters", "vertex-ai", "verification", "observability", "rag-full", "websearch-tavily", "websearch-readability", "skill-yaml"], marker = "extra == 'all'" },
     { name = "houyi", extras = ["rag", "rag-embedding", "rag-pdf", "rag-excel"], marker = "extra == 'rag-full'" },
     { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.25.0" },
     { name = "import-linter", marker = "extra == 'dev'", specifier = ">=2.0" },
@@ -964,8 +973,8 @@ requires-dist = [
     { name = "numpy", marker = "extra == 'rag'", specifier = ">=1.24.0" },
     { name = "openai", marker = "extra == 'model-adapters'", specifier = ">=1.0.0" },
     { name = "openpyxl", marker = "extra == 'rag-excel'", specifier = ">=3.1.0" },
-    { name = "opentelemetry-api", specifier = ">=1.20.0" },
-    { name = "opentelemetry-sdk", specifier = ">=1.20.0" },
+    { name = "opentelemetry-api", marker = "extra == 'observability'", specifier = ">=1.20.0" },
+    { name = "opentelemetry-sdk", marker = "extra == 'observability'", specifier = ">=1.20.0" },
     { name = "pandas", marker = "extra == 'rag-excel'", specifier = ">=2.0.0" },
     { name = "pdfplumber", marker = "extra == 'rag-pdf'", specifier = ">=0.10.0" },
     { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=3.0.0" },
@@ -981,14 +990,14 @@ requires-dist = [
     { name = "readability-lxml", marker = "extra == 'websearch-readability'", specifier = ">=0.8.1" },
     { name = "redis", marker = "extra == 'distributed'", specifier = ">=5.0.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.1.0" },
-    { name = "sqlparse", specifier = ">=0.4.0" },
+    { name = "sqlparse", marker = "extra == 'verification'", specifier = ">=0.4.0" },
     { name = "tavily-python", marker = "extra == 'websearch-tavily'", specifier = ">=0.3.0" },
     { name = "uvicorn", extras = ["standard"], marker = "extra == 'studio-server'", specifier = ">=0.24.0" },
     { name = "websockets", marker = "extra == 'dev'", specifier = ">=12.0" },
     { name = "websockets", marker = "extra == 'studio-server'", specifier = ">=12.0" },
-    { name = "z3-solver", specifier = ">=4.12.0" },
+    { name = "z3-solver", marker = "extra == 'verification'", specifier = ">=4.12.0" },
 ]
-provides-extras = ["dev", "studio-server", "websearch-tavily", "websearch-readability", "distributed", "model-adapters", "skill-yaml", "vertex-ai", "rag", "rag-embedding", "rag-pdf", "rag-excel", "rag-full", "all"]
+provides-extras = ["dev", "studio-server", "websearch-tavily", "websearch-readability", "distributed", "model-adapters", "skill-yaml", "vertex-ai", "verification", "observability", "rag", "rag-embedding", "rag-pdf", "rag-excel", "rag-full", "all"]
 
 [[package]]
 name = "httpcore"

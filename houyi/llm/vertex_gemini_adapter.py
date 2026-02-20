@@ -385,9 +385,7 @@ class GoogleVertexGeminiAdapter(LLMAdapter):
     def _convert_tool_choice(self, tool_choice: Any) -> dict[str, Any]:
         """Map OpenAI tool_choice to Vertex function calling config."""
         mode = "AUTO"
-        if isinstance(tool_choice, dict):
-            mode = "ANY"
-        elif tool_choice in {"required", "any"}:
+        if isinstance(tool_choice, dict) or tool_choice in {"required", "any"}:
             mode = "ANY"
         elif tool_choice in {"none"}:
             mode = "NONE"

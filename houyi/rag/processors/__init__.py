@@ -8,8 +8,8 @@ from houyi.rag.processors.query_analyzer import (
 )
 
 __all__ = [
-    "QueryAnalyzer",
     "QueryAnalysis",
+    "QueryAnalyzer",
     "QueryType",
     "analyze_query",
 ]

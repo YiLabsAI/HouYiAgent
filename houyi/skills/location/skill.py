@@ -162,7 +162,7 @@ def get_location(city: str | None = None) -> dict[str, Any]:
 
 # ── Default lifecycle hooks ──────────────────────────────────────────
 
-from houyi.core.skill.hooks import HookEvent, HookType, SkillHook  # noqa: E402
+from houyi.core.skill.hooks import HookEvent, HookType, SkillHook
 
 
 def _location_pre_tool_use(context: Any) -> dict[str, Any]:

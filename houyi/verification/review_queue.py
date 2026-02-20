@@ -59,7 +59,7 @@ class ReviewQueue:
         try:
             decision = await asyncio.wait_for(future, timeout=request.timeout_seconds)
             return decision
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.warning("Review request timed out: %s", request.request_id)
             request.status = "timeout"
             return "timeout"

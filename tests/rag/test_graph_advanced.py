@@ -1,6 +1,5 @@
 """Tests for PPR and community detection."""
 
-
 from houyi.rag.indexed.graph.community import (
     Community,
     CommunityDetectionResult,

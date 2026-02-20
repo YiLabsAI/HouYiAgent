@@ -76,6 +76,7 @@ class TestCRAGValidator:
             return await validator.validate("test query", [])
 
         import asyncio
+
         result = asyncio.run(run())
 
         assert result.quality == RetrievalQuality.INCORRECT
@@ -98,6 +99,7 @@ class TestCRAGValidator:
             return await validator.validate("machine learning", results)
 
         import asyncio
+
         result = asyncio.run(run())
 
         assert result.quality in [RetrievalQuality.CORRECT, RetrievalQuality.AMBIGUOUS]
@@ -119,6 +121,7 @@ class TestCRAGValidator:
             return await validator.validate("machine learning algorithms", results)
 
         import asyncio
+
         result = asyncio.run(run())
 
         # Low overlap should result in incorrect or ambiguous
@@ -169,6 +172,7 @@ class TestCRAGValidator:
             return await validator.validate("machine learning", results)
 
         import asyncio
+
         result = asyncio.run(run())
 
         # Only 1 out of 3 results is relevant, should be ambiguous
@@ -214,7 +218,9 @@ class TestCRAGValidator:
         validator = CRAGValidator(adapter=mock_adapter)
 
         results = [
-            SearchResult(source=Source(file_path="/doc1.md"), content="machine learning", score=0.9),
+            SearchResult(
+                source=Source(file_path="/doc1.md"), content="machine learning", score=0.9
+            ),
         ]
 
         result = await validator.validate("machine learning", results)
@@ -230,7 +236,9 @@ class TestCRAGValidator:
 
         mock_adapter = MagicMock()
         mock_response = MagicMock()
-        mock_response.content = '{"queries": ["what is ML", "ML algorithms", "machine learning basics"]}'
+        mock_response.content = (
+            '{"queries": ["what is ML", "ML algorithms", "machine learning basics"]}'
+        )
         mock_adapter.chat = AsyncMock(return_value=mock_response)
 
         validator = CRAGValidator(adapter=mock_adapter)

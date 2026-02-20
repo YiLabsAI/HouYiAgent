@@ -299,11 +299,7 @@ class AgenticMode:
         if len(high_score) >= 5:
             return True
 
-        # Check total results
-        if len(results) >= 10:
-            return True
-
-        return False
+        return len(results) >= 10
 
     def _get_top_files(
         self,

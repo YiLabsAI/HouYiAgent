@@ -130,7 +130,7 @@ class SearchService:
             logger.debug("Search mode=%s, checking embedding providers...", effective_mode)
 
             lib_meta = library.get("metadata", {}) if library else {}
-            embedding_config, provider_name = resolve_embedding_config(
+            embedding_config, _provider_name = resolve_embedding_config(
                 preferred_provider=lib_meta.get("embedding_provider"),
                 preferred_model=lib_meta.get("embedding_model"),
                 preferred_dimension=lib_meta.get("embedding_dimension"),

@@ -12,6 +12,7 @@ Progressive Disclosure Phases (when live=True):
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import re
@@ -310,10 +311,8 @@ async def _live_verify(
                 import inspect
 
                 if isinstance(tool_call_args, str):
-                    try:
+                    with contextlib.suppress(Exception):
                         tool_call_args = json.loads(tool_call_args)
-                    except Exception:
-                        pass
 
                 if isinstance(tool_call_args, dict):
                     exec_fn = skill.executor
@@ -433,10 +432,8 @@ def _build_tool_definitions(skill: SkillSpec) -> list[dict[str, Any]]:
         for tool in skill.tools:
             schema: dict[str, Any] = {}
             if hasattr(tool, "input_schema") and tool.input_schema:
-                try:
+                with contextlib.suppress(Exception):
                     schema = tool.input_schema.model_json_schema()
-                except Exception:
-                    pass
             defs.append(
                 {
                     "type": "function",
@@ -451,10 +448,8 @@ def _build_tool_definitions(skill: SkillSpec) -> list[dict[str, Any]]:
         # Single-tool skill: the skill itself is the tool
         schema = {}
         if hasattr(skill, "input_schema") and skill.input_schema:
-            try:
+            with contextlib.suppress(Exception):
                 schema = skill.input_schema.model_json_schema()
-            except Exception:
-                pass
         defs.append(
             {
                 "type": "function",
@@ -538,10 +533,8 @@ def _parse_llm_response(response: object, expected_tool: str) -> dict[str, Any]:
 
         if isinstance(args, str):
             args = _strip_deepseek_tokens(args)
-            try:
+            with contextlib.suppress(Exception):
                 args = json.loads(args)
-            except Exception:
-                pass
 
         matched = name == expected_tool
         return {

@@ -15,7 +15,7 @@ import json
 import threading
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -149,7 +149,7 @@ class FileContentStore(ContentStore):
         return {
             "trace_id": trace_id,
             "contents": {},
-            "created_at": datetime.now(timezone.utc).isoformat(),
+            "created_at": datetime.now(UTC).isoformat(),
         }
 
     def _save_manifest(self, trace_id: str, manifest: dict[str, Any]) -> None:
@@ -186,7 +186,7 @@ class FileContentStore(ContentStore):
         content_id = f"{span_id}_{content_type.value}_{checksum[:8]}"
 
         # Create reference
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         ref = ContentRef(
             content_id=content_id,
             content_type=content_type,

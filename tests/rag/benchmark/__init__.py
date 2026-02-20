@@ -18,18 +18,18 @@ from tests.rag.benchmark.runner import (
 )
 
 __all__ = [
+    # Runner
+    "BenchmarkDataset",
     # Metrics
     "BenchmarkMetrics",
+    "BenchmarkQuery",
+    "BenchmarkResult",
+    "BenchmarkRunner",
     "aggregate_metrics",
     "calculate_metrics",
     "calculate_mrr",
     "calculate_ndcg",
     "calculate_precision_at_k",
     "calculate_recall_at_k",
-    # Runner
-    "BenchmarkDataset",
-    "BenchmarkQuery",
-    "BenchmarkResult",
-    "BenchmarkRunner",
     "create_simple_dataset",
 ]

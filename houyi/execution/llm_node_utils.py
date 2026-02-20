@@ -15,9 +15,9 @@ def build_llm_node_inputs(
     prompt = config.get("prompt", "Hello, how can I help you?")
     system_prompt = config.get("system_prompt")
     user_prompt = config.get("user_prompt")
-    model = config.get("model", None)
+    model = config.get("model")
 
-    max_tokens: Any = config.get("max_tokens", None)
+    max_tokens: Any = config.get("max_tokens")
     if isinstance(max_tokens, str):
         try:
             max_tokens = int(max_tokens)

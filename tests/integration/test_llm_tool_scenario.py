@@ -99,9 +99,8 @@ async def test_llm_tool_scenario_weather_and_web_search(
     else:
         if env_key and os.getenv(env_key) != "1":
             pytest.skip(f"{env_key} not enabled; set to 1 to run DDG integration test")
-    if base_url_key:
-        if not os.getenv(base_url_key):
-            pytest.skip(f"{base_url_key} not set; searxng requires a running instance")
+    if base_url_key and not os.getenv(base_url_key):
+        pytest.skip(f"{base_url_key} not set; searxng requires a running instance")
     os.environ["WEB_SEARCH_PROVIDER"] = provider
 
     _load_console_tools()

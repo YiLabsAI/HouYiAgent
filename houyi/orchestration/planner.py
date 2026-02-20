@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from houyi.core.agent import AgentSpec
 from houyi.orchestration.plan import ExecutionPlan, IRNode, NodeType
 from houyi.orchestration.state import SessionState
@@ -122,7 +124,7 @@ class DAGPlanner:
             },
         )
 
-    def _should_verify(self, skill) -> bool:
+    def _should_verify(self, skill: Any) -> bool:
         """Check if skill output should be verified.
 
         Args:
@@ -142,7 +144,7 @@ class DAGPlanner:
         # Use global config
         return True
 
-    def _create_verify_node(self, skill, tool_node_id: str, output_var: str) -> IRNode:
+    def _create_verify_node(self, skill: Any, tool_node_id: str, output_var: str) -> IRNode:
         """Create verification node for skill output.
 
         Args:

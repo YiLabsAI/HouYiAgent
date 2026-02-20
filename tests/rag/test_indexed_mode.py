@@ -575,9 +575,11 @@ class TestSequentialRetrieval:
 
             sparse_index = SparseIndex(knowledge_dir=tmpdir)
             await sparse_index.load()
-            await sparse_index.add_batch([
-                Chunk(chunk_id="c1", doc_id="d1", content="Python programming"),
-            ])
+            await sparse_index.add_batch(
+                [
+                    Chunk(chunk_id="c1", doc_id="d1", content="Python programming"),
+                ]
+            )
             mode._sparse_index = sparse_index
 
             task_results = await mode._execute_sequential_retrieval("Python", 10)
@@ -613,9 +615,11 @@ class TestParallelRetrieval:
 
             sparse_index = SparseIndex(knowledge_dir=tmpdir)
             await sparse_index.load()
-            await sparse_index.add_batch([
-                Chunk(chunk_id="c1", doc_id="d1", content="Python programming"),
-            ])
+            await sparse_index.add_batch(
+                [
+                    Chunk(chunk_id="c1", doc_id="d1", content="Python programming"),
+                ]
+            )
             mode._sparse_index = sparse_index
 
             task_results = await mode._execute_parallel_retrieval("Python", 10)
@@ -662,9 +666,11 @@ class TestSearchWithRetrievalMetadata:
 
             sparse_index = SparseIndex(knowledge_dir=tmpdir)
             await sparse_index.load()
-            await sparse_index.add_batch([
-                Chunk(chunk_id="c1", doc_id="d1", content="Python programming"),
-            ])
+            await sparse_index.add_batch(
+                [
+                    Chunk(chunk_id="c1", doc_id="d1", content="Python programming"),
+                ]
+            )
             mode._sparse_index = sparse_index
 
             result = await mode.search("Python")
@@ -698,9 +704,11 @@ class TestSearchWithRetrievalMetadata:
 
             sparse_index = SparseIndex(knowledge_dir=tmpdir)
             await sparse_index.load()
-            await sparse_index.add_batch([
-                Chunk(chunk_id="c1", doc_id="d1", content="Python programming"),
-            ])
+            await sparse_index.add_batch(
+                [
+                    Chunk(chunk_id="c1", doc_id="d1", content="Python programming"),
+                ]
+            )
             mode._sparse_index = sparse_index
 
             result = await mode.search("Python")
@@ -751,10 +759,12 @@ class TestSearchWithLLMComponents:
         """Test search with LLM reranking enabled."""
         from houyi.rag.indexed.mode import IndexedMode
 
-        adapter = FakeLLMAdapter([
-            '{"scores": [9, 5]}',  # Reranker response
-            "Generated answer based on results.",  # Answer generator response
-        ])
+        adapter = FakeLLMAdapter(
+            [
+                '{"scores": [9, 5]}',  # Reranker response
+                "Generated answer based on results.",  # Answer generator response
+            ]
+        )
 
         with tempfile.TemporaryDirectory() as tmpdir:
             mode = IndexedMode(
@@ -773,10 +783,12 @@ class TestSearchWithLLMComponents:
 
             sparse_index = SparseIndex(knowledge_dir=tmpdir)
             await sparse_index.load()
-            await sparse_index.add_batch([
-                Chunk(chunk_id="c1", doc_id="d1", content="Python is great"),
-                Chunk(chunk_id="c2", doc_id="d1", content="Java is also good"),
-            ])
+            await sparse_index.add_batch(
+                [
+                    Chunk(chunk_id="c1", doc_id="d1", content="Python is great"),
+                    Chunk(chunk_id="c2", doc_id="d1", content="Java is also good"),
+                ]
+            )
             mode._sparse_index = sparse_index
 
             result = await mode.search("programming")
@@ -789,10 +801,12 @@ class TestSearchWithLLMComponents:
         """Test search with CRAG validation."""
         from houyi.rag.indexed.mode import IndexedMode
 
-        adapter = FakeLLMAdapter([
-            '{"quality": "correct", "confidence": 0.9, "reasoning": "Good match", "relevant_indices": [0]}',
-            "Answer with [1] citation.",  # Answer generator
-        ])
+        adapter = FakeLLMAdapter(
+            [
+                '{"quality": "correct", "confidence": 0.9, "reasoning": "Good match", "relevant_indices": [0]}',
+                "Answer with [1] citation.",  # Answer generator
+            ]
+        )
 
         with tempfile.TemporaryDirectory() as tmpdir:
             mode = IndexedMode(
@@ -812,9 +826,11 @@ class TestSearchWithLLMComponents:
 
             sparse_index = SparseIndex(knowledge_dir=tmpdir)
             await sparse_index.load()
-            await sparse_index.add_batch([
-                Chunk(chunk_id="c1", doc_id="d1", content="Python programming language"),
-            ])
+            await sparse_index.add_batch(
+                [
+                    Chunk(chunk_id="c1", doc_id="d1", content="Python programming language"),
+                ]
+            )
             mode._sparse_index = sparse_index
 
             result = await mode.search("What is Python?", enable_crag=True)
@@ -829,9 +845,11 @@ class TestSearchWithLLMComponents:
         """Test search with CRAG validation disabled."""
         from houyi.rag.indexed.mode import IndexedMode
 
-        adapter = FakeLLMAdapter([
-            "Simple answer without CRAG.",
-        ])
+        adapter = FakeLLMAdapter(
+            [
+                "Simple answer without CRAG.",
+            ]
+        )
 
         with tempfile.TemporaryDirectory() as tmpdir:
             mode = IndexedMode(
@@ -850,9 +868,11 @@ class TestSearchWithLLMComponents:
 
             sparse_index = SparseIndex(knowledge_dir=tmpdir)
             await sparse_index.load()
-            await sparse_index.add_batch([
-                Chunk(chunk_id="c1", doc_id="d1", content="Python programming"),
-            ])
+            await sparse_index.add_batch(
+                [
+                    Chunk(chunk_id="c1", doc_id="d1", content="Python programming"),
+                ]
+            )
             mode._sparse_index = sparse_index
 
             result = await mode.search("Python", enable_crag=False)
@@ -864,9 +884,11 @@ class TestSearchWithLLMComponents:
         """Test search includes query analysis metadata."""
         from houyi.rag.indexed.mode import IndexedMode
 
-        adapter = FakeLLMAdapter([
-            "Answer text.",
-        ])
+        adapter = FakeLLMAdapter(
+            [
+                "Answer text.",
+            ]
+        )
 
         with tempfile.TemporaryDirectory() as tmpdir:
             mode = IndexedMode(
@@ -885,9 +907,11 @@ class TestSearchWithLLMComponents:
 
             sparse_index = SparseIndex(knowledge_dir=tmpdir)
             await sparse_index.load()
-            await sparse_index.add_batch([
-                Chunk(chunk_id="c1", doc_id="d1", content="Python programming"),
-            ])
+            await sparse_index.add_batch(
+                [
+                    Chunk(chunk_id="c1", doc_id="d1", content="Python programming"),
+                ]
+            )
             mode._sparse_index = sparse_index
 
             result = await mode.search("What is Python?", enable_crag=False)
@@ -978,17 +1002,21 @@ class TestMultipleStrategies:
             # Setup sparse index
             sparse_index = SparseIndex(knowledge_dir=tmpdir)
             await sparse_index.load()
-            await sparse_index.add_batch([
-                Chunk(chunk_id="c1", doc_id="d1", content="Python programming"),
-            ])
+            await sparse_index.add_batch(
+                [
+                    Chunk(chunk_id="c1", doc_id="d1", content="Python programming"),
+                ]
+            )
             mode._sparse_index = sparse_index
 
             # Setup graph store
             graph_store = GraphStore(knowledge_dir=tmpdir, config=GraphConfig(enabled=True))
             await graph_store.load()
-            await graph_store.add_entities([
-                Entity(entity_id="e1", name="Python", entity_type="language"),
-            ])
+            await graph_store.add_entities(
+                [
+                    Entity(entity_id="e1", name="Python", entity_type="language"),
+                ]
+            )
             mode._graph_store = graph_store
 
             try:
@@ -1024,16 +1052,20 @@ class TestMultipleStrategies:
 
             sparse_index = SparseIndex(knowledge_dir=tmpdir)
             await sparse_index.load()
-            await sparse_index.add_batch([
-                Chunk(chunk_id="c1", doc_id="d1", content="Python programming"),
-            ])
+            await sparse_index.add_batch(
+                [
+                    Chunk(chunk_id="c1", doc_id="d1", content="Python programming"),
+                ]
+            )
             mode._sparse_index = sparse_index
 
             graph_store = GraphStore(knowledge_dir=tmpdir, config=GraphConfig(enabled=True))
             await graph_store.load()
-            await graph_store.add_entities([
-                Entity(entity_id="e1", name="Python", entity_type="language"),
-            ])
+            await graph_store.add_entities(
+                [
+                    Entity(entity_id="e1", name="Python", entity_type="language"),
+                ]
+            )
             mode._graph_store = graph_store
 
             try:
@@ -1117,9 +1149,10 @@ class TestIngestMethod:
             )
 
             # Mock the internal components
-            with patch("houyi.rag.indexed.document.loaders.load_documents") as mock_load, \
-                 patch("houyi.rag.indexed.document.splitters.split_documents") as mock_split:
-
+            with (
+                patch("houyi.rag.indexed.document.loaders.load_documents") as mock_load,
+                patch("houyi.rag.indexed.document.splitters.split_documents") as mock_split,
+            ):
                 mock_load.return_value = []
                 mock_split.return_value = []
 
@@ -1164,10 +1197,11 @@ class TestIngestMethod:
 
             test_chunks = [Chunk(chunk_id="c1", doc_id="d1", content="Python programming")]
 
-            with patch("houyi.rag.indexed.document.loaders.load_documents") as mock_load, \
-                 patch("houyi.rag.indexed.document.splitters.split_documents") as mock_split, \
-                 patch("houyi.rag.indexed.graph.extractor.extract_entities") as mock_extract:
-
+            with (
+                patch("houyi.rag.indexed.document.loaders.load_documents") as mock_load,
+                patch("houyi.rag.indexed.document.splitters.split_documents") as mock_split,
+                patch("houyi.rag.indexed.graph.extractor.extract_entities") as mock_extract,
+            ):
                 mock_load.return_value = [MagicMock()]
                 mock_split.return_value = test_chunks
                 mock_extract.return_value = ([], [])
@@ -1223,9 +1257,10 @@ class TestIngestMethod:
 
             test_chunks = [Chunk(chunk_id="c1", doc_id="d1", content="Python")]
 
-            with patch("houyi.rag.indexed.document.loaders.load_documents") as mock_load, \
-                 patch("houyi.rag.indexed.document.splitters.split_documents") as mock_split:
-
+            with (
+                patch("houyi.rag.indexed.document.loaders.load_documents") as mock_load,
+                patch("houyi.rag.indexed.document.splitters.split_documents") as mock_split,
+            ):
                 mock_load.return_value = [MagicMock()]
                 mock_split.return_value = test_chunks
 
@@ -1267,9 +1302,9 @@ class TestIngestMethod:
         from houyi.rag.indexed.mode import IndexedMode
         from houyi.rag.types import Chunk, Entity, Relation
 
-        adapter = FakeLLMAdapter([
-            '{"entities": [{"name": "Python", "type": "language"}], "relations": []}'
-        ])
+        adapter = FakeLLMAdapter(
+            ['{"entities": [{"name": "Python", "type": "language"}], "relations": []}']
+        )
 
         with tempfile.TemporaryDirectory() as tmpdir:
             mode = IndexedMode(
@@ -1282,9 +1317,10 @@ class TestIngestMethod:
 
             test_chunks = [Chunk(chunk_id="c1", doc_id="d1", content="Python programming")]
 
-            with patch("houyi.rag.indexed.document.loaders.load_documents") as mock_load, \
-                 patch("houyi.rag.indexed.document.splitters.split_documents") as mock_split:
-
+            with (
+                patch("houyi.rag.indexed.document.loaders.load_documents") as mock_load,
+                patch("houyi.rag.indexed.document.splitters.split_documents") as mock_split,
+            ):
                 mock_load.return_value = [MagicMock()]
                 mock_split.return_value = test_chunks
 
@@ -1448,9 +1484,7 @@ class TestGenerateAnswer:
         """Test answer generation with LLM adapter."""
         from houyi.rag.indexed.mode import IndexedMode
 
-        adapter = FakeLLMAdapter([
-            "Python is an interpreted, high-level programming language. [1]"
-        ])
+        adapter = FakeLLMAdapter(["Python is an interpreted, high-level programming language. [1]"])
 
         with tempfile.TemporaryDirectory() as tmpdir:
             mode = IndexedMode(
@@ -1506,4 +1540,3 @@ class TestIndexDir:
             )
 
             assert mode._index_dir == tmpdir
-

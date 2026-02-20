@@ -54,27 +54,27 @@ from .library_repository import LibraryRepository
 from .search_service import SearchService
 
 __all__ = [
-    # Facade / singleton
-    "KnowledgeService",
-    "get_knowledge_service",
-    # Sub-services
-    "LibraryRepository",
-    "DocumentService",
-    "IngestService",
-    "SearchService",
-    # Embedding helpers
-    "resolve_embedding_config",
-    "_detect_embedding_config",
-    "_make_embedding_config",
-    "_auto_detect_embedding",
+    "INDEX_SUBDIR",
+    "KNOWLEDGE_STORAGE_DIR",
     # Path / constant helpers
     "UPLOADS_SUBDIR",
-    "INDEX_SUBDIR",
     "_LIB_ID_PREFIX",
-    "KNOWLEDGE_STORAGE_DIR",
+    "DocumentService",
+    "IngestService",
+    # Facade / singleton
+    "KnowledgeService",
+    # Sub-services
+    "LibraryRepository",
+    "SearchService",
+    "_auto_detect_embedding",
     "_default_storage_dir",
+    "_detect_embedding_config",
+    "_make_embedding_config",
+    "get_knowledge_service",
+    "get_library_index_dir",
     "get_library_storage_dir",
     "get_library_upload_dir",
-    "get_library_index_dir",
     "is_index_path",
+    # Embedding helpers
+    "resolve_embedding_config",
 ]

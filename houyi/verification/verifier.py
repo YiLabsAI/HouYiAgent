@@ -99,7 +99,7 @@ class Verifier(ABC):
             # to prevent collision between different types with same string representation
             # Example: int(42) vs str("42") both have str() = "42"
             # but they should have different verification results
-            cache_key = f"{type(output).__name__}:{repr(output)}"
+            cache_key = f"{type(output).__name__}:{output!r}"
 
             cached_result = self._cache.get_result(cache_key, rule.rule_id, rule.rule_spec)
             if cached_result is not None:
@@ -112,7 +112,7 @@ class Verifier(ABC):
         # Cache result if enabled
         if self.use_cache and self._cache:
             # Use same cache key format: type:repr
-            cache_key = f"{type(output).__name__}:{repr(output)}"
+            cache_key = f"{type(output).__name__}:{output!r}"
 
             self._cache.put_result(cache_key, rule.rule_id, rule.rule_spec, result)
             logger.debug("Cached result for rule %s", rule.rule_id)

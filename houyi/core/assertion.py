@@ -1,9 +1,12 @@
 """Assertion specification for verification."""
 
+import logging
 from collections.abc import Callable
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
+
+logger = logging.getLogger(__name__)
 
 
 class AssertionSpec(BaseModel):
@@ -70,5 +73,5 @@ class AssertionSpec(BaseModel):
             return bool(result)
 
         except Exception as e:
-            print(f"Assertion evaluation failed: {e}")
+            logger.warning("Assertion evaluation failed: %s", e)
             return False

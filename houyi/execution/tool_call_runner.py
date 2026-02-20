@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import copy
 import inspect
 import json
@@ -108,10 +109,8 @@ class ToolCallRunner:
             if metrics:
                 attrs = MetricsExporter.to_opentelemetry_attributes(metrics)
                 for key, value in attrs.items():
-                    try:
+                    with contextlib.suppress(Exception):
                         span.set_attribute(f"{skill_name}.{key}", value)
-                    except Exception:
-                        pass
 
     async def run(
         self,
@@ -813,10 +812,8 @@ class ToolCallRunner:
         span = getattr(self.trace_manager, "current_span", None)
         if span is None:
             return
-        try:
+        with contextlib.suppress(Exception):
             span.add_event(name, attributes)
-        except Exception:
-            pass
 
     def _get_metrics_collector(self, skill_name: str) -> Any:
         """Get or create a MetricsCollector for a skill."""

@@ -43,13 +43,11 @@ async def pre_ingest_hook(context: HookContext) -> HookResult:
     tool_args = context.tool_args or {}
     file_path = tool_args.get("file_path", "")
 
-    if file_path:
-        # Check if writing to index directory
-        if ".rag_index" in file_path:
-            return HookResult(
-                success=True,
-                output=f"[kb-ingest] Writing index: {Path(file_path).name}",
-            )
+    if file_path and ".rag_index" in file_path:
+        return HookResult(
+            success=True,
+            output=f"[kb-ingest] Writing index: {Path(file_path).name}",
+        )
 
     return HookResult(success=True)
 

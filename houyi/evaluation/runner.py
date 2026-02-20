@@ -74,8 +74,8 @@ def _get_evaluator(name_or_instance: str | Evaluator) -> Evaluator:
 
 def evaluate(
     agent: Any,
-    test_cases: list[dict] | Dataset = None,
-    evaluators: list[str] | list[Evaluator] = None,
+    test_cases: list[dict] | Dataset | None = None,
+    evaluators: list[str] | list[Evaluator] | None = None,
     dataset: Dataset | None = None,
 ) -> EvaluationSummary:
     """Evaluate agent performance on test cases.

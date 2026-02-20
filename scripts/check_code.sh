@@ -102,14 +102,14 @@ fi
 run_check "Type Check (mypy)" "uv run mypy houyi/"
 
 # 5. Run SDK unit tests
-run_check "SDK Unit Tests" "uv run pytest tests/ -v --tb=short -x -n auto"
+run_check "SDK Unit Tests" "uv run pytest tests/ -x -n auto"
 
 # 6. Run server tests
-run_check "Server Tests" "uv run pytest houyi-studio/server/tests/ -v --tb=short -x"
+run_check "Server Tests" "uv run pytest houyi-studio/server/tests/ -x"
 
 # 7. Check SDK test coverage
 echo -e "${YELLOW}▶ Checking test coverage...${NC}"
-uv run pytest tests/ --cov=houyi --cov-report=term-missing --cov-fail-under=80 -n auto || {
+uv run pytest tests/ --cov=houyi --cov-report=term-missing --cov-fail-under=80 -n auto -q || {
     echo -e "${RED}✗ Coverage below 80%${NC}"
     FAILED=1
 }

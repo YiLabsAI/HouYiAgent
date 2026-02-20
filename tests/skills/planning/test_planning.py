@@ -455,11 +455,7 @@ class TestPostToolHook:
 - [ ] Task 1
 - [x] Task 2
 """)
-            context = HookContext(
-                cwd=tmpdir,
-                tool_name="Write",
-                tool_result={"success": True}
-            )
+            context = HookContext(cwd=tmpdir, tool_name="Write", tool_result={"success": True})
             result = await post_tool_hook(context)
 
             assert result.success
@@ -479,7 +475,9 @@ class TestPostToolHook:
 
             context = HookContext(cwd=tmpdir)
 
-            with patch("houyi.skills.planning.hooks.parse_plan", side_effect=Exception("Parse error")):
+            with patch(
+                "houyi.skills.planning.hooks.parse_plan", side_effect=Exception("Parse error")
+            ):
                 result = await post_tool_hook(context)
 
             assert result.success
@@ -588,7 +586,9 @@ class TestStopHook:
 
             context = HookContext(cwd=tmpdir)
 
-            with patch("houyi.skills.planning.hooks.parse_plan", side_effect=Exception("Parse error")):
+            with patch(
+                "houyi.skills.planning.hooks.parse_plan", side_effect=Exception("Parse error")
+            ):
                 result = await stop_hook(context)
 
             assert result.success

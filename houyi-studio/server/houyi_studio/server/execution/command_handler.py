@@ -122,7 +122,7 @@ class ExecutionCommandHandler:
     def can_handle(command: object) -> bool:
         return isinstance(command, _HANDLED_TYPES)
 
-    async def handle(self, command: ClientCommand, session_id: str) -> None:  # noqa: C901
+    async def handle(self, command: ClientCommand, session_id: str) -> None:
         if isinstance(command, StartExecutionCommand):
             await self._handle_start_execution(command, session_id)
         elif isinstance(command, PauseCommand):

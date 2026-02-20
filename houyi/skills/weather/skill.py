@@ -223,7 +223,7 @@ def get_weather(lat: float, lon: float, date: str) -> str:
 # These demonstrate the hooks system and provide useful default behaviour.
 # Users can extend or replace these hooks in their own SKILL.md or code.
 
-from houyi.core.skill.hooks import HookEvent, HookType, SkillHook  # noqa: E402
+from houyi.core.skill.hooks import HookEvent, HookType, SkillHook
 
 
 def _weather_pre_tool_use(context: Any) -> dict[str, Any]:

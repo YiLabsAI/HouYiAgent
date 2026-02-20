@@ -45,7 +45,7 @@ class VertexAIAdapter(LLMAdapter):
     Zero external dependencies — uses only stdlib + httpx.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         from houyi.config.env_config import EnvConfig
 
         _env = EnvConfig.get()

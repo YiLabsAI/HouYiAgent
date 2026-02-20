@@ -127,7 +127,7 @@ class TestSmokeFullLifecycle:
         assert full_content == "Hello from the assistant!"
 
         # 6. Verify context.usage structure
-        usage_event = [e for e in events if e["event"] == "context.usage"][0]
+        usage_event = next(e for e in events if e["event"] == "context.usage")
         usage_data = usage_event["data"]
         assert "usage" in usage_data
         usage = usage_data["usage"]
@@ -236,7 +236,7 @@ class TestContextBurst:
         assert "message.finish" in event_types
 
         # Verify context usage shows truncation
-        usage_event = [e for e in events if e["event"] == "context.usage"][0]["data"]
+        usage_event = next(e for e in events if e["event"] == "context.usage")["data"]
         usage = usage_event["usage"]
         assert usage["used_tokens"] <= usage["max_context_tokens"]
 

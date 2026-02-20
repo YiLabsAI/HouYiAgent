@@ -49,25 +49,25 @@ from houyi.rag.types import (
 __all__ = [
     # Primary API
     "RAG",
-    "search",
-    "RAGConfig",
-    "RAGMode",
-    "RetrievalStrategy",
+    "Chunk",
+    # Types
+    "Document",
+    "Entity",
+    "Generator",
     # Internal components (for advanced usage)
     "HybridRetriever",
     "HybridRetrieverConfig",
-    "create_hybrid_retriever",
+    "RAGConfig",
+    "RAGMode",
+    "Relation",
+    "Reranker",
+    "RetrievalResult",
+    "RetrievalStrategy",
     # Protocols
     "Retriever",
-    "Reranker",
-    "Generator",
-    "Validator",
-    # Types
-    "Document",
-    "Chunk",
-    "Entity",
-    "Relation",
     "SearchResult",
-    "RetrievalResult",
     "Source",
+    "Validator",
+    "create_hybrid_retriever",
+    "search",
 ]

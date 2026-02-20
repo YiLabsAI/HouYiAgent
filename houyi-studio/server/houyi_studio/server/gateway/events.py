@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
@@ -71,7 +71,7 @@ class ServerEvent(BaseModel):
     event_type: EventType = Field(..., description="Type of event")
     event_id: str = Field(..., description="Unique event identifier")
     timestamp: datetime = Field(
-        default_factory=lambda: datetime.now(timezone.utc),
+        default_factory=lambda: datetime.now(UTC),
         description="Event timestamp",
     )
     session_id: str = Field(..., description="Session identifier")

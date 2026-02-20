@@ -337,14 +337,12 @@ class CapabilityNegotiator:
                 missing.append(f"Missing hook handlers: {[h.value for h in missing_handlers]}")
 
         # Check consent
-        if requirements.requires_consent:
-            if self._capabilities.consent_model == ConsentModel.NONE:
-                missing.append("Extension requires consent support")
+        if requirements.requires_consent and self._capabilities.consent_model == ConsentModel.NONE:
+            missing.append("Extension requires consent support")
 
         # Check evaluation
-        if requirements.requires_evaluation:
-            if not self._capabilities.evaluation_support:
-                warnings.append("Extension prefers evaluation support (not critical)")
+        if requirements.requires_evaluation and not self._capabilities.evaluation_support:
+            warnings.append("Extension prefers evaluation support (not critical)")
 
         return CapabilityMatchResult(
             compatible=len(missing) == 0,

@@ -179,7 +179,7 @@ class PreprocessorPipeline:
                 output=output,
                 elapsed_ms=elapsed,
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             elapsed = (time.perf_counter() - start) * 1000
             return PreprocessorResult(
                 preprocessor=spec,

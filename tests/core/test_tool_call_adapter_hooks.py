@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -31,7 +31,7 @@ def test_resolve_tool_call_adapter_fake() -> None:
         skills=[],
         tool_sequence=["get_date"],
         parallel_tool_calls=None,
-        now=datetime.now(timezone.utc),
+        now=datetime.now(UTC),
     )
     adapter = resolve_tool_call_adapter(context)
     assert isinstance(adapter, FakeToolCallAdapter)
@@ -75,7 +75,7 @@ def test_resolve_tool_call_adapter_handles_hook_error() -> None:
             skills=[],
             tool_sequence=["get_date"],
             parallel_tool_calls=None,
-            now=datetime.now(timezone.utc),
+            now=datetime.now(UTC),
         )
         adapter = resolve_tool_call_adapter(context)
         assert isinstance(adapter, FakeToolCallAdapter)
@@ -94,7 +94,7 @@ def test_resolve_delegates_to_factory_for_known_provider() -> None:
             skills=[],
             tool_sequence=[],
             parallel_tool_calls=None,
-            now=datetime.now(timezone.utc),
+            now=datetime.now(UTC),
         )
         adapter = resolve_tool_call_adapter(context)
         mock_create.assert_called_once_with(PROVIDER_SILICONFLOW)
@@ -110,7 +110,7 @@ def test_resolve_returns_none_for_real() -> None:
         skills=[],
         tool_sequence=[],
         parallel_tool_calls=None,
-        now=datetime.now(timezone.utc),
+        now=datetime.now(UTC),
     )
     adapter = resolve_tool_call_adapter(context)
     assert adapter is None
@@ -129,7 +129,7 @@ def test_resolve_returns_none_when_factory_fails() -> None:
             skills=[],
             tool_sequence=[],
             parallel_tool_calls=None,
-            now=datetime.now(timezone.utc),
+            now=datetime.now(UTC),
         )
         adapter = resolve_tool_call_adapter(context)
         assert adapter is None

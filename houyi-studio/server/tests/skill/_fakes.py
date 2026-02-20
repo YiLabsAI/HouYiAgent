@@ -13,14 +13,14 @@ class _FakeSkillSpec:
         self.display_name = kwargs.get("display_name", name)
         self.description = kwargs.get("description", f"Skill {name}")
         self.version = kwargs.get("version", "1.0.0")
-        self.author = kwargs.get("author", None)
-        self.provider = kwargs.get("provider", None)
+        self.author = kwargs.get("author")
+        self.provider = kwargs.get("provider")
         self.tools = kwargs.get("tools", [])
         self.permissions = kwargs.get("permissions", [])
-        self.invocation_policy = kwargs.get("invocation_policy", None)
+        self.invocation_policy = kwargs.get("invocation_policy")
         self.hooks = kwargs.get("hooks", [])
         self.certification = kwargs.get("certification", "unverified")
-        self.input_schema = kwargs.get("input_schema", None)
+        self.input_schema = kwargs.get("input_schema")
 
     @property
     def qualified_name(self) -> str:

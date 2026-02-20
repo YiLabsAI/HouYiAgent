@@ -20,7 +20,7 @@ import asyncio
 import logging
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from houyi.core.skill_registry import DEFAULT_SKILL_REGISTRY, SkillRegistry
@@ -70,7 +70,7 @@ class PendingConsentRequest:
     tool_name: str
     reason: str
     permissions: list[str]
-    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     event: asyncio.Event = field(default_factory=asyncio.Event)
     granted: bool = False
     remember: bool = False
@@ -234,7 +234,7 @@ class SkillService:
         try:
             await asyncio.wait_for(req.event.wait(), timeout=timeout)
             return req.granted, req.remember
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.warning("Consent request %s timed out", request_id)
             return False, False
         finally:
@@ -268,11 +268,11 @@ def set_skill_service(service: SkillService) -> None:
 
 
 __all__ = [
+    "DryRunValidator",
     "PendingConsentRequest",
+    "SkillLoader",
+    "SkillSerializer",
     "SkillService",
     "get_skill_service",
     "set_skill_service",
-    "SkillLoader",
-    "SkillSerializer",
-    "DryRunValidator",
 ]

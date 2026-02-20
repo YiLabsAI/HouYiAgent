@@ -326,8 +326,14 @@ class TestAgenticMode:
         mode = AgenticMode(config=config, knowledge_dir="/tmp")
 
         results = [
-            SearchResult(chunk_id="c1", content='Python and TensorFlow are tools. "machine learning" is important.', score=0.9),
-            SearchResult(chunk_id="c2", content="JavaScript runs in browsers. React is popular.", score=0.8),
+            SearchResult(
+                chunk_id="c1",
+                content='Python and TensorFlow are tools. "machine learning" is important.',
+                score=0.9,
+            ),
+            SearchResult(
+                chunk_id="c2", content="JavaScript runs in browsers. React is popular.", score=0.8
+            ),
         ]
 
         entities = mode._extract_entities(results)
@@ -344,7 +350,9 @@ class TestAgenticMode:
         mode = AgenticMode(config=config, knowledge_dir="/tmp")
 
         results = [
-            SearchResult(chunk_id="c1", content="Python is great for machine learning tasks", score=0.9),
+            SearchResult(
+                chunk_id="c1", content="Python is great for machine learning tasks", score=0.9
+            ),
         ]
 
         refined = mode._refine_keywords("What is Python machine learning?", results)

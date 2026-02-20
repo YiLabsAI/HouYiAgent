@@ -22,6 +22,7 @@ Thread Safety:
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import logging
@@ -337,7 +338,7 @@ class IngestService:
                 stats.setdefault("errors", [])
                 return
 
-            doc_id, doc_metadata = self._upsert_document_record(library, library_id, file_path)
+            _doc_id, doc_metadata = self._upsert_document_record(library, library_id, file_path)
 
             try:
                 if progress_callback:
@@ -412,10 +413,8 @@ class IngestService:
                     break
 
             file_size = 0
-            try:
+            with contextlib.suppress(OSError):
                 file_size = file_path.stat().st_size if file_path.exists() else 0
-            except OSError:
-                pass
 
             if existing_doc_id:
                 doc_metadata = library["documents"][existing_doc_id]
@@ -462,10 +461,8 @@ class IngestService:
                 break
 
         file_size = 0
-        try:
+        with contextlib.suppress(OSError):
             file_size = file_path.stat().st_size if file_path.exists() else 0
-        except OSError:
-            pass
 
         if existing_doc_id:
             doc_metadata = library["documents"][existing_doc_id]

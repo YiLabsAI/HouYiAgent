@@ -102,11 +102,7 @@ class ErrorHandler:
         if retry_count >= max_retries:
             return True
 
-        # Escalate if error is not auto-fixable
-        if classification == "escalate":
-            return True
-
-        return False
+        return classification == "escalate"
 
     async def handle_error(
         self,

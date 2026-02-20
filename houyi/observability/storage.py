@@ -14,7 +14,7 @@ import sqlite3
 import threading
 from abc import ABC, abstractmethod
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -457,10 +457,8 @@ class SQLiteSpanStorage(SpanStorage):
             self._local.conn = None
 
     def __del__(self) -> None:
-        try:
+        with suppress(Exception):
             self.close()
-        except Exception:
-            pass
 
 
 # Global storage instance

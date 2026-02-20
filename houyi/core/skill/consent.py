@@ -14,7 +14,7 @@ import json
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
@@ -108,7 +108,7 @@ class ConsentResponse:
     request: ConsentRequest
     """The original request."""
 
-    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    timestamp: datetime = field(default_factory=lambda: datetime.now(UTC))
     """When the consent was given/denied."""
 
     expires_at: datetime | None = None
@@ -202,10 +202,9 @@ class InMemoryConsentStore(ConsentStore):
         if not response:
             return None
 
-        if response.expires_at:
-            if datetime.now(timezone.utc) > response.expires_at:
-                del self._consents[key]
-                return None
+        if response.expires_at and datetime.now(UTC) > response.expires_at:
+            del self._consents[key]
+            return None
 
         # Return with REMEMBERED status to indicate it was loaded from store
         return ConsentResponse(
@@ -269,7 +268,7 @@ class FileConsentStore(ConsentStore):
         expires_at = data.get("expires_at")
         if expires_at:
             expires = datetime.fromisoformat(expires_at)
-            if datetime.now(timezone.utc) > expires:
+            if datetime.now(UTC) > expires:
                 del self._consents[key]
                 self._save_to_file()
                 return None

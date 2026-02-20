@@ -13,8 +13,8 @@ from houyi.rag.generation.streaming import (
 )
 
 __all__ = [
-    "CitationGenerator",
     "CRAGValidator",
+    "CitationGenerator",
     "StreamEvent",
     "StreamEventType",
     "StreamingAnswerGenerator",

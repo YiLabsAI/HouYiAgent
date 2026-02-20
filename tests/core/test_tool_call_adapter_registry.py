@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -40,7 +40,7 @@ def _build_request(adapter_name: str) -> ToolCallAdapterRequest:
             skills=[],
             tool_sequence=[],
             parallel_tool_calls=None,
-            now=datetime.now(timezone.utc),
+            now=datetime.now(UTC),
         ),
     )
 

@@ -13,8 +13,8 @@ from houyi.rag.skills.kb_ingest.skill import kb_ingest_skill
 from houyi.rag.skills.kb_search.skill import kb_search_skill
 
 __all__ = [
-    "kb_search_skill",
-    "kb_ingest_skill",
-    "kb_graph_skill",
     "kb_analyze_skill",
+    "kb_graph_skill",
+    "kb_ingest_skill",
+    "kb_search_skill",
 ]

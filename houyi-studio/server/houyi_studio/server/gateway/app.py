@@ -6,7 +6,7 @@ import asyncio
 import logging
 import os
 import time as _time
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
@@ -619,10 +619,8 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str) -> None:
                     session_id,
                 )
                 # Close the connection; the finally block handles cleanup
-                try:
+                with suppress(Exception):
                     await websocket.close(code=4000, reason="client_timeout")
-                except Exception:
-                    pass
                 break
             try:
                 await websocket.send_json({"event_type": "ping"})

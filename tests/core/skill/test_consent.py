@@ -5,7 +5,7 @@ Reference: SimpleSkill Specification v0.1 Section 5.3
 
 import json
 import tempfile
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
@@ -440,7 +440,7 @@ class TestInMemoryConsentStoreExpiration:
         response = ConsentResponse(
             result=ConsentResult.GRANTED,
             request=request,
-            expires_at=datetime.now(timezone.utc) - timedelta(hours=1),  # Already expired
+            expires_at=datetime.now(UTC) - timedelta(hours=1),  # Already expired
         )
 
         # Force save by directly setting in store
@@ -466,7 +466,7 @@ class TestInMemoryConsentStoreExpiration:
         response = ConsentResponse(
             result=ConsentResult.GRANTED,
             request=request,
-            expires_at=datetime.now(timezone.utc) + timedelta(hours=1),  # Future expiration
+            expires_at=datetime.now(UTC) + timedelta(hours=1),  # Future expiration
         )
 
         # Force save
@@ -542,8 +542,8 @@ class TestFileConsentStore:
                     "result": "granted",
                     "skill_name": "persistent_skill",
                     "consent_type": "permission_grant",
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                    "expires_at": (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(),
+                    "timestamp": datetime.now(UTC).isoformat(),
+                    "expires_at": (datetime.now(UTC) - timedelta(hours=1)).isoformat(),
                     "remember": True,
                 }
             }

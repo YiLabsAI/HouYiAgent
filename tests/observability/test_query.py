@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import tempfile
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -68,7 +68,7 @@ def query(span_storage, content_store):
 def sample_trace(span_storage, content_store):
     """Create a sample trace with spans and content."""
     trace_id = "trace_sample"
-    now = datetime.now(timezone.utc).timestamp()
+    now = datetime.now(UTC).timestamp()
 
     # Create hierarchical spans
     spans = [
@@ -294,7 +294,7 @@ class TestObservabilityQuery:
     def test_query_spans_pagination(self, query, span_storage):
         """Test query pagination."""
         trace_id = "trace_pagination"
-        now = datetime.now(timezone.utc).timestamp()
+        now = datetime.now(UTC).timestamp()
 
         # Create many spans
         spans = [

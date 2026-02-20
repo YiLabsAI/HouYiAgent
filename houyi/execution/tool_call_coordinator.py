@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 
-class ToolCallCoordinator:  # noqa: F401
+class ToolCallCoordinator:
     def __init__(self, *args: object, **kwargs: object) -> None:
         raise RuntimeError(
             "ToolCallCoordinator is not available in this build. "

@@ -81,13 +81,18 @@ class TestGeminiEmbedderAuth:
         }
         with patch.dict(os.environ, env_override):
             mock_genai_module = MagicMock()
-            with patch.dict(
-                "sys.modules",
-                {"google": MagicMock(genai=mock_genai_module), "google.genai": mock_genai_module},
+            with (
+                patch.dict(
+                    "sys.modules",
+                    {
+                        "google": MagicMock(genai=mock_genai_module),
+                        "google.genai": mock_genai_module,
+                    },
+                ),
+                pytest.raises(ValueError, match="GOOGLE_API_KEY"),
             ):
-                with pytest.raises(ValueError, match="GOOGLE_API_KEY"):
-                    embedder._client = None
-                    embedder._ensure_client()
+                embedder._client = None
+                embedder._ensure_client()
 
     @pytest.mark.asyncio
     async def test_embed_batch_respects_batch_size(self):

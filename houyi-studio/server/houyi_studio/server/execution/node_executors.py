@@ -6,7 +6,7 @@ import json
 import logging
 import os
 from collections.abc import Awaitable, Callable
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from houyi.core.skill_registry import DEFAULT_SKILL_REGISTRY
@@ -612,7 +612,7 @@ class RouteNodeExecutor(NodeExecutor):
         if target_ids:
             for plan_node in context.plan.nodes:
                 if plan_node.node_id in target_ids and plan_node.deleted_at is None:
-                    plan_node.deleted_at = datetime.now(timezone.utc)
+                    plan_node.deleted_at = datetime.now(UTC)
                     disabled.append(plan_node.node_id)
 
         node_exec.outputs = {

@@ -438,7 +438,8 @@ class SkillSpec(BaseModel):
             default = ... if name in required else prop.get("default")
             fields[name] = (field_type, default)
 
-        return create_model(model_name, **fields)  # type: ignore[call-overload]
+        model: type[BaseModel] = create_model(model_name, **fields)  # type: ignore[call-overload]
+        return model
 
     @staticmethod
     def _json_type_to_python(json_type: str) -> type:

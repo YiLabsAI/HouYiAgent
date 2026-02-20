@@ -338,10 +338,11 @@ class NodeExecutionFlow:
             # observation (NodeStatusEvent) includes it for the frontend.
             if isinstance(node_exec.outputs, dict):
                 out_meta = node_exec.outputs.get("metadata")
-                if isinstance(out_meta, dict):
-                    if out_meta.get("cache_hit") is True or out_meta.get("llm_cache_hit") is True:
-                        node_span.cache_hit = True
-                        node_span.set_attribute("node.cache_hit", True)
+                if isinstance(out_meta, dict) and (
+                    out_meta.get("cache_hit") is True or out_meta.get("llm_cache_hit") is True
+                ):
+                    node_span.cache_hit = True
+                    node_span.set_attribute("node.cache_hit", True)
 
             node_span.end()
 

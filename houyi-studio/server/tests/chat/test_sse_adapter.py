@@ -96,7 +96,7 @@ class TestStreamChatSSE:
         assert deltas[0]["data"]["reasoning_content"] == "thinking..."
         assert deltas[1]["data"]["reasoning_content"] == " more thinking"
 
-        finish = [e for e in parsed if e["event"] == "message.finish"][0]
+        finish = next(e for e in parsed if e["event"] == "message.finish")
         assert finish["data"]["reasoning_length"] > 0
 
     @pytest.mark.asyncio
@@ -132,7 +132,7 @@ class TestStreamChatSSE:
         assert "message.delta" in types
         assert "message.error" in types
 
-        error_evt = [e for e in parsed if e["event"] == "message.error"][0]
+        error_evt = next(e for e in parsed if e["event"] == "message.error")
         assert "LLM connection failed" in error_evt["data"]["error"]
         assert error_evt["data"]["error_type"] == "RuntimeError"
         assert error_evt["data"]["chunks_sent"] == 1
@@ -155,7 +155,7 @@ class TestStreamChatSSE:
         assert "message.delta" in types
         assert "message.aborted" in types
 
-        aborted = [e for e in parsed if e["event"] == "message.aborted"][0]
+        aborted = next(e for e in parsed if e["event"] == "message.aborted")
         assert aborted["data"]["reason"] == "user_abort"
         assert aborted["data"]["chunks_sent"] == 1
 

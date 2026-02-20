@@ -134,9 +134,7 @@ class BenchmarkRunner:
                 latency_ms = (time.perf_counter() - start_time) * 1000
 
                 # Extract retrieved document IDs from sources
-                retrieved_ids = [
-                    s.doc_id for s in result.sources if s.doc_id
-                ]
+                retrieved_ids = [s.doc_id for s in result.sources if s.doc_id]
 
                 # Calculate metrics
                 metrics = calculate_metrics(
@@ -146,15 +144,17 @@ class BenchmarkRunner:
                     latency_ms=latency_ms,
                 )
 
-                query_results.append({
-                    "query": bq.query,
-                    "retrieved": retrieved_ids,
-                    "expected": list(bq.relevant_doc_ids),
-                    "answer": result.answer,
-                    "confidence": result.confidence,
-                    "latency_ms": latency_ms,
-                    "metrics": metrics.to_dict(),
-                })
+                query_results.append(
+                    {
+                        "query": bq.query,
+                        "retrieved": retrieved_ids,
+                        "expected": list(bq.relevant_doc_ids),
+                        "answer": result.answer,
+                        "confidence": result.confidence,
+                        "latency_ms": latency_ms,
+                        "metrics": metrics.to_dict(),
+                    }
+                )
 
             except Exception as e:
                 latency_ms = (time.perf_counter() - start_time) * 1000
@@ -163,11 +163,13 @@ class BenchmarkRunner:
                     query_count=1,
                     successful_queries=0,
                 )
-                query_results.append({
-                    "query": bq.query,
-                    "error": str(e),
-                    "latency_ms": latency_ms,
-                })
+                query_results.append(
+                    {
+                        "query": bq.query,
+                        "error": str(e),
+                        "latency_ms": latency_ms,
+                    }
+                )
 
             metrics_list.append(metrics)
 
@@ -201,10 +203,7 @@ def create_simple_dataset(
     Returns:
         BenchmarkDataset instance
     """
-    queries = [
-        BenchmarkQuery(query=q, relevant_doc_ids=set(r))
-        for q, r in queries_with_relevance
-    ]
+    queries = [BenchmarkQuery(query=q, relevant_doc_ids=set(r)) for q, r in queries_with_relevance]
     return BenchmarkDataset(
         name=name,
         queries=queries,

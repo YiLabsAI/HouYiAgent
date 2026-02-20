@@ -16,6 +16,7 @@ import json
 import logging
 import time
 import zipfile
+from datetime import UTC
 from typing import Any
 
 from .json_store import JsonStore
@@ -345,7 +346,7 @@ class ChatExporter:
         Returns:
             Dict matching HouyiChatWorkspace schema, JSON-serializable.
         """
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         conversations = self._store.list_conversations(limit=10000, offset=0)
         full_conversations = []
@@ -362,7 +363,7 @@ class ChatExporter:
 
         return {
             "version": self.SCHEMA_VERSION,
-            "exported_at": datetime.now(timezone.utc).isoformat(),
+            "exported_at": datetime.now(UTC).isoformat(),
             "conversations": full_conversations,
             "assistants": [],
             "settings": {},

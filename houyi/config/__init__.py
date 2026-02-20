@@ -8,13 +8,15 @@ Usage::
     knowledge_dir = env.rag_knowledge_dir
 """
 
+from typing import Any
+
 from houyi.config.env_config import EnvConfig
 
 
 class _LazyEnv:
     """Lazy proxy that defers EnvConfig initialization until first attribute access."""
 
-    def __getattr__(self, name: str):
+    def __getattr__(self, name: str) -> Any:
         return getattr(EnvConfig.get(), name)
 
     def __repr__(self) -> str:

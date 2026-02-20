@@ -9,6 +9,7 @@ and token usage tracking.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 from collections.abc import AsyncIterator
@@ -373,10 +374,8 @@ class SiliconFlowAdapter(LLMAdapter):
                 for idx in sorted(tool_call_accum):
                     tc = tool_call_accum[idx]
                     args_str = tc["function"]["arguments"]
-                    try:
+                    with contextlib.suppress(json.JSONDecodeError, TypeError):
                         tc["function"]["arguments"] = json.loads(args_str)
-                    except (json.JSONDecodeError, TypeError):
-                        pass
                     self.last_tool_calls.append(tc)
 
             logger.info(

@@ -14,7 +14,7 @@ import json
 import logging
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -258,7 +258,7 @@ class SkillMetrics:
     conformance: ConformanceMetrics = field(default_factory=ConformanceMetrics)
     """Conformance test results."""
 
-    collected_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    collected_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     """When metrics were collected."""
 
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -420,7 +420,7 @@ class MetricsCollector:
 
     def get_metrics(self) -> SkillMetrics:
         """Get collected metrics."""
-        self._metrics.collected_at = datetime.now(timezone.utc)
+        self._metrics.collected_at = datetime.now(UTC)
         return self._metrics
 
     def reset(self) -> None:

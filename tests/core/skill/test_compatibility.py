@@ -52,7 +52,7 @@ class TestInternalSkillMdLoading:
         """Locate project root for resolving skill file paths."""
         # Walk up from test file to find project root (contains pyproject.toml)
         current = Path(__file__).resolve()
-        for parent in [current] + list(current.parents):
+        for parent in [current, *list(current.parents)]:
             if (parent / "pyproject.toml").exists():
                 self.project_root = parent
                 return
@@ -479,7 +479,7 @@ class TestSkillRegistryIntegration:
         from houyi.core.skill_registry import SkillRegistry
 
         project_root = Path(__file__).resolve()
-        for parent in [project_root] + list(project_root.parents):
+        for parent in [project_root, *list(project_root.parents)]:
             if (parent / "pyproject.toml").exists():
                 project_root = parent
                 break

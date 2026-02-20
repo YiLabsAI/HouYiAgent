@@ -10,4 +10,4 @@ Skills can be loaded individually or registered automatically.
 
 from __future__ import annotations
 
-__all__ = ["planning", "weather", "location"]
+__all__ = ["location", "planning", "weather"]

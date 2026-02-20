@@ -49,21 +49,18 @@ def get_num_retries_from_policy(exception: Exception, policy: RetryPolicy) -> in
     name = exception.__class__.__name__.lower()
     if "timeout" in name and policy.timeout_retries is not None:
         return policy.timeout_retries
-    if "ratelimit" in name or "rate_limit" in name:
-        if policy.rate_limit_retries is not None:
-            return policy.rate_limit_retries
-    if "auth" in name or "authentication" in name:
-        if policy.auth_retries is not None:
-            return policy.auth_retries
-    if "badrequest" in name or "bad_request" in name:
-        if policy.bad_request_retries is not None:
-            return policy.bad_request_retries
-    if "contentpolicy" in name or "content_policy" in name:
-        if policy.content_policy_retries is not None:
-            return policy.content_policy_retries
-    if "internal" in name or "server" in name:
-        if policy.internal_error_retries is not None:
-            return policy.internal_error_retries
+    if ("ratelimit" in name or "rate_limit" in name) and policy.rate_limit_retries is not None:
+        return policy.rate_limit_retries
+    if ("auth" in name or "authentication" in name) and policy.auth_retries is not None:
+        return policy.auth_retries
+    if ("badrequest" in name or "bad_request" in name) and policy.bad_request_retries is not None:
+        return policy.bad_request_retries
+    if (
+        "contentpolicy" in name or "content_policy" in name
+    ) and policy.content_policy_retries is not None:
+        return policy.content_policy_retries
+    if ("internal" in name or "server" in name) and policy.internal_error_retries is not None:
+        return policy.internal_error_retries
     return policy.default_retries
 
 

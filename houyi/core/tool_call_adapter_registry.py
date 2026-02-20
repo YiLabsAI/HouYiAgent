@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from houyi.core.skill import SkillSpec
@@ -22,7 +22,7 @@ class ToolCallAdapterRequest:
     skills: list[SkillSpec] = field(default_factory=list)
     tool_sequence: list[str] = field(default_factory=list)
     parallel_tool_calls: bool | None = None
-    now: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    now: datetime = field(default_factory=lambda: datetime.now(UTC))
     context: ToolCallAdapterContext | None = None
 
     def __post_init__(self) -> None:

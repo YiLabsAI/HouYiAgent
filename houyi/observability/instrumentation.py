@@ -84,10 +84,11 @@ def instrument_llm(
                             )
 
                         metadata = result.get("metadata", {})
-                        if isinstance(metadata, dict):
-                            if metadata.get("cache_hit") or metadata.get("llm_cache_hit"):
-                                span.cache_hit = True
-                                span.set_attribute("llm.cache_hit", True)
+                        if isinstance(metadata, dict) and (
+                            metadata.get("cache_hit") or metadata.get("llm_cache_hit")
+                        ):
+                            span.cache_hit = True
+                            span.set_attribute("llm.cache_hit", True)
 
                     if capture_cost and isinstance(result, dict):
                         cost = result.get("cost") or result.get("cost_usd")
@@ -188,10 +189,9 @@ def instrument_tool(
 
                     if capture_cache and isinstance(result, dict):
                         metadata = result.get("metadata", {})
-                        if isinstance(metadata, dict):
-                            if metadata.get("cache_hit"):
-                                span.cache_hit = True
-                                span.set_attribute("tool.cache_hit", True)
+                        if isinstance(metadata, dict) and metadata.get("cache_hit"):
+                            span.cache_hit = True
+                            span.set_attribute("tool.cache_hit", True)
 
                     span.set_status("ok")
                     return result

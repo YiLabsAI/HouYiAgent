@@ -101,7 +101,7 @@ class SQLVerifier(Verifier):
                 return VerificationResult(
                     rule_id=rule.rule_id,
                     passed=False,
-                    error_message=f"SQL syntax error: {str(e)}",
+                    error_message=f"SQL syntax error: {e!s}",
                     error_type="sql_syntax",
                     auto_fixable=False,
                     severity=rule.severity,

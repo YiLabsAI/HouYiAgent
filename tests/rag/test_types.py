@@ -281,6 +281,7 @@ class TestRetrievalResultWithQuality:
     def test_retrieval_result_with_quality(self) -> None:
         """Test RetrievalResult includes quality field."""
         import pytest
+
         quality = QualitySummary.from_scores([0.8, 0.7, 0.6])
         result = RetrievalResult(
             answer="Test answer",

@@ -151,9 +151,13 @@ async def post_search_hook(context: HookContext) -> HookResult:
                         _search_state["sources_collected"].append(source)
 
     # Track content from Read results
-    elif tool_name.lower() == "read" and tool_result:
-        if isinstance(tool_result, str) and len(tool_result) > 0:
-            _search_state["files_searched"] += 1
+    elif (
+        tool_name.lower() == "read"
+        and tool_result
+        and isinstance(tool_result, str)
+        and len(tool_result) > 0
+    ):
+        _search_state["files_searched"] += 1
 
     # Return progress summary
     files = _search_state["files_searched"]

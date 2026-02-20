@@ -27,7 +27,7 @@ class TestToolCallServiceGetRunner:
             record_llm_call=overrides.get("record_llm_call", MagicMock()),
             tool_call_cache=overrides.get("tool_call_cache", {}),
             llm_tool_call_cache=overrides.get("llm_tool_call_cache", {}),
-            skill_registry=overrides.get("skill_registry", None),
+            skill_registry=overrides.get("skill_registry"),
         )
 
     @patch("houyi_studio.server.tooling.service.get_skill_service")

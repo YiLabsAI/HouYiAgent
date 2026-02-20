@@ -5,6 +5,7 @@ Supports both Claude/AgentSkills SKILL.md format and HouYi skill.md format.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import re
@@ -64,9 +65,10 @@ def _parse_frontmatter(content: str) -> dict[str, Any] | None:
 
     try:
         # Try to import PyYAML
-        import yaml
+        import yaml  # type: ignore[import-untyped]
 
-        return yaml.safe_load(yaml_content)
+        result: dict[str, Any] | None = yaml.safe_load(yaml_content)
+        return result
     except ImportError:
         # Fallback: simple YAML-like parsing for common fields
         logger.warning("PyYAML not installed, using simple parser")
@@ -113,10 +115,8 @@ def _simple_yaml_parse(content: str) -> dict[str, Any]:
                     current_key = key
                     current_indent = indent
                     nested_dict = {}
-            elif current_key and indent > current_indent:
-                # Nested key
-                if value:
-                    nested_dict[key] = _parse_yaml_value(value)
+            elif current_key and indent > current_indent and value:
+                nested_dict[key] = _parse_yaml_value(value)
 
         # List item pattern
         list_match = re.match(r"^-\s+(.*)$", stripped)
@@ -190,18 +190,14 @@ def _parse_markdown_body(content: str) -> dict[str, Any]:
     # Input Schema
     input_match = re.search(r"## Input Schema\s+```json\s+(.+?)\s+```", content, re.DOTALL)
     if input_match:
-        try:
+        with contextlib.suppress(json.JSONDecodeError):
             result["input_schema"] = json.loads(input_match.group(1))
-        except json.JSONDecodeError:
-            pass
 
     # Output Schema
     output_match = re.search(r"## Output Schema\s+```json\s+(.+?)\s+```", content, re.DOTALL)
     if output_match:
-        try:
+        with contextlib.suppress(json.JSONDecodeError):
             result["output_schema"] = json.loads(output_match.group(1))
-        except json.JSONDecodeError:
-            pass
 
     # Constraints section
     constraints_match = re.search(r"## Constraints\s+(.+?)(?=##|$)", content, re.DOTALL)

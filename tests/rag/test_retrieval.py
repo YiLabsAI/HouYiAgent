@@ -251,9 +251,11 @@ class TestHybridRetrieverRetrieve:
     async def test_retrieve_sparse_only(self) -> None:
         """Test retrieve with sparse index only."""
         mock_sparse = MagicMock()
-        mock_sparse.search = AsyncMock(return_value=[
-            SearchResult(chunk_id="c1", content="BM25 result", score=0.9),
-        ])
+        mock_sparse.search = AsyncMock(
+            return_value=[
+                SearchResult(chunk_id="c1", content="BM25 result", score=0.9),
+            ]
+        )
 
         retriever = HybridRetriever(sparse_index=mock_sparse)
         results = await retriever.retrieve("test query", top_k=10)
@@ -266,14 +268,18 @@ class TestHybridRetrieverRetrieve:
     async def test_retrieve_vector_and_sparse(self) -> None:
         """Test retrieve with vector and sparse indexes."""
         mock_vector = MagicMock()
-        mock_vector.search = AsyncMock(return_value=[
-            SearchResult(chunk_id="c1", content="Vector result", score=0.9),
-        ])
+        mock_vector.search = AsyncMock(
+            return_value=[
+                SearchResult(chunk_id="c1", content="Vector result", score=0.9),
+            ]
+        )
 
         mock_sparse = MagicMock()
-        mock_sparse.search = AsyncMock(return_value=[
-            SearchResult(chunk_id="c2", content="Sparse result", score=0.8),
-        ])
+        mock_sparse.search = AsyncMock(
+            return_value=[
+                SearchResult(chunk_id="c2", content="Sparse result", score=0.8),
+            ]
+        )
 
         mock_embedder = MagicMock()
         mock_embedder.embed = AsyncMock(return_value=[0.1] * 16)
@@ -294,9 +300,11 @@ class TestHybridRetrieverRetrieve:
     async def test_retrieve_with_graph(self) -> None:
         """Test retrieve with graph store."""
         mock_graph = MagicMock()
-        mock_graph.search = AsyncMock(return_value=[
-            SearchResult(chunk_id="c1", content="Graph result", score=0.9),
-        ])
+        mock_graph.search = AsyncMock(
+            return_value=[
+                SearchResult(chunk_id="c1", content="Graph result", score=0.9),
+            ]
+        )
 
         retriever = HybridRetriever(graph_store=mock_graph)
         results = await retriever.retrieve("test query", top_k=10)
@@ -311,9 +319,11 @@ class TestHybridRetrieverRetrieve:
         mock_vector.search = AsyncMock(side_effect=Exception("Vector error"))
 
         mock_sparse = MagicMock()
-        mock_sparse.search = AsyncMock(return_value=[
-            SearchResult(chunk_id="c1", content="Sparse result", score=0.9),
-        ])
+        mock_sparse.search = AsyncMock(
+            return_value=[
+                SearchResult(chunk_id="c1", content="Sparse result", score=0.9),
+            ]
+        )
 
         mock_embedder = MagicMock()
         mock_embedder.embed = AsyncMock(return_value=[0.1] * 16)
@@ -337,9 +347,11 @@ class TestHybridRetrieverRetrieve:
         mock_sparse.search = AsyncMock(side_effect=Exception("Sparse error"))
 
         mock_graph = MagicMock()
-        mock_graph.search = AsyncMock(return_value=[
-            SearchResult(chunk_id="c1", content="Graph result", score=0.9),
-        ])
+        mock_graph.search = AsyncMock(
+            return_value=[
+                SearchResult(chunk_id="c1", content="Graph result", score=0.9),
+            ]
+        )
 
         retriever = HybridRetriever(
             sparse_index=mock_sparse,
@@ -358,9 +370,11 @@ class TestHybridRetrieverRetrieve:
         mock_graph.search = AsyncMock(side_effect=Exception("Graph error"))
 
         mock_sparse = MagicMock()
-        mock_sparse.search = AsyncMock(return_value=[
-            SearchResult(chunk_id="c1", content="Sparse result", score=0.9),
-        ])
+        mock_sparse.search = AsyncMock(
+            return_value=[
+                SearchResult(chunk_id="c1", content="Sparse result", score=0.9),
+            ]
+        )
 
         retriever = HybridRetriever(
             sparse_index=mock_sparse,
@@ -378,9 +392,11 @@ class TestHybridRetrieverRetrieve:
         config = HybridRetrieverConfig(fusion_method="weighted")
 
         mock_sparse = MagicMock()
-        mock_sparse.search = AsyncMock(return_value=[
-            SearchResult(chunk_id="c1", content="Sparse result", score=0.9),
-        ])
+        mock_sparse.search = AsyncMock(
+            return_value=[
+                SearchResult(chunk_id="c1", content="Sparse result", score=0.9),
+            ]
+        )
 
         retriever = HybridRetriever(sparse_index=mock_sparse, config=config)
         results = await retriever.retrieve("test query", top_k=10)
@@ -402,9 +418,7 @@ class TestCreateHybridRetriever:
 
             mock_embedder = MagicMock()
 
-            with patch(
-                "houyi.rag.indexed.embedding.create_embedder", return_value=mock_embedder
-            ):
+            with patch("houyi.rag.indexed.embedding.create_embedder", return_value=mock_embedder):
                 retriever = create_hybrid_retriever(
                     knowledge_dir=tmpdir,
                     embedding_dimension=16,
@@ -424,9 +438,7 @@ class TestCreateHybridRetriever:
 
             mock_embedder = MagicMock()
 
-            with patch(
-                "houyi.rag.indexed.embedding.create_embedder", return_value=mock_embedder
-            ):
+            with patch("houyi.rag.indexed.embedding.create_embedder", return_value=mock_embedder):
                 retriever = create_hybrid_retriever(
                     knowledge_dir=tmpdir,
                     embedding_dimension=16,

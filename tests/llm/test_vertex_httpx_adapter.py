@@ -504,12 +504,12 @@ class TestVertexAIAdapterRetry:
                     "houyi.llm.vertex_httpx_adapter.exponential_backoff",
                     side_effect=noop_backoff,
                 ),
+                pytest.raises(Exception, match="500"),
             ):
-                with pytest.raises(Exception, match="500"):
-                    async for _ in adapter.stream_chat(
-                        [{"role": "user", "content": "hi"}],
-                    ):
-                        pass
+                async for _ in adapter.stream_chat(
+                    [{"role": "user", "content": "hi"}],
+                ):
+                    pass
 
         assert attempt_count == 4
 

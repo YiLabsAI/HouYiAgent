@@ -132,11 +132,8 @@ class Message(BaseModel):
             return True
         if att.mime_type in _TEXT_MIME_EXACT:
             return True
-        # Check by extension
         dot = att.filename.rfind(".")
-        if dot >= 0 and att.filename[dot:].lower() in _TEXT_EXTENSIONS:
-            return True
-        return False
+        return dot >= 0 and att.filename[dot:].lower() in _TEXT_EXTENSIONS
 
     @staticmethod
     def _extract_text(att: Attachment) -> str | None:
@@ -155,7 +152,7 @@ class Message(BaseModel):
                 payload = data
             raw = base64.b64decode(payload)
             return raw.decode("utf-8")
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.debug("Cannot extract text from %s", att.filename)
             return None
 

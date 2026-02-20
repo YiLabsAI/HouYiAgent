@@ -86,7 +86,7 @@ class PlanExecutionLoop:
                     session_id=session_id,
                     execution_id=execution.execution_id,
                     status=ExecutionStatus.FAILED,
-                    message=f"Execution failed: {str(exc)}",
+                    message=f"Execution failed: {exc!s}",
                 )
                 await self._observation_service.emit(event)
             except Exception as event_error:

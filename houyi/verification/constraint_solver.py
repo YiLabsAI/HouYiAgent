@@ -3,19 +3,25 @@
 import logging
 from typing import Any
 
-from z3 import (
-    And,
-    Bool,
-    Int,
-    Not,
-    Or,
-    Real,
-    Solver,
-    String,
-    sat,
-    unknown,
-    unsat,
-)
+try:
+    from z3 import (
+        And,
+        Bool,
+        Int,
+        Not,
+        Or,
+        Real,
+        Solver,
+        String,
+        sat,
+        unknown,
+        unsat,
+    )
+except ImportError as _err:
+    raise ImportError(
+        "z3-solver is required for constraint solving. "
+        "Install it with: pip install 'houyi[verification]'"
+    ) from _err
 
 logger = logging.getLogger(__name__)
 
@@ -278,7 +284,7 @@ class ConstraintSolver:
             # to prevent collision between different values of the same type
             # Example: {"x": 5} vs {"x": -5} both have type "int"
             # but they should have different constraint solving results
-            var_values = {k: f"{type(v).__name__}:{repr(v)}" for k, v in values.items()}
+            var_values = {k: f"{type(v).__name__}:{v!r}" for k, v in values.items()}
             constraint_exprs = [c.expression for c in constraints]
 
             cached_result = self._cache.get_result(var_values, constraint_exprs)
@@ -354,7 +360,7 @@ class ConstraintSolver:
         # for identical constraint problems in the future
         if self.use_cache and self._cache:
             # Use same cache key format: type:value for each variable
-            var_values = {k: f"{type(v).__name__}:{repr(v)}" for k, v in values.items()}
+            var_values = {k: f"{type(v).__name__}:{v!r}" for k, v in values.items()}
             constraint_exprs = [c.expression for c in constraints]
             self._cache.put_result(var_values, constraint_exprs, is_sat, violated_list)
 

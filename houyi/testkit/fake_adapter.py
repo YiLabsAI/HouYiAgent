@@ -7,7 +7,7 @@ It is selected by the hook system when ``HOUYI_TOOLCALL_ADAPTER=fake``.
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from houyi.llm.base import LLMResponse
@@ -19,7 +19,7 @@ class FakeToolCallAdapter:
     def __init__(self, sequence: list[str], now: datetime | None = None) -> None:
         self._sequence = [name for name in sequence if name]
         self._index = 0
-        self._now = now or datetime.now(timezone.utc)
+        self._now = now or datetime.now(UTC)
 
     async def chat(
         self,

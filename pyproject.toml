@@ -21,11 +21,6 @@ classifiers = [
 
 dependencies = [
     "pydantic>=2.0.0",
-    "opentelemetry-api>=1.20.0",
-    "opentelemetry-sdk>=1.20.0",
-    "z3-solver>=4.12.0",
-    "sqlparse>=0.4.0",
-    "google-auth>=2.48.0",
 ]
 
 [project.optional-dependencies]
@@ -77,6 +72,17 @@ skill-yaml = [
 
 vertex-ai = [
     "google-genai>=1.0.0",
+    "google-auth>=2.48.0",
+]
+
+verification = [
+    "z3-solver>=4.12.0",
+    "sqlparse>=0.4.0",
+]
+
+observability = [
+    "opentelemetry-api>=1.20.0",
+    "opentelemetry-sdk>=1.20.0",
 ]
 
 rag = [
@@ -104,7 +110,7 @@ rag-full = [
 ]
 
 all = [
-    "houyi[dev,studio-server,distributed,model-adapters,vertex-ai,rag-full,websearch-tavily,websearch-readability,skill-yaml]",
+    "houyi[dev,studio-server,distributed,model-adapters,vertex-ai,verification,observability,rag-full,websearch-tavily,websearch-readability,skill-yaml]",
 ]
 
 [build-system]
@@ -121,48 +127,79 @@ exclude = [
 
 [tool.ruff]
 line-length = 100
-target-version = "py310"
+target-version = "py311"
 
 [tool.ruff.lint]
 select = [
-    "E",   # pycodestyle errors
-    "W",   # pycodestyle warnings
-    "F",   # pyflakes
-    "I",   # isort
-    "B",   # flake8-bugbear
-    "C4",  # flake8-comprehensions
-    "UP",  # pyupgrade
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "B",    # flake8-bugbear
+    "C4",   # flake8-comprehensions
+    "UP",   # pyupgrade
+    "SIM",  # flake8-simplify
+    "RUF",  # ruff-specific rules
+    "T20",  # flake8-print (SDK should use logging)
 ]
 ignore = [
-    "E501",  # line too long (handled by formatter)
+    "E501",   # line too long (handled by formatter)
+    "SIM108", # ternary operator — sometimes if/else is clearer
+    "RUF001", # ambiguous-unicode-character-string — false positives on CJK
+    "RUF002", # ambiguous-unicode-character-docstring — false positives on CJK
+    "RUF003", # ambiguous-unicode-character-comment — false positives on CJK
+    "RUF012", # mutable class variable — too noisy with Pydantic models
 ]
 
-# Per-file ignores for test files and examples
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*.py" = [
-    "F811",  # redefinition of unused name (common in test fixtures)
-    "F841",  # local variable assigned but never used (test setup)
-    "B011",  # assert False usage (valid in tests)
-    "B905",  # zip without explicit strict parameter
+    "F811",   # redefinition of unused name (common in test fixtures)
+    "F841",   # local variable assigned but never used (test setup)
+    "B011",   # assert False usage (valid in tests)
+    "B905",   # zip without explicit strict parameter
+    "T20",    # print allowed in tests
+    "SIM115", # open() without context manager (test fixtures)
+    "SIM117", # multiple-with-statements (nested mocking)
+    "RUF006", # asyncio-dangling-task (fire-and-forget in tests)
+    "RUF059", # unused unpacked variable (common in test assertions)
+]
+"houyi-studio/server/tests/**/*.py" = [
+    "F811", "F841", "B011", "B905", "T20",
+    "SIM115", "SIM117", "RUF006", "RUF059",
+]
+"scripts/**/*.py" = [
+    "T20",   # print allowed in scripts
 ]
 "examples/**/*.py" = [
     "E402",  # module level import not at top (examples show step-by-step)
+    "T20",
 ]
+"houyi/core/skill/consent.py" = ["T20"]   # CLI consent prompts use print
+"houyi/evaluation/**/*.py" = ["T20"]      # evaluation output is print-based
+"houyi/execution/local_executor.py" = ["T20"]
+"houyi/runtime/executor.py" = ["T20"]
+"houyi/observability/exporters.py" = ["T20"]
+"houyi/observability/trace_manager.py" = ["T20"]
+"houyi/skills/**/*.py" = ["E402"]  # conditional late imports in skill modules
 
 [tool.mypy]
-python_version = "3.10"
+python_version = "3.11"
 strict = false
 warn_return_any = false
 warn_unused_configs = true
 warn_unused_ignores = true
 ignore_missing_imports = true
 disable_error_code = [
-    "call-arg",        # 67 errors — Pydantic models with Field() defaults (needs mypy-pydantic plugin)
-    "var-annotated",   # 11 errors — missing type annotations on local variables
-    "valid-type",      #  7 errors — complex type expressions mypy can't resolve
+    "call-arg",             # 14 errors — Pydantic dataclass defaults (needs mypy-pydantic plugin)
+    "var-annotated",        #  2 errors — runtime/team.py untyped locals
+    "valid-type",           #  6 errors — method name shadows builtin / callable as type
     "annotation-unchecked",
-    "import-untyped",
 ]
+
+[[tool.mypy.overrides]]
+module = ["houyi.core.*", "houyi.protocol.*"]
+disallow_untyped_defs = true
+warn_return_any = true
 
 [[tool.mypy.overrides]]
 module = [
@@ -175,7 +212,7 @@ ignore_errors = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
-addopts = "--cov=houyi --cov-report=term-missing"
+addopts = "-v --tb=short"
 python_classes = ["Test*", "!TestCase"]
 filterwarnings = [
     "ignore::pytest.PytestCollectionWarning",
@@ -183,6 +220,7 @@ filterwarnings = [
 markers = [
     "benchmark: performance benchmark tests",
     "smoke: critical-path smoke tests that must pass before any delivery",
+    "integration: integration tests that need external services or long setup",
 ]
 
 [tool.importlinter]

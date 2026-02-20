@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import UTC
+
 from houyi.orchestration.plan import ExecutionPlan, IRNode, NodeType
 from houyi.protocol.ir import CheckpointIR, CheckpointTrigger, ExecutionIR, LLMCallLog, NodeStatus
 from houyi.protocol.ir.converter import IRConverter
@@ -115,12 +117,12 @@ class TestPlanIR:
 
     def test_soft_delete_node(self) -> None:
         """Test soft delete functionality (DECISION-004)."""
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         node = NodeIR(node_id="node1", node_type=NodeType.LLM)
         assert node.deleted_at is None
 
-        node.deleted_at = datetime.now(timezone.utc)
+        node.deleted_at = datetime.now(UTC)
         assert node.deleted_at is not None
 
 
@@ -358,7 +360,7 @@ class TestIRConverter:
 
     def test_soft_deleted_nodes_skipped(self) -> None:
         """Test soft-deleted nodes are marked as skipped."""
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         plan_ir = PlanIR(
             plan_id="plan1",
@@ -367,7 +369,7 @@ class TestIRConverter:
                 NodeIR(
                     node_id="node2",
                     node_type=NodeType.TOOL,
-                    deleted_at=datetime.now(timezone.utc),
+                    deleted_at=datetime.now(UTC),
                 ),
             ],
             edges=[],

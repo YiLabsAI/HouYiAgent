@@ -86,7 +86,7 @@ class LocalExecutor:
             session_id=initial_state.session_id,
             agent_id=initial_state.agent_id,
             current_plan_id=plan.plan_id,
-            memory_stack=initial_state.memory_stack + [self.context],
+            memory_stack=[*initial_state.memory_stack, self.context],
             execution_pointer=None,  # Execution complete
             parent_state_id=initial_state.session_id,
             metadata={**initial_state.metadata, "completed": True},

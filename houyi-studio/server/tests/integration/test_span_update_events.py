@@ -56,24 +56,23 @@ def test_start_execution_emits_span_update_event(monkeypatch: pytest.MonkeyPatch
         },
     }
 
-    with TestClient(app) as client:
-        with client.websocket_connect(f"/ws/session/{session_id}") as ws:
-            ws.send_json(start_command)
+    with TestClient(app) as client, client.websocket_connect(f"/ws/session/{session_id}") as ws:
+        ws.send_json(start_command)
 
-            deadline = time.time() + 10.0
-            seen_span_update = False
+        deadline = time.time() + 10.0
+        seen_span_update = False
 
-            while time.time() < deadline:
-                event = ws.receive_json()
-                event_type = event.get("event_type")
-                if isinstance(event_type, dict):
-                    event_type = event_type.get("value")
+        while time.time() < deadline:
+            event = ws.receive_json()
+            event_type = event.get("event_type")
+            if isinstance(event_type, dict):
+                event_type = event_type.get("value")
 
-                if event_type == "span_update":
-                    assert event.get("execution_id"), "span_update must include execution_id"
-                    assert event.get("span_id"), "span_update must include span_id"
-                    assert event.get("trace_id"), "span_update must include trace_id"
-                    seen_span_update = True
-                    break
+            if event_type == "span_update":
+                assert event.get("execution_id"), "span_update must include execution_id"
+                assert event.get("span_id"), "span_update must include span_id"
+                assert event.get("trace_id"), "span_update must include trace_id"
+                seen_span_update = True
+                break
 
-            assert seen_span_update, "Expected at least one span_update event after start_execution"
+        assert seen_span_update, "Expected at least one span_update event after start_execution"

@@ -145,13 +145,16 @@ class ToolRouter:
             A ToolRouteResult with the routing decision.
         """
         # Level 1: Allowed-tools whitelist
-        if self.has_restrictions:
-            if tool_name not in self._global_allowed and not self._unrestricted_skills:
-                return ToolRouteResult(
-                    tool_name=tool_name,
-                    allowed=False,
-                    reason=f"Tool '{tool_name}' not in any skill's allowed-tools whitelist",
-                )
+        if (
+            self.has_restrictions
+            and tool_name not in self._global_allowed
+            and not self._unrestricted_skills
+        ):
+            return ToolRouteResult(
+                tool_name=tool_name,
+                allowed=False,
+                reason=f"Tool '{tool_name}' not in any skill's allowed-tools whitelist",
+            )
 
         # Level 2: InvocationPolicy
         matched_skill = self._tool_to_skill.get(tool_name)

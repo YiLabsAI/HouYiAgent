@@ -6,11 +6,11 @@ from houyi.evaluation.report import ReportGenerator
 from houyi.evaluation.runner import evaluate
 
 __all__ = [
-    "Evaluator",
+    "Dataset",
     "EvaluationResult",
     "EvaluationSummary",
-    "Dataset",
-    "TestCase",
+    "Evaluator",
     "ReportGenerator",
+    "TestCase",
     "evaluate",
 ]

@@ -284,8 +284,7 @@ class TestPostSearchHook:
         reset_search_state()
 
         matches = [
-            {"file": f"/test/doc{i}.md", "line": i, "content": f"match {i}"}
-            for i in range(10)
+            {"file": f"/test/doc{i}.md", "line": i, "content": f"match {i}"} for i in range(10)
         ]
 
         context = MockHookContext(

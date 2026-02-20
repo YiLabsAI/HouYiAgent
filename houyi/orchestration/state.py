@@ -1,6 +1,6 @@
 """State management with immutable snapshots."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
 
@@ -34,7 +34,7 @@ class SessionState(BaseModel):
     execution_pointer: str | None = Field(None, description="Current executing node ID")
     parent_state_id: str | None = Field(None, description="Parent state version ID")
     created_at: datetime = Field(
-        default_factory=lambda: datetime.now(timezone.utc), description="Creation timestamp"
+        default_factory=lambda: datetime.now(UTC), description="Creation timestamp"
     )
     metadata: dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
 
@@ -61,5 +61,5 @@ class TaskState(BaseModel):
     )
     retry_count: int = Field(default=0, description="Number of retries")
     error: str | None = Field(None, description="Error message if failed")
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))

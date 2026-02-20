@@ -7,6 +7,7 @@ Owns the business logic for sending messages, managing context, and streaming.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import re
 import time
@@ -422,13 +423,11 @@ class ChatService:
             raise
         finally:
             chat_span.end()
-            try:
+            # GeneratorExit during async streaming may cause cleanup
+            # in a different asyncio Context, making ContextVar.reset()
+            # fail. This is safe to ignore — the span is already ended.
+            with contextlib.suppress(ValueError):
                 TraceContext.pop(chat_token)
-            except ValueError:
-                # GeneratorExit during async streaming may cause cleanup
-                # in a different asyncio Context, making ContextVar.reset()
-                # fail. This is safe to ignore — the span is already ended.
-                pass
 
     async def edit_message(
         self,

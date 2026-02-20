@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 import os
 from collections.abc import Callable
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from houyi.config.env_config import (
@@ -218,7 +218,7 @@ class ToolCallService:
                     skills=skills,
                     tool_sequence=tool_sequence,
                     parallel_tool_calls=parallel_tool_calls,
-                    now=datetime.now(timezone.utc),
+                    now=datetime.now(UTC),
                 )
                 adapter = adapter_registry.resolve(
                     request,
@@ -233,7 +233,7 @@ class ToolCallService:
                         skills=skills,
                         tool_sequence=tool_names or [skill.name for skill in skills],
                         parallel_tool_calls=parallel_tool_calls,
-                        now=datetime.now(timezone.utc),
+                        now=datetime.now(UTC),
                     ),
                     fallback_factory=_build_openai_adapter,
                 )
@@ -357,7 +357,7 @@ class ToolCallService:
             final_chat_kwargs=chat_kwargs,
             prompt_cache_key=prompt_cache_key,
             llm_cache=self.llm_tool_call_cache,
-            created_at=datetime.now(timezone.utc),
+            created_at=datetime.now(UTC),
         )
         await assembler.assemble(context)
 

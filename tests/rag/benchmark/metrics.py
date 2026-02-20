@@ -49,9 +49,7 @@ class BenchmarkMetrics:
             "latency_ms": self.latency_ms,
             "query_count": self.query_count,
             "success_rate": (
-                self.successful_queries / self.query_count
-                if self.query_count > 0
-                else 0.0
+                self.successful_queries / self.query_count if self.query_count > 0 else 0.0
             ),
         }
 
@@ -154,9 +152,7 @@ def calculate_ndcg(
         )
 
     # Get relevance scores for retrieved documents
-    retrieved_scores = [
-        relevance_scores.get(doc_id, 0.0) for doc_id in retrieved_ids[:k]
-    ]
+    retrieved_scores = [relevance_scores.get(doc_id, 0.0) for doc_id in retrieved_ids[:k]]
 
     # Calculate DCG
     dcg_score = dcg(retrieved_scores, k)

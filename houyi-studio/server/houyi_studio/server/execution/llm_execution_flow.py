@@ -430,7 +430,7 @@ class LLMExecutionFlow:
                         if chunk_count % 10 == 0 and content:
                             logger.debug("Sent %d content chunks so far", chunk_count)
 
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 logger.error("LLM API call timeout after 60 seconds")
                 node_exec.error = "API call timeout"
                 error_chunk = "\n[Error: API call timeout after 60 seconds]"
@@ -534,7 +534,7 @@ class LLMExecutionFlow:
         except Exception as exc:
             logger.error("Error executing LLM node %s: %s", node_id, exc, exc_info=True)
             node_exec.error = str(exc)
-            error_chunk = f"\n[Error: {str(exc)}]"
+            error_chunk = f"\n[Error: {exc!s}]"
             node_exec.streaming_output += error_chunk
 
             if not isinstance(node_exec.outputs, dict) or not node_exec.outputs:

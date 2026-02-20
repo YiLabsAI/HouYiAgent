@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
@@ -295,10 +296,8 @@ class IndexedMode:
             # Handle timed out tasks
             for task in pending:
                 task.cancel()
-                try:
+                with contextlib.suppress(asyncio.CancelledError):
                     await task
-                except asyncio.CancelledError:
-                    pass
 
             # Mark timed out strategies
             for i, (strategy, name) in enumerate(task_info):
@@ -372,7 +371,7 @@ class IndexedMode:
                         duration_ms=elapsed,
                     )
                 )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 elapsed = (time.time() - start_time) * 1000
                 results.append(
                     RetrievalTaskResult(

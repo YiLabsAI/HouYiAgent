@@ -12,7 +12,9 @@ class MockEvaluator(Evaluator):
     def name(self) -> str:
         return "mock_evaluator"
 
-    def evaluate(self, input: str, output: str, expected: str = None, **kwargs) -> EvaluationResult:
+    def evaluate(
+        self, input: str, output: str, expected: str | None = None, **kwargs
+    ) -> EvaluationResult:
         """Mock evaluation."""
         passed = output == expected if expected else True
         return EvaluationResult(

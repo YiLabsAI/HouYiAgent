@@ -9,6 +9,7 @@ Implements SimpleSkill hooks specification:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 import re
@@ -137,10 +138,8 @@ class SkillHooksManager:
         """Unregister all hooks from a skill."""
         hooks = self._skill_hooks.pop(skill_name, [])
         for hook in hooks:
-            try:
+            with contextlib.suppress(ValueError):
                 self._hooks[hook.event].remove(hook)
-            except ValueError:
-                pass
         logger.debug("Unregistered hooks for skill: %s", skill_name)
 
     async def trigger_hook(
@@ -244,7 +243,7 @@ class SkillHooksManager:
                 should_block=should_block,
                 inject_to_prompt=bool(output),
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return HookResult(success=False, error="Command timed out")
         except Exception as e:
             return HookResult(success=False, error=str(e))

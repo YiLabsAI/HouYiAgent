@@ -183,9 +183,7 @@ class WebSearchService:
         resolved: list[WebSearchProvider] = []
         for provider in providers:
             try:
-                if provider.name in {"serper", "tavily"}:
-                    resolved.append(provider)
-                elif provider.name == "searxng":
+                if provider.name in {"serper", "tavily"} or provider.name == "searxng":
                     resolved.append(provider)
                 else:
                     resolved.append(provider)

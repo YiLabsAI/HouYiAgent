@@ -8,6 +8,7 @@ Provides Span and TraceManager for AI/Agent observability with:
 
 from __future__ import annotations
 
+import contextlib
 import time
 import uuid
 from collections.abc import Iterator
@@ -400,7 +401,5 @@ class TraceManager:
     def flush(self) -> None:
         """Flush all exporters."""
         for exporter in self.exporters:
-            try:
+            with contextlib.suppress(Exception):
                 exporter.flush()  # type: ignore[union-attr]
-            except Exception:
-                pass

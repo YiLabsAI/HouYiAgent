@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import csv
 import json
 from pathlib import Path
@@ -103,11 +104,9 @@ class Dataset(BaseModel):
             for row in reader:
                 # Parse metadata if present
                 metadata = {}
-                if "metadata" in row and row["metadata"]:
-                    try:
+                if row.get("metadata"):
+                    with contextlib.suppress(json.JSONDecodeError):
                         metadata = json.loads(row["metadata"])
-                    except json.JSONDecodeError:
-                        pass
 
                 test_case = TestCase(
                     input=row["input"],

@@ -235,7 +235,7 @@ class TestExecutionPlanComplexScenarios:
             )
             branches.append(branch)
 
-        plan = ExecutionPlan(plan_id="parallel", nodes=[start] + branches, entry_node="start")
+        plan = ExecutionPlan(plan_id="parallel", nodes=[start, *branches], entry_node="start")
 
         assert len(plan.nodes) == 4
         # All branches depend only on start

@@ -61,13 +61,13 @@ class _Skill:
         self.display_name = kw.get("display_name", self.name)
         self.description = kw.get("description", "d")
         self.version = kw.get("version", "1.0")
-        self.author = kw.get("author", None)
+        self.author = kw.get("author")
         self.tools = kw.get("tools", [])
-        self.permissions = kw.get("permissions", None)
-        self.invocation_policy = kw.get("policy", None)
+        self.permissions = kw.get("permissions")
+        self.invocation_policy = kw.get("policy")
         self.hooks = kw.get("hooks", [])
         self.certification = kw.get("certification", "unverified")
-        self.input_schema = kw.get("input_schema", None)
+        self.input_schema = kw.get("input_schema")
 
 
 # ── extract_side_effects / dominant_side_effect ───────────────────────

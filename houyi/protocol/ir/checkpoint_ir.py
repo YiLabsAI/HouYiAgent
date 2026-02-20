@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
 
@@ -38,7 +38,7 @@ class LLMCallLog(BaseModel):
 
     # Call details
     timestamp: datetime = Field(
-        default_factory=lambda: datetime.now(timezone.utc),
+        default_factory=lambda: datetime.now(UTC),
         description="Call timestamp",
     )
     model: str = Field(..., description="Model identifier")
@@ -81,7 +81,7 @@ class CheckpointIR(BaseModel):
         description="What triggered this checkpoint",
     )
     created_at: datetime = Field(
-        default_factory=lambda: datetime.now(timezone.utc),
+        default_factory=lambda: datetime.now(UTC),
         description="Checkpoint creation time",
     )
 

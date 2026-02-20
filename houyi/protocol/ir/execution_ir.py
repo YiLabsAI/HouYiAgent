@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
 
@@ -155,10 +155,12 @@ class ExecutionIR(BaseModel):
 
         # Update timing
         if status == NodeStatus.RUNNING and node_exec.started_at is None:
-            node_exec.started_at = datetime.now(timezone.utc)
-        elif status in (NodeStatus.COMPLETED, NodeStatus.FAILED, NodeStatus.SKIPPED):
-            if node_exec.completed_at is None:
-                node_exec.completed_at = datetime.now(timezone.utc)
+            node_exec.started_at = datetime.now(UTC)
+        elif (
+            status in (NodeStatus.COMPLETED, NodeStatus.FAILED, NodeStatus.SKIPPED)
+            and node_exec.completed_at is None
+        ):
+            node_exec.completed_at = datetime.now(UTC)
 
         # Update additional fields
         for key, value in kwargs.items():

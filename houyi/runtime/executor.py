@@ -2,7 +2,7 @@
 
 import asyncio
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -64,7 +64,7 @@ class LocalExecutor:
         task_id = f"task_{uuid.uuid4().hex[:8]}"
         trace_id = f"trace_{uuid.uuid4().hex[:8]}"
 
-        start_time = datetime.now(timezone.utc)
+        start_time = datetime.now(UTC)
         completed_nodes: set[str] = set()
         node_outputs: dict[str, Any] = {}
         metrics = ExecutionMetrics()
@@ -100,7 +100,7 @@ class LocalExecutor:
             )
 
             # Calculate total duration
-            end_time = datetime.now(timezone.utc)
+            end_time = datetime.now(UTC)
             metrics.total_duration_ms = (end_time - start_time).total_seconds() * 1000
 
             return ExecutionResult(
@@ -148,7 +148,7 @@ class LocalExecutor:
         Returns:
             Node execution result
         """
-        start_time = datetime.now(timezone.utc)
+        start_time = datetime.now(UTC)
 
         try:
             # Resolve inputs from dependencies
@@ -176,7 +176,7 @@ class LocalExecutor:
                 raise ValueError(f"Unknown node type: {node.node_type}")
 
             # Record metrics
-            end_time = datetime.now(timezone.utc)
+            end_time = datetime.now(UTC)
             duration_ms = (end_time - start_time).total_seconds() * 1000
             metrics.node_durations[node.node_id] = duration_ms
 

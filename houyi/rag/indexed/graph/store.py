@@ -255,9 +255,7 @@ class GraphStore:
         for entity_id, entity in self._entities.items():
             name_lower = entity.name.lower()
             # Simple matching: entity name contains query word
-            if any(word in name_lower for word in query_words):
-                matches.append(entity_id)
-            elif query_lower in name_lower:
+            if any(word in name_lower for word in query_words) or query_lower in name_lower:
                 matches.append(entity_id)
 
         return matches[:10]  # Limit seeds

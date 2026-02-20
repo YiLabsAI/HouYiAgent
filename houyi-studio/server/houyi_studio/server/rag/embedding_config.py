@@ -180,7 +180,7 @@ def _auto_detect_embedding() -> tuple[Any, str] | tuple[None, str]:
     """
     if os.environ.get(ENV_GOOGLE_API_KEY):
         try:
-            from google import genai  # noqa: F401
+            from google import genai
 
             cfg = _make_embedding_config("gemini")
             logger.debug("Embedding auto-detect: gemini (GOOGLE_API_KEY)")
