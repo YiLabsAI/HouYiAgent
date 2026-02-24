@@ -42,7 +42,6 @@ jobs:
       if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11'
       uses: codecov/codecov-action@v5
       with:
-        token: ${{ secrets.CODECOV_TOKEN }}
         slug: YiLabsAI/HouYiAgent
         file: ./coverage.xml
         flags: unittests

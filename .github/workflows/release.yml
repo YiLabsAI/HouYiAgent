@@ -8,6 +8,8 @@ on:
 jobs:
   release:
     runs-on: ubuntu-latest
+    env:
+      HAS_PYPI_TOKEN: ${{ secrets.PYPI_API_TOKEN != '' }}
 
     steps:
     - uses: actions/checkout@v4
@@ -28,7 +30,7 @@ jobs:
       run: ls -lah dist
 
     - name: Publish package to PyPI
-      if: ${{ secrets.PYPI_API_TOKEN != '' }}
+      if: ${{ env.HAS_PYPI_TOKEN == 'true' }}
       env:
         TWINE_USERNAME: __token__
         TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
