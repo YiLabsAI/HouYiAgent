@@ -37,6 +37,8 @@ dev = [
     "python-dotenv>=1.0.0",
     "websockets>=12.0",
     "fastapi>=0.104.0",
+    "z3-solver>=4.12.0",
+    "sqlparse>=0.4.0",
 ]
 
 studio-server = [
