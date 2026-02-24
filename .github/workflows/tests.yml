@@ -43,7 +43,7 @@ jobs:
       uses: codecov/codecov-action@v5
       with:
         slug: YiLabsAI/HouYiAgent
-        file: ./coverage.xml
+        files: ./coverage.xml
         flags: unittests
         name: codecov-umbrella
         fail_ci_if_error: false
