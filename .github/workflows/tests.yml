@@ -28,6 +28,9 @@ jobs:
       uses: astral-sh/setup-uv@v3
 
     - name: Install dependencies
+      env:
+        UV_INDEX_URL: https://pypi.org/simple
+        UV_EXTRA_INDEX_URL: ""
       run: |
         uv sync --extra dev --extra rag
 
@@ -63,6 +66,9 @@ jobs:
       uses: astral-sh/setup-uv@v3
 
     - name: Install dependencies
+      env:
+        UV_INDEX_URL: https://pypi.org/simple
+        UV_EXTRA_INDEX_URL: ""
       run: |
         uv sync --extra dev --extra rag
         uv pip install -e houyi-studio/server --quiet
