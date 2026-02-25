@@ -9,6 +9,7 @@ from houyi_studio.server.skill.dry_run import (
     DryRunValidator,
     _build_tool_definitions,
     _parse_llm_response,
+    _simplify_schema,
 )
 
 from houyi.core.skill_registry import SkillRegistry
@@ -118,10 +119,52 @@ class TestValidate:
         assert r["valid"] is True
 
     @pytest.mark.asyncio
-    async def test_policy_deny(self, registry):
+    async def test_policy_deny_via_skill_policy(self, registry):
+        """When InvocationPolicy is set on the skill, _check_policy reads it directly."""
+        from houyi.core.skill.policy import InvocationPolicy, ModelAutoInvoke
+
+        ip = InvocationPolicy()
+        ip.model_auto_invoke = ModelAutoInvoke.DENY
+        registry.register(_Skill(name="s", policy=ip), overwrite=True)
+        v = self._make_validator(registry)
+        r = await v.validate("s", "t", {})
+        assert r["valid"] is False
+        assert r["policy_result"] == "deny"
+
+    @pytest.mark.asyncio
+    async def test_policy_allow_with_consent_via_skill_policy(self, registry):
+        from houyi.core.skill.policy import InvocationPolicy, ModelAutoInvoke
+
+        ip = InvocationPolicy()
+        ip.model_auto_invoke = ModelAutoInvoke.ALLOW_WITH_CONSENT
+        registry.register(_Skill(name="s", policy=ip), overwrite=True)
+        v = self._make_validator(registry)
+        r = await v.validate("s", "t", {})
+        assert r["valid"] is True
+        assert r["policy_result"] == "allow_with_consent"
+
+    @pytest.mark.asyncio
+    async def test_policy_deny_blocks_live_execution(self, registry):
+        """When policy is deny, live=True should NOT call the LLM."""
+        from houyi.core.skill.policy import InvocationPolicy, ModelAutoInvoke
+
+        ip = InvocationPolicy()
+        ip.model_auto_invoke = ModelAutoInvoke.DENY
+        registry.register(_Skill(name="s", policy=ip), overwrite=True)
+        v = self._make_validator(registry)
+        r = await v.validate("s", "t", {}, live=True)
+        assert r["valid"] is False
+        assert r["policy_result"] == "deny"
+        assert r["llm_verification"]["success"] is False
+        assert "static validation failed" in r["llm_verification"]["message"]
+        assert r["llm_verification"]["phases"] == []
+
+    @pytest.mark.asyncio
+    async def test_policy_deny_via_enforcer_fallback(self, registry):
+        """When no InvocationPolicy on skill, falls back to PolicyEnforcer."""
         registry.register(_Skill(name="s"), overwrite=True)
         enforcer = MagicMock()
-        enforcer.evaluate.return_value = _PolicyResult("deny")
+        enforcer.check_invocation.return_value = MagicMock(allowed=False)
         v = self._make_validator(registry, enforcer=enforcer)
         r = await v.validate("s", "t", {})
         assert r["valid"] is False
@@ -197,6 +240,120 @@ class TestBuildToolDefs:
         assert defs[0]["function"]["name"] == "fn"
         assert defs[0]["function"]["description"] == "d"
         assert "required" in defs[0]["function"]["parameters"]
+
+
+# ── _simplify_schema ─────────────────────────────────────────────────
+
+
+class TestSimplifySchema:
+    """Regression tests for stripping Pydantic metadata from JSON Schema."""
+
+    def test_removes_top_level_title(self):
+        schema = {"title": "WebSearchInput", "type": "object", "properties": {}}
+        assert "title" not in _simplify_schema(schema)
+        assert _simplify_schema(schema)["type"] == "object"
+
+    def test_removes_property_titles(self):
+        schema = {
+            "type": "object",
+            "properties": {
+                "query": {"title": "Query", "type": "string"},
+            },
+        }
+        result = _simplify_schema(schema)
+        assert "title" not in result["properties"]["query"]
+        assert result["properties"]["query"]["type"] == "string"
+
+    def test_flattens_anyof_nullable(self):
+        """anyOf: [{type: string}, {type: null}] -> type: string"""
+        schema = {
+            "type": "object",
+            "properties": {
+                "provider": {
+                    "anyOf": [{"type": "string"}, {"type": "null"}],
+                    "default": None,
+                    "title": "Provider",
+                },
+            },
+        }
+        result = _simplify_schema(schema)
+        prop = result["properties"]["provider"]
+        assert "anyOf" not in prop
+        assert "title" not in prop
+        assert prop["type"] == "string"
+        assert prop["default"] is None
+
+    def test_preserves_required_and_other_keys(self):
+        schema = {
+            "title": "Input",
+            "type": "object",
+            "required": ["query"],
+            "properties": {"query": {"title": "Q", "type": "string"}},
+        }
+        result = _simplify_schema(schema)
+        assert result["required"] == ["query"]
+        assert result["type"] == "object"
+
+    def test_real_pydantic_schema(self):
+        """Simulate the exact schema Pydantic generates for WebSearchInput."""
+        pydantic_schema = {
+            "title": "WebSearchInput",
+            "type": "object",
+            "required": ["query"],
+            "properties": {
+                "query": {"title": "Query", "type": "string"},
+                "max_results": {
+                    "default": 3,
+                    "minimum": 1,
+                    "title": "Max Results",
+                    "type": "integer",
+                },
+                "provider": {
+                    "anyOf": [{"type": "string"}, {"type": "null"}],
+                    "default": None,
+                    "title": "Provider",
+                },
+            },
+        }
+        result = _simplify_schema(pydantic_schema)
+
+        assert "title" not in result
+        assert result["required"] == ["query"]
+        assert result["properties"]["query"] == {"type": "string"}
+        assert result["properties"]["max_results"] == {
+            "default": 3,
+            "minimum": 1,
+            "type": "integer",
+        }
+        assert result["properties"]["provider"] == {"default": None, "type": "string"}
+
+
+class TestBuildToolDefsSchemaCleanup:
+    """Verify _build_tool_definitions applies _simplify_schema."""
+
+    def test_pydantic_titles_stripped(self):
+        class _PydanticSchema:
+            @staticmethod
+            def model_json_schema():
+                return {
+                    "title": "MyInput",
+                    "type": "object",
+                    "properties": {
+                        "q": {"title": "Q", "type": "string"},
+                        "opt": {
+                            "anyOf": [{"type": "string"}, {"type": "null"}],
+                            "title": "Opt",
+                        },
+                    },
+                }
+
+        skill = _Skill(name="s", schema=_PydanticSchema, description="d")
+        defs = _build_tool_definitions(skill)
+        params = defs[0]["function"]["parameters"]
+        assert "title" not in params
+        assert "title" not in params["properties"]["q"]
+        assert params["properties"]["opt"]["type"] == "string"
+        assert "anyOf" not in params["properties"]["opt"]
 
 
 # ── _parse_llm_response ──────────────────────────────────────────────
@@ -399,6 +556,41 @@ class TestLiveVerifyIntegration:
 
         assert result["success"] is False
         assert "did not produce" in result["message"]
+
+    @pytest.mark.asyncio
+    async def test_tool_execution_preview_is_dict_not_string(self):
+        """result_preview must be a dict to avoid double-escaping.
+
+        If it were a pre-serialised JSON string, the outer WebSocket JSON
+        serialisation would double-escape quotes and newlines — exactly the
+        bug this regression test guards against.
+        """
+        from houyi_studio.server.skill.dry_run import _live_verify
+
+        async def _executor(**kwargs):
+            return {"title": "Test Title", "snippet": "line one\nline two"}
+
+        skill = _Skill(name="search", description="Search")
+        skill.executor = _executor
+        mock_response = MagicMock()
+        mock_response.tool_calls = [
+            {"type": "function", "function": {"name": "search", "arguments": '{"q":"hi"}'}}
+        ]
+        mock_adapter = AsyncMock()
+        mock_adapter.chat.return_value = mock_response
+
+        with patch(_FACTORY_PATCH) as factory:
+            factory.create.return_value = mock_adapter
+            result = await _live_verify(skill, "search", "search", {"q": "hi"})
+
+        assert result["success"] is True
+        exec_phase = next(p for p in result["phases"] if p["name"] == "tool_execution")
+        preview = exec_phase["data"]["result_preview"]
+        assert isinstance(preview, dict), (
+            "result_preview must be a dict to avoid double-escaping in JSON responses"
+        )
+        assert preview["title"] == "Test Title"
+        assert preview["snippet"] == "line one\nline two"
 
 
 # ── Full async validate + live ────────────────────────────────────────

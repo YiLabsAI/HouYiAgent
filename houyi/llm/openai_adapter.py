@@ -6,6 +6,7 @@ import os
 from collections.abc import AsyncIterator
 from typing import Any
 
+from houyi.config.env_config import ENV_OPENAI_API_KEY
 from houyi.llm.base import DEFAULT_TEMPERATURE, LLMAdapter, LLMMessage, LLMResponse
 
 
@@ -28,7 +29,7 @@ class OpenAIAdapter(LLMAdapter):
             model: Model name (e.g., "gpt-4", "gpt-3.5-turbo")
             base_url: Optional base URL for API
         """
-        self.api_key = api_key or os.getenv("OPENAI_API_KEY")
+        self.api_key = api_key or os.getenv(ENV_OPENAI_API_KEY)
         self.model = model
         self.base_url = base_url
 

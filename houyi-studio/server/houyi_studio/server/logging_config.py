@@ -102,6 +102,26 @@ def build_logging_config(level: str | None = None) -> dict[str, Any]:
                 "handlers": ["console"],
                 "propagate": False,
             },
+            "ddgs": {
+                "level": "WARNING",
+                "handlers": ["console"],
+                "propagate": False,
+            },
+            "ddgs.ddgs": {
+                "level": "WARNING",
+                "handlers": ["console"],
+                "propagate": False,
+            },
+            "primp": {
+                "level": "WARNING",
+                "handlers": ["console"],
+                "propagate": False,
+            },
+            "primp.impersonate": {
+                "level": "ERROR",
+                "handlers": ["console"],
+                "propagate": False,
+            },
         },
     }
 
@@ -129,6 +149,10 @@ def set_log_level(level: str) -> str:
     logging.getLogger("uvicorn.access").setLevel(access_level)
     logging.getLogger("watchfiles").setLevel(watchfiles_level)
     logging.getLogger("watchfiles.main").setLevel(watchfiles_level)
+    logging.getLogger("ddgs").setLevel(logging.WARNING)
+    logging.getLogger("ddgs.ddgs").setLevel(logging.WARNING)
+    logging.getLogger("primp").setLevel(logging.WARNING)
+    logging.getLogger("primp.impersonate").setLevel(logging.ERROR)
 
     return resolved_level
 

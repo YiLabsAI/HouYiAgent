@@ -8,6 +8,12 @@ hooks:
     matcher: get_weather
   - event: PostToolUse
     matcher: get_weather
+invocationPolicy:
+  sideEffect: network
+  modelAutoInvoke: allow_with_consent
+permissions:
+  network:
+    enabled: true
 ---
 
 # Weather Skill

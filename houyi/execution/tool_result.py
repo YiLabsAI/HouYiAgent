@@ -43,9 +43,9 @@ class ToolResultBuilder:
     def serialize(payload: Any) -> str:
         """JSON-serialize a payload for tool-message content."""
         try:
-            return json.dumps(payload, ensure_ascii=True, sort_keys=True)
+            return json.dumps(payload, ensure_ascii=False, sort_keys=True)
         except TypeError:
-            return json.dumps({"result": str(payload)}, ensure_ascii=True, sort_keys=True)
+            return json.dumps({"result": str(payload)}, ensure_ascii=False, sort_keys=True)
 
     @staticmethod
     def is_error(result: Any) -> bool:

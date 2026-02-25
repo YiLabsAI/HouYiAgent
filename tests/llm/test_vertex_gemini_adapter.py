@@ -2,14 +2,11 @@
 
 from __future__ import annotations
 
-from unittest.mock import patch
-
 import pytest
 
 from houyi.llm.vertex_gemini_adapter import (
     GoogleVertexGeminiAdapter,
     _build_proxy_http_options,
-    _detect_proxy,
 )
 
 
@@ -257,41 +254,6 @@ async def test_vertex_gemini_stream_chat() -> None:
         chunks.append((content, reasoning))
 
     assert chunks == [("hello", None), (" world", None)]
-
-
-# ── Proxy detection tests ────────────────────────────────────────────
-
-
-class TestDetectProxy:
-    """Tests for _detect_proxy (cross-platform via urllib.request.getproxies)."""
-
-    def test_returns_https_proxy(self):
-        with patch(
-            "houyi.llm.vertex_gemini_adapter.getproxies",
-            return_value={"https": "http://127.0.0.1:7890", "http": "http://127.0.0.1:7890"},
-        ):
-            assert _detect_proxy() == "http://127.0.0.1:7890"
-
-    def test_falls_back_to_http(self):
-        with patch(
-            "houyi.llm.vertex_gemini_adapter.getproxies",
-            return_value={"http": "http://127.0.0.1:1087"},
-        ):
-            assert _detect_proxy() == "http://127.0.0.1:1087"
-
-    def test_returns_none_when_no_proxy(self):
-        with patch(
-            "houyi.llm.vertex_gemini_adapter.getproxies",
-            return_value={},
-        ):
-            assert _detect_proxy() is None
-
-    def test_ignores_socks_only(self):
-        with patch(
-            "houyi.llm.vertex_gemini_adapter.getproxies",
-            return_value={"socks": "socks5://127.0.0.1:1080"},
-        ):
-            assert _detect_proxy() is None
 
 
 class TestBuildProxyHttpOptions:

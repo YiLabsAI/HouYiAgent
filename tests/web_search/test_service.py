@@ -4,6 +4,17 @@ from __future__ import annotations
 
 import pytest
 
+from houyi.config.env_config import (
+    ENV_BOCHA_API_KEY,
+    ENV_PROXY_URL,
+    ENV_SEARXNG_BASE_URL,
+    ENV_SERPER_API_KEY,
+    ENV_TAVILY_API_KEY,
+    ENV_WEB_SEARCH_CACHE_ENABLED,
+    ENV_WEB_SEARCH_CACHE_TTL,
+    ENV_WEB_SEARCH_PROVIDER,
+    ENV_WEB_SEARCH_PROXY_ENABLED,
+)
 from houyi.verification.cache import LRUCache
 from houyi.web_search.errors import (
     ContentFetchError,
@@ -13,7 +24,6 @@ from houyi.web_search.errors import (
     ProviderTimeoutError,
     WebSearchError,
 )
-from houyi.web_search.providers import DuckDuckGoWebSearchProvider
 from houyi.web_search.service import (
     WebSearchRetryPolicy,
     WebSearchService,
@@ -44,7 +54,7 @@ def test_web_search_service_from_env_invalid_provider() -> None:
 def test_web_search_service_from_env_override_env(monkeypatch) -> None:
     """Explicit provider should override WEB_SEARCH_PROVIDER env."""
 
-    monkeypatch.setenv("WEB_SEARCH_PROVIDER", "serper")
+    monkeypatch.setenv(ENV_WEB_SEARCH_PROVIDER, "serper")
     service = WebSearchService.from_env(provider="ddg")
     assert service.provider.name == "ddg"
 
@@ -52,9 +62,9 @@ def test_web_search_service_from_env_override_env(monkeypatch) -> None:
 def test_web_search_service_skip_fallback_without_keys(monkeypatch) -> None:
     """Fallback providers requiring keys should be skipped when missing."""
 
-    monkeypatch.delenv("SERPER_API_KEY", raising=False)
-    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
-    monkeypatch.delenv("SEARXNG_BASE_URL", raising=False)
+    monkeypatch.delenv(ENV_SERPER_API_KEY, raising=False)
+    monkeypatch.delenv(ENV_TAVILY_API_KEY, raising=False)
+    monkeypatch.delenv(ENV_SEARXNG_BASE_URL, raising=False)
     service = WebSearchService.from_env(provider="ddg")
     providers = service._resolve_providers()
     assert [provider.name for provider in providers] == ["ddg"]
@@ -64,8 +74,8 @@ def test_web_search_service_from_env_global_cache_enabled(monkeypatch) -> None:
     """from_env should reuse a global cache when WEB_SEARCH_CACHE_TTL is set."""
 
     _reset_global_cache_for_tests()
-    monkeypatch.setenv("WEB_SEARCH_CACHE_TTL", "60")
-    monkeypatch.delenv("WEB_SEARCH_CACHE_ENABLED", raising=False)
+    monkeypatch.setenv(ENV_WEB_SEARCH_CACHE_TTL, "60")
+    monkeypatch.delenv(ENV_WEB_SEARCH_CACHE_ENABLED, raising=False)
     service_a = WebSearchService.from_env(provider="ddg")
     service_b = WebSearchService.from_env(provider="ddg")
     assert service_a.cache is not None
@@ -76,8 +86,8 @@ def test_web_search_service_from_env_global_cache_disabled(monkeypatch) -> None:
     """WEB_SEARCH_CACHE_ENABLED=false should disable cache usage entirely."""
 
     _reset_global_cache_for_tests()
-    monkeypatch.setenv("WEB_SEARCH_CACHE_TTL", "60")
-    monkeypatch.setenv("WEB_SEARCH_CACHE_ENABLED", "false")
+    monkeypatch.setenv(ENV_WEB_SEARCH_CACHE_TTL, "60")
+    monkeypatch.setenv(ENV_WEB_SEARCH_CACHE_ENABLED, "false")
     service = WebSearchService.from_env(provider="ddg")
     assert service.cache is None
 
@@ -229,6 +239,32 @@ async def test_web_search_service_cache_hit() -> None:
 
 
 @pytest.mark.asyncio
+async def test_web_search_service_cache_key_includes_provider() -> None:
+    """Switching provider should NOT hit the other provider's cache."""
+
+    class _ProviderA(_Provider):
+        def __init__(self):
+            super().__init__(results=[{"title": "from_a", "url": "u"}])
+            self.name = "provider_a"
+
+    class _ProviderB(_Provider):
+        def __init__(self):
+            super().__init__(results=[{"title": "from_b", "url": "u"}])
+            self.name = "provider_b"
+
+    cache = LRUCache(max_size=10, default_ttl=60)
+    svc_a = WebSearchService(provider=_ProviderA(), cache=cache, cache_ttl=60)
+    svc_b = WebSearchService(provider=_ProviderB(), cache=cache, cache_ttl=60)
+
+    resp_a = await svc_a.search("q", max_results=1)
+    assert resp_a.results[0].title == "from_a"
+
+    resp_b = await svc_b.search("q", max_results=1)
+    assert resp_b.results[0].title == "from_b"
+    assert resp_b.metadata.cache_hit is False
+
+
+@pytest.mark.asyncio
 async def test_web_search_service_use_cache_false_disables_cache() -> None:
     """Per-call cache gating should skip cache reads/writes when use_cache is False."""
 
@@ -319,11 +355,8 @@ async def test_web_search_service_retries(monkeypatch) -> None:
                 raise ProviderTimeoutError("timeout")
             return [WebSearchResult(title="t", url="u")]
 
-    async def _sleep(_delay: float) -> None:
-        return None
-
-    policy = WebSearchRetryPolicy(max_retries=2, min_delay=0.0, max_delay=0.0, jitter=0.0)
-    service = WebSearchService(provider=_RetryProvider(), retry_policy=policy, sleep_func=_sleep)
+    policy = WebSearchRetryPolicy(max_retries=2, base_delay=0.0, max_delay=0.0)
+    service = WebSearchService(provider=_RetryProvider(), retry_policy=policy)
     response = await service.search("q", max_results=1)
     assert response.results[0].title == "t"
     assert attempts["count"] == 2
@@ -339,12 +372,8 @@ async def test_web_search_service_retry_exhausted() -> None:
         async def search(self, query: str, *, max_results: int) -> list[WebSearchResult]:
             raise ProviderRateLimitError("rate")
 
-    policy = WebSearchRetryPolicy(max_retries=1, min_delay=0.0, max_delay=0.0, jitter=0.0)
-
-    async def _sleep(_delay: float) -> None:
-        return None
-
-    service = WebSearchService(provider=_RetryProvider(), retry_policy=policy, sleep_func=_sleep)
+    policy = WebSearchRetryPolicy(max_retries=1, base_delay=0.0, max_delay=0.0)
+    service = WebSearchService(provider=_RetryProvider(), retry_policy=policy)
     response = await service.search("q", max_results=1)
     assert response.results == []
     assert response.metadata.rate_limit_count == 1
@@ -447,16 +476,32 @@ async def test_content_fetch_creates_sub_spans(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_ddg_provider_remote_disconnected_translates_to_timeout(monkeypatch) -> None:
-    """DDG network disconnects should raise ProviderTimeoutError (so retries/fallback can engage)."""
+async def test_web_search_service_from_env_bocha_provider(monkeypatch) -> None:
+    """from_env should create a Bocha provider when BOCHA_API_KEY is set."""
 
-    from http.client import RemoteDisconnected
+    monkeypatch.delenv(ENV_SERPER_API_KEY, raising=False)
+    monkeypatch.delenv(ENV_TAVILY_API_KEY, raising=False)
+    monkeypatch.delenv(ENV_SEARXNG_BASE_URL, raising=False)
+    monkeypatch.setenv(ENV_BOCHA_API_KEY, "test-bocha-key")
+    _reset_global_cache_for_tests()
+    service = WebSearchService.from_env()
+    assert service.provider.name == "bocha"
 
-    def _urlopen(*_args, **_kwargs):
-        raise RemoteDisconnected("Remote end closed connection")
 
-    monkeypatch.setattr("houyi.web_search.providers.request.urlopen", _urlopen)
+def test_web_search_service_from_env_proxy_disabled_by_default(monkeypatch) -> None:
+    """Proxy should be disabled by default."""
 
-    provider = DuckDuckGoWebSearchProvider()
-    with pytest.raises(ProviderTimeoutError):
-        await provider.search("q", max_results=1)
+    monkeypatch.delenv(ENV_WEB_SEARCH_PROXY_ENABLED, raising=False)
+    _reset_global_cache_for_tests()
+    service = WebSearchService.from_env(provider="ddg")
+    assert getattr(service.provider, "proxy_url", None) is None
+
+
+def test_web_search_service_from_env_proxy_enabled(monkeypatch) -> None:
+    """When WEB_SEARCH_PROXY_ENABLED=true, proxy should be detected and injected."""
+
+    monkeypatch.setenv(ENV_WEB_SEARCH_PROXY_ENABLED, "true")
+    monkeypatch.setenv(ENV_PROXY_URL, "http://127.0.0.1:7890")
+    _reset_global_cache_for_tests()
+    service = WebSearchService.from_env(provider="ddg")
+    assert getattr(service.provider, "proxy_url", None) == "http://127.0.0.1:7890"

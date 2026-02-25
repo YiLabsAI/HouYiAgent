@@ -14,6 +14,23 @@ import os
 from dataclasses import dataclass, field
 from typing import Any
 
+from houyi.config.env_config import (
+    ENV_CONSENT_AUTO_DENY_TIMEOUT,
+    ENV_CONSENT_CACHE_TTL,
+    ENV_CONSENT_PROMPT_TIMEOUT,
+    ENV_CONSENT_REQUIRE_EXPLICIT,
+    ENV_HOOK_FAIL_ON_ERROR,
+    ENV_HOOK_MAX_CONCURRENT,
+    ENV_HOOK_TIMEOUT,
+    ENV_METRICS_ENABLED,
+    ENV_METRICS_EXPORT_INTERVAL,
+    ENV_METRICS_EXPORT_PATH,
+    ENV_METRICS_MAX_SAMPLES,
+    ENV_POLICY_ALLOW_UNKNOWN,
+    ENV_POLICY_DEFAULT_AUTO_INVOKE,
+    ENV_POLICY_STRICT_MODE,
+)
+
 
 @dataclass
 class HookConfig:
@@ -115,28 +132,28 @@ class SkillConfig:
         """
         return cls(
             hooks=HookConfig(
-                timeout_seconds=_get_float_env("HOUYI_HOOK_TIMEOUT", 30.0),
-                max_concurrent=_get_int_env("HOUYI_HOOK_MAX_CONCURRENT", 10),
-                fail_on_error=_get_bool_env("HOUYI_HOOK_FAIL_ON_ERROR", False),
+                timeout_seconds=_get_float_env(ENV_HOOK_TIMEOUT, 30.0),
+                max_concurrent=_get_int_env(ENV_HOOK_MAX_CONCURRENT, 10),
+                fail_on_error=_get_bool_env(ENV_HOOK_FAIL_ON_ERROR, False),
             ),
             consent=ConsentConfig(
-                cache_ttl_seconds=_get_float_env("HOUYI_CONSENT_CACHE_TTL", 3600.0),
-                require_explicit_consent=_get_bool_env("HOUYI_CONSENT_REQUIRE_EXPLICIT", True),
-                auto_deny_timeout=_get_bool_env("HOUYI_CONSENT_AUTO_DENY_TIMEOUT", False),
-                consent_prompt_timeout_seconds=_get_float_env("HOUYI_CONSENT_PROMPT_TIMEOUT", 60.0),
+                cache_ttl_seconds=_get_float_env(ENV_CONSENT_CACHE_TTL, 3600.0),
+                require_explicit_consent=_get_bool_env(ENV_CONSENT_REQUIRE_EXPLICIT, True),
+                auto_deny_timeout=_get_bool_env(ENV_CONSENT_AUTO_DENY_TIMEOUT, False),
+                consent_prompt_timeout_seconds=_get_float_env(ENV_CONSENT_PROMPT_TIMEOUT, 60.0),
             ),
             metrics=MetricsConfig(
-                enabled=_get_bool_env("HOUYI_METRICS_ENABLED", True),
-                export_interval_seconds=_get_float_env("HOUYI_METRICS_EXPORT_INTERVAL", 60.0),
-                max_samples_per_skill=_get_int_env("HOUYI_METRICS_MAX_SAMPLES", 1000),
-                export_path=os.getenv("HOUYI_METRICS_EXPORT_PATH"),
+                enabled=_get_bool_env(ENV_METRICS_ENABLED, True),
+                export_interval_seconds=_get_float_env(ENV_METRICS_EXPORT_INTERVAL, 60.0),
+                max_samples_per_skill=_get_int_env(ENV_METRICS_MAX_SAMPLES, 1000),
+                export_path=os.getenv(ENV_METRICS_EXPORT_PATH),
             ),
             policy=PolicyConfig(
                 default_model_auto_invoke=os.getenv(
-                    "HOUYI_POLICY_DEFAULT_AUTO_INVOKE", "allow_with_consent"
+                    ENV_POLICY_DEFAULT_AUTO_INVOKE, "allow_with_consent"
                 ),
-                strict_mode=_get_bool_env("HOUYI_POLICY_STRICT_MODE", False),
-                allow_unknown_skills=_get_bool_env("HOUYI_POLICY_ALLOW_UNKNOWN", True),
+                strict_mode=_get_bool_env(ENV_POLICY_STRICT_MODE, False),
+                allow_unknown_skills=_get_bool_env(ENV_POLICY_ALLOW_UNKNOWN, True),
             ),
         )
 

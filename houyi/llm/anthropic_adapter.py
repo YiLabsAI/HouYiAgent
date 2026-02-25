@@ -6,6 +6,7 @@ import os
 from collections.abc import AsyncIterator
 from typing import Any
 
+from houyi.config.env_config import ENV_ANTHROPIC_API_KEY
 from houyi.llm.base import DEFAULT_TEMPERATURE, LLMAdapter, LLMMessage, LLMResponse
 
 
@@ -26,7 +27,7 @@ class AnthropicAdapter(LLMAdapter):
             api_key: Anthropic API key (defaults to ANTHROPIC_API_KEY env var)
             model: Model name (e.g., "claude-3-5-sonnet-20241022")
         """
-        self.api_key = api_key or os.getenv("ANTHROPIC_API_KEY")
+        self.api_key = api_key or os.getenv(ENV_ANTHROPIC_API_KEY)
         self.model = model
 
         if not self.api_key:

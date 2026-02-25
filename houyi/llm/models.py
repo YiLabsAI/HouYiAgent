@@ -10,7 +10,7 @@ rather than hardcoded here. The constants below serve as:
 Usage:
     from houyi.llm.models import DEFAULT_MODEL, MODEL_CONTEXT_WINDOWS
 
-    model = os.getenv("DEEPSEEK_MODEL", DEFAULT_MODEL)
+    model = os.getenv(ENV_DEEPSEEK_MODEL, DEFAULT_MODEL)
 """
 
 from __future__ import annotations

@@ -221,16 +221,20 @@ class GeminiEmbedder(BaseEmbedder):
 
         import os
 
-        # 1. API-key auth (no project required)
-        api_key = os.getenv("GOOGLE_API_KEY")
+        from houyi.config.env_config import (
+            ENV_GOOGLE_API_KEY,
+            ENV_GOOGLE_CLOUD_LOCATION,
+            ENV_GOOGLE_CLOUD_PROJECT,
+        )
+
+        api_key = os.getenv(ENV_GOOGLE_API_KEY)
         if api_key:
             self._client = genai.Client(api_key=api_key)
             logger.info("GeminiEmbedder: using GOOGLE_API_KEY auth")
             return
 
-        # 2. Vertex AI auth (requires project)
-        project = self._project or os.getenv("GOOGLE_CLOUD_PROJECT")
-        location = self._location or os.getenv("GOOGLE_CLOUD_LOCATION") or "us-central1"
+        project = self._project or os.getenv(ENV_GOOGLE_CLOUD_PROJECT)
+        location = self._location or os.getenv(ENV_GOOGLE_CLOUD_LOCATION) or "us-central1"
 
         if not project:
             raise ValueError(

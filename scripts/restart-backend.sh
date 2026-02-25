@@ -34,7 +34,7 @@ cd "$ROOT_DIR"
 
 # Ensure SDK + RAG deps are synced
 echo "� Syncing SDK dependencies..."
-uv sync --extra dev --extra rag --quiet
+uv sync --extra dev --extra rag --extra websearch-ddg --extra websearch-tavily --extra websearch-readability --quiet
 
 # Ensure houyi-studio-server is installed (uv sync may uninstall it)
 if ! uv run python -c "import houyi_studio" 2>/dev/null; then

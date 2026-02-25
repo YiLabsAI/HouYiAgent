@@ -14,6 +14,7 @@ import urllib.request
 from typing import Any
 
 from houyi import tool
+from houyi.core.skill.policy import InvocationPolicy, NetworkPerm, Permissions, SideEffect
 
 logger = logging.getLogger(__name__)
 
@@ -158,6 +159,10 @@ def get_location(city: str | None = None) -> dict[str, Any]:
             "found": False,
             "error": f"Unexpected: {type(e).__name__}",
         }
+
+
+get_location.invocation_policy = InvocationPolicy.default_for_side_effect(SideEffect.NETWORK)
+get_location.permissions = Permissions(network=NetworkPerm(enabled=True))
 
 
 # ── Default lifecycle hooks ──────────────────────────────────────────

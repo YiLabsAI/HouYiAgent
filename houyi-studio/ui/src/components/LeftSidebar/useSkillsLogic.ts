@@ -205,8 +205,24 @@ export function useSkillsLogic(
     });
 
     const unsubscribeConfigured = registerEventHandler('skill_configured', (event: unknown) => {
-      const e = event as { skill_name: string };
-      // Re-fetch detail to reflect the new configuration
+      const e = event as { skill_name: string; policy_action?: string; auto_invoke?: boolean };
+
+      // Optimistic update: patch skillDetail immediately so the dialog
+      // shows the correct value even before the full re-fetch completes.
+      setSkillDetail((prev) => {
+        if (!prev || prev.name !== e.skill_name) return prev;
+        const updatedPolicy = { ...prev.policy };
+        if (e.policy_action != null) {
+          updatedPolicy.default_action = e.policy_action;
+          updatedPolicy.model_auto_invoke = e.policy_action !== 'deny';
+        }
+        if (e.auto_invoke != null) {
+          updatedPolicy.model_auto_invoke = e.auto_invoke;
+        }
+        return { ...prev, policy: updatedPolicy };
+      });
+
+      // Full re-fetch for complete consistency (permissions, side_effect, etc.)
       if (selectedSkillRef.current === e.skill_name) {
         sendCommand({
           command_type: 'get_skill_detail',
@@ -215,7 +231,6 @@ export function useSkillsLogic(
           skill_name: e.skill_name,
         });
       }
-      // Also refresh the skills list since policy_action badge may have changed
       refreshSkills();
       useConsoleStore.getState().showToast(
         `Skill "${e.skill_name}" configuration saved`,
@@ -288,6 +303,20 @@ export function useSkillsLogic(
   }, [sendCommand, sessionId]);
 
   const configureSkill = useCallback((skillName: string, config: SkillConfigValues) => {
+    // Synchronous optimistic update — must happen BEFORE the dialog
+    // closes so that reopening it immediately shows the saved value.
+    setSkillDetail((prev) => {
+      if (!prev || prev.name !== skillName) return prev;
+      return {
+        ...prev,
+        policy: {
+          ...prev.policy,
+          default_action: config.policy_action,
+          model_auto_invoke: config.policy_action !== 'deny',
+        },
+      };
+    });
+
     sendCommand({
       command_type: 'configure_skill',
       command_id: `cmd_${crypto.randomUUID().slice(0, 8)}`,

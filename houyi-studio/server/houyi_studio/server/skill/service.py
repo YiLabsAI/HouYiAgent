@@ -136,10 +136,14 @@ class SkillService:
         if not self._metrics_store:
             return _empty_metrics(skill_name)
         agg = self._metrics_store.aggregate(skill_name)
+        if agg is None:
+            return _empty_metrics(skill_name)
         result: dict[str, Any] = {"skill_name": skill_name}
         for f in _METRICS_FIELDS:
-            result[f] = getattr(agg, f)
-        result["last_invoked"] = agg.last_invoked.isoformat() if agg.last_invoked else None
+            result[f] = getattr(agg, f, 0)
+        result["last_invoked"] = (
+            agg.last_invoked.isoformat() if getattr(agg, "last_invoked", None) else None
+        )
         return result
 
     # ── Write operations (delegate to loader) ─────────────────────
@@ -189,7 +193,7 @@ class SkillService:
         if not changes:
             return False, "No configuration changes specified"
 
-        logger.info("Configured skill '%s': %s", skill_name, ", ".join(changes))
+        logger.debug("Configured skill '%s': %s", skill_name, ", ".join(changes))
         return True, None
 
     # ── Dry-run (delegate to validator) ───────────────────────────

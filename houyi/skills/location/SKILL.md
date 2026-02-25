@@ -3,6 +3,12 @@ name: location
 version: 0.1.0
 description: Location/geocoding tools using Open-Meteo Geocoding API
 author: Houyi Team
+invocationPolicy:
+  sideEffect: network
+  modelAutoInvoke: allow_with_consent
+permissions:
+  network:
+    enabled: true
 ---
 
 # Location Skill

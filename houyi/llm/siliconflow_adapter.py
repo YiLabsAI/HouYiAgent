@@ -158,9 +158,9 @@ class SiliconFlowAdapter(LLMAdapter):
         **kwargs: Any,
     ) -> LLMResponse:
         """Non-streaming chat via httpx fallback with proxy + retry."""
-        import urllib.request
-
         import httpx
+
+        from houyi.net.proxy import detect_proxy
 
         url = self.base_url.rstrip("/") + "/chat/completions"
         body: dict = {
@@ -182,8 +182,7 @@ class SiliconFlowAdapter(LLMAdapter):
             "Content-Type": "application/json",
         }
 
-        proxies = urllib.request.getproxies()
-        proxy_url = proxies.get("https") or proxies.get("http")
+        proxy_url = detect_proxy()
 
         max_retries = DEFAULT_MAX_RETRIES
         last_error: Exception | None = None
@@ -401,7 +400,10 @@ class SiliconFlowAdapter(LLMAdapter):
         """Fallback: stream via httpx raw SSE when openai SDK is not installed."""
         import httpx
 
+        from houyi.net.proxy import detect_proxy
+
         http_client = httpx.AsyncClient(
+            proxy=detect_proxy(),
             timeout=httpx.Timeout(300.0, connect=10.0, read=300.0),
             limits=httpx.Limits(max_keepalive_connections=5, max_connections=10),
         )

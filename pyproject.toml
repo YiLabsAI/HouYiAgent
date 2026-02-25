@@ -49,6 +49,10 @@ studio-server = [
     "aiofiles>=23.2.1",
 ]
 
+websearch-ddg = [
+    "ddgs>=9.0,<10",
+]
+
 websearch-tavily = [
     "tavily-python>=0.3.0",
 ]
@@ -56,6 +60,7 @@ websearch-tavily = [
 websearch-readability = [
     "readability-lxml>=0.8.1",
     "beautifulsoup4>=4.11.0",
+    "markdownify>=0.14.0",
 ]
 
 distributed = [
@@ -112,7 +117,7 @@ rag-full = [
 ]
 
 all = [
-    "houyi[dev,studio-server,distributed,model-adapters,vertex-ai,verification,observability,rag-full,websearch-tavily,websearch-readability,skill-yaml]",
+    "houyi[dev,studio-server,distributed,model-adapters,vertex-ai,verification,observability,rag-full,websearch-ddg,websearch-tavily,websearch-readability,skill-yaml]",
 ]
 
 [build-system]
@@ -210,6 +215,7 @@ module = [
     "houyi.evaluation.*",
 ]
 ignore_errors = true
+
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

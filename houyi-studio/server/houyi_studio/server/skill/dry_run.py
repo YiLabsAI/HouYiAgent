@@ -81,10 +81,16 @@ class DryRunValidator:
         self._check_policy(skill_name, tool_name, result)
         self._check_side_effects(skill, result)
 
-        if live:
+        if live and result["valid"]:
             result["llm_verification"] = await _live_verify(
                 skill, skill_name, tool_name, input_data
             )
+        elif live and not result["valid"]:
+            result["llm_verification"] = {
+                "success": False,
+                "message": f"Skipped — static validation failed (policy: {result['policy_result']})",
+                "phases": [],
+            }
 
         return result
 
@@ -119,12 +125,27 @@ class DryRunValidator:
                 result["schema_errors"].append(str(e))
 
     def _check_policy(self, skill_name: str, tool_name: str, result: dict[str, Any]) -> None:
+        skill = self._registry.get(skill_name)
+        if skill:
+            ip = getattr(skill, "invocation_policy", None)
+            if ip is not None:
+                mai = getattr(ip, "model_auto_invoke", None)
+                if mai is not None:
+                    action = mai.value if hasattr(mai, "value") else str(mai)
+                    result["policy_result"] = action
+                    if action == POLICY_DENY:
+                        result["valid"] = False
+                    return
+
         if not self._policy_enforcer:
             return
-        pr = self._policy_enforcer.evaluate(skill_name, tool_name, invoked_by_model=False)
-        result["policy_result"] = pr.action.value
-        if pr.action.value == POLICY_DENY:
-            result["valid"] = False
+        try:
+            pr = self._policy_enforcer.check_invocation(skill_name, is_model_initiated=False)
+            result["policy_result"] = POLICY_DENY if not pr.allowed else POLICY_ALLOW
+            if not pr.allowed:
+                result["valid"] = False
+        except AttributeError:
+            pass
 
     @staticmethod
     def _check_side_effects(skill: SkillSpec, result: dict[str, Any]) -> None:
@@ -133,6 +154,39 @@ class DryRunValidator:
 
 
 # ── Live LLM verification with phased progressive disclosure ─────
+
+
+def _assess_tool_result(exec_result: object, exec_result_str: str) -> str:
+    """Determine the phase status based on actual tool execution output.
+
+    Returns "pass", "warn", or "fail".
+    Priority: non-empty results → pass (even with fallback errors);
+    empty results + errors → warn; empty results only → warn.
+    """
+    if isinstance(exec_result, dict):
+        results = exec_result.get("results")
+        has_results = isinstance(results, list) and len(results) > 0
+
+        if has_results:
+            return "pass"
+
+        metadata = exec_result.get("metadata")
+        has_errors = bool(exec_result.get("errors"))
+        if isinstance(metadata, dict):
+            has_errors = (
+                has_errors or metadata.get("error_count", 0) > 0 or bool(metadata.get("errors"))
+            )
+
+        if isinstance(results, list) and len(results) == 0:
+            return "warn"
+        if has_errors:
+            return "warn"
+
+    lower = exec_result_str[:500].lower()
+    if "'results': []" in lower or "results': []" in lower:
+        return "warn"
+
+    return "pass"
 
 
 def _build_natural_query(
@@ -321,20 +375,29 @@ async def _live_verify(
                     else:
                         exec_result = await asyncio.to_thread(exec_fn, **tool_call_args)
 
-                    exec_result_str = str(exec_result)
+                    try:
+                        exec_result_str = json.dumps(exec_result, ensure_ascii=False, default=str)
+                    except (TypeError, ValueError):
+                        exec_result_str = str(exec_result)
                     if len(exec_result_str) > 2000:
                         exec_result_str = exec_result_str[:2000] + "... (truncated)"
 
                     result["execution_result"] = exec_result_str
+                    exec_status = _assess_tool_result(exec_result, exec_result_str)
+                    preview = (
+                        exec_result
+                        if isinstance(exec_result, (dict, list))
+                        else exec_result_str[:500]
+                    )
                     phases.append(
                         {
                             "name": "tool_execution",
                             "label": "Tool Execution",
                             "timestamp_ms": _elapsed_ms(),
-                            "status": "pass",
+                            "status": exec_status,
                             "data": {
                                 "result_length": len(exec_result_str),
-                                "result_preview": exec_result_str[:500],
+                                "result_preview": preview,
                             },
                         }
                     )
@@ -419,6 +482,43 @@ async def _live_verify(
         }
 
 
+def _simplify_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    """Strip Pydantic-specific metadata from a JSON Schema for LLM consumption.
+
+    Many LLMs (especially non-OpenAI providers) get confused by Pydantic's
+    ``model_json_schema()`` extras — top-level ``title``, per-property
+    ``title``, and ``anyOf`` wrappers for optional fields.  Cleaning these
+    produces a minimal schema that all providers handle reliably.
+    """
+    cleaned: dict[str, Any] = {}
+    for key, value in schema.items():
+        if key == "title":
+            continue
+        if key == "properties" and isinstance(value, dict):
+            cleaned[key] = {
+                prop_name: _simplify_property(prop_schema)
+                for prop_name, prop_schema in value.items()
+            }
+        else:
+            cleaned[key] = value
+    return cleaned
+
+
+def _simplify_property(prop: dict[str, Any]) -> dict[str, Any]:
+    """Simplify a single property schema: drop title, flatten anyOf nullables."""
+    result: dict[str, Any] = {}
+    for key, value in prop.items():
+        if key == "title":
+            continue
+        if key == "anyOf" and isinstance(value, list):
+            non_null = [t for t in value if t != {"type": "null"}]
+            if len(non_null) == 1:
+                result.update(non_null[0])
+                continue
+        result[key] = value
+    return result
+
+
 def _build_tool_definitions(skill: SkillSpec) -> list[dict[str, Any]]:
     """Build OpenAI-format tool definitions from a SkillSpec.
 
@@ -433,7 +533,7 @@ def _build_tool_definitions(skill: SkillSpec) -> list[dict[str, Any]]:
             schema: dict[str, Any] = {}
             if hasattr(tool, "input_schema") and tool.input_schema:
                 with contextlib.suppress(Exception):
-                    schema = tool.input_schema.model_json_schema()
+                    schema = _simplify_schema(tool.input_schema.model_json_schema())
             defs.append(
                 {
                     "type": "function",
@@ -445,11 +545,10 @@ def _build_tool_definitions(skill: SkillSpec) -> list[dict[str, Any]]:
                 }
             )
     else:
-        # Single-tool skill: the skill itself is the tool
         schema = {}
         if hasattr(skill, "input_schema") and skill.input_schema:
             with contextlib.suppress(Exception):
-                schema = skill.input_schema.model_json_schema()
+                schema = _simplify_schema(skill.input_schema.model_json_schema())
         defs.append(
             {
                 "type": "function",

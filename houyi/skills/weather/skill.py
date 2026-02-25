@@ -23,6 +23,7 @@ from datetime import date, timedelta
 from typing import Any
 
 from houyi import tool
+from houyi.core.skill.policy import InvocationPolicy, NetworkPerm, Permissions, SideEffect
 
 logger = logging.getLogger(__name__)
 
@@ -219,9 +220,11 @@ def get_weather(lat: float, lon: float, date: str) -> str:
         return f"Weather unavailable for ({lat:.4f}, {lon:.4f}) on {date}: {type(e).__name__}"
 
 
+get_weather.invocation_policy = InvocationPolicy.default_for_side_effect(SideEffect.NETWORK)
+get_weather.permissions = Permissions(network=NetworkPerm(enabled=True))
+
+
 # ── Default lifecycle hooks ──────────────────────────────────────────
-# These demonstrate the hooks system and provide useful default behaviour.
-# Users can extend or replace these hooks in their own SKILL.md or code.
 
 from houyi.core.skill.hooks import HookEvent, HookType, SkillHook
 

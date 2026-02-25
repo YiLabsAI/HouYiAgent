@@ -120,21 +120,25 @@ class TestInternalSkillMdLoading:
         assert spec.permissions.filesystem.write is True
         assert spec.invocation_policy.side_effect == SideEffect.FILESYSTEM
 
-    def test_weather_skill_minimal(self) -> None:
-        """Verify weather SKILL.md loads (no policy/permissions)."""
+    def test_weather_skill_has_network_policy(self) -> None:
+        """Verify weather SKILL.md declares network side-effect."""
         spec = self._load_skill("houyi/skills/weather/SKILL.md")
 
         assert spec.name == "weather"
-        assert spec.invocation_policy is None
-        assert spec.permissions is None
+        assert spec.invocation_policy is not None
+        assert spec.invocation_policy.side_effect == SideEffect.NETWORK
+        assert spec.permissions is not None
+        assert spec.permissions.network.enabled is True
 
-    def test_location_skill_minimal(self) -> None:
-        """Verify location SKILL.md loads (no policy/permissions)."""
+    def test_location_skill_has_network_policy(self) -> None:
+        """Verify location SKILL.md declares network side-effect."""
         spec = self._load_skill("houyi/skills/location/SKILL.md")
 
         assert spec.name == "location"
-        assert spec.invocation_policy is None
-        assert spec.permissions is None
+        assert spec.invocation_policy is not None
+        assert spec.invocation_policy.side_effect == SideEffect.NETWORK
+        assert spec.permissions is not None
+        assert spec.permissions.network.enabled is True
 
 
 # =========================================================================

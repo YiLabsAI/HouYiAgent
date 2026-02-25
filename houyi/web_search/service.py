@@ -4,10 +4,21 @@ import asyncio
 import logging
 import os
 import time
-from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+from houyi.config.env_config import (
+    ENV_BOCHA_API_KEY,
+    ENV_SEARXNG_BASE_URL,
+    ENV_SERPER_API_KEY,
+    ENV_TAVILY_API_KEY,
+    ENV_WEB_SEARCH_CACHE_ENABLED,
+    ENV_WEB_SEARCH_CACHE_MAX_SIZE,
+    ENV_WEB_SEARCH_CACHE_TTL,
+    ENV_WEB_SEARCH_PROVIDER,
+    ENV_WEB_SEARCH_PROXY_ENABLED,
+    ENV_WEB_SEARCH_TIMEOUT,
+)
 from houyi.verification.cache import LRUCache
 from houyi.web_search.content_fetchers import JinaContentFetcher, ReadabilityContentFetcher
 from houyi.web_search.errors import (
@@ -21,6 +32,7 @@ from houyi.web_search.errors import (
 )
 from houyi.web_search.providers import (
     DEFAULT_PROVIDER_TIMEOUT,
+    BochaWebSearchProvider,
     DuckDuckGoWebSearchProvider,
     SearxNGWebSearchProvider,
     SerperWebSearchProvider,
@@ -87,13 +99,23 @@ def _is_truthy(value: str | None) -> bool:
 
 @dataclass(slots=True)
 class WebSearchRetryPolicy:
-    max_retries: int = 0
-    min_delay: float = 0.2
-    max_delay: float = 2.0
-    jitter: float = 0.1
+    """Retry policy with exponential backoff (reuses LLM retry strategy)."""
+
+    max_retries: int = 1
+    base_delay: float = 1.0
+    max_delay: float = 5.0
 
     def should_retry(self, error: WebSearchError) -> bool:
         return isinstance(error, (ProviderTimeoutError, ProviderRateLimitError))
+
+    async def backoff(self, attempt: int) -> None:
+        """Exponential backoff with full-jitter (same strategy as LLM retry)."""
+        import random
+
+        delay = min(self.base_delay * (2**attempt), self.max_delay)
+        jitter = random.uniform(0, delay)
+        logger.info("web_search retry %d: backing off %.2fs", attempt + 1, jitter)
+        await asyncio.sleep(jitter)
 
 
 class WebSearchService:
@@ -105,28 +127,41 @@ class WebSearchService:
         cache: LRUCache | None = None,
         cache_ttl: int | None = None,
         retry_policy: WebSearchRetryPolicy | None = None,
-        sleep_func: Callable[[float], Any] | None = None,
     ) -> None:
         self.provider = provider
         self.fallback_providers = fallback_providers or []
         self.cache = cache
         self.cache_ttl = cache_ttl
-        self.retry_policy = retry_policy or WebSearchRetryPolicy(max_retries=0)
-        self._sleep = sleep_func or asyncio.sleep
+        self.retry_policy = retry_policy or WebSearchRetryPolicy()
 
     @classmethod
     def from_env(cls, *, provider: str | None = None) -> WebSearchService:
-        provider_name = (
-            (provider or "").strip() or (os.getenv("WEB_SEARCH_PROVIDER") or "").strip() or "ddg"
-        )
+        explicit_provider = (provider or "").strip()
+        env_provider = (os.getenv(ENV_WEB_SEARCH_PROVIDER) or "").strip()
+        provider_name = explicit_provider or env_provider
+        auto_detected = False
 
-        ttl_raw = (os.getenv("WEB_SEARCH_CACHE_TTL") or "").strip()
-        ttl = int(ttl_raw) if ttl_raw else 300  # default 5 min cache
+        if not provider_name:
+            auto_detected = True
+            if os.getenv(ENV_SERPER_API_KEY):
+                provider_name = "serper"
+            elif os.getenv(ENV_TAVILY_API_KEY):
+                provider_name = "tavily"
+            elif os.getenv(ENV_BOCHA_API_KEY):
+                provider_name = "bocha"
+            elif os.getenv(ENV_SEARXNG_BASE_URL):
+                provider_name = "searxng"
+            else:
+                provider_name = "ddg"
 
-        enabled_raw = os.getenv("WEB_SEARCH_CACHE_ENABLED")
+        # --- Cache ---
+        ttl_raw = (os.getenv(ENV_WEB_SEARCH_CACHE_TTL) or "").strip()
+        ttl = int(ttl_raw) if ttl_raw else 300
+
+        enabled_raw = os.getenv(ENV_WEB_SEARCH_CACHE_ENABLED)
         cache_enabled = True if enabled_raw is None else _is_truthy(enabled_raw)
 
-        max_size_raw = (os.getenv("WEB_SEARCH_CACHE_MAX_SIZE") or "").strip()
+        max_size_raw = (os.getenv(ENV_WEB_SEARCH_CACHE_MAX_SIZE) or "").strip()
         max_size = int(max_size_raw) if max_size_raw else 256
 
         cache: LRUCache | None = None
@@ -136,18 +171,26 @@ class WebSearchService:
                 _GLOBAL_CACHE = LRUCache(max_size=max_size, default_ttl=ttl)
             cache = _GLOBAL_CACHE
 
-        primary = cls._build_provider(provider_name)
+        # --- Proxy ---
+        proxy_url: str | None = None
+        if _is_truthy(os.getenv(ENV_WEB_SEARCH_PROXY_ENABLED, "false")):
+            from houyi.net.proxy import detect_proxy
 
-        # Build fallback chain from available providers (skip primary)
-        fallback_order = ["serper", "tavily", "ddg", "searxng"]
+            proxy_url = detect_proxy()
+
+        primary = cls._build_provider(provider_name, proxy_url=proxy_url)
+
+        # Only build fallback chain when provider was auto-detected.
         fallbacks: list[WebSearchProvider] = []
-        for name in fallback_order:
-            if name == provider_name:
-                continue
-            try:
-                fallbacks.append(cls._build_provider(name))
-            except (ProviderAuthError, DependencyMissingError, ValueError):
-                continue
+        if auto_detected:
+            fallback_order = ["serper", "tavily", "bocha", "ddg", "searxng"]
+            for name in fallback_order:
+                if name == provider_name:
+                    continue
+                try:
+                    fallbacks.append(cls._build_provider(name, proxy_url=proxy_url))
+                except (ProviderAuthError, DependencyMissingError, ValueError):
+                    continue
 
         return cls(
             provider=primary,
@@ -157,42 +200,56 @@ class WebSearchService:
         )
 
     @staticmethod
-    def _build_provider(name: str, *, timeout: float | None = None) -> WebSearchProvider:
-        normalized = (name or "").strip().lower()
-        timeout_raw = (os.getenv("WEB_SEARCH_TIMEOUT") or "").strip()
+    def _build_provider(
+        name: str,
+        *,
+        timeout: float | None = None,
+        proxy_url: str | None = None,
+    ) -> WebSearchProvider:
+        normalised = (name or "").strip().lower()
+        timeout_raw = (os.getenv(ENV_WEB_SEARCH_TIMEOUT) or "").strip()
         resolved_timeout = (
             timeout or (float(timeout_raw) if timeout_raw else None) or DEFAULT_PROVIDER_TIMEOUT
         )
-        if normalized == "ddg":
-            return DuckDuckGoWebSearchProvider(timeout=resolved_timeout)
-        if normalized == "searxng":
-            base_url = os.getenv("SEARXNG_BASE_URL")
-            return SearxNGWebSearchProvider(base_url=base_url, timeout=resolved_timeout)
-        if normalized == "tavily":
-            api_key = os.getenv("TAVILY_API_KEY")
-            return TavilyWebSearchProvider(api_key=api_key, timeout=resolved_timeout)
-        if normalized == "serper":
-            api_key = os.getenv("SERPER_API_KEY")
-            return SerperWebSearchProvider(api_key=api_key, timeout=resolved_timeout)
-        raise ValueError(f"Unsupported web search provider: {normalized}")
+        if normalised == "ddg":
+            return DuckDuckGoWebSearchProvider(
+                timeout=resolved_timeout,
+                proxy_url=proxy_url,
+            )
+        if normalised == "searxng":
+            return SearxNGWebSearchProvider(
+                base_url=os.getenv(ENV_SEARXNG_BASE_URL),
+                timeout=resolved_timeout,
+                proxy_url=proxy_url,
+            )
+        if normalised == "tavily":
+            return TavilyWebSearchProvider(
+                api_key=os.getenv(ENV_TAVILY_API_KEY),
+                timeout=resolved_timeout,
+            )
+        if normalised == "serper":
+            return SerperWebSearchProvider(
+                api_key=os.getenv(ENV_SERPER_API_KEY),
+                timeout=resolved_timeout,
+                proxy_url=proxy_url,
+            )
+        if normalised == "bocha":
+            return BochaWebSearchProvider(
+                api_key=os.getenv(ENV_BOCHA_API_KEY),
+                timeout=resolved_timeout,
+                proxy_url=proxy_url,
+            )
+        raise ValueError(f"Unsupported web search provider: {normalised}")
 
     def _resolve_providers(self) -> list[WebSearchProvider]:
         providers: list[WebSearchProvider] = [self.provider]
         providers.extend(self.fallback_providers)
+        return providers
 
-        resolved: list[WebSearchProvider] = []
-        for provider in providers:
-            try:
-                if provider.name in {"serper", "tavily"} or provider.name == "searxng":
-                    resolved.append(provider)
-                else:
-                    resolved.append(provider)
-            except ProviderAuthError:
-                continue
-        return resolved
-
-    def _cache_key(self, query: str, *, max_results: int, include_content: bool) -> str:
-        return f"{self.provider.name}|{query}|{max_results}|{int(include_content)}"
+    def _cache_key(
+        self, query: str, *, provider: str, max_results: int, include_content: bool
+    ) -> str:
+        return f"{query}|{provider}|{max_results}|{int(include_content)}"
 
     @staticmethod
     def _normalize_results(results: list[Any]) -> list[WebSearchResult]:
@@ -229,16 +286,20 @@ class WebSearchService:
         rate_limit_count = 0
         rate_limit_recorded = False
         attempt = 0
+        provider_timeout = getattr(provider, "timeout", DEFAULT_PROVIDER_TIMEOUT)
+        hard_timeout = provider_timeout * 1.5
         while True:
             attempt += 1
-            # Instrumentation: sub-span per provider attempt
             span = _start_internal_span(
                 f"provider.{provider.name}",
                 {"provider.name": provider.name, "provider.attempt": attempt},
             )
             provider_start = time.monotonic()
             try:
-                results = await provider.search(query, max_results=max_results)
+                results = await asyncio.wait_for(
+                    provider.search(query, max_results=max_results),
+                    timeout=hard_timeout,
+                )
                 provider_latency_ms = int((time.monotonic() - provider_start) * 1000)
                 raw = getattr(provider, "last_raw_payload", None)
                 if isinstance(raw, dict):
@@ -248,6 +309,17 @@ class WebSearchService:
                     span.set_attribute("provider.result_count", len(provider_results))
                     span.set_attribute("provider.latency_ms", provider_latency_ms)
                 _end_span(span)
+                break
+            except TimeoutError:
+                elapsed = int((time.monotonic() - provider_start) * 1000)
+                msg = f"{provider.name} timeout after {elapsed}ms"
+                _end_span(span, error=msg)
+                errors.append(
+                    {"type": "ProviderTimeoutError", "message": msg, "provider": provider.name}
+                )
+                if attempt <= self.retry_policy.max_retries:
+                    await self.retry_policy.backoff(attempt - 1)
+                    continue
                 break
             except ProviderRateLimitError as exc:
                 _end_span(span, error=str(exc))
@@ -262,7 +334,7 @@ class WebSearchService:
                     )
                     rate_limit_recorded = True
                 if attempt <= self.retry_policy.max_retries and self.retry_policy.should_retry(exc):
-                    await self._sleep(0.0)
+                    await self.retry_policy.backoff(attempt - 1)
                     continue
                 break
             except ProviderTimeoutError as exc:
@@ -271,7 +343,7 @@ class WebSearchService:
                     {"type": type(exc).__name__, "message": str(exc), "provider": provider.name}
                 )
                 if attempt <= self.retry_policy.max_retries and self.retry_policy.should_retry(exc):
-                    await self._sleep(0.0)
+                    await self.retry_policy.backoff(attempt - 1)
                     continue
                 break
             except ProviderError as exc:
@@ -295,14 +367,23 @@ class WebSearchService:
         *,
         max_results: int = 10,
         include_content: bool = False,
+        max_content_chars: int | None = None,
         use_cache: bool = True,
     ) -> WebSearchResponse:
         start = time.monotonic()
         errors: list[dict[str, Any]] = []
 
+        providers = self._resolve_providers()
+        primary_provider_name = providers[0].name if providers else "unknown"
+
         cached = False
         cache_hit = False
-        cache_key = self._cache_key(query, max_results=max_results, include_content=include_content)
+        cache_key = self._cache_key(
+            query,
+            provider=primary_provider_name,
+            max_results=max_results,
+            include_content=include_content,
+        )
         logger.info(
             "web_search cache lookup: use_cache=%s cache_exists=%s cache_key=%s query=%r",
             use_cache,
@@ -324,15 +405,21 @@ class WebSearchService:
                 return resp
             logger.info("web_search CACHE MISS: cache_key=%s", cache_key)
 
-        providers = self._resolve_providers()
         provider_used: WebSearchProvider | None = None
         provider_results: list[WebSearchResult] = []
         raw_payload: dict[str, Any] | None = None
         provider_latency_ms: int | None = None
         rate_limit_count = 0
 
-        for provider in providers:
+        for idx, provider in enumerate(providers):
             provider_used = provider
+            if idx > 0:
+                logger.info(
+                    "web_search fallback: trying provider '%s' (attempt %d/%d)",
+                    provider.name,
+                    idx + 1,
+                    len(providers),
+                )
             (
                 provider_results,
                 raw_payload,
@@ -423,6 +510,11 @@ class WebSearchService:
                 _end_span(fetch_span)
                 if _fetch_tc_token is not None:
                     _TraceContext.pop(_fetch_tc_token)
+
+        if max_content_chars and provider_results:
+            for r in provider_results:
+                if r.content and len(r.content) > max_content_chars:
+                    r.content = r.content[:max_content_chars] + "..."
 
         latency_ms = int((time.monotonic() - start) * 1000)
         provider_name = provider_used.name if provider_used else self.provider.name

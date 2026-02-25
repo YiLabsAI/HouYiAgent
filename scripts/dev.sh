@@ -52,7 +52,7 @@ HOUYI_UI_PORT=${HOUYI_UI_PORT:-3000}
 VITE_WS_HOST=${VITE_WS_HOST:-localhost:${HOUYI_PORT}}
 
 # Create a new session and run backend (ensure houyi-studio-server is installed first)
-tmux new-session -d -s $SESSION_NAME -n "backend" "cd ${ROOT_DIR} && (uv run python -c 'import houyi_studio' 2>/dev/null || uv pip install -e houyi-studio/server --quiet) && env HOUYI_PORT=${HOUYI_PORT} WEB_SEARCH_CACHE_ENABLED=${WEB_SEARCH_CACHE_ENABLED} WEB_SEARCH_CACHE_TTL=${WEB_SEARCH_CACHE_TTL} WEB_SEARCH_CACHE_MAX_SIZE=${WEB_SEARCH_CACHE_MAX_SIZE} WEB_SEARCH_CACHE_LOG_HITS=${WEB_SEARCH_CACHE_LOG_HITS} WEB_SEARCH_PROVIDER=${WEB_SEARCH_PROVIDER} uv run python -m houyi_studio.server"
+tmux new-session -d -s $SESSION_NAME -n "backend" "cd ${ROOT_DIR} && uv sync --extra dev --extra rag --extra websearch-ddg --extra websearch-tavily --extra websearch-readability --quiet && (uv run python -c 'import houyi_studio' 2>/dev/null || uv pip install -e houyi-studio/server --quiet) && env HOUYI_PORT=${HOUYI_PORT} WEB_SEARCH_CACHE_ENABLED=${WEB_SEARCH_CACHE_ENABLED} WEB_SEARCH_CACHE_TTL=${WEB_SEARCH_CACHE_TTL} WEB_SEARCH_CACHE_MAX_SIZE=${WEB_SEARCH_CACHE_MAX_SIZE} WEB_SEARCH_CACHE_LOG_HITS=${WEB_SEARCH_CACHE_LOG_HITS} WEB_SEARCH_PROVIDER=${WEB_SEARCH_PROVIDER} uv run python -m houyi_studio.server"
 
 # Create a new window for frontend
 tmux new-window -t $SESSION_NAME -n "frontend" "cd ${ROOT_DIR}/houyi-studio/ui && VITE_WS_HOST=${VITE_WS_HOST} pnpm exec vite --host 127.0.0.1 --port ${HOUYI_UI_PORT} --strictPort"

@@ -58,6 +58,27 @@ class TestParseArguments:
         assert ToolResultBuilder.parse_arguments("not-json") == {}
 
 
+class TestSerialize:
+    def test_basic_dict(self):
+        out = ToolResultBuilder.serialize({"ok": True})
+        assert '"ok": true' in out
+
+    def test_non_ascii_preserved(self):
+        """Non-ASCII characters should NOT be escaped to \\uXXXX."""
+        out = ToolResultBuilder.serialize({"title": "caf\u00e9"})
+        assert "caf\u00e9" in out
+        assert "\\u" not in out
+
+    def test_newlines_in_content(self):
+        """Newlines should appear as \\n in JSON output (JSON spec), not double-escaped."""
+        out = ToolResultBuilder.serialize({"text": "line1\nline2"})
+        assert "line1\\nline2" in out
+
+    def test_fallback_for_non_serializable(self):
+        out = ToolResultBuilder.serialize(object())
+        assert '"result"' in out
+
+
 class TestCoercePayload:
     def test_dict(self):
         assert ToolResultBuilder.coerce_payload({"a": 1}) == {"a": 1}

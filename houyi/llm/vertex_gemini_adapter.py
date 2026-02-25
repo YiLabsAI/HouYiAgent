@@ -13,9 +13,9 @@ Uses the google-genai SDK which communicates via REST API,
 making it compatible with HTTP proxies (unlike the gRPC-based vertexai SDK).
 
 Proxy handling:
-    Uses Python's ``urllib.request.getproxies()`` for cross-platform system
-    proxy detection (macOS SystemConfiguration, Windows registry, Linux env
-    vars).  When a proxy is detected, a custom ``httpx`` client with the
+    Uses ``houyi.net.proxy.detect_proxy()`` for cross-platform system
+    proxy detection (with optional ``HOUYI_PROXY_URL`` override).
+    When a proxy is detected, a custom ``httpx`` client with the
     proxy explicitly configured is injected into the ``genai.Client`` via
     ``http_options``, guaranteeing the proxy is used for all requests.
 """
@@ -27,36 +27,12 @@ import logging
 import os
 from collections.abc import AsyncIterator
 from typing import Any
-from urllib.request import getproxies
 
 from houyi.config.env_config import _DEFAULT_GOOGLE_LOCATION
 from houyi.llm.base import DEFAULT_TEMPERATURE, LLMAdapter, LLMMessage, LLMResponse
+from houyi.net.proxy import detect_proxy
 
 logger = logging.getLogger(__name__)
-
-# ── Proxy detection (cross-platform) ─────────────────────────────────
-
-
-def _detect_proxy() -> str | None:
-    """Detect the system HTTPS/HTTP proxy.
-
-    ``urllib.request.getproxies()`` is the standard cross-platform approach:
-
-    * **macOS** — reads SystemConfiguration framework (same data as
-      ``scutil --proxy``, no subprocess needed).
-    * **Windows** — reads Internet Explorer / system registry settings.
-    * **Linux** — reads ``HTTPS_PROXY`` / ``HTTP_PROXY`` / ``ALL_PROXY``
-      environment variables.
-
-    Returns the proxy URL (e.g. ``http://127.0.0.1:7890``) or ``None``.
-    """
-    proxies = getproxies()
-    proxy_url = proxies.get("https") or proxies.get("http")
-    if proxy_url:
-        logger.debug("System proxy detected: %s (all: %s)", proxy_url, proxies)
-    else:
-        logger.debug("No system proxy detected (getproxies=%s)", proxies)
-    return proxy_url
 
 
 def _build_proxy_http_options(proxy_url: str) -> dict[str, Any]:
@@ -121,7 +97,7 @@ class GoogleVertexGeminiAdapter(LLMAdapter):
             ) from exc
 
         # ── Proxy detection (cross-platform) ──────────────────────────
-        self._proxy_url = _detect_proxy()
+        self._proxy_url = detect_proxy()
         http_options = _build_proxy_http_options(self._proxy_url) if self._proxy_url else None
 
         if self.project:

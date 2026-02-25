@@ -650,6 +650,138 @@ describe('useSkillsLogic', () => {
     });
   });
 
+  // --- configureSkill optimistic update ---
+
+  describe('configureSkill', () => {
+    it('updates skillDetail.policy synchronously before WebSocket round-trip', () => {
+      const { result } = renderHook(() =>
+        useSkillsLogic(SESSION_ID, mocks.sendCommand, mocks.registerEventHandler),
+      );
+
+      // 1. Select a skill and populate detail
+      act(() => {
+        result.current.selectSkill('web_search');
+      });
+      act(() => {
+        mocks.emitEvent('skill_detail', {
+          skill: {
+            ...MOCK_DETAIL,
+            name: 'web_search',
+            display_name: 'Web Search',
+            policy: { default_action: 'allow_with_consent', model_auto_invoke: true },
+            side_effect: 'network',
+          },
+        });
+      });
+      expect(result.current.skillDetail!.policy.default_action).toBe('allow_with_consent');
+
+      // 2. Configure: change policy to 'allow'
+      mocks.sendCommand.mockClear();
+      act(() => {
+        result.current.configureSkill('web_search', { policy_action: 'allow', auto_invoke: true });
+      });
+
+      // 3. Verify: detail.policy is updated IMMEDIATELY (no event needed)
+      expect(result.current.skillDetail!.policy.default_action).toBe('allow');
+      expect(result.current.skillDetail!.policy.model_auto_invoke).toBe(true);
+
+      // 4. Verify: command was also sent to backend
+      expect(mocks.sendCommand).toHaveBeenCalledWith(
+        expect.objectContaining({
+          command_type: 'configure_skill',
+          skill_name: 'web_search',
+          policy_action: 'allow',
+          auto_invoke: true,
+        }),
+      );
+    });
+
+    it('sets model_auto_invoke=false when policy is deny', () => {
+      const { result } = renderHook(() =>
+        useSkillsLogic(SESSION_ID, mocks.sendCommand, mocks.registerEventHandler),
+      );
+
+      act(() => {
+        result.current.selectSkill('web_search');
+      });
+      act(() => {
+        mocks.emitEvent('skill_detail', {
+          skill: {
+            ...MOCK_DETAIL,
+            name: 'web_search',
+            policy: { default_action: 'allow', model_auto_invoke: true },
+          },
+        });
+      });
+
+      act(() => {
+        result.current.configureSkill('web_search', { policy_action: 'deny', auto_invoke: false });
+      });
+
+      expect(result.current.skillDetail!.policy.default_action).toBe('deny');
+      expect(result.current.skillDetail!.policy.model_auto_invoke).toBe(false);
+    });
+
+    it('does not update detail when skill name does not match', () => {
+      const { result } = renderHook(() =>
+        useSkillsLogic(SESSION_ID, mocks.sendCommand, mocks.registerEventHandler),
+      );
+
+      act(() => {
+        result.current.selectSkill('get_weather');
+      });
+      act(() => {
+        mocks.emitEvent('skill_detail', { skill: MOCK_DETAIL });
+      });
+      expect(result.current.skillDetail!.policy.default_action).toBe('allow');
+
+      act(() => {
+        result.current.configureSkill('other_skill', { policy_action: 'deny', auto_invoke: false });
+      });
+
+      // Should NOT change because names don't match
+      expect(result.current.skillDetail!.policy.default_action).toBe('allow');
+    });
+
+    it('survives rapid save-reopen cycle without losing the update', () => {
+      const { result } = renderHook(() =>
+        useSkillsLogic(SESSION_ID, mocks.sendCommand, mocks.registerEventHandler),
+      );
+
+      // Populate detail
+      act(() => {
+        result.current.selectSkill('web_search');
+      });
+      act(() => {
+        mocks.emitEvent('skill_detail', {
+          skill: {
+            ...MOCK_DETAIL,
+            name: 'web_search',
+            policy: { default_action: 'allow_with_consent', model_auto_invoke: true },
+          },
+        });
+      });
+
+      // Save 'allow' — simulates the dialog onSave → configureSkill → close pattern
+      act(() => {
+        result.current.configureSkill('web_search', { policy_action: 'allow', auto_invoke: true });
+      });
+      // At this point dialog would close (setShowSkillConfig(false))
+      // User immediately reopens — detail should already reflect 'allow'
+      expect(result.current.skillDetail!.policy.default_action).toBe('allow');
+
+      // Then the server event arrives (late) — should NOT revert
+      act(() => {
+        mocks.emitEvent('skill_configured', {
+          skill_name: 'web_search',
+          policy_action: 'allow',
+          auto_invoke: true,
+        });
+      });
+      expect(result.current.skillDetail!.policy.default_action).toBe('allow');
+    });
+  });
+
   // --- respondToConsent with deny ---
 
   it('respondToConsent with deny sends granted=false', () => {

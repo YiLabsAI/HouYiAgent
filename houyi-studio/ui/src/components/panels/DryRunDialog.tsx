@@ -705,9 +705,29 @@ function computeStages(
       ? (result.policy_result === 'allow'
           ? 'Invocation allowed — no restrictions'
         : result.policy_result === 'allow_with_consent'
-          ? 'Allowed with user consent required'
+          ? 'Requires user consent before execution'
         : 'Invocation denied by policy')
       : 'Evaluating invocation policy...',
+    details: result && result.policy_result !== 'allow' ? (
+      <div className={`text-[10px] rounded px-2 py-1.5 ${
+        result.policy_result === 'allow_with_consent'
+          ? 'bg-yellow-900/20 border border-yellow-700/30 text-yellow-300'
+          : 'bg-red-900/20 border border-red-700/30 text-red-300'
+      }`}>
+        {result.policy_result === 'allow_with_consent' ? (
+          <>
+            <span className="font-medium">Consent required:</span> This skill is configured with <code className="px-1 py-0.5 bg-yellow-900/40 rounded text-[9px]">require_consent</code> policy.
+            In production, the LLM will pause and ask for user approval before invoking this tool.
+            Dry-run bypasses consent to show the full execution trace.
+          </>
+        ) : (
+          <>
+            <span className="font-medium">Blocked:</span> This skill is configured with <code className="px-1 py-0.5 bg-red-900/40 rounded text-[9px]">deny</code> policy.
+            The LLM will not be able to invoke this tool until the policy is changed.
+          </>
+        )}
+      </div>
+    ) : undefined,
   });
 
   // 4. Side Effects
@@ -806,7 +826,7 @@ function computeStages(
         label: 'Tool Execution',
         status: toolExecPhase.status === 'pass' ? 'pass' : toolExecPhase.status === 'fail' ? 'fail' : 'skip',
         summary: toolExecPhase.data?.result_preview
-          ? `Result: ${String(toolExecPhase.data.result_preview).substring(0, 80)}...`
+          ? `Result: ${(typeof toolExecPhase.data.result_preview === 'string' ? toolExecPhase.data.result_preview : JSON.stringify(toolExecPhase.data.result_preview)).substring(0, 120)}...`
           : String(toolExecPhase.data?.reason || toolExecPhase.data?.error || 'Skipped'),
       });
     }
@@ -936,10 +956,10 @@ const LlmVerificationDetails: React.FC<{
         </div>
       )}
 
-      {/* ─── LLM Response (always visible) ─────────────── */}
+      {/* ─── LLM Tool Call (always visible) ─────────────── */}
       <div className="border border-gray-700/40 rounded-lg p-2 bg-gray-900/40">
         <div className="text-[10px] text-blue-400/70 font-medium mb-1">
-          LLM Response
+          LLM Tool Call
         </div>
         {llm.tool_call ? (
           <pre className="text-[10px] text-green-300 bg-gray-900/80 border border-green-800/30 rounded p-2 overflow-x-auto font-mono leading-relaxed">

@@ -6,6 +6,7 @@ import os
 from collections.abc import AsyncIterator
 from typing import Any
 
+from houyi.config.env_config import ENV_OPENAI_API_KEY, ENV_OPENAI_BASE_URL, ENV_OPENAI_ORG
 from houyi.llm.base import DEFAULT_TEMPERATURE, LLMAdapter, LLMMessage, LLMResponse
 
 
@@ -20,10 +21,10 @@ class OpenAICompatibleAdapter(LLMAdapter):
         organization: str | None = None,
         default_headers: dict[str, str] | None = None,
     ) -> None:
-        self.api_key = api_key or os.getenv("OPENAI_API_KEY")
+        self.api_key = api_key or os.getenv(ENV_OPENAI_API_KEY)
         self.model = model
-        self.base_url = base_url or os.getenv("OPENAI_BASE_URL")
-        self.organization = organization or os.getenv("OPENAI_ORG")
+        self.base_url = base_url or os.getenv(ENV_OPENAI_BASE_URL)
+        self.organization = organization or os.getenv(ENV_OPENAI_ORG)
         self.default_headers = default_headers or {}
 
         if not self.api_key:

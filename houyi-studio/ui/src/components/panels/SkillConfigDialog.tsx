@@ -51,18 +51,19 @@ export const SkillConfigDialog: React.FC<SkillConfigDialogProps> = ({
   onSave,
   onCancel,
 }) => {
-  const [policyAction, setPolicyAction] = useState(
-    detail.policy?.default_action ?? 'allow',
-  );
-  const [autoInvoke, setAutoInvoke] = useState(true);
+  const currentAction = detail.policy?.default_action ?? 'allow';
+  const currentAutoInvoke = detail.policy?.model_auto_invoke !== false;
 
-  // Sync when detail changes or dialog opens
+  const [policyAction, setPolicyAction] = useState(currentAction);
+  const [autoInvoke, setAutoInvoke] = useState(currentAutoInvoke);
+
+  // Sync local state whenever the dialog opens or the detail changes
   useEffect(() => {
-    if (isOpen && detail) {
-      setPolicyAction(detail.policy?.default_action ?? 'allow');
-      setAutoInvoke(detail.policy?.model_auto_invoke !== false);
+    if (isOpen) {
+      setPolicyAction(currentAction);
+      setAutoInvoke(currentAutoInvoke);
     }
-  }, [isOpen, detail]);
+  }, [isOpen, currentAction, currentAutoInvoke]);
 
   if (!isOpen) return null;
 

@@ -54,9 +54,13 @@ class ReadabilityContentFetcher:
                 raise ContentFetchError(f"Readability fetch failed: {exc}") from exc
             doc = Document(html)
             summary = doc.summary()
-            soup = BeautifulSoup(summary, "html.parser")
-            text = soup.get_text("\n", strip=True)
-            return (url, text)
+            try:
+                from markdownify import markdownify as md
+
+                return (url, md(summary, strip=["img"]))
+            except ImportError:
+                soup = BeautifulSoup(summary, "html.parser")
+                return (url, soup.get_text("\n", strip=True))
 
         results = await asyncio.gather(*[asyncio.to_thread(_fetch_one, url) for url in urls])
         return dict(results)

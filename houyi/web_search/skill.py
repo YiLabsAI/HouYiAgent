@@ -6,6 +6,7 @@ import inspect
 from pydantic import BaseModel, Field
 
 from houyi.core.skill import ExecutionMode, SkillSpec
+from houyi.core.skill.policy import InvocationPolicy, NetworkPerm, Permissions, SideEffect
 from houyi.web_search.service import WebSearchService
 
 
@@ -69,4 +70,6 @@ def build_web_search_skill() -> SkillSpec:
         output_schema=WebSearchOutput,
         executor=_web_search_executor,
         execution_mode=ExecutionMode.PLUGIN,
+        invocation_policy=InvocationPolicy.default_for_side_effect(SideEffect.NETWORK),
+        permissions=Permissions(network=NetworkPerm(enabled=True)),
     )

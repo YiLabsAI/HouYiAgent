@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 from _fakes import (
     _FakeInputSchema,
-    _FakePolicyResult,
     _FakeSkillSpec,
     _FakeTool,
 )
@@ -47,12 +46,14 @@ class TestDryRun:
 
     @pytest.mark.asyncio
     async def test_policy_deny(self, populated_registry):
+        """When skill's InvocationPolicy is set to deny, dry-run should reflect it."""
+        from _fakes import _FakePolicy
         from houyi_studio.server.skill.service import SkillService
 
-        mock_enforcer = MagicMock()
-        mock_enforcer.evaluate.return_value = _FakePolicyResult("deny")
+        skill = populated_registry.get("web_search")
+        skill.invocation_policy = _FakePolicy("deny")
 
-        svc = SkillService(registry=populated_registry, policy_enforcer=mock_enforcer)
+        svc = SkillService(registry=populated_registry)
         result = await svc.dry_run("web_search", "search", {})
         assert result["valid"] is False
         assert result["policy_result"] == "deny"

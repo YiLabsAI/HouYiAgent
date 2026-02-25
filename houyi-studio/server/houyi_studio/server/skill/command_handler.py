@@ -344,7 +344,7 @@ class SkillCommandHandler:
                 message=f"Skill '{command.skill_name}' configuration updated",
             )
             await self._send_event(session_id, event)
-            self._logger.info("Configured skill: %s", command.skill_name)
+            self._logger.debug("Configured skill: %s", command.skill_name)
             return
 
         error_event = SkillErrorEvent(

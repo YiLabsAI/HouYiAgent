@@ -1,20 +1,18 @@
 #!/bin/bash
-# Code quality check script
-# Run this before committing code
+# Code quality check script — fail-fast mode
+# Run this before committing code.
+# Stops at the FIRST failure so the error output stays visible.
 
-set -e  # Exit on error
+set -euo pipefail
 
 echo "🔍 Running code quality checks..."
 echo ""
 
-# Colors for output
+# Colors
 GREEN='\033[0;32m'
 RED='\033[0;31m'
 YELLOW='\033[1;33m'
-NC='\033[0m' # No Color
-
-# Track if any check fails
-FAILED=0
+NC='\033[0m'
 
 if ! command -v uv >/dev/null 2>&1; then
     echo -e "${RED}✗ uv is not installed or not on PATH.${NC}"
@@ -28,7 +26,7 @@ if [ ! -d ".venv" ]; then
     exit 1
 fi
 
-# Ensure all dependencies are installed
+# ── Ensure dependencies ──────────────────────────────────────────────
 ensure_deps() {
     echo -e "${YELLOW}▶ Verifying dependencies...${NC}"
 
@@ -42,10 +40,9 @@ ensure_deps() {
 
     if [ $need_sync -eq 1 ]; then
         echo -e "${YELLOW}  Installing missing dev dependencies...${NC}"
-        uv sync --extra dev --quiet
+        uv sync --extra dev --extra websearch-ddg --extra websearch-tavily --extra websearch-readability --quiet
     fi
 
-    # Studio server is installed via pip -e and uv sync may remove it
     if ! uv run python -c "import houyi_studio" 2>/dev/null; then
         echo -e "${YELLOW}  Installing studio server...${NC}"
         uv pip install -e houyi-studio/server --quiet
@@ -57,70 +54,55 @@ ensure_deps() {
 
 ensure_deps
 
-# Function to run a check
+# ── Fail-fast runner ─────────────────────────────────────────────────
+# Runs the command; on failure prints a clear banner and exits immediately.
 run_check() {
     local name=$1
-    local command=$2
-
+    shift
     echo -e "${YELLOW}▶ Running $name...${NC}"
-    if eval "$command"; then
+    if "$@"; then
         echo -e "${GREEN}✓ $name passed${NC}"
         echo ""
     else
-        echo -e "${RED}✗ $name failed${NC}"
         echo ""
-        FAILED=1
+        echo -e "${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+        echo -e "${RED}✗ $name FAILED — stopping here.${NC}"
+        echo -e "${RED}  Fix the errors above, then re-run: make check${NC}"
+        echo -e "${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+        exit 1
     fi
 }
 
-# Determine changed Python files (staged + unstaged + untracked)
-get_changed_python_files() {
+# ── 1-2. Ruff lint + format (changed files only) ────────────────────
+CHANGED_PY_FILES=$(
     {
         git diff --name-only --cached
         git diff --name-only
         git ls-files --others --exclude-standard
-    } 2>/dev/null | awk '
-        ($0 ~ /\.pyi?$/) { print $0 }
-    ' | sort -u | while read -r file; do
-        [ -f "$file" ] && echo "$file"
+    } 2>/dev/null | awk '($0 ~ /\.pyi?$/) { print }' | sort -u | while read -r f; do
+        [ -f "$f" ] && echo "$f"
     done
-}
+)
 
-CHANGED_PY_FILES=$(get_changed_python_files)
-
-# 1-2. Ruff - Lint/format only changed Python files
 if [ -n "$CHANGED_PY_FILES" ]; then
     CHANGED_PY_FILES_ONELINE=$(echo "$CHANGED_PY_FILES" | tr '\n' ' ')
-    run_check "Ruff (lint)" "uv run ruff check --fix $CHANGED_PY_FILES_ONELINE"
-    run_check "Ruff (format)" "uv run ruff format $CHANGED_PY_FILES_ONELINE"
+    run_check "Ruff (lint)" uv run ruff check --fix $CHANGED_PY_FILES_ONELINE
+    run_check "Ruff (format)" uv run ruff format $CHANGED_PY_FILES_ONELINE
 else
     echo -e "${YELLOW}▶ Ruff (lint/format) skipped (no changed Python files)${NC}"
     echo ""
 fi
 
-# 3. Type checking with mypy
-run_check "Type Check (mypy)" "uv run mypy houyi/"
+# ── 3. Type check ───────────────────────────────────────────────────
+run_check "Type Check (mypy)" uv run mypy houyi/
 
-# 5. Run SDK unit tests
-run_check "SDK Unit Tests" "uv run pytest tests/ -x -n auto"
+# ── 4. SDK unit tests (with coverage, single pass) ──────────────────
+run_check "SDK Tests + Coverage" uv run pytest tests/ -x -n auto \
+    --cov=houyi --cov-report=term-missing --cov-fail-under=80
 
-# 6. Run server tests
-run_check "Server Tests" "uv run pytest houyi-studio/server/tests/ -x"
+# ── 5. Server tests ─────────────────────────────────────────────────
+run_check "Server Tests" uv run pytest houyi-studio/server/tests/ -x
 
-# 7. Check SDK test coverage
-echo -e "${YELLOW}▶ Checking test coverage...${NC}"
-uv run pytest tests/ --cov=houyi --cov-report=term-missing --cov-fail-under=80 -n auto -q || {
-    echo -e "${RED}✗ Coverage below 80%${NC}"
-    FAILED=1
-}
-echo ""
-
-# Final result
+# ── Done ─────────────────────────────────────────────────────────────
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-if [ $FAILED -eq 0 ]; then
-    echo -e "${GREEN}✓ All checks passed! Ready to commit.${NC}"
-    exit 0
-else
-    echo -e "${RED}✗ Some checks failed. Please fix before committing.${NC}"
-    exit 1
-fi
+echo -e "${GREEN}✓ All checks passed! Ready to commit.${NC}"

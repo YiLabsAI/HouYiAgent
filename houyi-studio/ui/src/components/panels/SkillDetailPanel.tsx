@@ -170,7 +170,7 @@ export const SkillDetailPanel: React.FC<SkillDetailPanelProps> = ({
       {/* ─── Metrics ────────────────────────────────────────── */}
       <div className="bg-gray-900/60 border border-gray-700 rounded p-2" data-testid="skill-metrics">
         <div className="text-gray-500 font-medium mb-1">METRICS</div>
-        {metrics ? (
+        {metrics && metrics.total_calls > 0 ? (
           <div className="grid grid-cols-3 gap-2">
             <div>
               <div className="text-gray-500">Calls</div>
@@ -188,7 +188,9 @@ export const SkillDetailPanel: React.FC<SkillDetailPanelProps> = ({
             </div>
           </div>
         ) : (
-          <div className="text-gray-600">No metrics available yet</div>
+          <div className="text-[11px] text-gray-600">
+            No invocations yet. Metrics are collected from Chat tool calls, not Dry-run.
+          </div>
         )}
       </div>
 

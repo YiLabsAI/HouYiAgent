@@ -154,9 +154,10 @@ class VertexAIAdapter(LLMAdapter):
         works even behind a proxy.
         """
         import time as _time
-        import urllib.request
 
         import httpx
+
+        from houyi.net.proxy import detect_proxy
 
         now = _time.time()
         if self._access_token and now < self._token_expiry - 60:
@@ -173,8 +174,7 @@ class VertexAIAdapter(LLMAdapter):
                 "assertion": jwt_token,
             }
 
-            proxies = urllib.request.getproxies()
-            proxy_url = proxies.get("https") or proxies.get("http")
+            proxy_url = detect_proxy()
 
             async with httpx.AsyncClient(
                 proxy=proxy_url,
@@ -239,12 +239,11 @@ class VertexAIAdapter(LLMAdapter):
         if tool_choice:
             body["tool_choice"] = tool_choice
 
-        import urllib.request
-
         import httpx
 
-        proxies = urllib.request.getproxies()
-        proxy_url = proxies.get("https") or proxies.get("http")
+        from houyi.net.proxy import detect_proxy
+
+        proxy_url = detect_proxy()
 
         max_retries = DEFAULT_MAX_RETRIES
         last_error: Exception | None = None
@@ -362,12 +361,11 @@ class VertexAIAdapter(LLMAdapter):
             body["reasoning_effort"] = "high"
             logger.info("Gemini reasoning enabled: reasoning_effort=high")
 
-        import urllib.request
-
         import httpx
 
-        _proxies = urllib.request.getproxies()
-        _proxy_url = _proxies.get("https") or _proxies.get("http")
+        from houyi.net.proxy import detect_proxy
+
+        _proxy_url = detect_proxy()
 
         max_retries = DEFAULT_MAX_RETRIES
         last_error: Exception | None = None
