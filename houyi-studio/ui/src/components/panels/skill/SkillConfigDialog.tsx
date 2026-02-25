@@ -10,7 +10,7 @@
  */
 import React, { useState, useEffect } from 'react';
 import { Settings } from 'lucide-react';
-import type { SkillDetail } from '../../types/websocket';
+import type { SkillDetail } from '../../../types/websocket';
 
 export interface SkillConfigValues {
   policy_action: string;

@@ -140,6 +140,7 @@ class WebSearchService:
         env_provider = (os.getenv(ENV_WEB_SEARCH_PROVIDER) or "").strip()
         provider_name = explicit_provider or env_provider
         auto_detected = False
+        provider_source = "tool_input" if explicit_provider else ("env" if env_provider else "auto")
 
         if not provider_name:
             auto_detected = True
@@ -173,7 +174,9 @@ class WebSearchService:
 
         # --- Proxy ---
         proxy_url: str | None = None
-        if _is_truthy(os.getenv(ENV_WEB_SEARCH_PROXY_ENABLED, "false")):
+        proxy_enabled_raw = os.getenv(ENV_WEB_SEARCH_PROXY_ENABLED, "false")
+        proxy_enabled = _is_truthy(proxy_enabled_raw)
+        if proxy_enabled:
             from houyi.net.proxy import detect_proxy
 
             proxy_url = detect_proxy()
@@ -191,6 +194,18 @@ class WebSearchService:
                     fallbacks.append(cls._build_provider(name, proxy_url=proxy_url))
                 except (ProviderAuthError, DependencyMissingError, ValueError):
                     continue
+
+        logger.info(
+            "web_search init resolved primary provider '%s' (source=%s, auto_detected=%s, "
+            "WEB_SEARCH_PROVIDER_set=%s); proxy is %s (url_detected=%s); fallback chain=%s",
+            provider_name,
+            provider_source,
+            auto_detected,
+            bool(env_provider),
+            "enabled" if proxy_enabled else "disabled",
+            bool(proxy_url),
+            [p.name for p in fallbacks],
+        )
 
         return cls(
             provider=primary,

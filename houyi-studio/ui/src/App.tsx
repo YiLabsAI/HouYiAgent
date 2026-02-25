@@ -17,9 +17,9 @@ import { useConsoleStore } from './stores/useConsoleStore';
 import { useThemeStore } from './stores/useThemeStore';
 import { ObsFullView } from './components/panels/ObsFullView';
 import { useSkillsLogic } from './components/LeftSidebar/useSkillsLogic';
-import { SkillConfigDialog } from './components/panels/SkillConfigDialog';
-import { DryRunDialog } from './components/panels/DryRunDialog';
-import { LoadSkillDialog } from './components/panels/LoadSkillDialog';
+import { SkillConfigDialog } from './components/panels/skill/SkillConfigDialog';
+import { DryRunDialog } from './components/panels/skill/DryRunDialog';
+import { LoadSkillDialog } from './components/panels/skill/LoadSkillDialog';
 import type { SkillConfigValues } from './components/LeftSidebar/useSkillsLogic';
 
 // Module-level session ID: survives Vite HMR but resets on full page reload.

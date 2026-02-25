@@ -7,7 +7,7 @@
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 
-import { LoadSkillDialog } from '@/components/panels/LoadSkillDialog';
+import { LoadSkillDialog } from '@/components/panels/skill/LoadSkillDialog';
 
 describe('LoadSkillDialog', () => {
   const defaultProps = {

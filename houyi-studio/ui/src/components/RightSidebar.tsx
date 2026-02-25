@@ -13,7 +13,7 @@ import { useConsoleStore } from '../stores/useConsoleStore';
 import type { SecondaryContentMode } from '../stores/useConsoleStore';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { NodePropertiesPanel } from './panels/NodePropertiesPanel';
-import { SkillDetailPanel } from './panels/SkillDetailPanel';
+import { SkillDetailPanel } from './panels/skill/SkillDetailPanel';
 import { KnowledgeDetailPanel } from './panels/KnowledgeDetailPanel';
 import { ConversationSettingsPanel } from './panels/ConversationSettingsPanel';
 

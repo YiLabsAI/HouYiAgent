@@ -4,7 +4,7 @@
 import { render, screen, fireEvent } from '@testing-library/react';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 
-import { SkillDetailPanel } from '@/components/panels/SkillDetailPanel';
+import { SkillDetailPanel } from '@/components/panels/skill/SkillDetailPanel';
 import type { SkillDetail, SkillMetricsData } from '@/types/websocket';
 
 const createDetail = (overrides: Partial<SkillDetail> = {}): SkillDetail => ({
@@ -199,7 +199,7 @@ describe('SkillDetailPanel', () => {
 
   it('should show "No metrics available" when metrics are null', () => {
     render(<SkillDetailPanel detail={createDetail()} metrics={null} isLoading={false} />);
-    expect(screen.getByText('No metrics available yet')).toBeInTheDocument();
+    expect(screen.getByText('No invocations yet. Metrics are collected from Chat tool calls, not Dry-run.')).toBeInTheDocument();
   });
 
   // ─── Action buttons ────────────────────────────────────────────

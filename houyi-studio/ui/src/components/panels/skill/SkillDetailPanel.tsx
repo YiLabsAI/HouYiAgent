@@ -5,8 +5,8 @@
  * selected skill. Provides actions for configure, dry-run, and unload.
  */
 import React, { useState } from 'react';
-import type { SkillDetail, SkillMetricsData } from '../../types/websocket';
-import { ConfirmDialog } from '../common/ConfirmDialog';
+import type { SkillDetail, SkillMetricsData } from '../../../types/websocket';
+import { ConfirmDialog } from '../../common/ConfirmDialog';
 
 // ─── Certification badge colors ──────────────────────────────────
 const CERT_STYLES: Record<string, { bg: string; text: string; label: string }> = {
@@ -71,20 +71,26 @@ export const SkillDetailPanel: React.FC<SkillDetailPanelProps> = ({
   const policyAction = detail.policy?.default_action ?? 'allow';
   const policyStyle = POLICY_STYLES[policyAction] ?? POLICY_STYLES.allow;
   const sideEffectStyle = SIDE_EFFECT_STYLES[detail.side_effect] ?? SIDE_EFFECT_STYLES.none;
+  const versionLabel = `v${detail.version || '0.0.0'}`;
+  const hasVersion = Boolean(detail.version && detail.version !== '0.0.0');
 
   return (
     <div className="flex flex-col gap-3 p-3 text-xs">
       {/* ─── Header ─────────────────────────────────────────── */}
       <div className="flex items-start justify-between" data-testid="skill-header">
         <div>
-          <div className="text-sm font-semibold text-gray-200">
-            {detail.display_name || detail.name}
+          <div className="flex items-center gap-2">
+            <div className="text-sm font-semibold text-gray-200">
+              {detail.display_name || detail.name}
+            </div>
+            {hasVersion && (
+              <span className="px-1.5 py-0.5 rounded bg-gray-700/60 text-[10px] text-gray-300" data-testid="skill-version-chip">
+                {versionLabel}
+              </span>
+            )}
           </div>
           <div className="text-gray-500 mt-0.5">
-            {detail.version && detail.version !== '0.0.0' && (
-              <span>v{detail.version}</span>
-            )}
-            {detail.author && <span className="ml-2">by {detail.author}</span>}
+            {detail.author ? <span>by {detail.author}</span> : hasVersion ? <span>Version {versionLabel}</span> : null}
           </div>
         </div>
         <span className={`px-2 py-0.5 rounded text-[10px] font-medium ${cert.bg} ${cert.text}`}>

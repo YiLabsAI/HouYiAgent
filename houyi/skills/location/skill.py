@@ -24,6 +24,12 @@ MAX_RETRIES = 2
 RETRY_DELAY = 1.0
 MAX_CITY_LENGTH = 200
 DEFAULT_CITY = "Hangzhou"
+GEOCODING_ENDPOINT = "https://geocoding-api.open-meteo.com/v1/search"
+GEOCODING_DEFAULT_PARAMS: dict[str, str] = {
+    "count": "1",
+    "language": "en",
+    "format": "json",
+}
 
 
 def _fetch_with_retry(
@@ -69,6 +75,31 @@ def _sanitize_city_name(city: str | None) -> str:
     return city
 
 
+def _split_city_country_code(city: str) -> tuple[str, str | None]:
+    """Split inputs like ``Beijing, CN`` into city + ISO country code."""
+    parts = [p.strip() for p in city.split(",") if p.strip()]
+    if len(parts) < 2:
+        return city, None
+
+    maybe_code = parts[-1]
+    if len(maybe_code) == 2 and maybe_code.isalpha():
+        city_part = ", ".join(parts[:-1]).strip()
+        if city_part:
+            return city_part, maybe_code.upper()
+    return city, None
+
+
+def _build_geocoding_url(city_name: str, country_code: str | None = None) -> str:
+    """Build Open-Meteo geocoding URL with optional country code filter."""
+    params: dict[str, str] = {
+        "name": city_name,
+        **GEOCODING_DEFAULT_PARAMS,
+    }
+    if country_code:
+        params["countryCode"] = country_code
+    return f"{GEOCODING_ENDPOINT}?{urllib.parse.urlencode(params)}"
+
+
 @tool
 def get_location(city: str | None = None) -> dict[str, Any]:
     """Get coordinates for a city using Open-Meteo Geocoding API.
@@ -85,9 +116,11 @@ def get_location(city: str | None = None) -> dict[str, Any]:
         get_location()           -> {"city": "Hangzhou", "lat": 30.2741, ...}
     """
     city = _sanitize_city_name(city)
+    query_city, country_code = _split_city_country_code(city)
 
     try:
-        encoded_city = urllib.parse.quote(city, safe="")
+        # Validate that the effective query string is encodable.
+        urllib.parse.quote(query_city, safe="")
     except Exception as e:
         logger.warning("Failed to encode city name '%s': %s", city, e)
         return {
@@ -98,12 +131,19 @@ def get_location(city: str | None = None) -> dict[str, Any]:
             "error": "Invalid city name",
         }
 
-    url = f"https://geocoding-api.open-meteo.com/v1/search?name={encoded_city}&count=1&language=en&format=json"
-    logger.debug("Geocoding city: %s", city)
+    url = _build_geocoding_url(query_city, country_code=country_code)
+    logger.debug("Geocoding city: %s (query=%s, country_code=%s)", city, query_city, country_code)
 
     try:
         payload = _fetch_with_retry(url)
         results = payload.get("results")
+
+        # Some queries like "beijing, CN" may over-constrain results with countryCode.
+        # Retry once without country filter before returning not-found.
+        if (not isinstance(results, list) or len(results) == 0) and country_code:
+            fallback_url = _build_geocoding_url(query_city, country_code=None)
+            payload = _fetch_with_retry(fallback_url)
+            results = payload.get("results")
 
         if not results or not isinstance(results, list) or len(results) == 0:
             logger.info("No geocoding results for: %s", city)

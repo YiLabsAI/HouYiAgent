@@ -4,7 +4,7 @@
 import { render, screen, fireEvent } from '@testing-library/react';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 
-import { SkillConfigDialog } from '@/components/panels/SkillConfigDialog';
+import { SkillConfigDialog } from '@/components/panels/skill/SkillConfigDialog';
 import type { SkillDetail } from '@/types/websocket';
 
 const createDetail = (overrides: Partial<SkillDetail> = {}): SkillDetail => ({

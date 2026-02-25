@@ -7,6 +7,9 @@ pure data transformation.
 
 from __future__ import annotations
 
+import inspect
+import logging
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -25,6 +28,9 @@ SIDE_EFFECT_NETWORK = "network"
 SIDE_EFFECT_FILESYSTEM = "filesystem"
 
 DEFAULT_VERSION = "0.0.0"
+_SKILL_MD_META_CACHE: dict[str, dict[str, Any]] = {}
+
+logger = logging.getLogger(__name__)
 
 # ── Side-effect helpers (pure functions) ──────────────────────────────
 
@@ -83,15 +89,56 @@ class SkillSerializer:
 
     def to_detail(self, skill: SkillSpec) -> dict[str, Any]:
         summary = self.to_summary(skill)
+        meta = self._resolve_frontmatter_meta(skill)
+        version = getattr(skill, "version", None) or meta.get("version") or DEFAULT_VERSION
+        author = getattr(skill, "author", None) or meta.get("author")
         return {
             **summary,
-            "version": getattr(skill, "version", None) or DEFAULT_VERSION,
-            "author": getattr(skill, "author", None),
+            "version": version,
+            "author": author,
             "tools": self._serialize_tools(skill),
             "permissions": self._serialize_permissions(skill),
             "policy": self._serialize_policy(skill),
             "hooks": self._serialize_hooks(skill),
         }
+
+    @staticmethod
+    def _resolve_frontmatter_meta(skill: SkillSpec) -> dict[str, Any]:
+        """Best-effort metadata hydration from adjacent SKILL.md for code skills."""
+        executor = getattr(skill, "executor", None)
+        if not callable(executor):
+            return {}
+
+        try:
+            source_file = inspect.getsourcefile(executor) or inspect.getfile(executor)
+        except (TypeError, OSError):
+            return {}
+        if not source_file:
+            return {}
+
+        skill_md = (Path(source_file).resolve().parent / "SKILL.md").resolve()
+        cache_key = str(skill_md)
+        if cache_key in _SKILL_MD_META_CACHE:
+            return _SKILL_MD_META_CACHE[cache_key]
+
+        if not skill_md.exists():
+            _SKILL_MD_META_CACHE[cache_key] = {}
+            return {}
+
+        try:
+            from houyi.core.skill.schema import parse_skill_md
+
+            parsed = parse_skill_md(skill_md.read_text(encoding="utf-8"))
+            meta = {
+                "version": parsed.get("version"),
+                "author": parsed.get("author"),
+            }
+            _SKILL_MD_META_CACHE[cache_key] = meta
+            return meta
+        except Exception as exc:  # pragma: no cover - defensive path
+            logger.debug("Failed to parse SKILL.md metadata at %s: %s", skill_md, exc)
+            _SKILL_MD_META_CACHE[cache_key] = {}
+            return {}
 
     # ── Private helpers ───────────────────────────────────────────
 
@@ -184,5 +231,17 @@ class SkillSerializer:
     @staticmethod
     def _serialize_hooks(skill: SkillSpec) -> list[str]:
         if hasattr(skill, "hooks") and skill.hooks:
-            return [getattr(h, "hook_type", str(h)) for h in skill.hooks]
+            labels: list[str] = []
+            for hook in skill.hooks:
+                event = getattr(hook, "event", None)
+                hook_type = getattr(hook, "hook_type", None)
+                matcher = getattr(hook, "matcher", None)
+
+                event_str = event.value if hasattr(event, "value") else str(event or "hook")
+                type_str = (
+                    hook_type.value if hasattr(hook_type, "value") else str(hook_type or "handler")
+                )
+                matcher_str = str(matcher) if matcher else "*"
+                labels.append(f"{event_str}:{matcher_str} ({type_str})")
+            return labels
         return []

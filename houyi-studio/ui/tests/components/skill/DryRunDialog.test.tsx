@@ -14,7 +14,7 @@
 import { render, screen, fireEvent, within, act } from '@testing-library/react';
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 
-import { DryRunDialog } from '@/components/panels/DryRunDialog';
+import { DryRunDialog } from '@/components/panels/skill/DryRunDialog';
 import type { SkillDetail } from '@/types/websocket';
 import type { DryRunResultData } from '@/components/LeftSidebar/useSkillsLogic';
 
@@ -59,6 +59,47 @@ const createMultiToolDetail = (): SkillDetail => ({
   ],
 });
 
+const createLocationDetail = (): SkillDetail => ({
+  ...createDetail(),
+  name: 'location',
+  display_name: 'Location',
+  tools: [
+    {
+      name: 'get_location',
+      description: 'Get coordinates by city',
+      input_schema: {
+        type: 'object',
+        properties: {
+          city: { anyOf: [{ type: 'string' }, { type: 'null' }], title: 'city' },
+        },
+      },
+    },
+  ],
+});
+
+const createWeatherDetail = (): SkillDetail => ({
+  ...createDetail(),
+  name: 'weather',
+  display_name: 'Weather',
+  tools: [
+    {
+      name: 'get_weather',
+      description: 'Get weather by coords or city',
+      input_schema: {
+        type: 'object',
+        properties: {
+          lat: { anyOf: [{ type: 'number' }, { type: 'null' }], title: 'lat' },
+          lon: { anyOf: [{ type: 'number' }, { type: 'null' }], title: 'lon' },
+          city: { anyOf: [{ type: 'string' }, { type: 'null' }], title: 'city' },
+          country: { anyOf: [{ type: 'string' }, { type: 'null' }], title: 'country' },
+          date: { anyOf: [{ type: 'string' }, { type: 'null' }], title: 'date' },
+          provider: { type: 'string', title: 'provider', default: 'auto' },
+        },
+      },
+    },
+  ],
+});
+
 const createPassResult = (): DryRunResultData => ({
   valid: true,
   schema_errors: [],
@@ -93,6 +134,38 @@ describe('DryRunDialog', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.clearAllMocks();
+  });
+
+  it('renders weather country/provider as dropdowns', () => {
+    render(<DryRunDialog {...defaultProps} detail={createWeatherDetail()} />);
+
+    const country = screen.getByTestId('dry-run-input-country') as HTMLSelectElement;
+    const provider = screen.getByTestId('dry-run-input-provider') as HTMLSelectElement;
+
+    expect(country.tagName).toBe('SELECT');
+    expect(provider.tagName).toBe('SELECT');
+    expect(Array.from(provider.options).map((o) => o.value)).toEqual(['auto', 'openmeteo', 'wttr']);
+  });
+
+  it('updates weather city suggestions when country changes', () => {
+    render(<DryRunDialog {...defaultProps} detail={createWeatherDetail()} />);
+
+    const country = screen.getByTestId('dry-run-input-country');
+    fireEvent.change(country, { target: { value: 'JP' } });
+
+    const cityInput = screen.getByTestId('dry-run-input-city') as HTMLInputElement;
+    expect(cityInput.getAttribute('list')).toBe('weather-city-suggestions');
+    const datalist = document.getElementById('weather-city-suggestions');
+    expect(datalist).toBeTruthy();
+    expect(datalist?.innerHTML).toContain('Tokyo');
+  });
+
+  it('renders get_location city as dropdown with HouYi style options', () => {
+    render(<DryRunDialog {...defaultProps} detail={createLocationDetail()} />);
+    const city = screen.getByTestId('dry-run-input-city') as HTMLSelectElement;
+    expect(city.tagName).toBe('SELECT');
+    expect(Array.from(city.options).map((o) => o.value)).toContain('Beijing');
+    expect(Array.from(city.options).map((o) => o.value)).toContain('Hangzhou');
   });
 
   afterEach(() => {
@@ -496,8 +569,8 @@ describe('DryRunDialog', () => {
     expect(flow).toHaveTextContent('LLM Execution');
     expect(flow).toHaveTextContent('t=0ms');
     expect(flow).toHaveTextContent('t=1200ms');
-    // LLM Response section — tool call JSON
-    expect(flow).toHaveTextContent('LLM Response');
+    // LLM tool-call section
+    expect(flow).toHaveTextContent('LLM Tool Call');
     expect(flow).toHaveTextContent('"web_search"');
     // Usage stats (prove real API call)
     expect(flow).toHaveTextContent('prompt_tokens: 50');

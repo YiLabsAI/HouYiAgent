@@ -19,6 +19,9 @@ const getStatusColor = (status: string): string => {
       return 'text-green-400';
     case 'failed':
       return 'text-red-400';
+    case 'warn':
+    case 'warning':
+      return 'text-yellow-400';
     default:
       return 'text-gray-400';
   }

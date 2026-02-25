@@ -10,7 +10,7 @@
  * (skill_loaded or skill_error) before closing.
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { CenterStage } from '../CenterStage';
+import { CenterStage } from '../../CenterStage';
 import { Upload, FileText, Globe, FolderOpen, Loader2, CheckCircle, AlertCircle } from 'lucide-react';
 
 export interface LoadSkillDialogProps {

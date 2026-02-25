@@ -141,6 +141,17 @@ class TestToDetail:
         d = self.ser.to_detail(s)
         assert d["version"] == DEFAULT_VERSION
 
+    def test_version_author_from_frontmatter_when_missing(self, monkeypatch):
+        s = _Skill(version=None, author=None)
+        monkeypatch.setattr(
+            SkillSerializer,
+            "_resolve_frontmatter_meta",
+            staticmethod(lambda _skill: {"version": "0.9.1", "author": "Team"}),
+        )
+        d = self.ser.to_detail(s)
+        assert d["version"] == "0.9.1"
+        assert d["author"] == "Team"
+
     def test_permissions_serialized(self):
         perms = _Perms(descs=["Network access"])
         s = _Skill(permissions=perms)
@@ -159,4 +170,4 @@ class TestToDetail:
 
         s = _Skill(hooks=[_H()])
         d = self.ser.to_detail(s)
-        assert d["hooks"] == ["pre_invoke"]
+        assert d["hooks"] == ["hook:* (pre_invoke)"]
