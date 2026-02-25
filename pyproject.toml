@@ -117,7 +117,7 @@ rag-full = [
 ]
 
 all = [
-    "houyi[dev,studio-server,distributed,model-adapters,vertex-ai,verification,observability,rag-full,websearch-ddg,websearch-tavily,websearch-readability,skill-yaml]",
+    "houyi[dev,studio-server,distributed,model-adapters,vertex-ai,verification,observability,rag,rag-pdf,rag-excel,websearch-ddg,websearch-tavily,websearch-readability,skill-yaml]",
 ]
 
 [build-system]
