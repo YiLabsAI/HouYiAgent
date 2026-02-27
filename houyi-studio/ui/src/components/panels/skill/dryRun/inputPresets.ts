@@ -46,3 +46,13 @@ export const LOCATION_CITY_OPTIONS = [
   'New York',
   'San Francisco',
 ];
+
+export const WEB_SEARCH_PROVIDER_OPTIONS = ['ddg', 'serper', 'tavily', 'bocha', 'searxng'] as const;
+
+export const WEB_SEARCH_MODE_OPTIONS = ['search', 'browse'] as const;
+
+export const WEATHER_DATE_OPTIONS = [
+  { value: 'today', label: 'today' },
+  { value: 'tomorrow', label: 'tomorrow' },
+  { value: 'day_after_tomorrow', label: 'day_after_tomorrow' },
+] as const;

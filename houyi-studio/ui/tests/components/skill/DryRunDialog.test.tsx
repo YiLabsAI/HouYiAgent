@@ -46,6 +46,156 @@ const createDetail = (overrides: Partial<SkillDetail> = {}): SkillDetail => ({
   certification: 'gold',
   side_effect: 'network',
   ...overrides,
+  is_core: overrides.is_core ?? false,
+});
+
+const createCorePlanningToolDetail = (): SkillDetail => ({
+  ...createPlanningToolDetail(),
+  name: 'planning-with-files',
+  display_name: 'Planning with Files (Core)',
+  tools: [
+    {
+      ...createPlanningToolDetail().tools[0],
+      name: 'planning-with-files',
+    },
+  ],
+});
+
+const createUsingSuperpowersDetail = (): SkillDetail => ({
+  ...createDetail({
+    name: 'using-superpowers',
+    display_name: 'using-superpowers',
+    runtime_binding: 'prompt_instructions',
+    instructions_length: 1800,
+    instructions: 'Invoke relevant skills before any response. Follow process skill order and announce selected skills.',
+  }),
+  tools: [
+    {
+      name: 'using-superpowers',
+      description: 'Meta workflow discipline',
+    },
+  ],
+});
+
+const createFrontendDesignDetail = (): SkillDetail => ({
+  ...createDetail({
+    name: 'frontend-design',
+    display_name: 'frontend-design',
+    runtime_binding: 'prompt_instructions',
+    instructions_length: 2100,
+    instructions: 'Choose bold aesthetic direction before coding and avoid generic AI style choices.',
+  }),
+  tools: [
+    {
+      name: 'frontend-design',
+      description: 'Frontend design workflow',
+    },
+  ],
+});
+
+const createSkillCreatorDetail = (): SkillDetail => ({
+  ...createDetail({
+    name: 'skill-creator',
+    display_name: 'skill-creator',
+    runtime_binding: 'prompt_instructions',
+    instructions_length: 3600,
+    instructions: 'Follow understand, plan, init, edit, package, and iterate workflow to build skills.',
+  }),
+  tools: [
+    {
+      name: 'skill-creator',
+      description: 'Skill creation guide',
+    },
+  ],
+});
+
+const createNotebooklmDetail = (): SkillDetail => ({
+  ...createDetail({
+    name: 'notebooklm',
+    display_name: 'notebooklm',
+    runtime_binding: 'prompt_instructions',
+    instructions_length: 5400,
+    instructions: 'Always use scripts/run.py. Check auth_manager.py status first, then notebook_manager.py add/list and ask_question.py.',
+  }),
+  tools: [
+    {
+      name: 'notebooklm',
+      description: 'NotebookLM workflow helper',
+    },
+  ],
+});
+
+const createRagSkillDetail = (): SkillDetail => ({
+  ...createDetail({
+    name: 'rag-skill',
+    display_name: 'rag-skill',
+    runtime_binding: 'prompt_instructions',
+    instructions_length: 3200,
+    instructions: 'Read data_structure.md in knowledge/. Use progressive retrieval. Do not read entire files.',
+  }),
+  tools: [
+    {
+      name: 'rag-skill',
+      description: 'Knowledge retrieval helper',
+    },
+  ],
+});
+
+const createPlanningToolDetail = (): SkillDetail => ({
+  ...createDetail({
+    name: 'ext__planning-with-files',
+    display_name: 'Planning with Files',
+    runtime_binding: 'prompt_instructions',
+    instructions_length: 5886,
+  }),
+  tools: [
+    {
+      name: 'ext__planning-with-files',
+      description: 'Planning workflow skill',
+      input_schema: {
+        type: 'object',
+        properties: {
+          action: { type: 'string', enum: ['create', 'update', 'complete', 'status'] },
+          task: { type: 'string' },
+          subtasks: { type: 'array', items: { type: 'string' } },
+          subtask_index: { type: 'integer' },
+          completed: { type: 'boolean' },
+        },
+        required: ['action'],
+      },
+    },
+  ],
+});
+
+const createRefSchemaDetail = (): SkillDetail => ({
+  ...createDetail(),
+  name: 'ref-schema-tool',
+  display_name: 'Ref Schema Tool',
+  tools: [
+    {
+      name: 'ref-schema-tool',
+      description: 'Ref-based schema tool',
+      input_schema: {
+        type: 'object',
+        properties: {
+          phase: { $ref: '#/$defs/PhaseEnum' },
+          retry_count: { $ref: '#/$defs/RetryCount' },
+        },
+        required: ['phase'],
+        $defs: {
+          PhaseEnum: {
+            type: 'string',
+            enum: ['draft', 'running', 'done'],
+          },
+          RetryCount: {
+            type: 'integer',
+            minimum: 0,
+            maximum: 5,
+          },
+        },
+      },
+    },
+  ],
 });
 
 const createMultiToolDetail = (): SkillDetail => ({
@@ -141,10 +291,180 @@ describe('DryRunDialog', () => {
 
     const country = screen.getByTestId('dry-run-input-country') as HTMLSelectElement;
     const provider = screen.getByTestId('dry-run-input-provider') as HTMLSelectElement;
+    const date = screen.getByTestId('dry-run-input-date') as HTMLSelectElement;
 
     expect(country.tagName).toBe('SELECT');
     expect(provider.tagName).toBe('SELECT');
+    expect(date.tagName).toBe('SELECT');
     expect(Array.from(provider.options).map((o) => o.value)).toEqual(['auto', 'openmeteo', 'wttr']);
+    expect(Array.from(date.options).map((o) => o.value)).toEqual(['', 'today', 'tomorrow', 'day_after_tomorrow']);
+  });
+
+  it('resolves $ref enum fields as dropdown and shows numeric ranges', () => {
+    render(<DryRunDialog {...defaultProps} detail={createRefSchemaDetail()} />);
+
+    const phase = screen.getByTestId('dry-run-input-phase') as HTMLSelectElement;
+    const retryCount = screen.getByTestId('dry-run-input-retry_count') as HTMLInputElement;
+
+    expect(phase.tagName).toBe('SELECT');
+    expect(Array.from(phase.options).map((o) => o.value)).toEqual([
+      '',
+      'draft',
+      'running',
+      'done',
+    ]);
+
+    expect(retryCount.min).toBe('0');
+    expect(retryCount.max).toBe('5');
+    expect(screen.getByTestId('dry-run-range-retry_count')).toHaveTextContent('Range: 0 to 5');
+  });
+
+  it('clears previous result when toggling live mode', () => {
+    const onClearResult = vi.fn();
+    render(
+      <DryRunDialog
+        {...defaultProps}
+        detail={createDetail()}
+        dryRunResult={createPassResult()}
+        onClearResult={onClearResult}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId('dry-run-live-toggle'));
+    expect(onClearResult).toHaveBeenCalled();
+  });
+
+  it('renders web_search provider/mode as dropdowns and submits selected values', () => {
+    const onExecute = vi.fn();
+    render(<DryRunDialog {...defaultProps} onExecute={onExecute} detail={createDetail()} />);
+
+    const provider = screen.getByTestId('dry-run-input-provider') as HTMLSelectElement;
+    const mode = screen.getByTestId('dry-run-input-mode') as HTMLSelectElement;
+
+    expect(Array.from(provider.options).map((o) => o.value)).toEqual(['', 'ddg', 'serper', 'tavily', 'bocha', 'searxng']);
+    expect(Array.from(mode.options).map((o) => o.value)).toEqual(['', 'search', 'browse']);
+
+    fireEvent.change(screen.getByTestId('dry-run-input-query'), { target: { value: 'houyi' } });
+    fireEvent.change(provider, { target: { value: 'ddg' } });
+    fireEvent.change(mode, { target: { value: 'browse' } });
+    fireEvent.click(screen.getByTestId('dry-run-execute'));
+
+    expect(onExecute).toHaveBeenCalledWith(
+      'web_search',
+      expect.objectContaining({ query: 'houyi', provider: 'ddg', mode: 'browse' }),
+      false,
+    );
+  });
+
+  it('renders multiple generic presets for notebooklm', () => {
+    render(<DryRunDialog {...defaultProps} detail={createNotebooklmDetail()} />);
+    expect(screen.getByTestId('tool-flow-presets')).toBeInTheDocument();
+    expect(screen.getByTestId('tool-flow-select-example-1-notebook-query')).toBeInTheDocument();
+    expect(screen.getByTestId('tool-flow-select-example-2-library-discovery-add')).toBeInTheDocument();
+  });
+
+  it('prefills first notebooklm preset on first open and executes without reselection', () => {
+    const onExecute = vi.fn();
+    render(<DryRunDialog {...defaultProps} detail={createNotebooklmDetail()} onExecute={onExecute} />);
+
+    expect(screen.getByText(/Selected execution payload/)).toHaveTextContent('"question":"Summarize the architecture decisions in this notebook"');
+
+    fireEvent.click(screen.getByTestId('dry-run-execute'));
+
+    expect(onExecute).toHaveBeenCalledWith(
+      'notebooklm',
+      expect.objectContaining({
+        question: 'Summarize the architecture decisions in this notebook',
+        notebook_url: 'https://notebooklm.google.com/notebook/example',
+      }),
+      false,
+    );
+  });
+
+  it('updates notebooklm payload when switching between generic examples', () => {
+    render(<DryRunDialog {...defaultProps} detail={createNotebooklmDetail()} />);
+
+    fireEvent.click(screen.getByTestId('tool-flow-select-example-2-library-discovery-add'));
+    expect(screen.getByText(/Selected execution payload/)).toHaveTextContent('"operation":"add_notebook"');
+
+    fireEvent.click(screen.getByTestId('tool-flow-select-example-1-notebook-query'));
+    expect(screen.getByText(/Selected execution payload/)).toHaveTextContent('"question":"Summarize the architecture decisions in this notebook"');
+  });
+
+  it('renders generic presets for additional community skills', () => {
+    const samples: Array<{ detail: SkillDetail; first: string; second: string }> = [
+      {
+        detail: createUsingSuperpowersDetail(),
+        first: 'tool-flow-select-example-1-workflow-discipline',
+        second: 'tool-flow-select-example-2-plan-before-implementation',
+      },
+      {
+        detail: createFrontendDesignDetail(),
+        first: 'tool-flow-select-example-1-landing-page',
+        second: 'tool-flow-select-example-2-dashboard-redesign',
+      },
+      {
+        detail: createSkillCreatorDetail(),
+        first: 'tool-flow-select-example-1-skill-scaffold',
+        second: 'tool-flow-select-example-2-skill-iteration',
+      },
+    ];
+
+    for (const sample of samples) {
+      const { unmount } = render(<DryRunDialog {...defaultProps} detail={sample.detail} />);
+      expect(screen.getByTestId('tool-flow-presets')).toBeInTheDocument();
+      expect(screen.getByTestId(sample.first)).toBeInTheDocument();
+      expect(screen.getByTestId(sample.second)).toBeInTheDocument();
+      unmount();
+    }
+  });
+
+  it('executes selected second preset payload for additional community skills', () => {
+    const samples: Array<{ detail: SkillDetail; selectId: string; tool: string; expected: Record<string, unknown> }> = [
+      {
+        detail: createUsingSuperpowersDetail(),
+        selectId: 'tool-flow-select-example-2-plan-before-implementation',
+        tool: 'using-superpowers',
+        expected: { task: 'Build a billing dashboard and choose process skill order first' },
+      },
+      {
+        detail: createFrontendDesignDetail(),
+        selectId: 'tool-flow-select-example-2-dashboard-redesign',
+        tool: 'frontend-design',
+        expected: { aesthetic: 'industrial data-editorial' },
+      },
+      {
+        detail: createSkillCreatorDetail(),
+        selectId: 'tool-flow-select-example-2-skill-iteration',
+        tool: 'skill-creator',
+        expected: { stage: 'iterate' },
+      },
+    ];
+
+    for (const sample of samples) {
+      const onExecute = vi.fn();
+      const { unmount } = render(<DryRunDialog {...defaultProps} detail={sample.detail} onExecute={onExecute} />);
+      fireEvent.click(screen.getByTestId(sample.selectId));
+      fireEvent.click(screen.getByTestId('dry-run-execute'));
+      expect(onExecute).toHaveBeenCalledWith(
+        sample.tool,
+        expect.objectContaining(sample.expected),
+        false,
+      );
+      unmount();
+    }
+  });
+
+  it('keeps example 4 status payload stable after switching examples', () => {
+    render(<DryRunDialog {...defaultProps} detail={createPlanningToolDetail()} />);
+
+    fireEvent.click(screen.getByTestId('planning-flow-select-example-4-error-recovery'));
+    expect(screen.getByText(/Selected execution payload/)).toHaveTextContent('"action":"status"');
+
+    fireEvent.click(screen.getByTestId('planning-flow-select-example-2-bug-fix'));
+    fireEvent.click(screen.getByTestId('planning-flow-select-example-4-error-recovery'));
+
+    expect(screen.getByText(/Selected execution payload/)).toHaveTextContent('"action":"status"');
   });
 
   it('updates weather city suggestions when country changes', () => {
@@ -236,12 +556,108 @@ describe('DryRunDialog', () => {
     expect(within(formInputs).getByText('*')).toBeInTheDocument();
   });
 
-  it('shows "no input parameters" message when tool has no schema', () => {
+  it('shows no-schema runtime-check message when tool has no schema', () => {
     const detail = createDetail({
       tools: [{ name: 'simple_tool', description: 'No params' }],
     });
     render(<DryRunDialog {...defaultProps} detail={detail} />);
-    expect(screen.getByText(/No input parameters/)).toBeInTheDocument();
+    expect(screen.getByText(/No structured input schema is defined/)).toBeInTheDocument();
+  });
+
+  it('renders planning flow presets for planning-with-files tool', () => {
+    render(<DryRunDialog {...defaultProps} detail={createPlanningToolDetail()} />);
+    expect(screen.getByTestId('planning-flow-presets')).toBeInTheDocument();
+    expect(screen.getByTestId('planning-flow-select-example-1-research-task')).toBeInTheDocument();
+    expect(screen.getByTestId('planning-flow-select-example-3-feature-development')).toBeInTheDocument();
+  });
+
+  it('activates planning create-flow preset and fills create payload', () => {
+    render(<DryRunDialog {...defaultProps} detail={createPlanningToolDetail()} />);
+    fireEvent.click(screen.getByTestId('planning-flow-select-example-1-research-task'));
+    expect(screen.getByText(/Selected execution payload/)).toHaveTextContent('"action":"create"');
+    const taskInput = screen.getByTestId('dry-run-input-task') as HTMLInputElement;
+    expect(taskInput.value).toContain('Research morning exercise benefits and write summary');
+  });
+
+  it('prefills first planning example on first open and executes without reselection', () => {
+    const onExecute = vi.fn();
+    render(<DryRunDialog {...defaultProps} detail={createPlanningToolDetail()} onExecute={onExecute} />);
+
+    const taskInput = screen.getByTestId('dry-run-input-task') as HTMLInputElement;
+    expect(taskInput.value).toContain('Research morning exercise benefits and write summary');
+
+    fireEvent.click(screen.getByTestId('dry-run-execute'));
+    expect(onExecute).toHaveBeenCalledWith(
+      'ext__planning-with-files',
+      expect.objectContaining({
+        action: 'create',
+        task: expect.stringContaining('Research morning exercise benefits and write summary'),
+      }),
+      false,
+    );
+  });
+
+  it('enforces single-select example behavior', () => {
+    render(<DryRunDialog {...defaultProps} detail={createPlanningToolDetail()} />);
+
+    const ex1 = screen.getByTestId('planning-flow-radio-example-1-research-task') as HTMLInputElement;
+    const ex2 = screen.getByTestId('planning-flow-radio-example-2-bug-fix') as HTMLInputElement;
+
+    expect(ex1.checked).toBe(true);
+    expect(ex2.checked).toBe(false);
+
+    fireEvent.click(screen.getByTestId('planning-flow-select-example-2-bug-fix'));
+
+    expect(ex1.checked).toBe(false);
+    expect(ex2.checked).toBe(true);
+  });
+
+  it('does not render planning flow presets for core planning tool', () => {
+    render(<DryRunDialog {...defaultProps} detail={createCorePlanningToolDetail()} />);
+    expect(screen.queryByTestId('planning-flow-presets')).not.toBeInTheDocument();
+  });
+
+  it('renders generic skill example presets for rag-skill', () => {
+    render(<DryRunDialog {...defaultProps} detail={createRagSkillDetail()} />);
+    expect(screen.getByTestId('tool-flow-presets')).toBeInTheDocument();
+    expect(screen.getByTestId('tool-flow-select-example-1-kb-query')).toBeInTheDocument();
+  });
+
+  it('uses selected generic preset payload when executing rag-skill with no schema', () => {
+    const onExecute = vi.fn();
+    render(<DryRunDialog {...defaultProps} detail={createRagSkillDetail()} onExecute={onExecute} />);
+
+    fireEvent.click(screen.getByTestId('tool-flow-select-example-1-kb-query'));
+    fireEvent.click(screen.getByTestId('dry-run-execute'));
+
+    expect(onExecute).toHaveBeenCalledWith(
+      'rag-skill',
+      expect.objectContaining({
+        query: 'What is RAG and when should it be used?',
+        knowledge_dir: 'knowledge/',
+      }),
+      false,
+    );
+  });
+
+  it('uses active planning loop payload when external planning has no schema', () => {
+    const onExecute = vi.fn();
+    const noSchemaExternalPlanning = createPlanningToolDetail();
+    noSchemaExternalPlanning.tools = [{
+      name: 'ext__planning-with-files',
+      description: 'No schema prompt-native planning tool',
+    }];
+
+    render(<DryRunDialog {...defaultProps} detail={noSchemaExternalPlanning} onExecute={onExecute} />);
+
+    fireEvent.click(screen.getByTestId('planning-flow-select-example-4-error-recovery'));
+    fireEvent.click(screen.getByTestId('dry-run-execute'));
+
+    expect(onExecute).toHaveBeenCalledWith(
+      'ext__planning-with-files',
+      expect.objectContaining({ action: 'status' }),
+      false,
+    );
   });
 
   // ─── Required field validation (CRITICAL FIX) ─────────────────
@@ -402,6 +818,39 @@ describe('DryRunDialog', () => {
     render(<DryRunDialog {...defaultProps} />);
     fireEvent.click(screen.getByTestId('dry-run-live-toggle'));
     expect(screen.getByTestId('dry-run-execute')).toHaveTextContent('Execute Live Dry-run');
+  });
+
+  it('shows notebooklm live defaults for provider and model when live is enabled', () => {
+    render(<DryRunDialog {...defaultProps} detail={createNotebooklmDetail()} />);
+
+    fireEvent.click(screen.getByTestId('dry-run-live-toggle'));
+
+    const provider = screen.getByTestId('dry-run-live-provider') as HTMLSelectElement;
+    const model = screen.getByTestId('dry-run-live-model') as HTMLInputElement;
+    expect(provider.value).toBe('vertex');
+    expect(model.value).toBe('gemini-2.5-pro');
+  });
+
+  it('passes live provider/model overrides when executing notebooklm live dry-run', () => {
+    const onExecute = vi.fn();
+    render(<DryRunDialog {...defaultProps} detail={createNotebooklmDetail()} onExecute={onExecute} />);
+
+    fireEvent.click(screen.getByTestId('dry-run-live-toggle'));
+    fireEvent.change(screen.getByTestId('dry-run-live-provider'), { target: { value: 'google_ai' } });
+    fireEvent.change(screen.getByTestId('dry-run-live-model'), { target: { value: 'gemini-2.5-flash' } });
+    fireEvent.click(screen.getByTestId('dry-run-execute'));
+
+    expect(onExecute).toHaveBeenCalledWith(
+      'notebooklm',
+      expect.objectContaining({
+        question: 'Summarize the architecture decisions in this notebook',
+      }),
+      true,
+      {
+        llmProvider: 'google_ai',
+        llmModel: 'gemini-2.5-flash',
+      },
+    );
   });
 
   // ─── Pipeline: verification pipeline display ────────────────────
@@ -623,16 +1072,16 @@ describe('DryRunDialog', () => {
     // After first tick (200ms) — registration reveals
     act(() => { vi.advanceTimersByTime(200); });
     expect(screen.getByTestId('dry-run-stage-registration').className).toContain('animate-stageReveal');
-    expect(screen.getByTestId('dry-run-stage-schema').className).toContain('opacity-40');
+    expect(screen.getByTestId('dry-run-stage-runtime-readiness').className).toContain('opacity-40');
 
-    // After second tick — schema reveals
+    // After second tick — runtime-readiness reveals
     act(() => { vi.advanceTimersByTime(200); });
-    expect(screen.getByTestId('dry-run-stage-schema').className).toContain('animate-stageReveal');
-    expect(screen.getByTestId('dry-run-stage-policy').className).toContain('opacity-40');
+    expect(screen.getByTestId('dry-run-stage-runtime-readiness').className).toContain('animate-stageReveal');
+    expect(screen.getByTestId('dry-run-stage-schema').className).toContain('opacity-40');
   });
 
   it('shows all stages as pending when executing (before result)', () => {
-    const { rerender } = render(<DryRunDialog {...defaultProps} />);
+    render(<DryRunDialog {...defaultProps} />);
 
     // Simulate execution by filling and clicking
     fireEvent.change(screen.getByTestId('dry-run-input-query'), { target: { value: 'test' } });
@@ -685,6 +1134,7 @@ describe('DryRunDialog', () => {
     render(<DryRunDialog {...defaultProps} dryRunResult={createPassResult()} />);
     revealAllStages();
     expect(screen.getByTestId('dry-run-result-panel')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('dry-run-input-toggle'));
     fireEvent.click(screen.getByTestId('dry-run-mode-json'));
     // Pipeline should still be visible
     expect(screen.getByTestId('dry-run-result-panel')).toBeInTheDocument();
@@ -694,6 +1144,7 @@ describe('DryRunDialog', () => {
   it('preserves pipeline results when switching back to Form mode', () => {
     render(<DryRunDialog {...defaultProps} dryRunResult={createPassResult()} />);
     revealAllStages();
+    fireEvent.click(screen.getByTestId('dry-run-input-toggle'));
     fireEvent.click(screen.getByTestId('dry-run-mode-json'));
     fireEvent.click(screen.getByTestId('dry-run-mode-form'));
     expect(screen.getByTestId('dry-run-result-panel')).toBeInTheDocument();

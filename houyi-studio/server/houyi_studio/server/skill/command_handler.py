@@ -164,6 +164,14 @@ class SkillCommandHandler:
                 policy_action=s.get("policy_action", "allow"),
                 side_effect=s.get("side_effect", "none"),
                 certification=s.get("certification", "unverified"),
+                is_core=bool(s.get("is_core", False)),
+                source=s.get("source", "local"),
+                capability_tier=s.get("capability_tier", "metadata"),
+                runtime_status=s.get("runtime_status", "unavailable"),
+                is_external_alias=bool(s.get("is_external_alias", False)),
+                alias_target=s.get("alias_target"),
+                instructions_length=int(s.get("instructions_length", 0) or 0),
+                runtime_binding=s.get("runtime_binding", "none"),
             )
             for s in skills_data
         ]
@@ -200,6 +208,17 @@ class SkillCommandHandler:
                 hooks=detail_data.get("hooks", []),
                 certification=detail_data.get("certification", "unverified"),
                 side_effect=detail_data.get("side_effect", "none"),
+                is_core=bool(detail_data.get("is_core", False)),
+                source=detail_data.get("source", "local"),
+                capability_tier=detail_data.get("capability_tier", "metadata"),
+                runtime_status=detail_data.get("runtime_status", "unavailable"),
+                is_external_alias=bool(detail_data.get("is_external_alias", False)),
+                alias_target=detail_data.get("alias_target"),
+                instructions_length=int(detail_data.get("instructions_length", 0) or 0),
+                runtime_binding=detail_data.get("runtime_binding", "none"),
+                instructions=detail_data.get("instructions"),
+                hook_specs=detail_data.get("hook_specs", []),
+                package_examples=detail_data.get("package_examples", []),
             )
             event = SkillDetailEvent(
                 event_id=f"evt_{uuid4().hex[:8]}",
@@ -364,6 +383,8 @@ class SkillCommandHandler:
             command.tool_name,
             command.input,
             live=command.live,
+            llm_provider=command.llm_provider,
+            llm_model=command.llm_model,
         )
         # Build llm_verification sub-model with full progressive disclosure data
         llm_v = result_data.get("llm_verification")
@@ -382,6 +403,7 @@ class SkillCommandHandler:
                 model_name=llm_v.get("model_name"),
                 raw_content=llm_v.get("raw_content"),
                 usage=llm_v.get("usage"),
+                requested_input=llm_v.get("requested_input"),
                 phases=phases,
             )
 
@@ -400,10 +422,14 @@ class SkillCommandHandler:
             result=result,
         )
         await self._send_event(session_id, event)
+        target = (
+            command.skill_name
+            if command.tool_name == command.skill_name
+            else f"{command.skill_name}.{command.tool_name}"
+        )
         self._logger.info(
-            "Dry-run for %s.%s: valid=%s",
-            command.skill_name,
-            command.tool_name,
+            "Dry-run for %s: valid=%s",
+            target,
             result.valid,
         )
 

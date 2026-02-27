@@ -296,6 +296,52 @@ class TestPlanningSkill:
             assert result["progress"]["completed"] == 1
 
     @pytest.mark.asyncio
+    async def test_create_requires_task(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir = Path(tmpdir)
+            skill = PlanningSkill(workspace=tmpdir)
+
+            result = await skill.execute("create")
+            assert not result["success"]
+            assert "Missing required field for create: task" in result["message"]
+
+    @pytest.mark.asyncio
+    async def test_update_requires_subtask_index(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir = Path(tmpdir)
+            skill = PlanningSkill(workspace=tmpdir)
+
+            await skill.execute(
+                "create",
+                task="Test Task",
+                subtasks=["Step 1"],
+            )
+
+            result = await skill.execute("update", completed=True)
+            assert not result["success"]
+            assert "Missing required field for update: subtask_index" in result["message"]
+
+    @pytest.mark.asyncio
+    async def test_update_rejects_invalid_subtask_index(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir = Path(tmpdir)
+            skill = PlanningSkill(workspace=tmpdir)
+
+            await skill.execute(
+                "create",
+                task="Test Task",
+                subtasks=["Step 1"],
+            )
+
+            bad_type = await skill.execute("update", subtask_index="abc")
+            assert not bad_type["success"]
+            assert "must be an integer" in bad_type["message"]
+
+            negative = await skill.execute("update", subtask_index=-1)
+            assert not negative["success"]
+            assert "must be >= 0" in negative["message"]
+
+    @pytest.mark.asyncio
     async def test_complete_plan(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             tmpdir = Path(tmpdir)
@@ -333,11 +379,18 @@ class TestPlanningSkill:
     def test_to_spec(self):
         skill = PlanningSkill()
         spec = skill.to_spec()
+        schema = spec.input_schema.model_json_schema()
+        props = schema.get("properties", {})
 
         assert spec.name == "planning-with-files"
         assert spec.version == "1.0.0"
         assert spec.user_invocable is True
         assert len(spec.hooks) > 0
+        assert callable(spec.executor)
+        assert props.get("action", {}).get("enum") == ["create", "update", "complete", "status"]
+        assert props.get("subtask_index", {}).get("minimum") == 0
+        assert props.get("completed", {}).get("type") == "boolean"
+        assert "status" not in props
 
 
 class TestPreWriteHook:

@@ -85,7 +85,14 @@ node_modules/
 
 # Houyi runtime data
 .houyi/
+.plan/
 knowledge/
 
 # pnpm store cache
 .pnpm-store/
+
+.agents/
+.windsurf/
+.claude/
+.openclaw/
+

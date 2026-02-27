@@ -68,6 +68,10 @@ class _Skill:
         self.hooks = kw.get("hooks", [])
         self.certification = kw.get("certification", "unverified")
         self.input_schema = kw.get("input_schema")
+        self.is_core = kw.get("is_core", False)
+        self.extra_frontmatter = kw.get("extra_frontmatter", {})
+        self.skill_md_path = kw.get("skill_md_path")
+        self.instructions = kw.get("instructions")
 
 
 # ── extract_side_effects / dominant_side_effect ───────────────────────
@@ -123,6 +127,34 @@ class TestToSummary:
         d = self.ser.to_summary(s)
         assert d["side_effect"] == SIDE_EFFECT_NETWORK
 
+    def test_source_builtin_for_core(self):
+        s = _Skill(name="web_search", is_core=True)
+        d = self.ser.to_summary(s)
+        assert d["source"] == "builtin"
+
+    def test_source_third_party_for_ext_prefix(self):
+        s = _Skill(name="ext__web_search")
+        d = self.ser.to_summary(s)
+        assert d["source"] == "third_party"
+        assert d["is_external_alias"] is True
+        assert d["alias_target"] == "web_search"
+
+    def test_source_community_from_skills_directory_path(self):
+        s = _Skill(skill_md_path="/tmp/project/skills/some-skill/SKILL.md")
+        d = self.ser.to_summary(s)
+        assert d["source"] == "community"
+
+    def test_source_trust_source_override(self):
+        s = _Skill(extra_frontmatter={"trust": {"source": "community"}})
+        d = self.ser.to_summary(s)
+        assert d["source"] == "community"
+
+    def test_summary_includes_runtime_binding_and_instruction_length(self):
+        s = _Skill(instructions="## steps\nuse tools")
+        d = self.ser.to_summary(s)
+        assert d["runtime_binding"] == "prompt_instructions"
+        assert d["instructions_length"] > 0
+
 
 # ── SkillSerializer.to_detail ─────────────────────────────────────────
 
@@ -171,3 +203,97 @@ class TestToDetail:
         s = _Skill(hooks=[_H()])
         d = self.ser.to_detail(s)
         assert d["hooks"] == ["hook:* (pre_invoke)"]
+
+    def test_instructions_and_hook_specs_serialized(self):
+        class _H:
+            event = "PreToolUse"
+            hook_type = "command"
+            matcher = "Write|Edit"
+            command = "echo hi"
+            handler_path = None
+
+        s = _Skill(instructions="body", hooks=[_H()])
+        d = self.ser.to_detail(s)
+        assert d["instructions"] == "body"
+        assert d["hook_specs"][0]["matcher"] == "Write|Edit"
+        assert d["hook_specs"][0]["command"] == "echo hi"
+
+
+# ── capability_tier / runtime_status serialization ─────────────────
+
+
+class TestCapabilityTierAndRuntimeStatus:
+    """Verify serializer emits capability_tier and runtime_status fields."""
+
+    def setup_method(self):
+        self.ser = SkillSerializer()
+
+    def test_summary_includes_capability_tier_and_runtime_status(self):
+        from pydantic import BaseModel
+
+        from houyi.core.skill.spec import SkillSpec
+
+        class _In(BaseModel):
+            q: str
+
+        class _Out(BaseModel):
+            r: str
+
+        skill = SkillSpec(
+            name="test-skill",
+            description="test",
+            input_schema=_In,
+            output_schema=_Out,
+        )
+        skill.bind_executor(lambda **kw: kw)
+        d = self.ser.to_summary(skill)
+        assert "capability_tier" in d
+        assert "runtime_status" in d
+        assert d["capability_tier"] == "executable"
+        assert d["runtime_status"] == "ready"
+
+    def test_detail_includes_capability_tier_and_runtime_status(self):
+        from pydantic import BaseModel
+
+        from houyi.core.skill.spec import SkillSpec
+
+        class _In(BaseModel):
+            q: str
+
+        class _Out(BaseModel):
+            r: str
+
+        skill = SkillSpec(
+            name="test-skill",
+            description="test",
+            input_schema=_In,
+            output_schema=_Out,
+        )
+        d = self.ser.to_detail(skill)
+        assert d["capability_tier"] == "schema"
+        assert d["runtime_status"] == "degraded"
+
+    def test_metadata_only_skill(self):
+        from pydantic import BaseModel
+
+        from houyi.core.skill.spec import SkillSpec
+
+        class _Empty(BaseModel):
+            pass
+
+        skill = SkillSpec(
+            name="meta-only",
+            description="no schema no executor",
+            input_schema=_Empty,
+            output_schema=_Empty,
+        )
+        d = self.ser.to_summary(skill)
+        assert d["capability_tier"] == "metadata"
+        assert d["runtime_status"] == "unavailable"
+
+    def test_fallback_on_fake_skill_without_property(self):
+        """Fake skill objects without computed properties get safe defaults."""
+        s = _Skill(name="fake")
+        d = self.ser.to_summary(s)
+        assert d["capability_tier"] == "metadata"
+        assert d["runtime_status"] == "unavailable"

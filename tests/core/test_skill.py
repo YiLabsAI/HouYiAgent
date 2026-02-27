@@ -407,7 +407,11 @@ Search the web
         mock_response.__exit__.return_value = None
         mock_urlopen.return_value = mock_response
 
-        skill = SkillSpec.from_registry("web_search", cache=False)
+        skill = SkillSpec.from_registry(
+            "web_search",
+            cache=False,
+            base_url="https://skills.example.com",
+        )
 
         assert skill.name == "Web Search"
         assert "search" in skill.description.lower()
@@ -590,7 +594,12 @@ Test
         mock_response.__exit__.return_value = None
         mock_urlopen.return_value = mock_response
 
-        skill = SkillSpec.from_registry("test_skill", version="v1.0.0", cache=False)
+        skill = SkillSpec.from_registry(
+            "test_skill",
+            version="v1.0.0",
+            cache=False,
+            base_url="https://skills.example.com",
+        )
 
         assert skill.name == "Test Skill"
         # Verify version in URL

@@ -209,6 +209,14 @@ class DryRunSkillCommand(ClientCommand):
         description="If True, also verify with a real LLM call to check "
         "the skill produces a valid tool invocation",
     )
+    llm_provider: str | None = Field(
+        default=None,
+        description="Optional LLM provider override for live verification (e.g. vertex/google_ai/openai)",
+    )
+    llm_model: str | None = Field(
+        default=None,
+        description="Optional model override for live verification (e.g. gemini-2.5-pro)",
+    )
 
 
 class ConfigureSkillCommand(ClientCommand):

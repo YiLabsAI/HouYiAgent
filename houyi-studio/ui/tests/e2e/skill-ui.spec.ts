@@ -229,10 +229,11 @@ test.describe('Skill classification', () => {
     const names = body.tools.map((t: any) => t.name);
 
     // These are real Claude community skills imported from local repos
-    const communitySkills = ['using-superpowers', 'notebooklm', 'kb-retriever'];
+    const communitySkills = ['using-superpowers', 'notebooklm', 'rag-skill'];
     for (const name of communitySkills) {
       expect(names).toContain(name);
     }
+    expect(names).not.toContain('kb-retriever');
   });
 
   test('each skill has a non-empty description', async ({ request }) => {

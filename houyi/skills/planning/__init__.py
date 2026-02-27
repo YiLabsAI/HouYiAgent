@@ -60,7 +60,9 @@ class PlanningSkill:
             SkillSpec instance
         """
         skill_md_path = self.skill_dir / "SKILL.md"
-        return SkillSpec.from_file(str(skill_md_path), skill_dir=str(self.skill_dir))
+        spec = SkillSpec.from_file(str(skill_md_path), skill_dir=str(self.skill_dir))
+        spec.bind_executor(self.execute)
+        return spec
 
     async def execute(self, action: str, **kwargs: Any) -> dict[str, Any]:
         """Execute a planning action.
@@ -73,9 +75,47 @@ class PlanningSkill:
             Result dictionary
         """
         if action == "create":
-            return await self._create_plan(**kwargs)
+            task = kwargs.get("task")
+            if not isinstance(task, str) or not task.strip():
+                return {
+                    "success": False,
+                    "message": "Missing required field for create: task",
+                }
+            subtasks = kwargs.get("subtasks")
+            return await self._create_plan(task=task.strip(), subtasks=subtasks)
         elif action == "update":
-            return await self._update_subtask(**kwargs)
+            if "subtask_index" not in kwargs:
+                return {
+                    "success": False,
+                    "message": "Missing required field for update: subtask_index",
+                }
+
+            raw_index = kwargs.get("subtask_index")
+            if raw_index is None:
+                return {
+                    "success": False,
+                    "message": "Missing required field for update: subtask_index",
+                }
+            try:
+                subtask_index = int(raw_index)
+            except (TypeError, ValueError):
+                return {
+                    "success": False,
+                    "message": "Invalid subtask_index: must be an integer",
+                }
+            if subtask_index < 0:
+                return {
+                    "success": False,
+                    "message": "Invalid subtask_index: must be >= 0",
+                }
+
+            completed = kwargs.get("completed", True)
+            if isinstance(completed, str):
+                completed = completed.strip().lower() == "true"
+            return await self._update_subtask(
+                subtask_index=subtask_index,
+                completed=bool(completed),
+            )
         elif action == "complete":
             return await self._complete_plan(**kwargs)
         elif action == "status":

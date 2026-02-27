@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import tempfile
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from houyi_studio.server.skill.dry_run import (
     DryRunValidator,
+    _build_natural_query,
     _build_tool_definitions,
     _parse_llm_response,
     _simplify_schema,
@@ -117,6 +120,24 @@ class TestValidate:
         v = self._make_validator(registry)
         r = await v.validate("s", "t", {"query": "hello"})
         assert r["valid"] is True
+
+    @pytest.mark.asyncio
+    async def test_schema_error_is_user_friendly_for_numeric_bounds(self, registry):
+        from pydantic import BaseModel, Field
+
+        class _BoundsSchema(BaseModel):
+            subtask_index: int = Field(ge=0)
+
+        registry.register(
+            _Skill(name="s", tools=[_Tool("t", schema=_BoundsSchema)]),
+            overwrite=True,
+        )
+        v = self._make_validator(registry)
+        r = await v.validate("s", "t", {"subtask_index": -1})
+
+        assert r["valid"] is False
+        assert "subtask_index: must be >= 0" in r["schema_errors"]
+        assert all("For further information visit" not in err for err in r["schema_errors"])
 
     @pytest.mark.asyncio
     async def test_policy_deny_via_skill_policy(self, registry):
@@ -409,6 +430,114 @@ class TestParseLlmResponse:
         assert r["success"] is False
         assert "did not produce" in r["message"]
 
+    def test_preserves_empty_dict_arguments_in_dict_style(self):
+        """Empty dict arguments are preserved as-is."""
+        resp = MagicMock()
+        resp.tool_calls = [
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "get_weather", "arguments": {}},
+            }
+        ]
+        r = _parse_llm_response(resp, "get_weather")
+        assert r["success"] is True
+        assert r["tool_call"]["arguments"] == {}
+
+    def test_preserves_empty_dict_arguments_in_object_style(self):
+        """Object-style tool call with {} args remains {}."""
+
+        class _TC:
+            name = "get_weather"
+            arguments = {}
+
+        class _Resp:
+            tool_calls = [_TC()]
+
+        r = _parse_llm_response(_Resp(), "get_weather")
+        assert r["success"] is True
+        assert r["tool_call"]["arguments"] == {}
+
+    def test_parses_fenced_json_arguments_and_extracts_action(self):
+        resp = MagicMock()
+        resp.tool_calls = [
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {
+                    "name": "ext__planning-with-files",
+                    "arguments": '```json\n{"action": "create"}\n```',
+                },
+            }
+        ]
+        r = _parse_llm_response(resp, "ext__planning-with-files")
+        assert r["success"] is True
+        assert r["tool_call"]["arguments"] == {"action": "create"}
+        assert r["tool_call"]["action"] == "create"
+
+    def test_parses_python_style_arguments_and_extracts_nested_action(self):
+        resp = MagicMock()
+        resp.tool_calls = [
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {
+                    "name": "ext__planning-with-files",
+                    "arguments": "{'kwargs': {'Action': 'create'}}",
+                },
+            }
+        ]
+        r = _parse_llm_response(resp, "ext__planning-with-files")
+        assert r["success"] is True
+        assert r["tool_call"]["arguments"] == {"kwargs": {"Action": "create"}}
+        assert r["tool_call"]["action"] == "create"
+
+    def test_recovers_arguments_from_raw_content_when_tool_call_args_empty(self):
+        resp = MagicMock()
+        resp.tool_calls = [
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {
+                    "name": "ext__planning-with-files",
+                    "arguments": {},
+                },
+            }
+        ]
+        resp.content = (
+            '{"tool_calls":[{"function":{"name":"ext__planning-with-files",'
+            '"arguments":{"action":"create","task":"demo"}}}]}'
+        )
+
+        r = _parse_llm_response(resp, "ext__planning-with-files")
+        assert r["success"] is True
+        assert r["tool_call"]["arguments"] == {"action": "create", "task": "demo"}
+        assert r["tool_call"]["action"] == "create"
+
+    def test_recovers_tool_call_from_raw_content_when_tool_calls_missing(self):
+        class _Resp:
+            tool_calls = []
+            content = (
+                '{"message":{"tool_call":{"name":"frontend-design","arguments":{"brief":"bold"}}}}'
+            )
+
+        r = _parse_llm_response(_Resp(), "frontend-design")
+        assert r["success"] is True
+        assert r["tool_call"]["name"] == "frontend-design"
+        assert r["tool_call"]["arguments"] == {"brief": "bold"}
+
+
+class TestBuildNaturalQuery:
+    def test_keeps_original_query_text_in_prompt_context(self):
+        """Dry-run probe keeps the original user query text."""
+        original_query = "published articles on infoq in the last year"
+        prompt = _build_natural_query(
+            "web_search",
+            "web_search",
+            {"query": original_query, "provider": "ddg"},
+        )
+        assert original_query in prompt
+
 
 # ── _live_verify integration ────────────────────────────────────────
 
@@ -439,6 +568,7 @@ class TestLiveVerifyIntegration:
 
         assert result["success"] is True
         assert "correctly called" in result["message"]
+        assert result["requested_input"] == {"query": "hi"}
 
     @pytest.mark.asyncio
     async def test_single_tool_skill_no_schema(self):
@@ -556,6 +686,7 @@ class TestLiveVerifyIntegration:
 
         assert result["success"] is False
         assert "did not produce" in result["message"]
+        assert result["requested_input"] == {}
 
     @pytest.mark.asyncio
     async def test_tool_execution_preview_is_dict_not_string(self):
@@ -591,6 +722,154 @@ class TestLiveVerifyIntegration:
         )
         assert preview["title"] == "Test Title"
         assert preview["snippet"] == "line one\nline two"
+
+    @pytest.mark.asyncio
+    async def test_tool_execution_falls_back_to_requested_input_when_observed_args_missing(self):
+        """If provider omits arguments, live dry-run should still replay with requested_input."""
+        from houyi_studio.server.skill.dry_run import _live_verify
+
+        async def _executor(**kwargs):
+            return {"success": True, "received": kwargs}
+
+        skill = _Skill(name="rag-skill", description="RAG")
+        skill.executor = _executor
+
+        mock_response = MagicMock()
+        mock_response.tool_calls = [
+            {
+                "type": "function",
+                "function": {"name": "rag-skill", "arguments": None},
+            }
+        ]
+
+        mock_adapter = AsyncMock()
+        mock_adapter.chat.return_value = mock_response
+
+        with patch(_FACTORY_PATCH) as factory:
+            factory.create.return_value = mock_adapter
+            result = await _live_verify(
+                skill,
+                "rag-skill",
+                "rag-skill",
+                {"query": "what is rag", "knowledge_dir": "knowledge/"},
+            )
+
+        assert result["success"] is True
+        assert result["tool_call"]["arguments_source"] == "requested_input_fallback"
+        exec_phase = next(p for p in result["phases"] if p["name"] == "tool_execution")
+        assert exec_phase["status"] == "pass"
+        assert exec_phase["data"]["argument_source"] == "requested_input_fallback"
+
+    @pytest.mark.asyncio
+    async def test_live_verify_adds_final_response_after_tool_execution(self):
+        from houyi_studio.server.skill.dry_run import _live_verify
+
+        async def _executor(**kwargs):
+            return {"success": True, "received": kwargs}
+
+        skill = _Skill(name="rag-skill", description="RAG")
+        skill.executor = _executor
+
+        first = MagicMock()
+        first.tool_calls = [
+            {
+                "type": "function",
+                "function": {"name": "rag-skill", "arguments": '{"query":"what is rag"}'},
+            }
+        ]
+
+        second = MagicMock()
+        second.content = "RAG is retrieval-augmented generation."
+
+        mock_adapter = AsyncMock()
+        mock_adapter.chat.side_effect = [first, second]
+
+        with patch(_FACTORY_PATCH) as factory:
+            factory.create.return_value = mock_adapter
+            result = await _live_verify(
+                skill,
+                "rag-skill",
+                "rag-skill",
+                {"query": "what is rag"},
+            )
+
+        final_phase = next(p for p in result["phases"] if p["name"] == "final_response")
+        assert final_phase["status"] == "pass"
+        assert "RAG is retrieval-augmented generation" in result.get("final_answer", "")
+
+    @pytest.mark.asyncio
+    async def test_planning_skill_live_verify_executes_bound_executor(self):
+        """Planning skill should execute in live dry-run (not skip with missing executor)."""
+        from houyi_studio.server.skill.dry_run import _live_verify
+
+        from houyi.skills.planning import PlanningSkill
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            skill = PlanningSkill(workspace=Path(tmpdir)).to_spec()
+            mock_response = MagicMock()
+            mock_response.tool_calls = [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "planning-with-files",
+                        "arguments": '{"action":"status"}',
+                    },
+                }
+            ]
+            mock_adapter = AsyncMock()
+            mock_adapter.chat.return_value = mock_response
+
+            with patch(_FACTORY_PATCH) as factory:
+                factory.create.return_value = mock_adapter
+                result = await _live_verify(
+                    skill,
+                    "planning-with-files",
+                    "planning-with-files",
+                    {"action": "status"},
+                )
+
+        assert result["success"] is True
+        exec_phase = next(p for p in result["phases"] if p["name"] == "tool_execution")
+        assert exec_phase["status"] != "skip"
+        assert exec_phase["data"].get("reason") != "no executor available"
+
+    @pytest.mark.asyncio
+    async def test_planning_create_without_task_returns_validation_failure(self):
+        """Planning create without task should fail gracefully without TypeError."""
+        from houyi_studio.server.skill.dry_run import _live_verify
+
+        from houyi.skills.planning import PlanningSkill
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            skill = PlanningSkill(workspace=Path(tmpdir)).to_spec()
+            mock_response = MagicMock()
+            mock_response.tool_calls = [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "planning-with-files",
+                        "arguments": '{"action":"create"}',
+                    },
+                }
+            ]
+            mock_adapter = AsyncMock()
+            mock_adapter.chat.return_value = mock_response
+
+            with patch(_FACTORY_PATCH) as factory:
+                factory.create.return_value = mock_adapter
+                result = await _live_verify(
+                    skill,
+                    "planning-with-files",
+                    "planning-with-files",
+                    {"action": "create"},
+                )
+
+        exec_phase = next(p for p in result["phases"] if p["name"] == "tool_execution")
+        assert exec_phase["status"] == "fail"
+        preview = exec_phase["data"].get("result_preview")
+        assert isinstance(preview, dict)
+        assert preview.get("success") is False
+        assert "Missing required field for create: task" in str(preview.get("message", ""))
 
 
 # ── Full async validate + live ────────────────────────────────────────

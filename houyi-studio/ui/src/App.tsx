@@ -466,10 +466,10 @@ function App() {
           isOpen={showDryRun}
           detail={skillsLogic.skillDetail}
           dryRunResult={skillsLogic.dryRunResult}
-          onExecute={(toolName, input, live) => {
+          onExecute={(toolName, input, live, options) => {
             const skillName = skillsLogic.selectedSkill;
             if (skillName) {
-              skillsLogic.dryRunSkill(skillName, toolName, input, live);
+              skillsLogic.dryRunSkill(skillName, toolName, input, live, options);
             }
           }}
           onClose={() => {

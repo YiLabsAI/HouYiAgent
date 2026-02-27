@@ -52,6 +52,7 @@ const MOCK_SKILLS: SkillSummary[] = [
     certification: 'silver',
     policy_action: 'allow',
     side_effect: 'none',
+    is_core: true,
   },
   {
     name: 'web_search',
@@ -60,6 +61,7 @@ const MOCK_SKILLS: SkillSummary[] = [
     certification: 'gold',
     policy_action: 'allow_with_consent',
     side_effect: 'network',
+    is_core: false,
   },
 ];
 
@@ -75,6 +77,7 @@ const MOCK_DETAIL: SkillDetail = {
   hooks: ['PreToolUse'],
   certification: 'silver',
   side_effect: 'none',
+  is_core: true,
 };
 
 const MOCK_METRICS: SkillMetricsData = {

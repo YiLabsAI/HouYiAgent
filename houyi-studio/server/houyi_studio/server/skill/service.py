@@ -204,12 +204,16 @@ class SkillService:
         tool_name: str,
         input_data: dict[str, Any],
         live: bool = False,
+        llm_provider: str | None = None,
+        llm_model: str | None = None,
     ) -> dict[str, Any]:
         return await self._dry_run_validator.validate(
             skill_name,
             tool_name,
             input_data,
             live=live,
+            llm_provider=llm_provider,
+            llm_model=llm_model,
         )
 
     # ── Consent management ────────────────────────────────────────

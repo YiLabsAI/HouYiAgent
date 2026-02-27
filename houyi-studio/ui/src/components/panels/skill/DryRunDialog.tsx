@@ -31,6 +31,54 @@ import {
   DEFAULT_WEATHER_CITY_OPTIONS,
   WEATHER_CITY_SUGGESTIONS,
 } from './dryRun/inputPresets';
+import {
+  applyToolSpecificValidation,
+  getToolDryRunPresets,
+  getToolFieldRules,
+  isExternalPlanningWithFilesTool,
+  isPlanningWithFilesTool,
+  normalizeToolInput,
+  PLANNING_FLOW_PRESETS,
+  shouldShowActionHint,
+  type ToolDryRunPreset,
+} from './dryRun/dryRunToolRules';
+
+const DEFAULT_PLANNING_FLOW_ID = PLANNING_FLOW_PRESETS[0]?.id ?? '';
+
+type LiveLlmProviderOption = {
+  value: string;
+  label: string;
+  models: string[];
+};
+
+const LIVE_LLM_PROVIDER_OPTIONS: LiveLlmProviderOption[] = [
+  { value: '', label: 'provider: default', models: [] },
+  { value: 'vertex', label: 'provider: vertex', models: ['gemini-2.5-pro', 'gemini-2.5-flash'] },
+  { value: 'google_ai', label: 'provider: google_ai', models: ['gemini-2.5-pro', 'gemini-2.5-flash'] },
+  { value: 'openai', label: 'provider: openai', models: ['gpt-4o', 'gpt-4.1-mini'] },
+  { value: 'siliconflow', label: 'provider: siliconflow', models: ['deepseek-chat', 'deepseek-reasoner'] },
+  { value: 'openai_compat', label: 'provider: openai_compat', models: ['deepseek-chat', 'qwen-plus'] },
+  { value: 'deepseek', label: 'provider: deepseek', models: ['deepseek-chat', 'deepseek-reasoner'] },
+];
+
+const getProviderModels = (provider: string): string[] => (
+  LIVE_LLM_PROVIDER_OPTIONS.find((opt) => opt.value === provider)?.models ?? []
+);
+
+const presetToFormValues = (preset: ToolDryRunPreset | null): Record<string, string> => {
+  if (!preset) return {};
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(preset.input ?? {})) {
+    if (Array.isArray(v)) {
+      out[k] = v.join(', ');
+    } else if (typeof v === 'boolean') {
+      out[k] = v ? 'true' : 'false';
+    } else if (v !== undefined && v !== null) {
+      out[k] = String(v);
+    }
+  }
+  return out;
+};
 
 // ─── Stage status icon ───────────────────────────────────────────
 
@@ -135,7 +183,12 @@ export interface DryRunDialogProps {
   isOpen: boolean;
   detail: SkillDetail;
   dryRunResult: DryRunResultData | null;
-  onExecute: (toolName: string, input: Record<string, unknown>, live?: boolean) => void;
+  onExecute: (
+    toolName: string,
+    input: Record<string, unknown>,
+    live?: boolean,
+    options?: { llmProvider?: string; llmModel?: string },
+  ) => void;
   onClose: () => void;
   onClearResult?: () => void;
 }
@@ -157,10 +210,55 @@ export const DryRunDialog: React.FC<DryRunDialogProps> = ({
   const [jsonError, setJsonError] = useState<string | null>(null);
   const [isExecuting, setIsExecuting] = useState(false);
   const [liveMode, setLiveMode] = useState(false);
+  const [liveLlmProvider, setLiveLlmProvider] = useState('');
+  const [liveLlmModel, setLiveLlmModel] = useState('');
   const [inputCollapsed, setInputCollapsed] = useState(false);
+  const [selectedExampleId, setSelectedExampleId] = useState<string>(DEFAULT_PLANNING_FLOW_ID);
 
   // How many stages have been revealed with their actual status
   const [revealedCount, setRevealedCount] = useState(0);
+  const packagePresets = useMemo<ToolDryRunPreset[]>(
+    () => detail.package_examples ?? [],
+    [detail.package_examples],
+  );
+  const availablePresets = useMemo<ToolDryRunPreset[]>(
+    () => (packagePresets.length > 0 ? packagePresets : getToolDryRunPresets(selectedTool)),
+    [packagePresets, selectedTool],
+  );
+  const presetModeEnabled = availablePresets.length > 0;
+  const activePreset = useMemo<ToolDryRunPreset | null>(
+    () => availablePresets.find((p) => p.id === selectedExampleId) ?? availablePresets[0] ?? null,
+    [availablePresets, selectedExampleId],
+  );
+
+  const getInitialPresetForTool = useCallback((toolName: string): ToolDryRunPreset | null => {
+    const packagePreset = (detail.package_examples ?? [])[0] ?? null;
+    if (packagePreset) return packagePreset;
+    return getToolDryRunPresets(toolName)[0] ?? null;
+  }, [detail.package_examples]);
+
+  const getLiveDefaultsForTool = useCallback((toolName: string): { provider: string; model: string } => {
+    if (toolName === 'notebooklm') {
+      return { provider: 'vertex', model: 'gemini-2.5-pro' };
+    }
+    return { provider: '', model: '' };
+  }, []);
+
+  const liveModelOptions = useMemo(() => getProviderModels(liveLlmProvider), [liveLlmProvider]);
+
+  useEffect(() => {
+    if (!liveLlmProvider) {
+      if (liveLlmModel !== '') setLiveLlmModel('');
+      return;
+    }
+    if (liveModelOptions.length === 0) {
+      if (liveLlmModel !== '') setLiveLlmModel('');
+      return;
+    }
+    if (!liveModelOptions.includes(liveLlmModel)) {
+      setLiveLlmModel(liveModelOptions[0]);
+    }
+  }, [liveLlmProvider, liveLlmModel, liveModelOptions]);
 
   // Select first tool by default
   useEffect(() => {
@@ -169,13 +267,31 @@ export const DryRunDialog: React.FC<DryRunDialogProps> = ({
     }
   }, [isOpen, detail.tools, selectedTool]);
 
+  useEffect(() => {
+    if (!presetModeEnabled || !activePreset) return;
+    const preset = activePreset;
+    if (!preset) return;
+    setFormValues(presetToFormValues(preset));
+    setJsonInput(JSON.stringify(preset.input, null, 2));
+  }, [presetModeEnabled, activePreset]);
+
   // Progressive reveal: when result arrives, reveal stages one by one
   useEffect(() => {
     if (dryRunResult) {
       setIsExecuting(false);
       setInputCollapsed(true);
       setRevealedCount(0);
-      const totalStages = computeStages(dryRunResult, detail, liveMode).length;
+      const isPresetMode = presetModeEnabled;
+      const selectedPreset = isPresetMode ? activePreset : null;
+      const totalStages = computeStages(dryRunResult, detail, liveMode, {
+        planningFlowId: isExternalPlanningWithFilesTool(selectedTool) ? selectedExampleId : null,
+        planningFlowLabel: isExternalPlanningWithFilesTool(selectedTool)
+          ? (selectedPreset?.label ?? null)
+          : null,
+        selectedExampleId: selectedPreset?.id ?? null,
+        selectedExampleLabel: selectedPreset?.label ?? null,
+        selectedToolName: selectedTool,
+      }).length;
       let count = 0;
       const timer = setInterval(() => {
         count += 1;
@@ -186,31 +302,50 @@ export const DryRunDialog: React.FC<DryRunDialogProps> = ({
     } else {
       setRevealedCount(0);
     }
-  }, [dryRunResult, detail, liveMode]);
+  }, [dryRunResult, detail, liveMode, selectedExampleId, selectedTool]);
 
   // Reset state on open
   useEffect(() => {
     if (isOpen) {
-      setJsonInput('{}');
-      setFormValues({});
       setJsonError(null);
       setFormErrors({});
       setIsExecuting(false);
       setLiveMode(false);
+      setLiveLlmProvider('');
+      setLiveLlmModel('');
       setInputCollapsed(false);
       setRevealedCount(0);
+      onClearResult?.();
       if (detail.tools.length > 0) {
-        setSelectedTool(detail.tools[0].name);
+        const nextTool = detail.tools[0].name;
+        const initialPreset = getInitialPresetForTool(nextTool);
+        const liveDefaults = getLiveDefaultsForTool(nextTool);
+        setSelectedTool(nextTool);
+        setLiveLlmProvider(liveDefaults.provider);
+        setLiveLlmModel(liveDefaults.model);
+        setSelectedExampleId(initialPreset?.id ?? '');
+        if (initialPreset) {
+          setFormValues(presetToFormValues(initialPreset));
+          setJsonInput(JSON.stringify(initialPreset.input, null, 2));
+        } else {
+          setFormValues({});
+          setJsonInput('{}');
+        }
+      } else {
+        setFormValues({});
+        setJsonInput('{}');
       }
     }
-  }, [isOpen, detail.tools]);
+  }, [isOpen, detail.tools, onClearResult, getInitialPresetForTool, getLiveDefaultsForTool]);
 
   const currentTool: SkillTool | undefined = useMemo(
     () => detail.tools.find((t) => t.name === selectedTool),
     [detail.tools, selectedTool],
   );
+  const presetModeForExternalPlanning = presetModeEnabled && isExternalPlanningWithFilesTool(selectedTool);
   const isWeatherTool = currentTool?.name === 'get_weather';
   const isLocationTool = currentTool?.name === 'get_location';
+  const isWebSearchTool = currentTool?.name === 'web_search';
 
   // Extract fields from input_schema, handling Pydantic's anyOf pattern
   const schemaFields = useMemo<DryRunSchemaField[]>(() => {
@@ -219,18 +354,45 @@ export const DryRunDialog: React.FC<DryRunDialogProps> = ({
     const props = schema.properties || {};
     const required = new Set(schema.required || []);
 
+    const resolveRef = (ref: string): Record<string, unknown> => {
+      if (!ref.startsWith('#/')) return {};
+      const path = ref.slice(2).split('/');
+      let cursor: unknown = schema;
+      for (const segment of path) {
+        if (!cursor || typeof cursor !== 'object' || !(segment in cursor)) {
+          return {};
+        }
+        cursor = (cursor as Record<string, unknown>)[segment];
+      }
+      return (cursor && typeof cursor === 'object') ? (cursor as Record<string, unknown>) : {};
+    };
+
+    const resolveNode = (node: unknown): Record<string, unknown> => {
+      if (!node || typeof node !== 'object') return {};
+      const raw = node as Record<string, unknown>;
+      const ref = typeof raw.$ref === 'string' ? resolveRef(raw.$ref) : {};
+      const rest = { ...raw };
+      delete rest.$ref;
+      return { ...ref, ...rest };
+    };
+
     return Object.entries(props).map(([name, def]) => {
-      const d = def as Record<string, unknown>;
+      const d = resolveNode(def);
       let fieldType = d.type as string | undefined;
+      let fieldFormat = d.format as string | undefined;
       let nullable = false;
       let enumValues = d.enum as string[] | undefined;
 
       if (!fieldType && Array.isArray(d.anyOf)) {
-        const variants = d.anyOf as Array<Record<string, unknown>>;
+        const variants = (d.anyOf as Array<unknown>).map(resolveNode);
         const types = variants.map((t) => t.type as string).filter(Boolean);
         const nonNullTypes = types.filter((t) => t !== 'null');
         nullable = types.includes('null');
         fieldType = nonNullTypes[0] || 'string';
+        if (!fieldFormat) {
+          const withFormat = variants.find((v) => typeof v.format === 'string');
+          fieldFormat = withFormat?.format as string | undefined;
+        }
         if (!enumValues) {
           for (const v of variants) {
             if (Array.isArray(v.enum)) {
@@ -248,6 +410,7 @@ export const DryRunDialog: React.FC<DryRunDialogProps> = ({
       return {
         name,
         type: fieldType || 'string',
+        format: fieldFormat,
         title: (d.title as string) || '',
         description: (d.description as string) || '',
         required: isRequired,
@@ -264,6 +427,25 @@ export const DryRunDialog: React.FC<DryRunDialogProps> = ({
   // Track validation errors
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
 
+  const getFieldRules = useCallback((field: DryRunSchemaField): { visible: boolean; required: boolean } => {
+    return getToolFieldRules(selectedTool, field, formValues);
+  }, [selectedTool, formValues.action]);
+
+  const visibleSchemaFields = useMemo(() => (
+    schemaFields
+      .map((field) => {
+        const rules = getFieldRules(field);
+        const forceHideAction = presetModeForExternalPlanning && field.name === 'action';
+        return {
+          ...field,
+          required: rules.required,
+          visible: forceHideAction ? false : rules.visible,
+        };
+      })
+      .filter((field) => field.visible)
+      .sort((a, b) => (a.required === b.required ? 0 : a.required ? -1 : 1))
+  ), [schemaFields, getFieldRules, presetModeForExternalPlanning]);
+
   const updateFormField = (fieldName: string, value: string) => {
     setFormValues((prev) => ({ ...prev, [fieldName]: value }));
     if (formErrors[fieldName]) {
@@ -272,6 +454,9 @@ export const DryRunDialog: React.FC<DryRunDialogProps> = ({
         delete next[fieldName];
         return next;
       });
+    }
+    if (fieldName === 'action' && isPlanningWithFilesTool(selectedTool)) {
+      setFormErrors({});
     }
   };
 
@@ -285,21 +470,23 @@ export const DryRunDialog: React.FC<DryRunDialogProps> = ({
         setJsonError(`Invalid JSON: ${(e as Error).message}`);
         return;
       }
-    } else {
       const errors: Record<string, string> = {};
-      for (const field of schemaFields) {
-        const val = formValues[field.name];
-        if (field.required && (val === undefined || val === '')) {
-          errors[field.name] = 'This field is required';
-        }
-      }
+      applyToolSpecificValidation(selectedTool, input, errors);
       if (Object.keys(errors).length > 0) {
         setFormErrors(errors);
         return;
       }
       setFormErrors({});
+    } else {
+      const errors: Record<string, string> = {};
       for (const field of schemaFields) {
+        const rules = getFieldRules(field);
+        if (!rules.visible) continue;
+
         const val = formValues[field.name];
+        if (rules.required && (val === undefined || val === '')) {
+          errors[field.name] = 'This field is required';
+        }
         if (val !== undefined && val !== '') {
           if (field.type === 'number' || field.type === 'integer') {
             input[field.name] = Number(val);
@@ -310,12 +497,49 @@ export const DryRunDialog: React.FC<DryRunDialogProps> = ({
           }
         }
       }
+      applyToolSpecificValidation(selectedTool, input, errors);
+      if (Object.keys(errors).length > 0) {
+        setFormErrors(errors);
+        return;
+      }
+      setFormErrors({});
     }
+    if (presetModeEnabled && activePreset) {
+      const forced = activePreset.input;
+      input = {
+        ...input,
+        ...forced,
+      };
+    }
+    input = normalizeToolInput(selectedTool, input);
     setIsExecuting(true);
     setRevealedCount(0);
     onClearResult?.();
+    const provider = liveLlmProvider.trim();
+    const model = liveLlmModel.trim();
+    if (liveMode && (provider || model)) {
+      onExecute(selectedTool, input, liveMode, {
+        llmProvider: provider || undefined,
+        llmModel: model || undefined,
+      });
+      return;
+    }
     onExecute(selectedTool, input, liveMode);
-  }, [inputMode, jsonInput, schemaFields, formValues, selectedTool, liveMode, onExecute, onClearResult]);
+  }, [
+    inputMode,
+    jsonInput,
+    schemaFields,
+    formValues,
+    getFieldRules,
+    selectedTool,
+    liveMode,
+    liveLlmProvider,
+    liveLlmModel,
+    onExecute,
+    onClearResult,
+    presetModeEnabled,
+    activePreset,
+  ]);
 
   const fieldPlaceholder = (field: DryRunSchemaField): string => {
     if (field.required) return 'Required';
@@ -337,9 +561,19 @@ export const DryRunDialog: React.FC<DryRunDialogProps> = ({
 
   const pipelineStages = useMemo(
     () => (dryRunResult || isExecuting)
-      ? computeStages(dryRunResult, detail, liveMode)
+      ? computeStages(dryRunResult, detail, liveMode, {
+        planningFlowId: presetModeForExternalPlanning
+          ? selectedExampleId
+          : null,
+        planningFlowLabel: presetModeForExternalPlanning
+          ? activePreset?.label ?? null
+          : null,
+        selectedExampleId: activePreset?.id ?? null,
+        selectedExampleLabel: activePreset?.label ?? null,
+        selectedToolName: selectedTool,
+      })
       : [],
-    [dryRunResult, isExecuting, detail, liveMode],
+    [dryRunResult, isExecuting, detail, liveMode, selectedExampleId, presetModeForExternalPlanning, selectedTool, activePreset],
   );
 
   const showPipeline = isExecuting || !!dryRunResult;
@@ -389,11 +623,19 @@ export const DryRunDialog: React.FC<DryRunDialogProps> = ({
                     <select
                       value={selectedTool}
                       onChange={(e) => {
-                        setSelectedTool(e.target.value);
-                        setFormValues({});
+                        const nextTool = e.target.value;
+                        const initialPreset = getInitialPresetForTool(nextTool);
+                        const liveDefaults = getLiveDefaultsForTool(nextTool);
+                        setSelectedTool(nextTool);
+                        setLiveLlmProvider(liveDefaults.provider);
+                        setLiveLlmModel(liveDefaults.model);
+                        setSelectedExampleId(initialPreset?.id ?? '');
+                        setFormValues(initialPreset ? presetToFormValues(initialPreset) : {});
                         setFormErrors({});
-                        setJsonInput('{}');
+                        setJsonInput(initialPreset ? JSON.stringify(initialPreset.input, null, 2) : '{}');
                         setJsonError(null);
+                        setInputCollapsed(false);
+                        onClearResult?.();
                       }}
                       className="w-full bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 appearance-none cursor-pointer focus:border-blue-500 focus:outline-none"
                       data-testid="dry-run-tool-select"
@@ -420,6 +662,67 @@ export const DryRunDialog: React.FC<DryRunDialogProps> = ({
               )}
 
               {/* Input mode toggle */}
+              {presetModeEnabled && (
+                <div className="bg-gray-900/60 border border-gray-700 rounded-lg p-3 space-y-2" data-testid={presetModeForExternalPlanning ? 'planning-flow-presets' : 'tool-flow-presets'}>
+                  <div className="text-[11px] font-medium text-cyan-300 uppercase tracking-wide">
+                    {presetModeForExternalPlanning ? 'Planning Flow Verification' : 'Skill Example Verification'}
+                  </div>
+                  <div className="text-[11px] text-gray-400">Single-select one example and verify strict expected/requested/observed routing evidence end-to-end.</div>
+                  <div className="space-y-1.5">
+                    {availablePresets.map((preset) => {
+                      const selected = selectedExampleId === preset.id;
+                      const baseId = presetModeForExternalPlanning ? 'planning-flow' : 'tool-flow';
+                      return (
+                        <button
+                          type="button"
+                          key={preset.id}
+                          onClick={() => {
+                            setSelectedExampleId(preset.id);
+                            setFormValues(presetToFormValues(preset));
+                            setJsonInput(JSON.stringify(preset.input, null, 2));
+                            setInputCollapsed(false);
+                            onClearResult?.();
+                          }}
+                          className={`w-full text-left rounded border p-2 transition-colors ${
+                            selected
+                              ? 'border-cyan-600/50 bg-cyan-900/10'
+                              : 'border-gray-700/50 bg-gray-800/40 hover:bg-gray-800/60'
+                          }`}
+                          data-testid={`${baseId}-select-${preset.id}`}
+                        >
+                          <div className="flex items-start gap-2">
+                            <input
+                              type="radio"
+                              name={`${baseId}-example`}
+                              checked={selected}
+                              onChange={() => {
+                                setSelectedExampleId(preset.id);
+                                setFormValues(presetToFormValues(preset));
+                                setJsonInput(JSON.stringify(preset.input, null, 2));
+                              }}
+                              className="mt-0.5"
+                              data-testid={`${baseId}-radio-${preset.id}`}
+                            />
+                            <div className={`flex-1 ${selected ? 'text-cyan-300' : 'text-gray-300'}`}>
+                              <div className="text-[11px] font-medium">{preset.label}</div>
+                              <div className="text-[10px] text-gray-500">{preset.description}</div>
+                              {preset.objective && (
+                                <div className="text-[10px] text-gray-400 mt-0.5">Objective: {preset.objective}</div>
+                              )}
+                            </div>
+                          </div>
+                          {selected && (
+                            <div className="mt-1 text-[10px] text-cyan-200">
+                              Selected execution payload: <span className="font-mono">{JSON.stringify(preset.input)}</span>
+                            </div>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
               <div className="flex items-center gap-2">
                 <label className="block text-[11px] font-medium text-gray-400 uppercase tracking-wide">
                   Input
@@ -427,7 +730,12 @@ export const DryRunDialog: React.FC<DryRunDialogProps> = ({
                 <div className="flex bg-gray-900 rounded-lg border border-gray-700 overflow-hidden">
                   <button
                     type="button"
-                    onClick={() => { setInputMode('form'); setJsonError(null); }}
+                    onClick={() => {
+                      setInputMode('form');
+                      setJsonError(null);
+                      setInputCollapsed(false);
+                      onClearResult?.();
+                    }}
                     className={`px-3 py-1 text-[11px] transition-colors ${
                       inputMode === 'form'
                         ? 'bg-blue-600 text-white'
@@ -439,7 +747,12 @@ export const DryRunDialog: React.FC<DryRunDialogProps> = ({
                   </button>
                   <button
                     type="button"
-                    onClick={() => { setInputMode('json'); setFormErrors({}); }}
+                    onClick={() => {
+                      setInputMode('json');
+                      setFormErrors({});
+                      setInputCollapsed(false);
+                      onClearResult?.();
+                    }}
                     className={`px-3 py-1 text-[11px] transition-colors ${
                       inputMode === 'json'
                         ? 'bg-blue-600 text-white'
@@ -456,13 +769,28 @@ export const DryRunDialog: React.FC<DryRunDialogProps> = ({
               {inputMode === 'form' && (
                 <div className="space-y-3" data-testid="dry-run-form-inputs">
                   {schemaFields.length === 0 ? (
-                    <div className="text-xs text-gray-500 bg-gray-900/40 rounded-lg p-3 border border-gray-700/50">
-                      No input parameters defined. Dry-run will perform an availability check.
+                    <div className="text-xs text-gray-500 bg-gray-900/40 rounded-lg p-3 border border-gray-700/50 space-y-1">
+                      <div>No structured input schema is defined. Dry-run will run capability and runtime checks.</div>
+                      {detail.runtime_binding === 'prompt_instructions' && (detail.instructions_length ?? 0) > 0 && (
+                        <div className="text-[11px] text-green-300">
+                          Prompt-native runtime detected: SKILL.md instructions are loaded ({detail.instructions_length} chars), and lifecycle hooks can execute without a JSON input schema.
+                        </div>
+                      )}
+                      {isPlanningWithFilesTool(selectedTool) && detail.runtime_binding !== 'prompt_instructions' && (
+                        <div className="text-[11px] text-gray-400">
+                          Add <span className="font-mono">input_schema</span> (SKILL.md frontmatter or simpleskill.json)
+                          to enable form fields and action-level dry-run validation for planning actions.
+                        </div>
+                      )}
                     </div>
                   ) : (
-                    schemaFields
-                      .sort((a, b) => (a.required === b.required ? 0 : a.required ? -1 : 1))
-                      .map((field) => (
+                    <>
+                      {!presetModeForExternalPlanning && shouldShowActionHint(selectedTool, formValues) && (
+                        <div className="text-[11px] text-gray-500 bg-gray-900/40 rounded-lg p-2 border border-gray-700/50">
+                          Select an action to show relevant inputs.
+                        </div>
+                      )}
+                      {visibleSchemaFields.map((field) => (
                       <div key={field.name} className={!field.required ? 'opacity-70' : ''}>
                         <label className="flex items-center gap-1.5 text-[11px] text-gray-400 mb-1">
                           <span className="font-medium text-gray-300">{field.name}</span>
@@ -481,15 +809,23 @@ export const DryRunDialog: React.FC<DryRunDialogProps> = ({
                           error={formErrors[field.name]}
                           isWeatherTool={isWeatherTool}
                           isLocationTool={isLocationTool}
+                          isWebSearchTool={isWebSearchTool}
                           weatherCityOptions={weatherCityOptions}
                           onChange={(value) => updateFormField(field.name, value)}
                           placeholder={fieldPlaceholder(field)}
                         />
+                        {(field.type === 'number' || field.type === 'integer') &&
+                          (field.minimum !== undefined || field.maximum !== undefined) && (
+                            <div className="mt-0.5 text-[10px] text-gray-600" data-testid={`dry-run-range-${field.name}`}>
+                              Range: {field.minimum !== undefined ? field.minimum : '-inf'} to {field.maximum !== undefined ? field.maximum : '+inf'}
+                            </div>
+                          )}
                         {formErrors[field.name] && (
                           <div className="mt-0.5 text-[10px] text-red-400">{formErrors[field.name]}</div>
                         )}
                       </div>
-                    ))
+                      ))}
+                    </>
                   )}
                 </div>
               )}
@@ -499,7 +835,11 @@ export const DryRunDialog: React.FC<DryRunDialogProps> = ({
                 <div data-testid="dry-run-json-input">
                   <textarea
                     value={jsonInput}
-                    onChange={(e) => { setJsonInput(e.target.value); setJsonError(null); }}
+                    onChange={(e) => {
+                      setJsonInput(e.target.value);
+                      setJsonError(null);
+                      setFormErrors({});
+                    }}
                     rows={4}
                     className="w-full bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-xs text-gray-200 font-mono focus:border-blue-500 focus:outline-none resize-y"
                     placeholder='{"key": "value"}'
@@ -510,6 +850,15 @@ export const DryRunDialog: React.FC<DryRunDialogProps> = ({
                       <AlertCircle size={10} /> {jsonError}
                     </div>
                   )}
+                  {!jsonError && Object.values(formErrors).length > 0 && (
+                    <div className="mt-1 space-y-1" data-testid="dry-run-json-validation-errors">
+                      {Object.values(formErrors).map((msg) => (
+                        <div key={msg} className="text-[10px] text-red-400 flex items-center gap-1">
+                          <AlertCircle size={10} /> {msg}
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -517,12 +866,21 @@ export const DryRunDialog: React.FC<DryRunDialogProps> = ({
         </div>
 
         {/* ── Execute bar ──────────────────────────────────────── */}
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           <label className="flex items-center gap-1.5 cursor-pointer select-none shrink-0" title="When enabled, dry-run will send the input to an LLM to verify the skill produces a valid tool call.">
             <input
               type="checkbox"
               checked={liveMode}
-              onChange={(e) => setLiveMode(e.target.checked)}
+              onChange={(e) => {
+                setLiveMode(e.target.checked);
+                if (e.target.checked && !liveLlmProvider && !liveLlmModel) {
+                  const defaults = getLiveDefaultsForTool(selectedTool);
+                  setLiveLlmProvider(defaults.provider);
+                  setLiveLlmModel(defaults.model);
+                }
+                setInputCollapsed(false);
+                onClearResult?.();
+              }}
               className="w-3.5 h-3.5 rounded border-gray-600 bg-gray-800 text-blue-500 focus:ring-blue-500 focus:ring-offset-0 cursor-pointer"
               data-testid="dry-run-live-toggle"
             />
@@ -532,11 +890,38 @@ export const DryRunDialog: React.FC<DryRunDialogProps> = ({
             </span>
           </label>
 
+          {liveMode && (
+            <div className="flex items-center gap-2 shrink-0" data-testid="dry-run-live-llm-config">
+              <select
+                value={liveLlmProvider}
+                onChange={(e) => setLiveLlmProvider(e.target.value)}
+                className="bg-gray-900 border border-gray-700 rounded px-2 py-1 text-[11px] text-gray-200"
+                data-testid="dry-run-live-provider"
+              >
+                {LIVE_LLM_PROVIDER_OPTIONS.map((option) => (
+                  <option key={`live-provider-${option.value || 'default'}`} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+              <select
+                value={liveLlmModel}
+                onChange={(e) => setLiveLlmModel(e.target.value)}
+                className="w-44 bg-gray-900 border border-gray-700 rounded px-2 py-1 text-[11px] text-gray-200"
+                data-testid="dry-run-live-model"
+                disabled={!liveLlmProvider || liveModelOptions.length === 0}
+              >
+                <option value="">model: default</option>
+                {liveModelOptions.map((modelName) => (
+                  <option key={`live-model-${liveLlmProvider}-${modelName}`} value={modelName}>{modelName}</option>
+                ))}
+              </select>
+            </div>
+          )}
+
           <button
             type="button"
             onClick={handleExecute}
             disabled={isExecuting || !selectedTool}
-            className={`flex-1 flex items-center justify-center gap-2 px-4 py-2 text-white text-sm font-medium rounded-lg transition-colors ${
+            className={`flex-1 min-w-[220px] whitespace-nowrap flex items-center justify-center gap-2 px-4 py-2 text-white text-sm font-medium rounded-lg transition-colors ${
               liveMode
                 ? 'bg-amber-600 hover:bg-amber-500 disabled:bg-gray-700 disabled:text-gray-500'
                 : 'bg-blue-600 hover:bg-blue-500 disabled:bg-gray-700 disabled:text-gray-500'

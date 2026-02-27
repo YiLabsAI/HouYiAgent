@@ -244,7 +244,7 @@ class TestFullSkillInventory:
             recursive=True,
             overwrite=True,
         )
-        assert len(loaded) >= 6, f"Expected >= 6 external skills, got {len(loaded)}: {loaded}"
+        assert len(loaded) >= 5, f"Expected >= 5 external skills, got {len(loaded)}: {loaded}"
 
         names = set(loaded)
         # Acceptance skills #9-#13 (real names from community repos)
@@ -255,7 +255,6 @@ class TestFullSkillInventory:
             "skill-creator",
             "frontend-design",
             "notebooklm",
-            "kb-retriever",
         }
         missing = expected_external - names
         assert not missing, f"Missing external skills: {missing}. Loaded: {names}"

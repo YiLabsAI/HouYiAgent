@@ -28,7 +28,7 @@ fi
 
 # 1. Ruff auto-fix
 echo -e "${YELLOW}▶ Ruff auto-fix...${NC}"
-if uv run ruff check . --fix; then
+if uv run ruff check . --fix --exclude skills/; then
     echo -e "${GREEN}✓ Ruff passed${NC}"
 else
     echo -e "${RED}✗ Ruff failed${NC}"

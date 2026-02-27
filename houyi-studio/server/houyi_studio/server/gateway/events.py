@@ -551,6 +551,35 @@ class SkillSummary(BaseModel):
         default="unverified",
         description="Certification level (unverified/bronze/silver/gold)",
     )
+    is_core: bool = Field(default=False, description="Whether this is a host core built-in skill")
+    source: str = Field(
+        default="local",
+        description="Skill source classification (builtin/community/third_party/local)",
+    )
+    capability_tier: str = Field(
+        default="metadata",
+        description="How deeply integrated: metadata / schema / executable",
+    )
+    runtime_status: str = Field(
+        default="unavailable",
+        description="Operational readiness: ready / degraded / unavailable",
+    )
+    is_external_alias: bool = Field(
+        default=False,
+        description="Whether this skill name is an ext__ alias",
+    )
+    alias_target: str | None = Field(
+        default=None,
+        description="Core name targeted by ext__ alias, if any",
+    )
+    instructions_length: int = Field(
+        default=0,
+        description="Length of parsed markdown instructions body",
+    )
+    runtime_binding: str = Field(
+        default="none",
+        description="Runtime binding mode: python_executor | prompt_instructions | none",
+    )
 
 
 class SkillListEvent(ServerEvent):
@@ -594,6 +623,47 @@ class SkillDetail(BaseModel):
     hooks: list[str] = Field(default_factory=list, description="Registered hook names")
     certification: str = Field(default="unverified", description="Certification level")
     side_effect: str = Field(default="none", description="Side effect type")
+    is_core: bool = Field(default=False, description="Whether this is a host core built-in skill")
+    source: str = Field(
+        default="local",
+        description="Skill source classification (builtin/community/third_party/local)",
+    )
+    capability_tier: str = Field(
+        default="metadata",
+        description="How deeply integrated: metadata / schema / executable",
+    )
+    runtime_status: str = Field(
+        default="unavailable",
+        description="Operational readiness: ready / degraded / unavailable",
+    )
+    is_external_alias: bool = Field(
+        default=False,
+        description="Whether this skill name is an ext__ alias",
+    )
+    alias_target: str | None = Field(
+        default=None,
+        description="Core name targeted by ext__ alias, if any",
+    )
+    instructions_length: int = Field(
+        default=0,
+        description="Length of parsed markdown instructions body",
+    )
+    runtime_binding: str = Field(
+        default="none",
+        description="Runtime binding mode: python_executor | prompt_instructions | none",
+    )
+    instructions: str | None = Field(
+        default=None,
+        description="Parsed instructions body from SKILL.md",
+    )
+    hook_specs: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="Structured hook specs including matcher/type/command/handler",
+    )
+    package_examples: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="Package-native dry-run examples loaded from skill assets",
+    )
 
 
 class SkillDetailEvent(ServerEvent):
@@ -747,6 +817,10 @@ class LlmVerificationResult(BaseModel):
     usage: dict[str, Any] | None = Field(
         default=None,
         description="Token usage stats from the LLM call",
+    )
+    requested_input: dict[str, Any] | None = Field(
+        default=None,
+        description="Exact input payload requested in the LLM probe prompt",
     )
     phases: list[DisclosurePhase] = Field(
         default_factory=list,

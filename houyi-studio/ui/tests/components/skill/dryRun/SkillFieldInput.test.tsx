@@ -20,6 +20,7 @@ describe('SkillFieldInput', () => {
         value=""
         isWeatherTool
         isLocationTool={false}
+        isWebSearchTool={false}
         weatherCityOptions={[]}
         onChange={vi.fn()}
         placeholder=""
@@ -38,6 +39,7 @@ describe('SkillFieldInput', () => {
         value=""
         isWeatherTool
         isLocationTool={false}
+        isWebSearchTool={false}
         weatherCityOptions={['Tokyo', 'Osaka']}
         onChange={vi.fn()}
         placeholder="Required"
@@ -51,6 +53,30 @@ describe('SkillFieldInput', () => {
     expect(datalist?.innerHTML).toContain('Tokyo');
   });
 
+  it('renders weather date as preset dropdown', () => {
+    render(
+      <SkillFieldInput
+        field={{ ...baseField, name: 'date', required: false }}
+        value=""
+        isWeatherTool
+        isLocationTool={false}
+        isWebSearchTool={false}
+        weatherCityOptions={[]}
+        onChange={vi.fn()}
+        placeholder=""
+      />,
+    );
+
+    const select = screen.getByTestId('dry-run-input-date') as HTMLSelectElement;
+    expect(select.tagName).toBe('SELECT');
+    expect(Array.from(select.options).map((o) => o.value)).toEqual([
+      '',
+      'today',
+      'tomorrow',
+      'day_after_tomorrow',
+    ]);
+  });
+
   it('renders get_location city as select with preset options', () => {
     render(
       <SkillFieldInput
@@ -58,6 +84,7 @@ describe('SkillFieldInput', () => {
         value=""
         isWeatherTool={false}
         isLocationTool
+        isWebSearchTool={false}
         weatherCityOptions={[]}
         onChange={vi.fn()}
         placeholder=""
@@ -69,6 +96,42 @@ describe('SkillFieldInput', () => {
     expect(Array.from(select.options).map((o) => o.value)).toContain('Hangzhou');
   });
 
+  it('applies weather lat/lon range defaults when schema has no bounds', () => {
+    const { rerender } = render(
+      <SkillFieldInput
+        field={{ ...baseField, name: 'lat', type: 'number', required: false }}
+        value=""
+        isWeatherTool
+        isLocationTool={false}
+        isWebSearchTool={false}
+        weatherCityOptions={[]}
+        onChange={vi.fn()}
+        placeholder=""
+      />,
+    );
+
+    const lat = screen.getByTestId('dry-run-input-lat') as HTMLInputElement;
+    expect(lat.min).toBe('-90');
+    expect(lat.max).toBe('90');
+
+    rerender(
+      <SkillFieldInput
+        field={{ ...baseField, name: 'lon', type: 'number', required: false }}
+        value=""
+        isWeatherTool
+        isLocationTool={false}
+        isWebSearchTool={false}
+        weatherCityOptions={[]}
+        onChange={vi.fn()}
+        placeholder=""
+      />,
+    );
+
+    const lon = screen.getByTestId('dry-run-input-lon') as HTMLInputElement;
+    expect(lon.min).toBe('-180');
+    expect(lon.max).toBe('180');
+  });
+
   it('renders boolean as select and applies defaultRaw fallback', () => {
     render(
       <SkillFieldInput
@@ -76,6 +139,7 @@ describe('SkillFieldInput', () => {
         value=""
         isWeatherTool={false}
         isLocationTool={false}
+        isWebSearchTool={false}
         weatherCityOptions={[]}
         onChange={vi.fn()}
         placeholder=""
@@ -95,6 +159,7 @@ describe('SkillFieldInput', () => {
         value=""
         isWeatherTool={false}
         isLocationTool={false}
+        isWebSearchTool={false}
         weatherCityOptions={[]}
         onChange={onChange}
         placeholder=""
@@ -104,5 +169,64 @@ describe('SkillFieldInput', () => {
     const select = screen.getByTestId('dry-run-input-mode');
     fireEvent.change(select, { target: { value: 'balanced' } });
     expect(onChange).toHaveBeenCalledWith('balanced');
+  });
+
+  it('renders required enum with explicit select placeholder', () => {
+    render(
+      <SkillFieldInput
+        field={{ ...baseField, name: 'action', required: true, enum: ['create', 'update'] }}
+        value=""
+        isWeatherTool={false}
+        isLocationTool={false}
+        isWebSearchTool={false}
+        weatherCityOptions={[]}
+        onChange={vi.fn()}
+        placeholder=""
+      />,
+    );
+
+    const select = screen.getByTestId('dry-run-input-action') as HTMLSelectElement;
+    expect(Array.from(select.options).map((o) => o.value)).toEqual(['', 'create', 'update']);
+    expect(select.options[0].textContent).toBe('— select —');
+    expect(select.value).toBe('');
+  });
+
+  it('renders web_search provider/mode as preset selects', () => {
+    render(
+      <>
+        <SkillFieldInput
+          field={{ ...baseField, name: 'provider', required: false }}
+          value=""
+          isWeatherTool={false}
+          isLocationTool={false}
+          isWebSearchTool
+          weatherCityOptions={[]}
+          onChange={vi.fn()}
+          placeholder=""
+        />
+        <SkillFieldInput
+          field={{ ...baseField, name: 'mode', required: false }}
+          value=""
+          isWeatherTool={false}
+          isLocationTool={false}
+          isWebSearchTool
+          weatherCityOptions={[]}
+          onChange={vi.fn()}
+          placeholder=""
+        />
+      </>,
+    );
+
+    const provider = screen.getByTestId('dry-run-input-provider') as HTMLSelectElement;
+    const mode = screen.getByTestId('dry-run-input-mode') as HTMLSelectElement;
+    expect(Array.from(provider.options).map((o) => o.value)).toEqual([
+      '',
+      'ddg',
+      'serper',
+      'tavily',
+      'bocha',
+      'searxng',
+    ]);
+    expect(Array.from(mode.options).map((o) => o.value)).toEqual(['', 'search', 'browse']);
   });
 });

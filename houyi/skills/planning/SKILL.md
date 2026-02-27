@@ -115,14 +115,20 @@ If incomplete tasks remain, prompts to continue or explicitly acknowledge incomp
       "type": "string",
       "description": "Task description (for create action)"
     },
+    "subtasks": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Optional subtask list (for create action)"
+    },
     "subtask_index": {
       "type": "integer",
+      "minimum": 0,
       "description": "Subtask index to update (for update action)"
     },
-    "status": {
-      "type": "string",
-      "enum": ["pending", "in_progress", "completed", "blocked"],
-      "description": "New status (for update action)"
+    "completed": {
+      "type": "boolean",
+      "default": true,
+      "description": "Whether the target subtask is completed (for update action)"
     }
   },
   "required": ["action"]

@@ -304,7 +304,10 @@ class TestSkillSpecFromRegistry:
         """Test loading latest version from registry."""
         mock_from_url.return_value = MagicMock(spec=SkillSpec)
 
-        SkillSpec.from_registry("web_search")
+        SkillSpec.from_registry(
+            "web_search",
+            base_url="https://example.com/skills",
+        )
 
         mock_from_url.assert_called_once()
         call_args = mock_from_url.call_args
@@ -316,11 +319,20 @@ class TestSkillSpecFromRegistry:
         """Test loading specific version from registry."""
         mock_from_url.return_value = MagicMock(spec=SkillSpec)
 
-        SkillSpec.from_registry("web_search", version="v1.0.0")
+        SkillSpec.from_registry(
+            "web_search",
+            version="v1.0.0",
+            base_url="https://example.com/skills",
+        )
 
         mock_from_url.assert_called_once()
         call_args = mock_from_url.call_args
         assert "web_search/v1.0.0/skill.md" in call_args[0][0]
+
+    def test_from_registry_without_base_url_raises(self) -> None:
+        """Test base_url or env is required for remote registry loading."""
+        with pytest.raises(ValueError, match="Remote skill registry base URL is not configured"):
+            SkillSpec.from_registry("web_search")
 
 
 class TestSkillSpecParsing:
@@ -408,6 +420,38 @@ Some content without proper sections.
         model = SkillSpec._json_to_pydantic(json_schema, "NoPropsModel")
 
         assert issubclass(model, BaseModel)
+
+    def test_json_to_pydantic_preserves_enum_description_and_range(self) -> None:
+        """Test enum/description/range metadata are kept for UI schema rendering."""
+        json_schema = {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["create", "update", "complete", "status"],
+                    "description": "Action to perform on the plan",
+                },
+                "subtask_index": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 99,
+                    "description": "Subtask index",
+                },
+            },
+            "required": ["action"],
+        }
+
+        model = SkillSpec._json_to_pydantic(json_schema, "PlanInput")
+        rendered = model.model_json_schema()
+
+        action = rendered["properties"]["action"]
+        subtask_index = rendered["properties"]["subtask_index"]
+
+        assert action["enum"] == ["create", "update", "complete", "status"]
+        assert action["description"] == "Action to perform on the plan"
+        assert subtask_index["minimum"] == 0
+        assert subtask_index["maximum"] == 99
+        assert subtask_index["description"] == "Subtask index"
 
     def test_json_type_to_python(self) -> None:
         """Test JSON type to Python type mapping."""

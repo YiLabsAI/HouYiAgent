@@ -311,6 +311,22 @@ export interface SkillSummary {
   policy_action: 'allow' | 'allow_with_consent' | 'deny';
   side_effect: 'none' | 'network' | 'filesystem' | 'exec';
   certification: 'unverified' | 'bronze' | 'silver' | 'gold';
+  is_core: boolean;
+  source?: 'builtin' | 'community' | 'third_party' | 'local';
+  capability_tier?: 'metadata' | 'schema' | 'executable';
+  runtime_status?: 'ready' | 'degraded' | 'unavailable';
+  is_external_alias?: boolean;
+  alias_target?: string;
+  instructions_length?: number;
+  runtime_binding?: 'python_executor' | 'prompt_instructions' | 'none' | string;
+}
+
+export interface SkillHookSpec {
+  event: string;
+  type: string;
+  matcher: string;
+  command?: string | null;
+  handler?: string | null;
 }
 
 export interface SkillListEvent extends ServerEvent {
@@ -342,6 +358,24 @@ export interface SkillDetail {
   hooks: string[];
   certification: 'unverified' | 'bronze' | 'silver' | 'gold';
   side_effect: 'none' | 'network' | 'filesystem' | 'exec';
+  is_core: boolean;
+  source?: 'builtin' | 'community' | 'third_party' | 'local';
+  capability_tier?: 'metadata' | 'schema' | 'executable';
+  runtime_status?: 'ready' | 'degraded' | 'unavailable';
+  is_external_alias?: boolean;
+  alias_target?: string;
+  instructions_length?: number;
+  runtime_binding?: 'python_executor' | 'prompt_instructions' | 'none' | string;
+  instructions?: string;
+  hook_specs?: SkillHookSpec[];
+  package_examples?: Array<{
+    id: string;
+    label: string;
+    description: string;
+    input: Record<string, unknown>;
+    expectedFocus: string[];
+    objective: string;
+  }>;
 }
 
 export interface SkillDetailEvent extends ServerEvent {
@@ -692,6 +726,9 @@ export interface DryRunSkillCommand extends ClientCommand {
   skill_name: string;
   tool_name: string;
   input: Record<string, any>;
+  live?: boolean;
+  llm_provider?: string;
+  llm_model?: string;
 }
 
 export interface ConsentResponseCommand extends ClientCommand {

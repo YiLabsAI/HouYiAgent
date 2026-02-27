@@ -23,6 +23,17 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+class CoreToolProtectionError(ValueError):
+    """Raised when an operation attempts to overwrite or hijack a core built-in tool.
+
+    Core tools (``is_core=True``) are protected from external override.
+    External tools with a conflicting name are automatically renamed to
+    ``ext__<name>`` instead of raising this error.
+    This error is only raised when ``overwrite=True`` explicitly targets
+    a core-tool slot, which is always a Host code mistake.
+    """
+
+
 class SkillRegistry:
     """Central registry for skills with hooks, policy, and namespace support.
 
@@ -49,7 +60,7 @@ class SkillRegistry:
         """Set the policy enforcer for automatic policy setup."""
         self._policy_enforcer = enforcer
 
-    def register(self, skill: SkillSpec, *, overwrite: bool = False) -> None:
+    def register(self, skill: SkillSpec, *, overwrite: bool = False) -> str:
         """Register a skill with automatic hooks and policy integration.
 
         When a skill has a ``provider``, the qualified name
@@ -58,15 +69,62 @@ class SkillRegistry:
         lookups will return whichever was registered first (or the one that
         overwrote it).
 
+        **Core Tool Protection**
+        - If the slot is occupied by a ``is_core=True`` skill and the incoming
+          skill is *not* core, the incoming skill is automatically renamed to
+          ``ext__<name>`` and registered under that prefixed name.  The core
+          slot is never displaced.
+        - ``overwrite=True`` targeting a core-tool slot raises
+          :class:`CoreToolProtectionError`.
+        - Two core tools with the same name raise :class:`ValueError` (Host
+          code error).
+
         Raises:
-            ValueError: If skill name is empty or already registered
-                (when not overwriting and same provider).
+            CoreToolProtectionError: If ``overwrite=True`` targets a core tool.
+            ValueError: If skill name is empty, or two core tools share a name,
+                or a same-provider duplicate is registered without overwrite.
+
+        Returns:
+            Actual registered key/name. This can differ from ``skill.name``
+            when core-conflict protection rewrites the incoming skill to
+            ``ext__<name>``.
         """
         name = str(getattr(skill, "name", "") or "").strip()
         if not name:
             raise ValueError("Skill name is required")
 
         existing = self._skills.get(name)
+
+        # --- Core Tool Protection ---
+        if existing is not None and getattr(existing, "is_core", False):
+            if overwrite:
+                raise CoreToolProtectionError(
+                    f"Cannot overwrite core tool '{name}': core tools are protected "
+                    "from external override. Remove is_core=True from the existing "
+                    "registration or use a different tool name."
+                )
+            if getattr(skill, "is_core", False):
+                # Two core tools with the same name is a Host code mistake
+                raise ValueError(
+                    f"Duplicate core tool registration: '{name}' is already registered "
+                    "as a core tool. Each core tool name must be unique."
+                )
+            # External tool conflicts with core: rename to ext__<name>
+            prefixed_name = f"ext__{name}"
+            skill = skill.model_copy(update={"name": prefixed_name})
+            logger.warning(
+                "External tool '%s' conflicts with core tool; renamed to '%s'",
+                name,
+                prefixed_name,
+            )
+            self._skills[prefixed_name] = skill
+            if skill.provider:
+                self._qualified[skill.qualified_name] = skill
+            self._register_hooks(skill, prefixed_name)
+            logger.debug("Registered external skill as: %s", prefixed_name)
+            return prefixed_name
+        # --- End Core Tool Protection ---
+
         if not overwrite and existing is not None:
             existing_provider = getattr(existing, "provider", None) or ""
             new_provider = getattr(skill, "provider", None) or ""
@@ -84,7 +142,7 @@ class SkillRegistry:
                 new_provider,
                 existing_provider,
             )
-            return
+            return qname
 
         if overwrite and name in self._skills and self._hooks_manager:
             self._hooks_manager.unregister_hooks(name)
@@ -94,6 +152,7 @@ class SkillRegistry:
             self._qualified[skill.qualified_name] = skill
         self._register_hooks(skill, name)
         logger.debug("Registered skill: %s", skill.qualified_name)
+        return name
 
     def _register_hooks(self, skill: SkillSpec, key: str) -> None:
         if self._hooks_manager and hasattr(skill, "hooks") and skill.hooks:
@@ -139,8 +198,14 @@ class SkillRegistry:
         return [s.qualified_name for s in self.list()]
 
     def as_tool_schemas(self) -> list[dict[str, Any]]:
-        """Convert all skills to OpenAI function calling schemas."""
-        return [skill.to_tool_schema() for skill in self.list()]
+        """Convert all skills to OpenAI function calling schemas.
+
+        Core tools (``is_core=True``) are placed first to leverage LLM
+        position bias, ensuring the model encounters official tools before
+        any third-party extensions.
+        """
+        skills = sorted(self.list(), key=lambda s: (0 if getattr(s, "is_core", False) else 1))
+        return [skill.to_tool_schema() for skill in skills]
 
     def clear(self) -> None:
         """Clear all registered skills and their hooks."""
@@ -158,7 +223,7 @@ class SkillRegistry:
     ) -> list[str]:
         """Load and register all skills from a simpleskill.json manifest.
 
-        This method implements Layer A (Manifest) integration by:
+        This method implements Manifest by:
         1. Parsing the manifest file
         2. Loading each skill definition from the contributions
         3. Registering skills with their hooks and policies
@@ -207,8 +272,8 @@ class SkillRegistry:
                             output_schema=_empty,
                             invocation_policy=skill_contrib.invocation_policy,
                         )
-                    self.register(skill, overwrite=overwrite)
-                    registered.append(skill.name)
+                    registered_name = self.register(skill, overwrite=overwrite)
+                    registered.append(registered_name)
                 except Exception as e:
                     logger.warning(
                         "Failed to load skill '%s' from manifest %s: %s",
@@ -244,8 +309,8 @@ class SkillRegistry:
             ValueError: If skill parsing fails
         """
         skill = SkillSpec.from_file(str(skill_path))
-        self.register(skill, overwrite=overwrite)
-        return skill.name
+        registered_name = self.register(skill, overwrite=overwrite)
+        return registered_name
 
     def register_from_directory(
         self,
@@ -285,9 +350,9 @@ class SkillRegistry:
                     dup_name = str(e).replace("Skill already registered: ", "")
                     logger.warning(
                         "Skill '%s' from %s skipped: already registered "
-                        "(built-in takes priority over external SKILL.md). "
-                        "To override, use overwrite=True or remove the "
-                        "duplicate from the skills/ directory.",
+                        "for the same provider/name namespace. "
+                        "Use overwrite=True to replace or rename/remove the "
+                        "duplicate SKILL.md.",
                         dup_name,
                         skill_path,
                     )
@@ -339,6 +404,7 @@ DEFAULT_SKILL_REGISTRY = create_default_registry()
 
 __all__ = [
     "DEFAULT_SKILL_REGISTRY",
+    "CoreToolProtectionError",
     "SkillRegistry",
     "create_default_registry",
 ]

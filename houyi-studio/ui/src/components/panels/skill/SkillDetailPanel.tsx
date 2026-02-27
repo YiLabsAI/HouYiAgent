@@ -7,6 +7,7 @@
 import React, { useState } from 'react';
 import type { SkillDetail, SkillMetricsData } from '../../../types/websocket';
 import { ConfirmDialog } from '../../common/ConfirmDialog';
+import { MarkdownRenderer } from '../../Chat/MarkdownRenderer';
 
 // ─── Certification badge colors ──────────────────────────────────
 const CERT_STYLES: Record<string, { bg: string; text: string; label: string }> = {
@@ -23,6 +24,20 @@ const POLICY_STYLES: Record<string, { color: string; label: string }> = {
   deny: { color: 'text-red-400', label: 'Deny' },
 };
 
+// ─── Integration level display ──────────────────────────────────
+const INTEGRATION_STYLES: Record<string, { bg: string; text: string; label: string }> = {
+  metadata: { bg: 'bg-gray-700', text: 'text-gray-400', label: 'Metadata' },
+  schema: { bg: 'bg-blue-900/40', text: 'text-blue-300', label: 'Schema' },
+  executable: { bg: 'bg-green-900/40', text: 'text-green-300', label: 'Executable' },
+};
+
+// ─── Runtime status display ─────────────────────────────────────
+const RUNTIME_STATUS_STYLES: Record<string, { color: string; icon: string; label: string }> = {
+  ready: { color: 'text-green-400', icon: '●', label: 'Ready' },
+  degraded: { color: 'text-yellow-400', icon: '◐', label: 'Degraded' },
+  unavailable: { color: 'text-red-400', icon: '○', label: 'Unavailable' },
+};
+
 // ─── Side effect display ─────────────────────────────────────────
 const SIDE_EFFECT_STYLES: Record<string, { color: string; icon: string }> = {
   none: { color: 'text-green-400', icon: '○' },
@@ -30,6 +45,50 @@ const SIDE_EFFECT_STYLES: Record<string, { color: string; icon: string }> = {
   filesystem: { color: 'text-orange-400', icon: '◑' },
   exec: { color: 'text-red-400', icon: '●' },
   mixed: { color: 'text-red-400', icon: '●' },
+};
+
+const normalizeWorkspacePlaceholder = (text: string): string => text.replace(/\$\{WORKSPACE\}/g, 'workspace');
+
+const parsePermissionText = (text: string): { title: string; targets: string[] } => {
+  const normalized = normalizeWorkspacePlaceholder(text).trim();
+  const fileAccessMatch = normalized.match(/^(Read|Write)\s+files?\s+(from|to):\s*(.+)$/i);
+  if (!fileAccessMatch) {
+    return { title: normalized, targets: [] };
+  }
+
+  const verb = fileAccessMatch[1].toLowerCase() === 'read' ? 'Read files' : 'Write files';
+  const targets = fileAccessMatch[3]
+    .split(',')
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+  return {
+    title: verb,
+    targets,
+  };
+};
+
+const formatHookLabel = (hook: string): string => {
+  const match = hook.match(/^([^:]+):(.*?)(?:\s+\(([^)]+)\))?$/);
+  const eventRaw = match?.[1]?.trim() || hook;
+  const matcherRaw = match?.[2]?.trim() || '';
+
+  const eventLabelMap: Record<string, string> = {
+    PreToolUse: 'Before tool use',
+    PostToolUse: 'After tool use',
+    Stop: 'Before stop',
+  };
+
+  const eventLabel = eventLabelMap[eventRaw] || eventRaw;
+  if (!matcherRaw) {
+    return eventLabel;
+  }
+
+  const matcherLabel = matcherRaw === '*' || matcherRaw === '.*'
+    ? 'all tools'
+    : matcherRaw.split('|').map((part) => part.trim()).filter(Boolean).join(', ');
+
+  return `${eventLabel} · ${matcherLabel}`;
 };
 
 export interface SkillDetailPanelProps {
@@ -50,6 +109,7 @@ export const SkillDetailPanel: React.FC<SkillDetailPanelProps> = ({
   onUnload,
 }) => {
   const [showUnloadConfirm, setShowUnloadConfirm] = useState(false);
+  const [descriptionExpanded, setDescriptionExpanded] = useState(false);
 
   if (isLoading) {
     return (
@@ -71,8 +131,33 @@ export const SkillDetailPanel: React.FC<SkillDetailPanelProps> = ({
   const policyAction = detail.policy?.default_action ?? 'allow';
   const policyStyle = POLICY_STYLES[policyAction] ?? POLICY_STYLES.allow;
   const sideEffectStyle = SIDE_EFFECT_STYLES[detail.side_effect] ?? SIDE_EFFECT_STYLES.none;
+  const integrationStyle = INTEGRATION_STYLES[detail.capability_tier ?? 'metadata'] ?? INTEGRATION_STYLES.metadata;
+  const runtimeStatusStyle = RUNTIME_STATUS_STYLES[detail.runtime_status ?? 'unavailable'] ?? RUNTIME_STATUS_STYLES.unavailable;
   const versionLabel = `v${detail.version || '0.0.0'}`;
   const hasVersion = Boolean(detail.version && detail.version !== '0.0.0');
+  const instructionsLength = detail.instructions_length ?? (detail.instructions?.length ?? 0);
+  const hasInstructions = Boolean(detail.instructions && detail.instructions.trim().length > 0);
+  const hookSpecs = detail.hook_specs ?? [];
+  const description = detail.description ?? '';
+  const isLongDescription = description.length > 260 || description.split('\n').length > 5;
+  const descriptionPreview = isLongDescription
+    ? `${description.slice(0, 220).trimEnd()}...`
+    : description;
+  const normalizedFrontmatter = {
+    name: detail.name,
+    description: detail.description ?? '',
+    user_invocable: detail.policy?.default_action !== 'deny',
+    allowed_tools: detail.tools.map((tool) => tool.name),
+    hooks: hookSpecs,
+    metadata: {
+      version: detail.version,
+      capability_tier: detail.capability_tier ?? 'metadata',
+      runtime_status: detail.runtime_status ?? 'unavailable',
+      runtime_binding: detail.runtime_binding ?? 'none',
+      is_external_alias: Boolean(detail.is_external_alias),
+      alias_target: detail.alias_target ?? null,
+    },
+  };
 
   return (
     <div className="flex flex-col gap-3 p-3 text-xs">
@@ -88,6 +173,24 @@ export const SkillDetailPanel: React.FC<SkillDetailPanelProps> = ({
                 {versionLabel}
               </span>
             )}
+            {detail.is_core && (
+              <span
+                className="px-1.5 py-0.5 rounded bg-cyan-900/40 text-[10px] text-cyan-300 border border-cyan-700/60"
+                data-testid="skill-core-chip"
+                title="Host core protected skill"
+              >
+                CORE
+              </span>
+            )}
+            {detail.is_external_alias && (
+              <span
+                className="px-1.5 py-0.5 rounded bg-amber-900/40 text-[10px] text-amber-300 border border-amber-700/60"
+                data-testid="skill-external-alias-chip"
+                title={detail.alias_target ? `External alias of core skill: ${detail.alias_target}` : 'External alias skill'}
+              >
+                {detail.alias_target ? `EXT → ${detail.alias_target}` : 'EXT'}
+              </span>
+            )}
           </div>
           <div className="text-gray-500 mt-0.5">
             {detail.author ? <span>by {detail.author}</span> : hasVersion ? <span>Version {versionLabel}</span> : null}
@@ -98,8 +201,32 @@ export const SkillDetailPanel: React.FC<SkillDetailPanelProps> = ({
         </span>
       </div>
 
-      {detail.description && (
-        <p className="text-gray-400 leading-relaxed">{detail.description}</p>
+      {description && (
+        <div className="bg-gray-900/40 border border-gray-700/40 rounded p-2" data-testid="skill-description">
+          {isLongDescription ? (
+            <div>
+              {!descriptionExpanded ? (
+                <div className="text-gray-300 text-[12px] leading-relaxed">{descriptionPreview}</div>
+              ) : (
+                <div className="text-gray-300 text-[12px] leading-relaxed markdown-body">
+                  <MarkdownRenderer content={description} />
+                </div>
+              )}
+              <button
+                type="button"
+                onClick={() => setDescriptionExpanded((v) => !v)}
+                className="mt-1 text-[11px] text-cyan-300 hover:text-cyan-200"
+                data-testid="skill-description-more"
+              >
+                {descriptionExpanded ? 'Show less' : 'Show more'}
+              </button>
+            </div>
+          ) : (
+            <div className="text-gray-300 text-[12px] leading-relaxed markdown-body">
+              <MarkdownRenderer content={description} />
+            </div>
+          )}
+        </div>
       )}
 
       {/* ─── Policy ─────────────────────────────────────────── */}
@@ -114,23 +241,99 @@ export const SkillDetailPanel: React.FC<SkillDetailPanelProps> = ({
         </div>
       </div>
 
+      {/* ─── Capability ──────────────────────────────────────── */}
+      <div className="bg-gray-900/60 border border-gray-700 rounded p-2" data-testid="skill-capability">
+        <div className="text-gray-500 font-medium mb-1">CAPABILITY</div>
+        <div className="flex items-center gap-3">
+          <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${integrationStyle.bg} ${integrationStyle.text}`}>
+            {integrationStyle.label}
+          </span>
+          <span className={`flex items-center gap-1 ${runtimeStatusStyle.color}`}>
+            <span>{runtimeStatusStyle.icon}</span>
+            <span>{runtimeStatusStyle.label}</span>
+          </span>
+        </div>
+        <div className="mt-1.5 text-[10px] text-gray-400" data-testid="skill-runtime-binding">
+          Binding: <span className="font-mono text-gray-300">{detail.runtime_binding ?? 'none'}</span>
+          {instructionsLength > 0 && (
+            <>
+              {' · '}Instructions loaded: <span className="font-mono text-gray-300">{instructionsLength}</span> chars
+            </>
+          )}
+        </div>
+        {detail.runtime_status === 'unavailable' && (
+          <div className="mt-1.5 text-[10px] text-red-400/80">
+            Skill is not executable. Missing runtime adapter or core executor binding.
+          </div>
+        )}
+        {detail.runtime_status === 'degraded' && (
+          <div className="mt-1.5 text-[10px] text-yellow-400/80">
+            Skill has schema but no executor. Dry-run validation is available but live execution is not.
+          </div>
+        )}
+      </div>
+
       {/* ─── Permissions ────────────────────────────────────── */}
       {detail.permissions.length > 0 && (
         <div className="bg-gray-900/60 border border-gray-700 rounded p-2" data-testid="skill-permissions">
           <div className="text-gray-500 font-medium mb-1">PERMISSIONS</div>
           <div className="space-y-0.5">
-            {detail.permissions.map((perm) => (
-              <div key={perm.name} className="flex items-center gap-1">
-                <span className={perm.is_sensitive ? 'text-red-400' : 'text-gray-400'}>
-                  {perm.is_sensitive ? '[!]' : '[ ]'}
-                </span>
-                <span className="text-gray-300">{perm.name}</span>
-                {perm.description && (
-                  <span className="text-gray-600 truncate">{perm.description}</span>
-                )}
-              </div>
-            ))}
+            {detail.permissions.map((perm) => {
+              const parsed = parsePermissionText(perm.name);
+              return (
+                <div key={perm.name} className="flex items-start gap-1">
+                  <span className={perm.is_sensitive ? 'text-red-400' : 'text-gray-400'}>
+                    {perm.is_sensitive ? '[!]' : '[ ]'}
+                  </span>
+                  <div className="min-w-0">
+                    <div className="text-gray-300 break-all">{parsed.title}</div>
+                    {parsed.targets.length > 0 && (
+                      <ul className="mt-0.5 space-y-0.5 text-gray-500">
+                        {parsed.targets.map((target) => (
+                          <li key={target} className="break-all">• {target}</li>
+                        ))}
+                      </ul>
+                    )}
+                    {perm.description && perm.description !== perm.name && (
+                      <div className="text-gray-600 break-all">{normalizeWorkspacePlaceholder(perm.description)}</div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
           </div>
+        </div>
+      )}
+
+      <div className="bg-gray-900/60 border border-gray-700 rounded p-2" data-testid="skill-frontmatter-normalized">
+        <div className="text-gray-500 font-medium mb-1">FRONTMATTER (NORMALIZED)</div>
+        <div className="text-[11px] text-gray-400 mb-1">
+          HouYi renders core fields in structured cards, and shows this normalized frontmatter view for 1:1 comparison with native SKILL.md style.
+        </div>
+        <details className="group" data-testid="skill-frontmatter-more">
+          <summary className="cursor-pointer text-[11px] text-cyan-300 hover:text-cyan-200 select-none">
+            Show normalized frontmatter
+          </summary>
+          <pre className="mt-1.5 max-h-40 overflow-auto rounded bg-gray-950/70 border border-gray-700/50 p-2 text-[10px] text-gray-300 whitespace-pre-wrap">
+            {JSON.stringify(normalizedFrontmatter, null, 2)}
+          </pre>
+        </details>
+      </div>
+
+      {hasInstructions && (
+        <div className="bg-gray-900/60 border border-gray-700 rounded p-2" data-testid="skill-instructions">
+          <div className="text-gray-500 font-medium mb-1">INSTRUCTIONS</div>
+          <div className="text-[11px] text-gray-400 mb-1">
+            Prompt body loaded from SKILL.md ({instructionsLength} chars)
+          </div>
+          <details className="group" data-testid="skill-instructions-more">
+            <summary className="cursor-pointer text-[11px] text-cyan-300 hover:text-cyan-200 select-none">
+              Show full instructions
+            </summary>
+            <pre className="mt-1.5 max-h-32 overflow-auto rounded bg-gray-950/70 border border-gray-700/50 p-2 text-[10px] text-gray-300 whitespace-pre-wrap">
+              {detail.instructions}
+            </pre>
+          </details>
         </div>
       )}
 
@@ -143,11 +346,42 @@ export const SkillDetailPanel: React.FC<SkillDetailPanelProps> = ({
               <span
                 key={hook}
                 className="px-1.5 py-0.5 bg-gray-700 rounded text-gray-300 text-[10px]"
+                title={hook}
               >
-                {hook}
+                {formatHookLabel(hook)}
               </span>
             ))}
           </div>
+          {hookSpecs.length > 0 && (
+            <details className="mt-2 group" data-testid="skill-hook-specs-more">
+              <summary className="cursor-pointer text-[11px] text-cyan-300 hover:text-cyan-200 select-none">
+                Show hook specs ({hookSpecs.length})
+              </summary>
+              <div className="mt-1.5 space-y-1.5">
+                {hookSpecs.map((hook, idx) => (
+                  <div key={`${hook.event}-${hook.matcher}-${idx}`} className="rounded border border-gray-700/60 bg-gray-800/40 p-1.5 text-[10px]">
+                    <div className="text-gray-300">
+                      <span className="font-mono">{hook.event}</span>
+                      {' · '}
+                      <span className="text-gray-400">{hook.matcher}</span>
+                      {' · '}
+                      <span className="text-gray-400">{hook.type}</span>
+                    </div>
+                    {hook.command && (
+                      <div className="mt-1 text-gray-400 break-all">
+                        command: <span className="font-mono text-gray-300">{hook.command}</span>
+                      </div>
+                    )}
+                    {hook.handler && (
+                      <div className="mt-1 text-gray-400 break-all">
+                        handler: <span className="font-mono text-gray-300">{hook.handler}</span>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </details>
+          )}
         </div>
       )}
 

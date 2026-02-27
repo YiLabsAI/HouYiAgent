@@ -27,6 +27,7 @@ const createDetail = (overrides: Partial<SkillDetail> = {}): SkillDetail => ({
   certification: 'gold',
   side_effect: 'filesystem',
   ...overrides,
+  is_core: overrides.is_core ?? false,
 });
 
 const createMetrics = (overrides: Partial<SkillMetricsData> = {}): SkillMetricsData => ({
@@ -70,6 +71,30 @@ describe('SkillDetailPanel', () => {
     expect(screen.getByText(/by HouYi/)).toBeInTheDocument();
   });
 
+  it('should render core badge when skill is core', () => {
+    render(
+      <SkillDetailPanel
+        detail={createDetail({ is_core: true })}
+        metrics={null}
+        isLoading={false}
+      />,
+    );
+    expect(screen.getByTestId('skill-core-chip')).toBeInTheDocument();
+    expect(screen.getByTestId('skill-core-chip')).toHaveTextContent('CORE');
+  });
+
+  it('should render external alias badge when skill is ext alias', () => {
+    render(
+      <SkillDetailPanel
+        detail={createDetail({ is_external_alias: true, alias_target: 'planning-with-files' })}
+        metrics={null}
+        isLoading={false}
+      />,
+    );
+    const chip = screen.getByTestId('skill-external-alias-chip');
+    expect(chip).toHaveTextContent('EXT → planning-with-files');
+  });
+
   it('should render certification badge', () => {
     render(<SkillDetailPanel detail={createDetail()} metrics={null} isLoading={false} />);
     expect(screen.getByText('Gold')).toBeInTheDocument();
@@ -89,6 +114,42 @@ describe('SkillDetailPanel', () => {
   it('should render description', () => {
     render(<SkillDetailPanel detail={createDetail()} metrics={null} isLoading={false} />);
     expect(screen.getByText('A skill for file-based planning operations.')).toBeInTheDocument();
+  });
+
+  it('should auto-collapse long description and render markdown after expand', () => {
+    const longMarkdown = [
+      'Get weather summary with modes:',
+      '',
+      '- **Coordinates mode**: `lat` + `lon`',
+      '- **City mode**: `city` + optional `country`',
+      '- Supports provider fallback',
+      '- Returns readable weather text',
+      '',
+      'Extra context for display quality checks.',
+    ].join('\n');
+
+    render(
+      <SkillDetailPanel
+        detail={createDetail({ description: longMarkdown })}
+        metrics={null}
+        isLoading={false}
+      />,
+    );
+
+    const desc = screen.getByTestId('skill-description-more');
+    expect(desc).toBeInTheDocument();
+    expect(desc).toHaveTextContent('Show more');
+    fireEvent.click(desc);
+    expect(screen.getByTestId('skill-description')).toHaveTextContent('Coordinates mode');
+    expect(screen.getByTestId('skill-description-more')).toHaveTextContent('Show less');
+  });
+
+  it('should render normalized frontmatter view', () => {
+    render(<SkillDetailPanel detail={createDetail()} metrics={null} isLoading={false} />);
+    const block = screen.getByTestId('skill-frontmatter-normalized');
+    expect(block).toHaveTextContent('FRONTMATTER (NORMALIZED)');
+    expect(block).toHaveTextContent('planning-with-files');
+    expect(block).toHaveTextContent('allowed_tools');
   });
 
   // ─── Policy section ────────────────────────────────────────────
@@ -113,6 +174,30 @@ describe('SkillDetailPanel', () => {
     expect(permSection).toHaveTextContent('[ ]');
   });
 
+  it('should render file permissions in user-friendly format', () => {
+    render(
+      <SkillDetailPanel
+        detail={createDetail({
+          permissions: [
+            {
+              name: 'Read files from: ${WORKSPACE}/**/*.md, ${WORKSPACE}/.plan/**',
+              description: 'Read files from: ${WORKSPACE}/**/*.md, ${WORKSPACE}/.plan/**',
+              is_sensitive: true,
+            },
+          ],
+        })}
+        metrics={null}
+        isLoading={false}
+      />,
+    );
+
+    const permSection = screen.getByTestId('skill-permissions');
+    expect(permSection).toHaveTextContent('Read files');
+    expect(permSection).toHaveTextContent('workspace/**/*.md');
+    expect(permSection).toHaveTextContent('workspace/.plan/**');
+    expect(permSection).not.toHaveTextContent('${WORKSPACE}');
+  });
+
   it('should not render permissions section when empty', () => {
     render(
       <SkillDetailPanel
@@ -129,9 +214,30 @@ describe('SkillDetailPanel', () => {
   it('should render hooks list', () => {
     render(<SkillDetailPanel detail={createDetail()} metrics={null} isLoading={false} />);
     const hooksSection = screen.getByTestId('skill-hooks');
-    expect(hooksSection).toHaveTextContent('PreToolUse');
-    expect(hooksSection).toHaveTextContent('PostToolUse');
-    expect(hooksSection).toHaveTextContent('Stop');
+    expect(hooksSection).toHaveTextContent('Before tool use');
+    expect(hooksSection).toHaveTextContent('After tool use');
+    expect(hooksSection).toHaveTextContent('Before stop');
+  });
+
+  it('should render hooks in human-readable labels', () => {
+    render(
+      <SkillDetailPanel
+        detail={createDetail({
+          hooks: [
+            'PreToolUse:Write|Edit|StrReplace (handler)',
+            'PostToolUse:.* (handler)',
+            'Stop:* (handler)',
+          ],
+        })}
+        metrics={null}
+        isLoading={false}
+      />,
+    );
+
+    const hooksSection = screen.getByTestId('skill-hooks');
+    expect(hooksSection).toHaveTextContent('Before tool use · Write, Edit, StrReplace');
+    expect(hooksSection).toHaveTextContent('After tool use · all tools');
+    expect(hooksSection).toHaveTextContent('Before stop · all tools');
   });
 
   it('should not render hooks section when empty', () => {
@@ -302,6 +408,125 @@ describe('SkillDetailPanel', () => {
 
     // Dialog should be closed
     expect(screen.queryByText('Unload Skill')).not.toBeInTheDocument();
+  });
+
+  // ─── Capability section ──────────────────────────────────────────
+
+  it('should render capability section with integration level and runtime status', () => {
+    render(
+      <SkillDetailPanel
+        detail={createDetail({ capability_tier: 'executable', runtime_status: 'ready' })}
+        metrics={null}
+        isLoading={false}
+      />
+    );
+    const capSection = screen.getByTestId('skill-capability');
+    expect(capSection).toHaveTextContent('CAPABILITY');
+    expect(capSection).toHaveTextContent('Executable');
+    expect(capSection).toHaveTextContent('Ready');
+  });
+
+  it('should show degraded warning when runtime_status is degraded', () => {
+    render(
+      <SkillDetailPanel
+        detail={createDetail({ capability_tier: 'schema', runtime_status: 'degraded' })}
+        metrics={null}
+        isLoading={false}
+      />
+    );
+    const capSection = screen.getByTestId('skill-capability');
+    expect(capSection).toHaveTextContent('Schema');
+    expect(capSection).toHaveTextContent('Degraded');
+    expect(capSection).toHaveTextContent('has schema but no executor');
+  });
+
+  it('should show unavailable warning when runtime_status is unavailable', () => {
+    render(
+      <SkillDetailPanel
+        detail={createDetail({ capability_tier: 'metadata', runtime_status: 'unavailable' })}
+        metrics={null}
+        isLoading={false}
+      />
+    );
+    const capSection = screen.getByTestId('skill-capability');
+    expect(capSection).toHaveTextContent('Metadata');
+    expect(capSection).toHaveTextContent('Unavailable');
+    expect(capSection).toHaveTextContent('not executable');
+  });
+
+  it('should render runtime binding and instruction length metadata', () => {
+    render(
+      <SkillDetailPanel
+        detail={createDetail({
+          capability_tier: 'executable',
+          runtime_status: 'ready',
+          runtime_binding: 'prompt_instructions',
+          instructions_length: 1234,
+        })}
+        metrics={null}
+        isLoading={false}
+      />,
+    );
+    const capSection = screen.getByTestId('skill-capability');
+    expect(capSection).toHaveTextContent('Binding:');
+    expect(capSection).toHaveTextContent('prompt_instructions');
+    expect(capSection).toHaveTextContent('Instructions loaded: 1234 chars');
+  });
+
+  it('should render instructions panel when instructions exist', () => {
+    render(
+      <SkillDetailPanel
+        detail={createDetail({
+          instructions: 'Step 1\nStep 2',
+          instructions_length: 12,
+        })}
+        metrics={null}
+        isLoading={false}
+      />,
+    );
+    expect(screen.getByTestId('skill-instructions')).toBeInTheDocument();
+    expect(screen.getByText(/Prompt body loaded from SKILL.md/)).toBeInTheDocument();
+    expect(screen.getByText(/Step 1/)).toBeInTheDocument();
+  });
+
+  it('should render hook specs when provided', () => {
+    render(
+      <SkillDetailPanel
+        detail={createDetail({
+          hooks: ['PreToolUse:Write|Edit (command)'],
+          hook_specs: [
+            {
+              event: 'PreToolUse',
+              type: 'command',
+              matcher: 'Write|Edit',
+              command: 'echo hello',
+              handler: null,
+            },
+          ],
+        })}
+        metrics={null}
+        isLoading={false}
+      />,
+    );
+
+    const hooksSection = screen.getByTestId('skill-hooks');
+    expect(hooksSection).toHaveTextContent('PreToolUse');
+    expect(hooksSection).toHaveTextContent('Write|Edit');
+    expect(hooksSection).toHaveTextContent('command:');
+    expect(hooksSection).toHaveTextContent('echo hello');
+  });
+
+  it('should default to metadata/unavailable when fields are absent', () => {
+    render(
+      <SkillDetailPanel
+        detail={createDetail()}
+        metrics={null}
+        isLoading={false}
+      />
+    );
+    const capSection = screen.getByTestId('skill-capability');
+    expect(capSection).toHaveTextContent('Metadata');
+    expect(capSection).toHaveTextContent('Unavailable');
   });
 
   // ─── Edge cases ────────────────────────────────────────────────

@@ -228,6 +228,32 @@ const PhaseData: React.FC<{ phase: DisclosurePhase }> = ({ phase }) => {
         </div>
       );
 
+    case 'tool_execution':
+      return (
+        <div className="text-[9px] text-gray-400 space-y-0.5">
+          {!!d.reason && (
+            <div>
+              <span className="text-gray-600">reason:</span> {String(d.reason)}
+            </div>
+          )}
+          {!!d.error && (
+            <div className="text-red-400 bg-red-900/20 rounded px-2 py-1">{String(d.error)}</div>
+          )}
+          {String(d.reason || '').toLowerCase() === 'no executor available' && (
+            <div className="text-cyan-300 bg-cyan-900/20 rounded px-2 py-1">
+              Prompt-native skills can pass LLM tool-call verification without a bound Python executor. Hook commands and instructions still run in real chat execution paths.
+            </div>
+          )}
+          {!!d.result_preview && (
+            <pre className="text-[9px] text-cyan-200 bg-gray-900/70 border border-cyan-800/30 rounded p-1.5 overflow-x-auto whitespace-pre-wrap">
+              {typeof d.result_preview === 'string'
+                ? d.result_preview
+                : JSON.stringify(d.result_preview, null, 2)}
+            </pre>
+          )}
+        </div>
+      );
+
     default:
       return (
         <pre className="text-[9px] text-gray-500 overflow-x-auto">

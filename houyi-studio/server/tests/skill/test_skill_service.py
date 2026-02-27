@@ -106,6 +106,103 @@ class TestGetSkillDetail:
         assert skill_detail.version == "0.0.0"
         assert skill_detail.name == "pydantic_compat"
 
+    def test_detail_includes_package_examples_from_examples_markdown(self, registry, tmp_path):
+        from houyi_studio.server.skill.service import SkillService
+        from pydantic import BaseModel
+
+        from houyi.core.skill.spec import SkillSpec
+
+        class _In(BaseModel):
+            q: str
+
+        class _Out(BaseModel):
+            r: str
+
+        skill_dir = tmp_path / "rag-skill"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "examples.md").write_text(
+            """
+# Examples
+
+## Example 1: Knowledge Query
+
+**User Request:** "What is RAG and when should it be used?"
+
+""".strip(),
+            encoding="utf-8",
+        )
+
+        skill = SkillSpec(
+            name="rag-skill",
+            description="rag",
+            input_schema=_In,
+            output_schema=_Out,
+            skill_dir=skill_dir,
+        )
+        registry.register(skill, overwrite=True)
+        svc = SkillService(registry=registry)
+
+        detail = svc.get_skill_detail("rag-skill")
+        assert detail is not None
+        assert len(detail["package_examples"]) == 1
+        assert detail["package_examples"][0]["id"] == "example-1-knowledge-query"
+        assert (
+            detail["package_examples"][0]["input"]["task"]
+            == "What is RAG and when should it be used?"
+        )
+
+    def test_package_examples_infer_action_and_fallback_task(self, registry, tmp_path):
+        from houyi_studio.server.skill.service import SkillService
+        from pydantic import BaseModel
+
+        from houyi.core.skill.spec import SkillSpec
+
+        class _In(BaseModel):
+            q: str
+
+        class _Out(BaseModel):
+            r: str
+
+        skill_dir = tmp_path / "planning-with-files"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "examples.md").write_text(
+            """
+# Examples
+
+## Example 2: Bug Fix Task
+
+**User Request:** "Fix the login bug in the authentication module"
+
+## Example 4: Error Recovery Pattern
+
+When something fails, DON'T hide it:
+""".strip(),
+            encoding="utf-8",
+        )
+
+        skill = SkillSpec(
+            name="ext__planning-with-files",
+            description="planning",
+            input_schema=_In,
+            output_schema=_Out,
+            skill_dir=skill_dir,
+        )
+        registry.register(skill, overwrite=True)
+        svc = SkillService(registry=registry)
+
+        detail = svc.get_skill_detail("ext__planning-with-files")
+        assert detail is not None
+        examples = {e["id"]: e for e in detail["package_examples"]}
+
+        bug_fix = examples["example-2-bug-fix-task"]
+        assert bug_fix["input"]["action"] == "update"
+        assert bug_fix["input"]["task"] == "Fix the login bug in the authentication module"
+
+        error_recovery = examples["example-4-error-recovery-pattern"]
+        assert error_recovery["input"]["action"] == "status"
+        assert isinstance(error_recovery["input"].get("task"), str)
+        assert error_recovery["input"]["task"]
+
 
 class TestGetSkillMetrics:
     def test_no_metrics_store(self, populated_service):

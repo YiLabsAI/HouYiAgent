@@ -20,6 +20,7 @@ const createDetail = (overrides: Partial<SkillDetail> = {}): SkillDetail => ({
   certification: 'unverified',
   side_effect: 'network',
   ...overrides,
+  is_core: overrides.is_core ?? false,
 });
 
 describe('SkillConfigDialog', () => {

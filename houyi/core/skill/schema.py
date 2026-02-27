@@ -6,6 +6,7 @@ Supports both Claude/AgentSkills SKILL.md format and HouYi skill.md format.
 from __future__ import annotations
 
 import contextlib
+import importlib
 import json
 import logging
 import re
@@ -34,8 +35,14 @@ def parse_skill_md(content: str) -> dict[str, Any]:
         # Remove frontmatter from content for body parsing
         content = _remove_frontmatter(content)
 
+    # The remaining content is the instructions (prompt body)
+    result["instructions"] = content.strip()
+
     # Parse Markdown body (fallback for fields not in frontmatter)
     body_data = _parse_markdown_body(content)
+    for k, v in body_data.items():
+        if k not in result:
+            result[k] = v
 
     # Merge: frontmatter takes precedence
     for key, value in body_data.items():
@@ -65,9 +72,9 @@ def _parse_frontmatter(content: str) -> dict[str, Any] | None:
 
     try:
         # Try to import PyYAML
-        import yaml  # type: ignore[import-untyped]
+        yaml_module = importlib.import_module("yaml")
 
-        result: dict[str, Any] | None = yaml.safe_load(yaml_content)
+        result: dict[str, Any] | None = yaml_module.safe_load(yaml_content)
         return result
     except ImportError:
         # Fallback: simple YAML-like parsing for common fields

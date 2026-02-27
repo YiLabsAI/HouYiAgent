@@ -36,6 +36,47 @@ const PolicyBadge: React.FC<{ action: string }> = ({ action }) => {
   }
 };
 
+const sourceLabel: Record<string, string> = {
+  builtin: 'builtin',
+  community: 'community',
+  third_party: 'third_party',
+  local: 'local',
+};
+
+const sourceColor: Record<string, string> = {
+  builtin: 'bg-emerald-900/40 text-emerald-300 border-emerald-700/60',
+  community: 'bg-indigo-900/40 text-indigo-300 border-indigo-700/60',
+  third_party: 'bg-amber-900/40 text-amber-300 border-amber-700/60',
+  local: 'bg-gray-800/70 text-gray-300 border-gray-600/60',
+};
+
+const SourceBadge: React.FC<{ source?: string; isCore?: boolean }> = ({ source, isCore }) => {
+  const key = source || 'local';
+  const display = isCore && key === 'builtin' ? 'host' : (sourceLabel[key] || key);
+  const title = isCore && key === 'builtin'
+    ? 'Source: builtin (host core)'
+    : `Source: ${sourceLabel[key] || key}`;
+
+  return (
+    <span
+      className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] border ${sourceColor[key] || sourceColor.local}`}
+      title={title}
+    >
+      {display}
+    </span>
+  );
+};
+
+const CoreBadge: React.FC = () => (
+  <span
+    className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] bg-cyan-900/40 text-cyan-300 border border-cyan-700/60"
+    title="Host core protected skill"
+  >
+    <Shield size={10} />
+    core
+  </span>
+);
+
 const SideEffectBadge: React.FC<{ effect: string }> = ({ effect }) => {
   if (effect === 'none') return null;
 
@@ -52,6 +93,37 @@ const SideEffectBadge: React.FC<{ effect: string }> = ({ effect }) => {
     >
       <Zap size={10} />
       {effect}
+    </span>
+  );
+};
+
+const runtimeStatusColor: Record<string, string> = {
+  ready: 'text-green-400',
+  degraded: 'text-yellow-400',
+  unavailable: 'text-red-400',
+};
+
+const runtimeStatusIcon: Record<string, string> = {
+  ready: '●',
+  degraded: '◐',
+  unavailable: '○',
+};
+
+const RuntimeBadge: React.FC<{ capabilityTier?: string; runtimeStatus?: string }> = ({
+  capabilityTier,
+  runtimeStatus,
+}) => {
+  const level = capabilityTier || 'metadata';
+  const status = runtimeStatus || 'unavailable';
+  const color = runtimeStatusColor[status] || runtimeStatusColor.unavailable;
+  const icon = runtimeStatusIcon[status] || runtimeStatusIcon.unavailable;
+
+  return (
+    <span
+      className={`inline-flex items-center gap-0.5 text-[10px] ${color}`}
+      title={`Integration: ${level} · Runtime: ${status}`}
+    >
+      {icon} {level}
     </span>
   );
 };
@@ -82,6 +154,72 @@ export const SkillsList: React.FC<SkillsListProps> = ({
   onRefresh,
   onLoadSkill,
 }) => {
+  const coreSkills = skills.filter((s) => s.is_core);
+  const builtinSkills = skills.filter((s) => !s.is_core && (s.source || 'local') === 'builtin');
+  const externalSkills = skills.filter((s) => !s.is_core && (s.source || 'local') !== 'builtin');
+
+  const renderSection = (title: string, items: SkillSummary[]) => {
+    if (items.length === 0) return null;
+    return (
+      <div className="space-y-1" data-testid={`skills-group-${title.toLowerCase()}`}>
+        <div className="px-1 pt-2 pb-1 text-[10px] uppercase tracking-wide text-gray-500">
+          {title} ({items.length})
+        </div>
+        {items.map((skill) => (
+          <button
+            key={skill.name}
+            onClick={() => onSelectSkill(skill.name)}
+            className={`w-full text-left p-2 rounded transition-colors ${
+              selectedSkill === skill.name
+                ? 'bg-blue-900/50 border border-blue-700'
+                : 'bg-gray-900 border border-gray-700 hover:border-gray-600'
+            }`}
+          >
+            <div className="flex items-start justify-between">
+              <div className="flex items-center gap-2 min-w-0">
+                <Package size={14} className="text-gray-400 shrink-0" />
+                <div className="min-w-0">
+                  <div className="text-xs font-medium text-gray-200 truncate">
+                    {skill.display_name}
+                  </div>
+                  {skill.description && (
+                    <div className="text-[10px] text-gray-500 truncate mt-0.5">
+                      {skill.description}
+                    </div>
+                  )}
+                </div>
+              </div>
+              <ChevronRight size={14} className="text-gray-500 shrink-0 mt-0.5" />
+            </div>
+
+            {/* Badges Row */}
+            <div className="flex items-center gap-1.5 mt-2 flex-wrap">
+              {skill.is_core && <CoreBadge />}
+              {skill.is_external_alias && (
+                <span
+                  className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] border bg-amber-900/40 text-amber-300 border-amber-700/60"
+                  title={skill.alias_target ? `External alias of core skill: ${skill.alias_target}` : 'External alias skill'}
+                >
+                  {skill.alias_target ? `ext→${skill.alias_target}` : 'ext'}
+                </span>
+              )}
+              <SourceBadge source={skill.source} isCore={skill.is_core} />
+              <PolicyBadge action={skill.policy_action} />
+              <SideEffectBadge effect={skill.side_effect} />
+              <CertificationBadge level={skill.certification} />
+              <RuntimeBadge capabilityTier={skill.capability_tier} runtimeStatus={skill.runtime_status} />
+              {skill.tools.length > 0 && (
+                <span className="text-[10px] text-gray-500">
+                  {skill.tools.length} tool{skill.tools.length > 1 ? 's' : ''}
+                </span>
+              )}
+            </div>
+          </button>
+        ))}
+      </div>
+    );
+  };
+
   return (
     <div className="p-3">
       {/* Header */}
@@ -107,6 +245,24 @@ export const SkillsList: React.FC<SkillsListProps> = ({
         </div>
       </div>
 
+      {/* Legend */}
+      {skills.length > 0 && (
+        <div className="mb-3 pb-2 border-b border-gray-700" data-testid="skills-policy-legend">
+          <div className="text-[10px] text-gray-500 mb-1.5">Policy Legend</div>
+          <div className="flex flex-wrap gap-2 text-[10px]">
+            <span className="flex items-center gap-1 text-gray-400">
+              <Check size={10} className="text-green-400" /> Allow
+            </span>
+            <span className="flex items-center gap-1 text-gray-400">
+              <AlertTriangle size={10} className="text-yellow-400" /> Consent
+            </span>
+            <span className="flex items-center gap-1 text-gray-400">
+              <Shield size={10} className="text-red-400" /> Deny
+            </span>
+          </div>
+        </div>
+      )}
+
       {/* Skills List */}
       {isLoading ? (
         <div className="text-xs text-gray-500 text-center py-4">Loading skills...</div>
@@ -119,65 +275,10 @@ export const SkillsList: React.FC<SkillsListProps> = ({
           </div>
         </div>
       ) : (
-        <div className="space-y-1">
-          {skills.map((skill) => (
-            <button
-              key={skill.name}
-              onClick={() => onSelectSkill(skill.name)}
-              className={`w-full text-left p-2 rounded transition-colors ${
-                selectedSkill === skill.name
-                  ? 'bg-blue-900/50 border border-blue-700'
-                  : 'bg-gray-900 border border-gray-700 hover:border-gray-600'
-              }`}
-            >
-              <div className="flex items-start justify-between">
-                <div className="flex items-center gap-2 min-w-0">
-                  <Package size={14} className="text-gray-400 shrink-0" />
-                  <div className="min-w-0">
-                    <div className="text-xs font-medium text-gray-200 truncate">
-                      {skill.display_name}
-                    </div>
-                    {skill.description && (
-                      <div className="text-[10px] text-gray-500 truncate mt-0.5">
-                        {skill.description}
-                      </div>
-                    )}
-                  </div>
-                </div>
-                <ChevronRight size={14} className="text-gray-500 shrink-0 mt-0.5" />
-              </div>
-
-              {/* Badges Row */}
-              <div className="flex items-center gap-1.5 mt-2 flex-wrap">
-                <PolicyBadge action={skill.policy_action} />
-                <SideEffectBadge effect={skill.side_effect} />
-                <CertificationBadge level={skill.certification} />
-                {skill.tools.length > 0 && (
-                  <span className="text-[10px] text-gray-500">
-                    {skill.tools.length} tool{skill.tools.length > 1 ? 's' : ''}
-                  </span>
-                )}
-              </div>
-            </button>
-          ))}
-        </div>
-      )}
-
-      {/* Legend */}
-      {skills.length > 0 && (
-        <div className="mt-4 pt-3 border-t border-gray-700">
-          <div className="text-[10px] text-gray-500 mb-2">Policy Legend</div>
-          <div className="flex flex-wrap gap-2 text-[10px]">
-            <span className="flex items-center gap-1 text-gray-400">
-              <Check size={10} className="text-green-400" /> Allow
-            </span>
-            <span className="flex items-center gap-1 text-gray-400">
-              <AlertTriangle size={10} className="text-yellow-400" /> Consent
-            </span>
-            <span className="flex items-center gap-1 text-gray-400">
-              <Shield size={10} className="text-red-400" /> Deny
-            </span>
-          </div>
+        <div className="space-y-3">
+          {renderSection('Core', coreSkills)}
+          {renderSection('Builtin', builtinSkills)}
+          {renderSection('External', externalSkills)}
         </div>
       )}
     </div>

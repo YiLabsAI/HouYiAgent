@@ -11,9 +11,10 @@ from __future__ import annotations
 
 import logging
 import re
+import shutil
 from pathlib import Path
 
-from houyi.core.skill_registry import SkillRegistry
+from houyi.core.skill_registry import CoreToolProtectionError, SkillRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -123,6 +124,7 @@ class SkillLoader:
     def _load_from_manifest(self, source: str) -> LoadResult:
         try:
             names = self._registry.register_from_manifest(source, overwrite=True)
+            self._hydrate_external_runtime(names)
             if names:
                 return True, names[0], None
             return False, ERR_NO_SKILLS, "Manifest contains no skills"
@@ -148,20 +150,33 @@ class SkillLoader:
                 ),
             )
 
+        effective_source = source
+        installed_skill_path = self._install_local_skill_package(path)
+        if installed_skill_path is not None:
+            effective_source = str(installed_skill_path)
+
         try:
-            skill_name = self._registry.register_from_skill_file(source, overwrite=True)
+            try:
+                skill_name = self._registry.register_from_skill_file(
+                    effective_source, overwrite=True
+                )
+            except CoreToolProtectionError:
+                skill_name = self._registry.register_from_skill_file(
+                    effective_source, overwrite=False
+                )
             if not skill_name or skill_name == SKILL_NAME_UNKNOWN:
                 return (
                     False,
                     ERR_PARSE_FAILED,
                     (
-                        f"Failed to extract skill name from {source}. "
+                        f"Failed to extract skill name from {effective_source}. "
                         f"Ensure the YAML frontmatter has a 'name' field."
                     ),
                 )
             skill = self._registry.get(skill_name)
             if skill:
                 _validate_parsed_skill(skill)
+            self._hydrate_external_runtime([skill_name])
             return True, skill_name, None
         except ValueError as e:
             return False, ERR_VALIDATION_FAILED, str(e)
@@ -218,14 +233,18 @@ class SkillLoader:
             cache_path = _cache_url_content(raw_url, content)
             skill = SkillSpec.from_file(cache_path)
             _validate_parsed_skill(skill)
-            self._registry.register(skill, overwrite=True)
+            try:
+                registered_name = self._registry.register(skill, overwrite=True)
+            except CoreToolProtectionError:
+                registered_name = self._registry.register(skill, overwrite=False)
+            self._hydrate_external_runtime([registered_name])
             logger.info(
                 "Loaded skill '%s' from URL: %s (cached: %s)",
-                skill.name,
+                registered_name,
                 url,
                 cache_path,
             )
-            return True, skill.name, None
+            return True, registered_name, None
         except ValueError as e:
             return False, ERR_VALIDATION_FAILED, str(e)
         except Exception as e:
@@ -234,6 +253,11 @@ class SkillLoader:
 
     def _load_from_directory(self, directory: str) -> LoadResult:
         dir_path = Path(directory)
+
+        direct_skill = dir_path / SKILL_MD_UPPER
+        if direct_skill.exists() and direct_skill.is_file():
+            return self._load_from_skill_md(direct_skill, str(direct_skill))
+
         all_names: list[str] = []
 
         for pattern in (SKILL_MD_UPPER, SKILL_MD_LOWER):
@@ -242,7 +266,7 @@ class SkillLoader:
                     directory,
                     pattern=pattern,
                     recursive=True,
-                    overwrite=True,
+                    overwrite=False,
                 )
                 all_names.extend(n for n in names if n and n != SKILL_NAME_UNKNOWN)
             except Exception as e:
@@ -250,6 +274,7 @@ class SkillLoader:
 
         if all_names:
             unique = list(dict.fromkeys(all_names))
+            self._hydrate_external_runtime(unique)
             logger.info(
                 "Loaded %d skills from directory %s: %s",
                 len(unique),
@@ -279,6 +304,135 @@ class SkillLoader:
                 f"with YAML frontmatter."
             ),
         )
+
+    @staticmethod
+    def _project_root() -> Path:
+        this_file = Path(__file__).resolve()
+        return this_file.parents[5]
+
+    def _managed_skills_root(self) -> Path:
+        return self._project_root() / "skills"
+
+    def _install_local_skill_package(self, skill_md_path: Path) -> Path | None:
+        """Ensure local skill loads use a full installed package under project skills/."""
+        try:
+            source_skill_md = skill_md_path.resolve()
+        except Exception:
+            return None
+
+        package_dir = source_skill_md.parent
+        managed_root = self._managed_skills_root().resolve()
+
+        if managed_root == package_dir or managed_root in package_dir.parents:
+            return source_skill_md
+
+        target_package_dir = managed_root / package_dir.name
+        target_skill_md = target_package_dir / source_skill_md.name
+
+        try:
+            target_package_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(package_dir, target_package_dir, dirs_exist_ok=True)
+        except Exception as exc:
+            logger.warning(
+                "Failed to install full skill package '%s' into managed skills dir: %s",
+                package_dir,
+                exc,
+            )
+            return source_skill_md
+
+        if target_skill_md.exists():
+            logger.info(
+                "Installed skill package '%s' to %s",
+                package_dir.name,
+                target_package_dir,
+            )
+            return target_skill_md
+
+        return source_skill_md
+
+    def _hydrate_external_runtime(self, loaded_names: list[str]) -> None:
+        """Hydrate ext__ aliases with core runtime when external spec is metadata-only.
+
+        Two-phase resolution:
+        1. RuntimeResolver: if a skill declares a ``runtime`` contract with an
+           ``adapter``, dynamically import and bind it as executor.
+        2. Core fallback: if the skill still lacks an executor, inherit from the
+           matching core skill (ext__X -> X).
+        """
+        self._resolve_runtime_contracts(loaded_names)
+        from houyi.core.skill.runtime_contract import CapabilityTier
+
+        for name in loaded_names:
+            if not name or not name.startswith("ext__"):
+                continue
+
+            external = self._registry.get(name)
+            if external is None:
+                continue
+
+            if getattr(external, "capability_tier", None) == CapabilityTier.EXECUTABLE and callable(
+                getattr(external, "executor", None)
+            ):
+                continue
+
+            has_executor = callable(getattr(external, "executor", None))
+            has_schema = self._has_schema(getattr(external, "input_schema", None))
+            if has_executor and has_schema:
+                continue
+
+            core_name = name[len("ext__") :]
+            core = self._registry.get(core_name)
+            if core is None:
+                continue
+            core_executor = getattr(core, "executor", None)
+            if not callable(core_executor):
+                continue
+
+            updates: dict[str, object] = {"executor": core_executor}
+            if not self._has_schema(getattr(external, "input_schema", None)):
+                updates["input_schema"] = core.input_schema
+            if not self._has_schema(getattr(external, "output_schema", None)):
+                updates["output_schema"] = core.output_schema
+
+            self._registry.register(external.model_copy(update=updates), overwrite=True)
+            logger.info(
+                "Hydrated external skill runtime '%s' from core '%s'",
+                name,
+                core_name,
+            )
+
+    def _resolve_runtime_contracts(self, loaded_names: list[str]) -> None:
+        """Phase 1: resolve runtime contracts via adapter import."""
+        try:
+            from houyi.core.skill.runtime_resolver import RuntimeResolver
+        except ImportError:
+            return
+
+        resolver = RuntimeResolver()
+        for name in loaded_names:
+            if not name:
+                continue
+            skill = self._registry.get(name)
+            if skill is None:
+                continue
+            rc = getattr(skill, "runtime_contract", None)
+            if rc is None:
+                continue
+            resolved = resolver.resolve(skill)
+            if resolved is not skill:
+                self._registry.register(resolved, overwrite=True)
+
+    @staticmethod
+    def _has_schema(schema: object | None) -> bool:
+        if schema is None or not hasattr(schema, "model_json_schema"):
+            return False
+        try:
+            payload = schema.model_json_schema()
+        except Exception:
+            return False
+        if not isinstance(payload, dict):
+            return False
+        return bool(payload.get("properties") or payload.get("required"))
 
 
 # ── Free functions (stateless, importable for testing) ────────────────

@@ -14,6 +14,7 @@ export interface LlmVerificationResult {
   success: boolean;
   message?: string;
   tool_call?: Record<string, unknown>;
+  requested_input?: Record<string, unknown>;
   probe_prompt?: string;
   system_prompt?: string;
   tool_definitions?: Array<Record<string, unknown>>;
@@ -47,6 +48,11 @@ export interface SkillConfigValues {
   auto_invoke: boolean;
 }
 
+export interface DryRunLiveOptions {
+  llmProvider?: string;
+  llmModel?: string;
+}
+
 export interface LoadResultData {
   success: boolean;
   message: string;
@@ -69,7 +75,13 @@ interface UseSkillsLogicReturn {
   loadSkill: (path: string) => void;
   unloadSkill: (skillName: string) => void;
   configureSkill: (skillName: string, config: SkillConfigValues) => void;
-  dryRunSkill: (skillName: string, toolName: string, input?: Record<string, unknown>, live?: boolean) => void;
+  dryRunSkill: (
+    skillName: string,
+    toolName: string,
+    input?: Record<string, unknown>,
+    live?: boolean,
+    options?: DryRunLiveOptions,
+  ) => void;
   respondToConsent: (requestId: string, granted: boolean, remember: boolean) => void;
   clearDryRunResult: () => void;
   clearBlockedMessage: () => void;
@@ -327,8 +339,16 @@ export function useSkillsLogic(
     });
   }, [sendCommand, sessionId]);
 
-  const dryRunSkill = useCallback((skillName: string, toolName: string, input?: Record<string, unknown>, live?: boolean) => {
+  const dryRunSkill = useCallback((
+    skillName: string,
+    toolName: string,
+    input?: Record<string, unknown>,
+    live?: boolean,
+    options?: DryRunLiveOptions,
+  ) => {
     setDryRunResult(null);
+    const llmProvider = options?.llmProvider?.trim();
+    const llmModel = options?.llmModel?.trim();
     sendCommand({
       command_type: 'dry_run_skill',
       command_id: `cmd_${crypto.randomUUID().slice(0, 8)}`,
@@ -337,6 +357,8 @@ export function useSkillsLogic(
       tool_name: toolName,
       input: input ?? {},
       live: live ?? false,
+      llm_provider: llmProvider || undefined,
+      llm_model: llmModel || undefined,
     });
   }, [sendCommand, sessionId]);
 

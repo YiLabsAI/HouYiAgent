@@ -12,6 +12,7 @@ Progressive Disclosure Phases (when live=True):
 
 from __future__ import annotations
 
+import ast
 import contextlib
 import json
 import logging
@@ -56,6 +57,8 @@ class DryRunValidator:
         tool_name: str,
         input_data: dict[str, Any],
         live: bool = False,
+        llm_provider: str | None = None,
+        llm_model: str | None = None,
     ) -> dict[str, Any]:
         """Run static (and optionally live) validation.
 
@@ -83,7 +86,12 @@ class DryRunValidator:
 
         if live and result["valid"]:
             result["llm_verification"] = await _live_verify(
-                skill, skill_name, tool_name, input_data
+                skill,
+                skill_name,
+                tool_name,
+                input_data,
+                llm_provider=llm_provider,
+                llm_model=llm_model,
             )
         elif live and not result["valid"]:
             result["llm_verification"] = {
@@ -114,7 +122,7 @@ class DryRunValidator:
                             tool.input_schema.model_validate(input_data)
                         except Exception as e:
                             result["valid"] = False
-                            result["schema_errors"].append(str(e))
+                            result["schema_errors"].extend(DryRunValidator._format_schema_errors(e))
                         validated = True
                     break
         if not validated and hasattr(skill, "input_schema") and skill.input_schema:
@@ -122,7 +130,61 @@ class DryRunValidator:
                 skill.input_schema.model_validate(input_data)
             except Exception as e:
                 result["valid"] = False
-                result["schema_errors"].append(str(e))
+                result["schema_errors"].extend(DryRunValidator._format_schema_errors(e))
+
+    @staticmethod
+    def _format_schema_errors(error: Exception) -> list[str]:
+        if not hasattr(error, "errors"):
+            return [str(error)]
+
+        errors_attr = error.errors
+        if not callable(errors_attr):
+            return [str(error)]
+
+        try:
+            raw_errors = errors_attr()
+        except Exception:
+            return [str(error)]
+
+        messages: list[str] = []
+        for item in raw_errors:
+            if not isinstance(item, dict):
+                continue
+            loc_raw = item.get("loc", ())
+            loc = ".".join(str(part) for part in loc_raw if part not in {"__root__", "body"})
+            type_code = str(item.get("type", ""))
+            ctx = item.get("ctx") if isinstance(item.get("ctx"), dict) else {}
+            message = DryRunValidator._format_single_schema_error(
+                type_code, ctx, str(item.get("msg", "invalid value"))
+            )
+            if loc:
+                messages.append(f"{loc}: {message}")
+            else:
+                messages.append(message)
+
+        return messages or [str(error)]
+
+    @staticmethod
+    def _format_single_schema_error(type_code: str, ctx: dict[str, Any], fallback: str) -> str:
+        if type_code == "missing":
+            return "is required"
+        if type_code in {"int_parsing", "int_type"}:
+            return "must be an integer"
+        if type_code in {"float_parsing", "float_type"}:
+            return "must be a number"
+        if type_code == "greater_than_equal":
+            return f"must be >= {ctx.get('ge')}"
+        if type_code == "greater_than":
+            return f"must be > {ctx.get('gt')}"
+        if type_code == "less_than_equal":
+            return f"must be <= {ctx.get('le')}"
+        if type_code == "less_than":
+            return f"must be < {ctx.get('lt')}"
+        if type_code == "string_too_short":
+            return f"is too short (min {ctx.get('min_length')})"
+        if type_code == "string_too_long":
+            return f"is too long (max {ctx.get('max_length')})"
+        return fallback
 
     def _check_policy(self, skill_name: str, tool_name: str, result: dict[str, Any]) -> None:
         skill = self._registry.get(skill_name)
@@ -164,6 +226,9 @@ def _assess_tool_result(exec_result: object, exec_result_str: str) -> str:
     empty results + errors → warn; empty results only → warn.
     """
     if isinstance(exec_result, dict):
+        if exec_result.get("success") is False:
+            return "fail"
+
         results = exec_result.get("results")
         has_results = isinstance(results, list) and len(results) > 0
 
@@ -194,24 +259,15 @@ def _build_natural_query(
     tool_name: str,
     input_data: dict[str, Any],
 ) -> str:
-    """Build a natural user query that lets the LLM decide how to use the tool.
-
-    Instead of "call function X with args Y" (which causes the LLM to echo
-    the input), we describe the *task* so the LLM has to reason about
-    which tool to use and what arguments to supply.
-    """
+    """Build a precise query instructing the LLM to call the tool with exact arguments."""
     if not input_data:
-        return f"I need to use the '{tool_name}' capability. Please help me with this tool."
+        return f"Please call the '{tool_name}' tool with no arguments."
 
-    # Build a task-oriented description from the input parameters
-    parts: list[str] = []
-    for key, value in input_data.items():
-        parts.append(f"{key}={value}")
-    params_str = ", ".join(parts)
-
+    params_str = json.dumps(input_data, ensure_ascii=False, indent=2)
     return (
-        f"I need help with a task. Here is the context: {params_str}. "
-        f"Use the '{tool_name}' tool to complete this request and return the result."
+        f"Please call the '{tool_name}' tool exactly with these arguments:\n"
+        f"```json\n{params_str}\n```\n"
+        f"Do not modify, guess, or omit any values. Just pass them directly to the tool."
     )
 
 
@@ -220,6 +276,8 @@ async def _live_verify(
     skill_name: str,
     tool_name: str,
     input_data: dict[str, Any],
+    llm_provider: str | None = None,
+    llm_model: str | None = None,
 ) -> dict[str, Any]:
     """Send a probe to the LLM and check the tool call.
 
@@ -233,12 +291,15 @@ async def _live_verify(
       3. negotiation — system prompt + user query constructed
       4. execution   — real LLM API call, response parsed
     """
+    requested_input: dict[str, Any] = dict(input_data)
+
     try:
         from houyi.llm.factory import LLMAdapterFactory
     except ImportError:
         return {
             "success": False,
             "message": "LLM adapter not available — install houyi[model-adapters]",
+            "requested_input": requested_input,
         }
 
     phases: list[dict[str, Any]] = []
@@ -287,6 +348,7 @@ async def _live_verify(
             "success": False,
             "message": "No tool definitions available for LLM probe",
             "phases": phases,
+            "requested_input": requested_input,
         }
 
     # ── Phase 3: Negotiation ──────────────────────────────────────
@@ -313,7 +375,12 @@ async def _live_verify(
 
     # ── Phase 4: Execution ────────────────────────────────────────
     try:
-        adapter = LLMAdapterFactory.create()
+        adapter = LLMAdapterFactory.create(llm_provider)
+        if llm_model:
+            if hasattr(adapter, "model"):
+                adapter.model = llm_model
+            if hasattr(adapter, "default_model"):
+                adapter.default_model = llm_model
         model_name = (
             getattr(adapter, "model", None) or getattr(adapter, "default_model", None) or "unknown"
         )
@@ -350,6 +417,7 @@ async def _live_verify(
                 "timestamp_ms": exec_ms,
                 "status": "pass" if result.get("success") else "fail",
                 "data": {
+                    "provider": llm_provider or "default",
                     "model": model_name,
                     "latency_ms": exec_ms - (phases[-1]["timestamp_ms"] if phases else 0),
                     "usage": usage,
@@ -358,8 +426,11 @@ async def _live_verify(
         )
 
         # ── Phase 5: Tool Execution ────────────────────────────────
-        tool_call_args = result.get("tool_call", {}).get("arguments")
-        if result.get("success") and tool_call_args and skill.executor:
+        tool_call = result.get("tool_call", {}) if isinstance(result.get("tool_call"), dict) else {}
+        tool_call_args = tool_call.get("arguments")
+        tool_exec_status: str | None = None
+        tool_exec_payload: dict[str, Any] | None = None
+        if result.get("success") and skill.executor:
             try:
                 import asyncio
                 import inspect
@@ -367,6 +438,13 @@ async def _live_verify(
                 if isinstance(tool_call_args, str):
                     with contextlib.suppress(Exception):
                         tool_call_args = json.loads(tool_call_args)
+
+                argument_source = "observed_tool_call"
+                if not isinstance(tool_call_args, dict) and requested_input:
+                    tool_call_args = dict(requested_input)
+                    argument_source = "requested_input_fallback"
+                    tool_call["arguments_source"] = argument_source
+                    result["tool_call"] = tool_call
 
                 if isinstance(tool_call_args, dict):
                     exec_fn = skill.executor
@@ -398,9 +476,16 @@ async def _live_verify(
                             "data": {
                                 "result_length": len(exec_result_str),
                                 "result_preview": preview,
+                                "argument_source": argument_source,
                             },
                         }
                     )
+                    tool_exec_status = exec_status
+                    tool_exec_payload = {
+                        "result_length": len(exec_result_str),
+                        "result_preview": preview,
+                        "argument_source": argument_source,
+                    }
                 else:
                     result["execution_result"] = None
                     phases.append(
@@ -409,9 +494,17 @@ async def _live_verify(
                             "label": "Tool Execution",
                             "timestamp_ms": _elapsed_ms(),
                             "status": "skip",
-                            "data": {"reason": "arguments not a valid dict"},
+                            "data": {
+                                "reason": "arguments not a valid dict",
+                                "argument_source": "none",
+                            },
                         }
                     )
+                    tool_exec_status = "skip"
+                    tool_exec_payload = {
+                        "reason": "arguments not a valid dict",
+                        "argument_source": "none",
+                    }
             except Exception as exec_err:
                 logger.warning(
                     "Tool execution failed for '%s': %s",
@@ -428,6 +521,8 @@ async def _live_verify(
                         "data": {"error": str(exec_err)[:300]},
                     }
                 )
+                tool_exec_status = "fail"
+                tool_exec_payload = {"error": str(exec_err)[:300]}
         elif result.get("success"):
             phases.append(
                 {
@@ -438,13 +533,66 @@ async def _live_verify(
                     "data": {"reason": "no executor available"},
                 }
             )
+            tool_exec_status = "skip"
+            tool_exec_payload = {"reason": "no executor available"}
+
+        # ── Phase 6: Final Response Synthesis ──────────────────────
+        if result.get("success") and tool_exec_status not in {None, "skip"}:
+            try:
+                tool_result_summary = result.get("execution_result")
+                followup = await adapter.chat(
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_query},
+                        {
+                            "role": "user",
+                            "content": (
+                                "The tool has been executed. Based on the following tool result, "
+                                "provide the final answer for the original request.\n"
+                                f"Tool result:\n{tool_result_summary}"
+                            ),
+                        },
+                    ],
+                    tools=[],
+                )
+                final_answer = _extract_response_content(followup)
+                result["final_answer"] = final_answer
+                final_status = "pass" if final_answer else "warn"
+                phases.append(
+                    {
+                        "name": "final_response",
+                        "label": "Final Response",
+                        "timestamp_ms": _elapsed_ms(),
+                        "status": final_status,
+                        "data": {
+                            "answer_preview": final_answer[:500] if final_answer else "",
+                            "tool_execution_status": tool_exec_status,
+                            "tool_execution": tool_exec_payload or {},
+                        },
+                    }
+                )
+            except Exception as followup_err:
+                phases.append(
+                    {
+                        "name": "final_response",
+                        "label": "Final Response",
+                        "timestamp_ms": _elapsed_ms(),
+                        "status": "fail",
+                        "data": {
+                            "error": str(followup_err)[:300],
+                            "tool_execution_status": tool_exec_status,
+                        },
+                    }
+                )
 
         result["probe_prompt"] = user_query
         result["system_prompt"] = system_prompt
         result["tool_definitions"] = tool_defs
         result["model_name"] = model_name
+        result["provider"] = llm_provider or "default"
         result["usage"] = usage
         result["phases"] = phases
+        result["requested_input"] = requested_input
         return result
 
     except Exception as e:
@@ -452,7 +600,12 @@ async def _live_verify(
         exec_ms = _elapsed_ms()
         model_name = "unknown"
         try:
-            adapter_check = LLMAdapterFactory.create()
+            adapter_check = LLMAdapterFactory.create(llm_provider)
+            if llm_model:
+                if hasattr(adapter_check, "model"):
+                    adapter_check.model = llm_model
+                if hasattr(adapter_check, "default_model"):
+                    adapter_check.default_model = llm_model
             model_name = (
                 getattr(adapter_check, "model", None)
                 or getattr(adapter_check, "default_model", None)
@@ -478,7 +631,9 @@ async def _live_verify(
             "system_prompt": system_prompt if "system_prompt" in dir() else "",
             "tool_definitions": tool_defs if "tool_defs" in dir() else [],
             "model_name": model_name,
+            "provider": llm_provider or "default",
             "phases": phases,
+            "requested_input": requested_input,
         }
 
 
@@ -502,6 +657,78 @@ def _simplify_schema(schema: dict[str, Any]) -> dict[str, Any]:
         else:
             cleaned[key] = value
     return cleaned
+
+
+def _parse_tool_arguments(raw: Any) -> Any:
+    if not isinstance(raw, str):
+        return raw
+
+    cleaned = _strip_deepseek_tokens(raw).strip()
+    if not cleaned:
+        return cleaned
+
+    cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s*```$", "", cleaned)
+
+    for start_ch, end_ch in (("{", "}"), ("[", "]")):
+        start = cleaned.find(start_ch)
+        if start >= 0:
+            depth = 0
+            for i in range(start, len(cleaned)):
+                if cleaned[i] == start_ch:
+                    depth += 1
+                elif cleaned[i] == end_ch:
+                    depth -= 1
+                    if depth == 0:
+                        cleaned = cleaned[start : i + 1]
+                        break
+            break
+
+    with contextlib.suppress(Exception):
+        return json.loads(cleaned)
+
+    with contextlib.suppress(Exception):
+        return ast.literal_eval(cleaned)
+
+    return cleaned
+
+
+def _extract_action(payload: Any, depth: int = 0) -> str:
+    if depth > 6 or payload is None:
+        return ""
+
+    if isinstance(payload, str):
+        parsed = _parse_tool_arguments(payload)
+        if parsed is payload:
+            return ""
+        return _extract_action(parsed, depth + 1)
+
+    if isinstance(payload, list):
+        for item in payload:
+            action = _extract_action(item, depth + 1)
+            if action:
+                return action
+        return ""
+
+    if not isinstance(payload, dict):
+        return ""
+
+    for key, value in payload.items():
+        if key.lower() == "action" and isinstance(value, str):
+            return value
+
+    for key in ("arguments", "input", "params", "payload", "data", "args", "kwargs", "tool_input"):
+        if key in payload:
+            action = _extract_action(payload.get(key), depth + 1)
+            if action:
+                return action
+
+    for value in payload.values():
+        action = _extract_action(value, depth + 1)
+        if action:
+            return action
+
+    return ""
 
 
 def _simplify_property(prop: dict[str, Any]) -> dict[str, Any]:
@@ -599,11 +826,11 @@ def _parse_llm_response(response: object, expected_tool: str) -> dict[str, Any]:
     # Capture raw text content from the response
     raw_content = ""
     if hasattr(response, "content") and response.content:
-        raw_content = str(response.content)[:500]
+        raw_content = str(response.content)[:4000]
     elif hasattr(response, "choices") and response.choices:
         msg = getattr(response.choices[0], "message", None)
         if msg and getattr(msg, "content", None):
-            raw_content = str(msg.content)[:500]
+            raw_content = str(msg.content)[:4000]
 
     # Fallback: raw OpenAI response with choices[].message.tool_calls
     if not tool_calls and hasattr(response, "choices"):
@@ -618,22 +845,44 @@ def _parse_llm_response(response: object, expected_tool: str) -> dict[str, Any]:
         name: str | None = None
         args: Any = None
 
+        def _pick_non_none(*values: Any) -> Any:
+            for value in values:
+                if value is not None:
+                    return value
+            return None
+
         if isinstance(first, dict):
             func = first.get("function", {})
-            name = func.get("name") or first.get("name")
-            args = func.get("arguments") or first.get("arguments")
+            name = _pick_non_none(func.get("name"), first.get("name"))
+            args = _pick_non_none(func.get("arguments"), first.get("arguments"))
         else:
-            name = getattr(first, "name", None) or (
-                getattr(first.function, "name", None) if hasattr(first, "function") else None
+            name = _pick_non_none(
+                getattr(first, "name", None),
+                getattr(first.function, "name", None) if hasattr(first, "function") else None,
             )
-            args = getattr(first, "arguments", None) or (
-                getattr(first.function, "arguments", None) if hasattr(first, "function") else None
+            args = _pick_non_none(
+                getattr(first, "arguments", None),
+                getattr(first.function, "arguments", None) if hasattr(first, "function") else None,
             )
 
-        if isinstance(args, str):
-            args = _strip_deepseek_tokens(args)
-            with contextlib.suppress(Exception):
-                args = json.loads(args)
+        args = _parse_tool_arguments(args)
+
+        recovered_name, recovered_args = _recover_tool_call_from_text(raw_content)
+        if not name and recovered_name:
+            name = recovered_name
+        if _is_missing_args(args) and recovered_args is not None:
+            args = recovered_args
+
+        # Unpack nested LLM hallucinations e.g. arguments={"name": "foo", "arguments": {"action": ...}}
+        if (
+            isinstance(args, dict)
+            and "arguments" in args
+            and "name" in args
+            and args["name"] == name
+        ):
+            args = args["arguments"]
+
+        observed_action = _extract_action(args)
 
         matched = name == expected_tool
         return {
@@ -643,7 +892,30 @@ def _parse_llm_response(response: object, expected_tool: str) -> dict[str, Any]:
                 if matched
                 else f"LLM called '{name}' instead of '{expected_tool}'"
             ),
-            "tool_call": {"name": name, "arguments": args},
+            "tool_call": {
+                "name": name,
+                "arguments": args,
+                **({"action": observed_action} if observed_action else {}),
+            },
+            "raw_content": raw_content or None,
+        }
+
+    recovered_name, recovered_args = _recover_tool_call_from_text(raw_content)
+    if recovered_name:
+        observed_action = _extract_action(recovered_args)
+        matched = recovered_name == expected_tool
+        return {
+            "success": matched,
+            "message": (
+                f"LLM correctly called '{recovered_name}'"
+                if matched
+                else f"LLM called '{recovered_name}' instead of '{expected_tool}'"
+            ),
+            "tool_call": {
+                "name": recovered_name,
+                "arguments": recovered_args,
+                **({"action": observed_action} if observed_action else {}),
+            },
             "raw_content": raw_content or None,
         }
 
@@ -652,3 +924,92 @@ def _parse_llm_response(response: object, expected_tool: str) -> dict[str, Any]:
         "message": f"LLM did not produce a tool call. Response: {raw_content[:200]}",
         "raw_content": raw_content or None,
     }
+
+
+def _is_missing_args(args: Any) -> bool:
+    if args is None:
+        return True
+    if isinstance(args, str):
+        return not args.strip()
+    if isinstance(args, dict):
+        return len(args) == 0
+    if isinstance(args, list):
+        return len(args) == 0
+    return False
+
+
+def _recover_tool_call_from_text(raw_content: str) -> tuple[str | None, Any]:
+    if not raw_content:
+        return None, None
+
+    parsed = _parse_tool_arguments(raw_content)
+    if parsed is raw_content:
+        return None, None
+    return _find_tool_call_candidate(parsed)
+
+
+def _extract_response_content(response: object) -> str:
+    """Best-effort extraction of assistant text from adapter response."""
+    content = getattr(response, "content", None)
+    if isinstance(content, str):
+        return content.strip()
+    if content is not None:
+        return str(content).strip()
+
+    if hasattr(response, "choices") and response.choices:
+        msg = getattr(response.choices[0], "message", None)
+        text = getattr(msg, "content", None) if msg is not None else None
+        if isinstance(text, str):
+            return text.strip()
+        if text is not None:
+            return str(text).strip()
+
+    return ""
+
+
+def _find_tool_call_candidate(payload: Any, depth: int = 0) -> tuple[str | None, Any]:
+    if payload is None or depth > 8:
+        return None, None
+
+    if isinstance(payload, str):
+        parsed = _parse_tool_arguments(payload)
+        if parsed is payload:
+            return None, None
+        return _find_tool_call_candidate(parsed, depth + 1)
+
+    if isinstance(payload, list):
+        for item in payload:
+            name, args = _find_tool_call_candidate(item, depth + 1)
+            if name:
+                return name, args
+        return None, None
+
+    if not isinstance(payload, dict):
+        return None, None
+
+    function_block = payload.get("function")
+    if isinstance(function_block, dict):
+        name = function_block.get("name")
+        if isinstance(name, str) and name:
+            args = function_block.get("arguments")
+            return name, _parse_tool_arguments(args)
+
+    name = payload.get("name")
+    if isinstance(name, str) and name:
+        args = payload.get("arguments")
+        if args is None:
+            args = payload.get("args")
+        return name, _parse_tool_arguments(args)
+
+    for key in ("tool_calls", "tool_call", "calls", "choices", "message"):
+        if key in payload:
+            recovered_name, recovered_args = _find_tool_call_candidate(payload[key], depth + 1)
+            if recovered_name:
+                return recovered_name, recovered_args
+
+    for value in payload.values():
+        recovered_name, recovered_args = _find_tool_call_candidate(value, depth + 1)
+        if recovered_name:
+            return recovered_name, recovered_args
+
+    return None, None

@@ -33,6 +33,7 @@ class FakeSkillService:
                 "policy_action": "allow",
                 "side_effect": "none",
                 "certification": "silver",
+                "source": "builtin",
             }
         ]
 
@@ -61,6 +62,8 @@ class FakeSkillService:
         tool_name: str,
         input_data: dict[str, Any],
         live: bool = False,
+        llm_provider: str | None = None,
+        llm_model: str | None = None,
     ) -> dict[str, Any]:
         return {
             "valid": True,
@@ -90,6 +93,7 @@ async def test_list_skills_sends_skill_list_event() -> None:
     assert len(events) == 1
     assert isinstance(events[0], SkillListEvent)
     assert events[0].skills[0].name == "planner"
+    assert events[0].skills[0].source == "builtin"
 
 
 @pytest.mark.asyncio
@@ -124,6 +128,7 @@ async def test_get_skill_detail_defaults_version_when_none() -> None:
         "hooks": [],
         "certification": "silver",
         "side_effect": "none",
+        "source": "community",
     }
 
     async def send_event(session_id: str, event: object) -> None:
@@ -137,6 +142,7 @@ async def test_get_skill_detail_defaults_version_when_none() -> None:
     assert len(events) == 1
     assert isinstance(events[0], SkillDetailEvent)
     assert events[0].skill.version is None
+    assert events[0].skill.source == "community"
 
 
 @pytest.mark.asyncio

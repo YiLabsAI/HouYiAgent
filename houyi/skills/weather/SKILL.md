@@ -1,7 +1,12 @@
 ---
 name: weather
 version: 0.3.0
-description: Weather query tools using Open-Meteo with wttr.in fallback
+description: |
+  CRITICAL WEATHER TOOL. Use this skill IMMEDIATELY whenever the user asks about:
+  - weather, temperature, forecast, rain, snow, sunny
+  - e.g., "what is the weather in Hangzhou", "今天天气怎么样", "北京气温"
+  - ALWAYS use this BEFORE attempting web search or other fallback tools.
+  (Weather query tools using Open-Meteo with wttr.in fallback)
 author: Houyi Team
 hooks:
   - event: PreToolUse
@@ -80,3 +85,16 @@ This skill registers default hooks that users can extend:
 
 - [Open-Meteo](https://open-meteo.com/) — structured forecast (date-aware)
 - [wttr.in](https://wttr.in/:help) — compact current-weather text summary
+
+## Agent Execution Contract
+
+When an AI Agent needs to execute this skill, use the following workspace-agnostic command. Replace the placeholders with actual values (use `None` for missing values, strings must be quoted).
+
+```bash
+uv run python -c "from houyi.skills.weather import get_weather; print(get_weather.executor(lat={LAT}, lon={LON}, city={CITY}, country={COUNTRY}, date={DATE}, provider={PROVIDER}))"
+```
+
+**Example:**
+```bash
+uv run python -c "from houyi.skills.weather import get_weather; print(get_weather.executor(lat=None, lon=None, city='Hangzhou', country=None, date='today', provider='auto'))"
+```

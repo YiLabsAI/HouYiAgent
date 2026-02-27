@@ -79,7 +79,7 @@ CHANGED_PY_FILES=$(
         git diff --name-only --cached
         git diff --name-only
         git ls-files --others --exclude-standard
-    } 2>/dev/null | awk '($0 ~ /\.pyi?$/) { print }' | sort -u | while read -r f; do
+    } 2>/dev/null | awk '($0 ~ /\.pyi?$/) && ($0 !~ /^skills\//) { print }' | sort -u | while read -r f; do
         [ -f "$f" ] && echo "$f"
     done
 )

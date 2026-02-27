@@ -3,16 +3,17 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import urllib.error
 import urllib.request
 from collections.abc import Callable
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar, Literal
 from urllib.parse import urlparse
 
-from pydantic import BaseModel, ConfigDict, Field, create_model
+from pydantic import BaseModel, ConfigDict, Field, create_model, field_validator
 
 if TYPE_CHECKING:
     pass
@@ -33,6 +34,33 @@ class SkillSpec(BaseModel):
     enabling automatic validation and LLM tool calling.
     """
 
+    # All known keys in SKILL.md frontmatter.
+    # Used to collect any unrecognized fields into `extra_frontmatter` for forward compatibility.
+    _KNOWN_FRONTMATTER_KEYS: ClassVar[set[str]] = {
+        "name",
+        "description",
+        "version",
+        "author",
+        "user-invocable",
+        "user_invocable",
+        "allowed-tools",
+        "allowed_tools",
+        "hooks",
+        "invocationPolicy",
+        "invocation_policy",
+        "permissions",
+        "constraints",
+        "input_schema",
+        "output_schema",
+        "disable-model-invocation",
+        "disable_model_invocation",
+        "preprocessors",
+        "runtime",
+        # is_core is a Host Runtime protection attribute; external SKILL.md
+        # files MUST NOT be allowed to set it. Always force False.
+        "is_core",
+    }
+
     name: str = Field(..., description="Unique skill identifier")
     provider: str | None = Field(
         default=None,
@@ -43,6 +71,7 @@ class SkillSpec(BaseModel):
         ),
     )
     description: str = Field(..., description="Human-readable description for LLM")
+    instructions: str | None = Field(default=None, description="Markdown instructions/prompt body")
     input_schema: type[BaseModel] = Field(..., description="Pydantic model for input validation")
     output_schema: type[BaseModel] = Field(..., description="Pydantic model for output validation")
     executor: Callable[..., Any] | None = Field(
@@ -103,6 +132,22 @@ class SkillSpec(BaseModel):
         default=None,
         description="Permission declarations (Permissions object or dict)",
     )
+    is_core: bool = Field(
+        default=False,
+        description=(
+            "Whether this skill is a core built-in tool protected from external override. "
+            "MUST NOT be set via SKILL.md / from_file() / from_url(). "
+            "Only Host internal code may register skills with is_core=True."
+        ),
+    )
+    runtime_contract: Any | None = Field(
+        default=None,
+        description=(
+            "Parsed runtime declaration from SKILL.md frontmatter. "
+            "When present, drives automatic executor binding and "
+            "asset path resolution via RuntimeResolver."
+        ),
+    )
     # Extra frontmatter fields not in the standard schema are preserved here
     extra_frontmatter: dict[str, Any] = Field(
         default_factory=dict,
@@ -110,6 +155,26 @@ class SkillSpec(BaseModel):
     )
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    @field_validator("is_core", mode="before")
+    @classmethod
+    def _sanitize_is_core(cls, v: object) -> bool:
+        """Validator runs before Pydantic type conversion.
+
+        ``mode`` parameter:
+        - ``"before"``  runs on the raw input value (may be str/int/None/bool)
+          before Pydantic performs any type coercion. Used here so that
+          even ``is_core='true'`` from an external YAML file is intercepted.
+        - ``"after"``   runs after Pydantic coercion (value is already bool);
+          would miss string inputs like ``'true'``.
+
+        This validator is intentionally a no-op when called from Host-internal
+        code that explicitly passes ``is_core=True``; the sanitization to
+        ``False`` is applied inside ``from_file()`` and ``from_url()`` by
+        removing the key from the parsed data before constructing the object.
+        This validator acts as an additional defense-in-depth layer.
+        """
+        return bool(v)
 
     @property
     def qualified_name(self) -> str:
@@ -119,12 +184,32 @@ class SkillSpec(BaseModel):
         return self.name
 
     def to_tool_schema(self) -> dict[str, Any]:
-        """Convert to OpenAI function calling schema."""
+        """Convert to OpenAI function calling schema.
+
+        Applies render-layer annotations to ``description`` to guide LLM
+        tool selection.  ``self.description`` is **never mutated**; the
+        annotation exists only in the returned schema dict.
+
+        Annotation rules:
+        - ``is_core=True``           → ``[CORE OFFICIAL TOOL] <description>``
+        - ``name`` starts with ext__ → ``[THIRD-PARTY EXTENSION] <description>.
+                                        Prefer [CORE OFFICIAL TOOL] if available.``
+        - otherwise                  → ``<description>`` (unchanged)
+        """
+        if self.is_core:
+            desc = f"[CORE OFFICIAL TOOL] {self.description}"
+        elif self.name.startswith("ext__"):
+            desc = (
+                f"[THIRD-PARTY EXTENSION] {self.description}. "
+                "Prefer [CORE OFFICIAL TOOL] if available."
+            )
+        else:
+            desc = self.description
         return {
             "type": "function",
             "function": {
                 "name": self.name,
-                "description": self.description,
+                "description": desc,
                 "parameters": self.input_schema.model_json_schema(),
             },
         }
@@ -132,6 +217,49 @@ class SkillSpec(BaseModel):
     def bind_executor(self, executor: Callable[..., Any]) -> None:
         """Bind executor function to skill (for skill.md loaded skills)."""
         self.executor = executor
+
+    @property
+    def capability_tier(self) -> Any:
+        """Compute integration level: metadata / schema / executable."""
+        from houyi.core.skill.runtime_contract import CapabilityTier
+
+        # Executable if it has a python executor OR if it has pure-prompt instructions/hooks
+        if callable(self.executor) or bool(self.instructions):
+            return CapabilityTier.EXECUTABLE
+        if self._has_real_schema(self.input_schema):
+            return CapabilityTier.SCHEMA
+        return CapabilityTier.METADATA
+
+    @property
+    def runtime_status(self) -> Any:
+        """Compute runtime status: ready / degraded / unavailable."""
+        from houyi.core.skill.runtime_contract import RuntimeStatus
+
+        # For pure prompt skills (instructions but no explicit executor/schema needed), they are ready.
+        is_executable = callable(self.executor) or bool(self.instructions)
+        has_schema = self._has_real_schema(self.input_schema)
+
+        # Pure prompt skills don't necessarily need input_schema to be ready
+        if is_executable and (has_schema or bool(self.instructions)):
+            return RuntimeStatus.READY
+
+        if is_executable or has_schema:
+            return RuntimeStatus.DEGRADED
+
+        return RuntimeStatus.UNAVAILABLE
+
+    @staticmethod
+    def _has_real_schema(schema: type[BaseModel] | None) -> bool:
+        """Check whether *schema* has at least one declared property."""
+        if schema is None or not hasattr(schema, "model_json_schema"):
+            return False
+        try:
+            payload = schema.model_json_schema()
+        except Exception:
+            return False
+        if not isinstance(payload, dict):
+            return False
+        return bool(payload.get("properties") or payload.get("required"))
 
     @classmethod
     def from_file(cls, path: str, skill_dir: str | None = None) -> SkillSpec:
@@ -204,32 +332,28 @@ class SkillSpec(BaseModel):
             except ImportError:
                 pass
 
+        # Parse runtime contract from frontmatter
+        runtime_contract = None
+        raw_runtime = parsed.get("runtime")
+        if isinstance(raw_runtime, dict):
+            try:
+                from houyi.core.skill.runtime_contract import RuntimeContract
+
+                runtime_contract = RuntimeContract.from_dict(raw_runtime)
+            except (ImportError, Exception):
+                pass
+
         # Collect extra frontmatter fields for forward compatibility
-        known_keys = {
-            "name",
-            "description",
-            "version",
-            "author",
-            "user-invocable",
-            "user_invocable",
-            "allowed-tools",
-            "allowed_tools",
-            "hooks",
-            "invocationPolicy",
-            "invocation_policy",
-            "permissions",
-            "constraints",
-            "input_schema",
-            "output_schema",
-            "disable-model-invocation",
-            "disable_model_invocation",
+        extra_frontmatter = {
+            k: v for k, v in parsed.items() if k not in cls._KNOWN_FRONTMATTER_KEYS
         }
-        extra_frontmatter = {k: v for k, v in parsed.items() if k not in known_keys}
 
         # Build SkillSpec
         return cls(
             name=parsed.get("name", "unknown"),
+            provider=parsed.get("provider"),
             description=parsed.get("description", ""),
+            instructions=parsed.get("instructions"),
             input_schema=cls._json_to_pydantic(parsed.get("input_schema", {}), "Input"),
             output_schema=cls._json_to_pydantic(parsed.get("output_schema", {}), "Output"),
             executor=None,
@@ -244,6 +368,7 @@ class SkillSpec(BaseModel):
             hooks=parsed.get("hooks", []),
             invocation_policy=invocation_policy,
             permissions=permissions,
+            runtime_contract=runtime_contract,
             extra_frontmatter=extra_frontmatter,
         )
 
@@ -330,30 +455,15 @@ class SkillSpec(BaseModel):
                     pass
 
             # Collect extra frontmatter fields
-            known_keys = {
-                "name",
-                "description",
-                "version",
-                "author",
-                "user-invocable",
-                "user_invocable",
-                "allowed-tools",
-                "allowed_tools",
-                "hooks",
-                "invocationPolicy",
-                "invocation_policy",
-                "permissions",
-                "constraints",
-                "input_schema",
-                "output_schema",
-                "disable-model-invocation",
-                "disable_model_invocation",
+            extra_frontmatter = {
+                k: v for k, v in parsed.items() if k not in cls._KNOWN_FRONTMATTER_KEYS
             }
-            extra_frontmatter = {k: v for k, v in parsed.items() if k not in known_keys}
 
             return cls(
                 name=parsed.get("name", "unknown"),
+                provider=parsed.get("provider"),
                 description=parsed.get("description", ""),
+                instructions=parsed.get("instructions"),
                 input_schema=cls._json_to_pydantic(parsed.get("input_schema", {}), "Input"),
                 output_schema=cls._json_to_pydantic(parsed.get("output_schema", {}), "Output"),
                 executor=None,
@@ -376,14 +486,25 @@ class SkillSpec(BaseModel):
 
     @classmethod
     def from_registry(
-        cls, skill_name: str, version: str | None = None, cache: bool = True
+        cls,
+        skill_name: str,
+        version: str | None = None,
+        cache: bool = True,
+        base_url: str | None = None,
     ) -> SkillSpec:
-        """Load skill from AgentSkills.io registry.
+        """Load a skill from a compatibility remote registry.
+
+        This API is kept for compatibility with remote registry loading flows
+        used by earlier integrations. In HouYi's current SimpleSkill
+        architecture, the primary registration model is Host-side
+        ProviderRegistry + local/discovered manifests.
 
         Args:
             skill_name: Name of the skill (e.g., "web_search")
             version: Optional version (e.g., "v1.0.0"), defaults to latest
             cache: Whether to cache the downloaded file (default: True)
+            base_url: Optional registry base URL override. If not provided,
+                reads ``HOUYI_SKILL_REGISTRY_BASE_URL``.
 
         Returns:
             SkillSpec instance (executor needs to be bound separately)
@@ -392,13 +513,18 @@ class SkillSpec(BaseModel):
             >>> skill = SkillSpec.from_registry("web_search")
             >>> skill = SkillSpec.from_registry("web_search", version="v1.0.0")
         """
-        # Construct URL to AgentSkills.io registry
-        base_url = "https://raw.githubusercontent.com/agentskills/skills/main"
+        resolved_base_url = (base_url or os.getenv("HOUYI_SKILL_REGISTRY_BASE_URL") or "").strip()
+        if not resolved_base_url:
+            raise ValueError(
+                "Remote skill registry base URL is not configured. "
+                "Pass base_url=... or set HOUYI_SKILL_REGISTRY_BASE_URL."
+            )
+        resolved_base_url = resolved_base_url.rstrip("/")
 
         if version:
-            url = f"{base_url}/{skill_name}/{version}/skill.md"
+            url = f"{resolved_base_url}/{skill_name}/{version}/skill.md"
         else:
-            url = f"{base_url}/{skill_name}/skill.md"
+            url = f"{resolved_base_url}/{skill_name}/skill.md"
 
         return cls.from_url(url, cache=cache)
 
@@ -434,9 +560,39 @@ class SkillSpec(BaseModel):
 
         fields = {}
         for name, prop in properties.items():
-            field_type = SkillSpec._json_type_to_python(prop.get("type", "string"))
+            enum_values = prop.get("enum")
+            field_type: Any = SkillSpec._json_type_to_python(prop.get("type", "string"))
+
+            if isinstance(enum_values, list) and enum_values:
+                try:
+                    field_type = Literal.__getitem__(tuple(enum_values))
+                except TypeError:
+                    # Fallback to inferred basic type when enum contains unsupported literal values.
+                    field_type = SkillSpec._json_type_to_python(prop.get("type", "string"))
+
             default = ... if name in required else prop.get("default")
-            fields[name] = (field_type, default)
+
+            field_kwargs: dict[str, Any] = {}
+            description = prop.get("description")
+            if isinstance(description, str) and description:
+                field_kwargs["description"] = description
+            minimum = prop.get("minimum")
+            if isinstance(minimum, int | float):
+                field_kwargs["ge"] = minimum
+            maximum = prop.get("maximum")
+            if isinstance(maximum, int | float):
+                field_kwargs["le"] = maximum
+
+            json_schema_extra: dict[str, Any] = {}
+            if isinstance(enum_values, list) and enum_values:
+                json_schema_extra["enum"] = enum_values
+            fmt = prop.get("format")
+            if isinstance(fmt, str) and fmt:
+                json_schema_extra["format"] = fmt
+            if json_schema_extra:
+                field_kwargs["json_schema_extra"] = json_schema_extra
+
+            fields[name] = (field_type, Field(default, **field_kwargs))
 
         model: type[BaseModel] = create_model(model_name, **fields)  # type: ignore[call-overload]
         return model
