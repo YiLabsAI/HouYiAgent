@@ -220,6 +220,7 @@ class TestFullSkillInventory:
                 registry.register(SkillSpec.from_file(md_path), overwrite=True)
 
         # SKILL.md — subdirectory external skills (planning-with-files, superpowers, etc.)
+        loaded: list[str] = []
         if os.path.isdir(SKILLS_DIR):
             loaded = registry.register_from_directory(
                 SKILLS_DIR,
