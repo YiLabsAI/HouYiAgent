@@ -252,6 +252,7 @@ class TestEnvConfigSummary:
             "google_location",
             "gemini_model",
             "rag_knowledge_dir",
+            "startup_skills_dir",
             "embedding_provider",
             "embedding_model",
         }

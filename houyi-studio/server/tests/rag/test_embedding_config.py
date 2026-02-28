@@ -46,20 +46,70 @@ class TestResolveEmbeddingConfig:
 
     def test_explicit_provider_wins_over_everything(self):
         """Priority 1: explicit override always wins."""
-        with patch.dict(os.environ, {"EMBEDDING_PROVIDER": "openai", "OPENAI_API_KEY": "sk-x"}):
+        with (
+            patch.dict(os.environ, {"EMBEDDING_PROVIDER": "openai", "OPENAI_API_KEY": "sk-x"}),
+            patch(
+                "houyi_studio.server.rag.embedding_config._is_provider_runtime_available",
+                return_value=True,
+            ),
+        ):
             cfg, name = self._resolve(preferred_provider="local")
             assert name == "local"
             assert cfg.provider == "local"
             assert cfg.model == "BAAI/bge-small-en-v1.5"
             assert cfg.dimension == 384
 
+    def test_explicit_local_falls_back_when_fastembed_missing(self):
+        def _available(provider: str) -> bool:
+            return provider != "local"
+
+        with (
+            patch.dict(os.environ, {"EMBEDDING_PROVIDER": "openai", "OPENAI_API_KEY": "sk-x"}),
+            patch(
+                "houyi_studio.server.rag.embedding_config._is_provider_runtime_available",
+                side_effect=_available,
+            ),
+        ):
+            cfg, name = self._resolve(preferred_provider="local")
+            assert name == "openai"
+            assert cfg.provider == "openai"
+
+    def test_explicit_local_strict_mode_raises(self):
+        with patch(
+            "houyi_studio.server.rag.embedding_config._is_provider_runtime_available",
+            return_value=False,
+        ):
+            try:
+                self._resolve(preferred_provider="local", strict_explicit=True)
+                raise AssertionError("Expected RuntimeError for strict explicit provider")
+            except RuntimeError as exc:
+                assert "Embedding provider 'local'" in str(exc)
+
+    def test_env_local_strict_mode_raises(self):
+        with (
+            patch.dict(os.environ, {"EMBEDDING_PROVIDER": "local"}, clear=False),
+            patch(
+                "houyi_studio.server.rag.embedding_config._is_provider_runtime_available",
+                return_value=False,
+            ),
+        ):
+            try:
+                self._resolve(strict_explicit=True)
+                raise AssertionError("Expected RuntimeError for strict env provider")
+            except RuntimeError as exc:
+                assert "from env" in str(exc)
+
     def test_explicit_provider_with_custom_model(self):
         """Explicit override can include custom model/dimension."""
-        cfg, name = self._resolve(
-            preferred_provider="openai",
-            preferred_model="text-embedding-3-large",
-            preferred_dimension=3072,
-        )
+        with patch(
+            "houyi_studio.server.rag.embedding_config._is_provider_runtime_available",
+            return_value=True,
+        ):
+            cfg, name = self._resolve(
+                preferred_provider="openai",
+                preferred_model="text-embedding-3-large",
+                preferred_dimension=3072,
+            )
         assert cfg.provider == "openai"
         assert cfg.model == "text-embedding-3-large"
         assert cfg.dimension == 3072
@@ -71,7 +121,11 @@ class TestResolveEmbeddingConfig:
     )
     def test_env_vars_used_when_no_explicit(self):
         """Priority 2: env vars used when no explicit provider given."""
-        cfg, name = self._resolve()
+        with patch(
+            "houyi_studio.server.rag.embedding_config._is_provider_runtime_available",
+            return_value=True,
+        ):
+            cfg, name = self._resolve()
         assert name == "gemini"
         assert cfg.provider == "gemini"
         assert cfg.model == "text-embedding-004"
@@ -111,8 +165,12 @@ class TestAutoDetectEmbedding:
             cfg, name = detect()
             assert name == "gemini"
         except ImportError:
-            cfg, name = detect()
-            assert name == "openai"
+            with patch(
+                "houyi_studio.server.rag.embedding_config._is_provider_runtime_available",
+                return_value=True,
+            ):
+                cfg, name = detect()
+                assert name == "openai"
 
     @patch.dict(
         os.environ,
@@ -132,8 +190,12 @@ class TestAutoDetectEmbedding:
             cfg, name = detect()
             assert name == "gemini"
         except ImportError:
-            cfg, name = detect()
-            assert name == "openai"
+            with patch(
+                "houyi_studio.server.rag.embedding_config._is_provider_runtime_available",
+                return_value=True,
+            ):
+                cfg, name = detect()
+                assert name == "openai"
 
     @patch.dict(
         os.environ,
@@ -148,7 +210,11 @@ class TestAutoDetectEmbedding:
     def test_openai_detected_when_api_key_set(self):
         """OpenAI provider detected when OPENAI_API_KEY is set."""
         detect = self._auto_detect()
-        cfg, name = detect()
+        with patch(
+            "houyi_studio.server.rag.embedding_config._is_provider_runtime_available",
+            return_value=True,
+        ):
+            cfg, name = detect()
         assert name == "openai"
         assert cfg.provider == "openai"
         assert cfg.model == "text-embedding-3-small"

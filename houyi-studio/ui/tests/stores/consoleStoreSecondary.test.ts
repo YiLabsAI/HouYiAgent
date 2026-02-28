@@ -57,18 +57,13 @@ describe('Secondary Sidebar routing state', () => {
     });
 
     // Priority 2: skill selected
-    it('should return "skill" when skill is selected and no node is selected', () => {
-      useConsoleStore.setState({ selectedSkillId: 'web-search' });
-      expect(useConsoleStore.getState().getSecondaryContentMode()).toBe('skill');
-    });
-
-    it('should return "skill" when skill is selected in chat mode', () => {
-      useConsoleStore.setState({ primaryMode: 'chat', sidebarTab: 'conversations', selectedSkillId: 'calculator' });
+    it('should return "skill" when skill is selected and sidebar is skills tab', () => {
+      useConsoleStore.setState({ sidebarTab: 'skills', selectedSkillId: 'web-search' });
       expect(useConsoleStore.getState().getSecondaryContentMode()).toBe('skill');
     });
 
     it('should return "node" over "skill" when both node and skill are selected (graph)', () => {
-      useConsoleStore.setState({ selectedNodeId: 'llm_1', selectedSkillId: 'web-search' });
+      useConsoleStore.setState({ primaryMode: 'graph', sidebarTab: 'workflow', selectedNodeId: 'llm_1', selectedSkillId: 'web-search' });
       expect(useConsoleStore.getState().getSecondaryContentMode()).toBe('node');
     });
 
@@ -81,15 +76,6 @@ describe('Secondary Sidebar routing state', () => {
     it('should NOT return "knowledge" when library is selected but sidebarTab is NOT knowledge', () => {
       useConsoleStore.setState({ selectedLibraryId: 'kb-1', sidebarTab: 'workflow' });
       expect(useConsoleStore.getState().getSecondaryContentMode()).not.toBe('knowledge');
-    });
-
-    it('should return "skill" over "knowledge" when both are set', () => {
-      useConsoleStore.setState({
-        selectedSkillId: 'calculator',
-        selectedLibraryId: 'kb-1',
-        sidebarTab: 'knowledge',
-      });
-      expect(useConsoleStore.getState().getSecondaryContentMode()).toBe('skill');
     });
 
     // Priority 4: conversation settings in chat mode
@@ -110,18 +96,8 @@ describe('Secondary Sidebar routing state', () => {
 
     // Complex interactions
     it('should return "node" even when conversation tab is active (graph priority)', () => {
-      useConsoleStore.setState({ primaryMode: 'graph', selectedNodeId: 'tool_1' });
+      useConsoleStore.setState({ primaryMode: 'graph', sidebarTab: 'workflow', selectedNodeId: 'tool_1' });
       expect(useConsoleStore.getState().getSecondaryContentMode()).toBe('node');
-    });
-
-    it('should return "skill" in chat conversations tab when skill is selected', () => {
-      useConsoleStore.setState({
-        primaryMode: 'chat',
-        sidebarTab: 'conversations',
-        selectedSkillId: 'text-analyzer',
-      });
-      // Skill has higher priority than conversation
-      expect(useConsoleStore.getState().getSecondaryContentMode()).toBe('skill');
     });
 
     it('should return "empty" in chat knowledge tab with no library', () => {

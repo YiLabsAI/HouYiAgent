@@ -14,18 +14,18 @@ class TestSkillFromFile:
 
     def test_from_file_basic(self):
         """Test loading a skill from a local SKILL.md file."""
-        skill = SkillSpec.from_file("skills/planning-with-files/SKILL.md")
+        skill = SkillSpec.from_file("houyi/skills/planning/SKILL.md")
 
         assert skill.name == "planning-with-files"
         assert skill.description is not None
         assert skill.input_schema is not None
         assert skill.output_schema is not None
         assert skill.executor is None  # Executor not bound yet
-        assert skill.skill_md_path == "skills/planning-with-files/SKILL.md"
+        assert skill.skill_md_path == "houyi/skills/planning/SKILL.md"
 
     def test_from_file_calculator(self):
         """Test loading community skill."""
-        skill = SkillSpec.from_file("skills/skill-creator/SKILL.md")
+        skill = SkillSpec.from_file("houyi/skills/weather/SKILL.md")
 
         # Verify it loaded successfully
         assert skill.name is not None

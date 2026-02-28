@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Restart frontend service and stream logs
 
 set -euo pipefail

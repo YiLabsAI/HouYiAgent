@@ -19,6 +19,7 @@ import {
   PROVIDER_GOOGLE_AI,
   PROVIDER_VERTEX,
 } from '@/constants/models';
+import { invalidateModelCache } from '@/hooks/useAvailableModels';
 import { useSettingsStore } from '@/stores/useSettingsStore';
 
 const API_BASE = '/api/chat';
@@ -142,6 +143,8 @@ export const GlobalSettingsPage: React.FC<GlobalSettingsPageProps> = ({ isOpen, 
       // Refresh the global display settings store so MessageBubble picks up
       // avatar/name changes immediately without a page reload.
       await refreshDisplaySettings();
+      // Refresh model options used by conversation-level model selectors.
+      invalidateModelCache();
       // Show success toast
       setSaveSuccess(true);
       setTimeout(() => setSaveSuccess(false), 2500);

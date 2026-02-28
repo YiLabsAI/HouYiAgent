@@ -8,13 +8,100 @@ from __future__ import annotations
 
 import logging
 import os
+from pathlib import Path
 
-from houyi.core.skill_registry import DEFAULT_SKILL_REGISTRY
+from houyi.config import env
+from houyi.core.skill_registry import DEFAULT_SKILL_REGISTRY, CoreToolProtectionError
 
+from .paths import resolve_managed_skills_dir
 from .service import SkillService, set_skill_service
 
 logger = logging.getLogger(__name__)
 _EXTERNAL_PREFIX = "ext__"
+_SKILL_FILE_PATTERNS = ("SKILL.md", "skill.md")
+
+
+def _entry_file_priority(path: Path) -> int:
+    name = path.name
+    if name == "SKILL.md":
+        return 2
+    if name == "skill.md":
+        return 1
+    return 0
+
+
+def _iter_external_skill_files(skills_dir: Path) -> list[Path]:
+    """Return unique SKILL.md files, including those under symlinked package dirs."""
+    scan_roots: list[Path] = [skills_dir]
+    for child in skills_dir.iterdir():
+        if not child.is_dir():
+            continue
+        try:
+            scan_roots.append(child.resolve())
+        except Exception:
+            scan_roots.append(child)
+
+    files: list[Path] = []
+    seen: set[Path] = set()
+    for root in scan_roots:
+        for pattern in _SKILL_FILE_PATTERNS:
+            for path in root.rglob(pattern):
+                if not path.is_file():
+                    continue
+                try:
+                    resolved = path.resolve()
+                except Exception:
+                    resolved = path
+                if resolved in seen:
+                    continue
+                seen.add(resolved)
+                files.append(resolved)
+
+    # Keep one canonical entry file per package dir. Prefer SKILL.md over skill.md.
+    selected_by_dir: dict[Path, Path] = {}
+    for skill_file in files:
+        package_dir = skill_file.parent
+        existing = selected_by_dir.get(package_dir)
+        if existing is None or _entry_file_priority(skill_file) > _entry_file_priority(existing):
+            selected_by_dir[package_dir] = skill_file
+
+    return sorted(selected_by_dir.values(), key=lambda p: str(p))
+
+
+def _read_declared_skill_name(skill_path: Path) -> str | None:
+    """Extract declared skill name from a skill file."""
+    from houyi.core.skill.spec import SkillSpec
+
+    try:
+        spec = SkillSpec.from_file(str(skill_path))
+    except Exception:
+        return None
+
+    name = getattr(spec, "name", "")
+    if not isinstance(name, str):
+        return None
+    normalized = name.strip()
+    return normalized or None
+
+
+def _default_startup_skills_dir() -> Path:
+    return resolve_managed_skills_dir()
+
+
+def _resolve_external_skill_scan_dirs() -> list[Path]:
+    configured = (env.startup_skills_dir or "").strip()
+    primary = Path(configured).expanduser() if configured else _default_startup_skills_dir()
+    dirs: list[Path] = [primary]
+
+    unique: list[Path] = []
+    seen: set[Path] = set()
+    for path in dirs:
+        resolved = path.expanduser()
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        unique.append(resolved)
+    return unique
 
 
 def _as_core(skill):
@@ -263,40 +350,50 @@ def register_console_skills() -> None:
 
 
 def _load_external_skills(registered_skills: list[str]) -> None:
-    """Load external/community SKILL.md files from the skills/ directory.
+    """Load external/community SKILL.md files from managed startup scan dirs.
 
-    Scans the project-root ``skills/`` directory for sub-directories that
-    contain a ``SKILL.md`` file and registers each one.  Skills that are
-    already registered (e.g. identical name to a built-in) are skipped
-    unless they have a different name to avoid overwrites.
+    Default scan path resolves to the managed ``.houyi/skills`` directory.
+    ``HOUYI_STARTUP_SKILLS_DIR`` can override it explicitly.
     """
-    import pathlib
+    for skills_dir in _resolve_external_skill_scan_dirs():
+        if not skills_dir.is_dir():
+            logger.debug("External skills directory not found: %s", skills_dir)
+            continue
 
-    # Resolve skills/ relative to project root
-    this_file = pathlib.Path(__file__).resolve()
-    # skill/startup_hooks.py -> server -> houyi_studio -> server -> houyi-studio -> root
-    project_root = this_file.parents[5]
-    skills_dir = project_root / "skills"
+        discovered_names = _discover_external_skill_names(skills_dir)
+        loaded: list[str] = []
+        loaded_name_sources: dict[str, Path] = {}
+        for skill_file in _iter_external_skill_files(skills_dir):
+            declared_name = _read_declared_skill_name(skill_file)
+            if declared_name and declared_name in loaded_name_sources:
+                logger.info(
+                    "Skip duplicate external skill '%s' from %s (already loaded from %s)",
+                    declared_name,
+                    skill_file,
+                    loaded_name_sources[declared_name],
+                )
+                continue
+            try:
+                loaded_name = DEFAULT_SKILL_REGISTRY.register_from_skill_file(
+                    str(skill_file),
+                    overwrite=False,
+                )
+                if loaded_name:
+                    loaded.append(loaded_name)
+                    canonical_name = declared_name or loaded_name.removeprefix(_EXTERNAL_PREFIX)
+                    loaded_name_sources.setdefault(canonical_name, skill_file)
+            except CoreToolProtectionError:
+                continue
+            except Exception as exc:
+                logger.warning("Failed loading external skill from %s: %s", skill_file, exc)
 
-    if not skills_dir.is_dir():
-        logger.debug("External skills directory not found: %s", skills_dir)
-        return
-
-    discovered_names = _discover_external_skill_names(skills_dir)
-
-    loaded = DEFAULT_SKILL_REGISTRY.register_from_directory(
-        skills_dir,
-        pattern="SKILL.md",
-        recursive=True,
-        overwrite=False,
-    )
-    registered_skills.extend(loaded)
-    pruned = _prune_stale_external_skills(skills_dir, discovered_names)
-    if pruned:
-        logger.info("Pruned %d stale external skills: %s", len(pruned), ", ".join(pruned))
-    if loaded:
-        logger.info("Loaded %d external skills from %s", len(loaded), skills_dir)
-        logger.debug("External skills: %s", ", ".join(loaded))
+        registered_skills.extend(loaded)
+        pruned = _prune_stale_external_skills(skills_dir, discovered_names)
+        if pruned:
+            logger.info("Pruned %d stale external skills: %s", len(pruned), ", ".join(pruned))
+        if loaded:
+            logger.info("Loaded %d external skills from %s", len(loaded), skills_dir)
+            logger.debug("External skills: %s", ", ".join(loaded))
 
 
 def _discover_external_skill_names(skills_dir) -> set[str]:
@@ -304,7 +401,7 @@ def _discover_external_skill_names(skills_dir) -> set[str]:
     from houyi.core.skill.spec import SkillSpec
 
     discovered: set[str] = set()
-    for skill_path in skills_dir.glob("**/SKILL.md"):
+    for skill_path in _iter_external_skill_files(skills_dir):
         try:
             spec = SkillSpec.from_file(str(skill_path))
         except Exception:

@@ -483,8 +483,8 @@ function App() {
       {/* Load Skill Center Stage M dialog */}
       <LoadSkillDialog
         isOpen={showLoadSkill}
-        onLoad={(source) => {
-          skillsLogic.loadSkill(source);
+        onLoad={(source, installStrategy) => {
+          skillsLogic.loadSkill(source, installStrategy);
         }}
         onClose={() => setShowLoadSkill(false)}
         loadResult={skillsLogic.loadResult}

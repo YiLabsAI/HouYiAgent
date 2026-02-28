@@ -58,6 +58,8 @@ export interface LoadResultData {
   message: string;
 }
 
+export type SkillInstallStrategy = 'copy' | 'symlink';
+
 interface UseSkillsLogicReturn {
   skills: SkillSummary[];
   selectedSkill: string | null;
@@ -72,7 +74,7 @@ interface UseSkillsLogicReturn {
   loadResult: LoadResultData | null;
   selectSkill: (skillName: string) => void;
   refreshSkills: () => void;
-  loadSkill: (path: string) => void;
+  loadSkill: (source: string, installStrategy?: SkillInstallStrategy) => void;
   unloadSkill: (skillName: string) => void;
   configureSkill: (skillName: string, config: SkillConfigValues) => void;
   dryRunSkill: (
@@ -294,14 +296,14 @@ export function useSkillsLogic(
     });
   }, [sendCommand, sessionId]);
 
-  const loadSkill = useCallback((source: string) => {
+  const loadSkill = useCallback((source: string, installStrategy?: SkillInstallStrategy) => {
     setLoadResult(null);
     sendCommand({
       command_type: 'load_skill',
       command_id: `cmd_${crypto.randomUUID().slice(0, 8)}`,
       session_id: sessionId,
       source,
-      path: source,
+      install_strategy: installStrategy,
     });
   }, [sendCommand, sessionId]);
 

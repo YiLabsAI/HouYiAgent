@@ -12,6 +12,10 @@ export interface ToolDryRunPreset {
   input: Record<string, unknown>;
   expectedFocus: string[];
   objective?: string;
+  source?: string;
+  confidence?: 'high' | 'medium' | 'low' | string;
+  confidence_reason?: string;
+  confidence_breakdown?: Record<string, number>;
 }
 
 export type PlanningFlowPreset = ToolDryRunPreset;

@@ -8,6 +8,8 @@ interface RegisteredSkill {
   type: 'executable' | 'instruction';
   tool_count: number;
   has_executor: boolean;
+  classification_basis?: string;
+  classification_signals?: string[];
 }
 
 /**
@@ -74,8 +76,8 @@ export const ToolStatistics: React.FC = () => {
     return null;
   }
 
-  const executableSkills = registeredSkills.filter((s) => s.has_executor);
-  const instructionSkills = registeredSkills.filter((s) => !s.has_executor);
+  const executableSkills = registeredSkills.filter((s) => s.type === 'executable');
+  const instructionSkills = registeredSkills.filter((s) => s.type === 'instruction');
 
   return (
     <div ref={dropdownRef} className="relative" data-testid="tool-statistics">
@@ -172,7 +174,7 @@ export const ToolStatistics: React.FC = () => {
               <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-gray-500 mb-1.5">
                 <Wrench size={10} />
                 <span>Executable ({executableSkills.length})</span>
-                <span className="text-[9px] text-green-600 ml-auto">has executor</span>
+                <span className="text-[9px] text-green-600 ml-auto">semantic executable</span>
               </div>
               <div className="space-y-1.5">
                 {executableSkills.map((skill) => (
@@ -191,6 +193,16 @@ export const ToolStatistics: React.FC = () => {
                         {skill.description}
                       </div>
                     )}
+                    {skill.classification_basis && (
+                      <div className="text-[9px] text-emerald-400/80 ml-3">
+                        Basis: {skill.classification_basis}
+                      </div>
+                    )}
+                    {Array.isArray(skill.classification_signals) && skill.classification_signals.length > 0 && (
+                      <div className="text-[9px] text-gray-600 ml-3">
+                        Signals: {skill.classification_signals.join(', ')}
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
@@ -203,7 +215,7 @@ export const ToolStatistics: React.FC = () => {
               <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-gray-500 mb-1.5">
                 <BookOpen size={10} />
                 <span>Instruction ({instructionSkills.length})</span>
-                <span className="text-[9px] text-blue-500 ml-auto">SKILL.md</span>
+                <span className="text-[9px] text-blue-500 ml-auto">semantic instruction</span>
               </div>
               <div className="space-y-1.5">
                 {instructionSkills.map((skill) => (
@@ -215,6 +227,16 @@ export const ToolStatistics: React.FC = () => {
                     {skill.description && (
                       <div className="text-[10px] text-gray-500 leading-tight line-clamp-2 ml-3">
                         {skill.description}
+                      </div>
+                    )}
+                    {skill.classification_basis && (
+                      <div className="text-[9px] text-blue-400/80 ml-3">
+                        Basis: {skill.classification_basis}
+                      </div>
+                    )}
+                    {Array.isArray(skill.classification_signals) && skill.classification_signals.length > 0 && (
+                      <div className="text-[9px] text-gray-600 ml-3">
+                        Signals: {skill.classification_signals.join(', ')}
                       </div>
                     )}
                   </div>

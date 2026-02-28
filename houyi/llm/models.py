@@ -35,6 +35,9 @@ CLAUDE_35_HAIKU = "claude-3-5-haiku"
 
 # Google
 GEMINI_25_PRO = "gemini-2.5-pro"
+GEMINI_3_PRO_PREVIEW = "gemini-3-pro-preview"
+GEMINI_3_FLASH_PREVIEW = "gemini-3-flash-preview"
+GEMINI_31_PRO_PREVIEW = "gemini-3.1-pro-preview"
 
 # ---------------------------------------------------------------------------
 # Provider identifiers (canonical lowercase keys used in config/env/API)

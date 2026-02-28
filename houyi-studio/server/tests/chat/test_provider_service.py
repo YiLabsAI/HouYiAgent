@@ -234,6 +234,9 @@ class TestVertexAIProbe:
         assert result["error"] is None
         assert len(result["models"]) == len(_VERTEX_KNOWN_MODELS)
         model_ids = [m["id"] for m in result["models"]]
+        assert "gemini-3.1-pro-preview" in model_ids
+        assert "gemini-3-pro-preview" in model_ids
+        assert "gemini-3-flash-preview" in model_ids
         assert "gemini-2.5-pro" in model_ids
         assert "gemini-2.0-flash" in model_ids
         for m in result["models"]:
@@ -329,7 +332,9 @@ class TestOpenAICompatProbe:
             mock_client.get = AsyncMock(return_value=mock_response)
             mock_cls.return_value = mock_client
 
-            result = await probe.fetch_models("https://api.openai.com/v1", "key")
+            result = await probe.fetch_models(
+                "https://api.openai.com/v1", "key", force_refresh=True
+            )
 
         assert result["error"] is None
         assert len(result["models"]) == 2
@@ -350,7 +355,9 @@ class TestOpenAICompatProbe:
             mock_client.get = AsyncMock(return_value=mock_response)
             mock_cls.return_value = mock_client
 
-            result = await probe.fetch_models("https://api.example.com/v1", "key")
+            result = await probe.fetch_models(
+                "https://api.example.com/v1", "key", force_refresh=True
+            )
 
         assert result["models"] == []
         assert "500" in result["error"]
@@ -374,7 +381,9 @@ class TestOpenAICompatProbe:
             mock_client.get = AsyncMock(return_value=mock_response)
             mock_cls.return_value = mock_client
 
-            result = await probe.fetch_models("https://api.openai.com/v1", "key")
+            result = await probe.fetch_models(
+                "https://api.openai.com/v1", "key", force_refresh=True
+            )
 
         assert len(result["models"]) == 1
         assert result["models"][0]["id"] == "gpt-4o"

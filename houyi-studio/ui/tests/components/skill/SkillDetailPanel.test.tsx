@@ -209,6 +209,17 @@ describe('SkillDetailPanel', () => {
     expect(screen.queryByTestId('skill-permissions')).not.toBeInTheDocument();
   });
 
+  it('should not render ad-hoc template sections block', () => {
+    render(
+      <SkillDetailPanel
+        detail={createDetail()}
+        metrics={null}
+        isLoading={false}
+      />
+    );
+    expect(screen.queryByTestId('skill-template-sections')).not.toBeInTheDocument();
+  });
+
   // ─── Hooks section ─────────────────────────────────────────────
 
   it('should render hooks list', () => {

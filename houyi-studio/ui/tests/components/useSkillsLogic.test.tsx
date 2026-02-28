@@ -313,7 +313,7 @@ describe('useSkillsLogic', () => {
 
   // --- loadSkill ---
 
-  it('loadSkill sends load_skill command with path', () => {
+  it('loadSkill sends load_skill command with source', () => {
     const { result } = renderHook(() =>
       useSkillsLogic(SESSION_ID, mocks.sendCommand, mocks.registerEventHandler),
     );
@@ -328,7 +328,7 @@ describe('useSkillsLogic', () => {
       expect.objectContaining({
         command_type: 'load_skill',
         session_id: SESSION_ID,
-        path: '/skills/weather.md',
+        source: '/skills/weather.md',
       }),
     );
   });

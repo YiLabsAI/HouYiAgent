@@ -497,6 +497,10 @@ class IndexedMode:
         chunks = await split_documents(documents)
         stats["chunks"] = len(chunks)
 
+        if not chunks:
+            logger.info("No chunks produced during ingest; skipping index updates")
+            return stats
+
         # Apply Contextual Retrieval if enabled and LLM available
         embed_contents = [c.content for c in chunks]
         if contextual_retrieval and self._contextualizer:

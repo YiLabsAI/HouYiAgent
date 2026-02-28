@@ -26,10 +26,14 @@ import contextlib
 import hashlib
 import json
 import logging
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
+
+from houyi.config.env_config import ENV_EMBEDDING_PROVIDER
+from houyi.rag.indexed.document.loaders import SUPPORTED_DOCUMENT_SUFFIXES
 
 from .embedding_config import is_index_path, resolve_embedding_config
 from .library_repository import LibraryRepository
@@ -191,7 +195,7 @@ class IngestService:
                 if not is_index_path(path):
                     all_files.append(path)
             elif path.is_dir():
-                for ext in [".md", ".txt", ".pdf", ".json", ".csv", ".html"]:
+                for ext in SUPPORTED_DOCUMENT_SUFFIXES:
                     for f in path.rglob(f"*{ext}"):
                         if not is_index_path(f):
                             all_files.append(f)
@@ -293,10 +297,15 @@ class IngestService:
         knowledge_dir = library.get("knowledge_dir", "./knowledge")
 
         lib_metadata = library.get("metadata", {})
+        strict_explicit_local = (
+            lib_metadata.get("embedding_provider") == "local"
+            or os.environ.get(ENV_EMBEDDING_PROVIDER) == "local"
+        )
         embedding_config, provider_name = resolve_embedding_config(
             preferred_provider=lib_metadata.get("embedding_provider"),
             preferred_model=lib_metadata.get("embedding_model"),
             preferred_dimension=lib_metadata.get("embedding_dimension"),
+            strict_explicit=strict_explicit_local,
         )
         if embedding_config is None:
             logger.warning("No embedding provider available, falling back to simple file counting")
@@ -307,6 +316,14 @@ class IngestService:
             embedding_config.model,
             embedding_config.dimension,
         )
+        if embedding_config.provider == "local":
+            try:
+                import fastembed  # noqa: F401
+            except ImportError:
+                logger.warning(
+                    "Local embedding provider selected but fastembed is unavailable; falling back to metadata-only ingest"
+                )
+                raise ImportError("fastembed package required for local embedding") from None
 
         library.setdefault("metadata", {})["embedding_provider"] = embedding_config.provider
         library["metadata"]["embedding_model"] = embedding_config.model
@@ -338,7 +355,11 @@ class IngestService:
                 stats.setdefault("errors", [])
                 return
 
-            _doc_id, doc_metadata = self._upsert_document_record(library, library_id, file_path)
+            doc_id, doc_metadata, created_new = self._upsert_document_record(
+                library,
+                library_id,
+                file_path,
+            )
 
             try:
                 if progress_callback:
@@ -358,13 +379,20 @@ class IngestService:
                 doc_metadata["status"] = "indexed"
                 doc_metadata["chunk_count"] = chunks_created
                 doc_metadata["updated_at"] = datetime.now().isoformat()
+                doc_metadata.pop("error_message", None)
+                if isinstance(doc_metadata.get("metadata"), dict):
+                    doc_metadata["metadata"].pop("error", None)
 
             except Exception as e:
                 stats["files_failed"] += 1
                 stats["errors"].append(f"{file_path.name}: {e}")
                 logger.warning("Failed to ingest %s: %s", file_path, e)
-                doc_metadata["status"] = "error"
-                doc_metadata["metadata"]["error"] = str(e)
+                if created_new:
+                    with contextlib.suppress(Exception):
+                        del library["documents"][doc_id]
+                else:
+                    doc_metadata["status"] = "error"
+                    doc_metadata["metadata"]["error"] = str(e)
 
         if progress_callback:
             await progress_callback(
@@ -421,6 +449,9 @@ class IngestService:
                 doc_metadata["file_size"] = file_size
                 doc_metadata["status"] = "indexed"
                 doc_metadata["updated_at"] = datetime.now().isoformat()
+                doc_metadata.pop("error_message", None)
+                if isinstance(doc_metadata.get("metadata"), dict):
+                    doc_metadata["metadata"].pop("error", None)
             else:
                 doc_id = f"doc_{uuid4().hex[:8]}"
                 doc_metadata = {
@@ -444,11 +475,11 @@ class IngestService:
         library: dict[str, Any],
         library_id: str,
         file_path: Path,
-    ) -> tuple[str, dict[str, Any]]:
+    ) -> tuple[str, dict[str, Any], bool]:
         """Create or update the document metadata record for *file_path*.
 
         Returns:
-            ``(doc_id, doc_metadata)`` tuple.
+            ``(doc_id, doc_metadata, created_new)`` tuple.
         """
         file_path_str = str(file_path.resolve())
         if "documents" not in library:
@@ -469,7 +500,10 @@ class IngestService:
             doc_metadata["file_size"] = file_size
             doc_metadata["status"] = "pending"
             doc_metadata["updated_at"] = datetime.now().isoformat()
-            return existing_doc_id, doc_metadata
+            doc_metadata.pop("error_message", None)
+            if isinstance(doc_metadata.get("metadata"), dict):
+                doc_metadata["metadata"].pop("error", None)
+            return existing_doc_id, doc_metadata, False
 
         doc_id = f"doc_{uuid4().hex[:8]}"
         doc_metadata: dict[str, Any] = {
@@ -485,7 +519,7 @@ class IngestService:
             "metadata": {},
         }
         library["documents"][doc_id] = doc_metadata
-        return doc_id, doc_metadata
+        return doc_id, doc_metadata, True
 
     def _finalise(
         self,

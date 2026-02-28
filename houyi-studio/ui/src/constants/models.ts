@@ -24,6 +24,9 @@ export const CLAUDE_35_SONNET = "claude-3-5-sonnet";
 
 // Google
 export const GEMINI_25_PRO = "gemini-2.5-pro";
+export const GEMINI_3_PRO_PREVIEW = "gemini-3-pro-preview";
+export const GEMINI_3_FLASH_PREVIEW = "gemini-3-flash-preview";
+export const GEMINI_31_PRO_PREVIEW = "gemini-3.1-pro-preview";
 
 // Qwen
 export const QWEN_25_72B = "Qwen/Qwen2.5-72B-Instruct";
@@ -61,6 +64,9 @@ export const MODEL_OPTIONS = [
   { value: DEEPSEEK_R1, label: "DeepSeek-R1 (Reasoning)" },
   { value: GPT_4O, label: "GPT-4o" },
   { value: CLAUDE_35_SONNET, label: "Claude 3.5 Sonnet" },
-  { value: GEMINI_25_PRO, label: "Gemini 2.5 Pro" },
+  { value: GEMINI_31_PRO_PREVIEW, label: "Gemini 3.1 Pro (Preview)" },
+  { value: GEMINI_3_PRO_PREVIEW, label: "Gemini 3 Pro (Preview)" },
+  { value: GEMINI_3_FLASH_PREVIEW, label: "Gemini 3 Flash (Preview)" },
+  { value: GEMINI_25_PRO, label: "Gemini 2.5 Pro (Stable)" },
   { value: QWEN_25_72B, label: "Qwen 2.5 72B" },
 ] as const;

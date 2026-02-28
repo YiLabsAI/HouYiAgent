@@ -356,6 +356,34 @@ describe('DryRunDialog', () => {
     );
   });
 
+  it('renders single-tool description with collapsible markdown', () => {
+    const longDescription = [
+      'NotebookLM execution flow:',
+      '',
+      '- **Step 1**: `python scripts/run.py auth_manager.py status`',
+      '- **Step 2**: `python scripts/run.py notebook_manager.py list`',
+      '- **Step 3**: `python scripts/run.py ask_question.py --question "..."`',
+      '',
+      'Always use run.py wrapper.',
+    ].join('\n');
+
+    render(
+      <DryRunDialog
+        {...defaultProps}
+        detail={{
+          ...createNotebooklmDetail(),
+          tools: [{ name: 'notebooklm', description: longDescription }],
+        }}
+      />,
+    );
+
+    const toggle = screen.getByTestId('dry-run-tool-description-more');
+    expect(toggle).toHaveTextContent('Show more');
+    fireEvent.click(toggle);
+    expect(screen.getByTestId('dry-run-tool-description')).toHaveTextContent('auth_manager.py status');
+    expect(screen.getByTestId('dry-run-tool-description-more')).toHaveTextContent('Show less');
+  });
+
   it('renders multiple generic presets for notebooklm', () => {
     render(<DryRunDialog {...defaultProps} detail={createNotebooklmDetail()} />);
     expect(screen.getByTestId('tool-flow-presets')).toBeInTheDocument();
@@ -389,6 +417,151 @@ describe('DryRunDialog', () => {
 
     fireEvent.click(screen.getByTestId('tool-flow-select-example-1-notebook-query'));
     expect(screen.getByText(/Selected execution payload/)).toHaveTextContent('"question":"Summarize the architecture decisions in this notebook"');
+  });
+
+  it('treats prompt-native notebooklm routing as pass when observed args are missing but requested_input matches', () => {
+    const result: DryRunResultData = {
+      ...createPassResult(),
+      llm_verification: {
+        success: true,
+        message: "LLM correctly called 'notebooklm'",
+        tool_call: { name: 'notebooklm', arguments: {} },
+        requested_input: {
+          question: 'Summarize the architecture decisions in this notebook',
+          notebook_url: 'https://notebooklm.google.com/notebook/example',
+        },
+        phases: [
+          { name: 'discovery', label: 'Skill Discovery', timestamp_ms: 0, status: 'pass', data: {} },
+          { name: 'activation', label: 'Tool Activation', timestamp_ms: 0, status: 'pass', data: {} },
+          { name: 'negotiation', label: 'LLM Negotiation', timestamp_ms: 0, status: 'pass', data: {} },
+          { name: 'execution', label: 'LLM Execution', timestamp_ms: 1000, status: 'pass', data: { model: 'gemini-2.5-pro' } },
+          { name: 'tool_execution', label: 'Tool Execution', timestamp_ms: 1000, status: 'skip', data: { reason: 'no executor available' } },
+        ],
+      },
+    };
+
+    render(<DryRunDialog {...defaultProps} detail={createNotebooklmDetail()} dryRunResult={result} />);
+    revealAllStages();
+    const routingStage = screen.getByTestId('dry-run-stage-tool-example-runtime');
+    expect(routingStage).toHaveTextContent('PASS');
+    expect(routingStage).toHaveTextContent('instruction-driven mode uses requested_input as routing evidence');
+  });
+
+  it('shows instruction-driven guidance for script_executor_compat skills without schema', () => {
+    const detail = createDetail({
+      name: 'docx',
+      display_name: 'DOCX',
+      runtime_binding: 'script_executor_compat',
+      instructions_length: 880,
+      tools: [{ name: 'docx', description: 'DOCX workflow helper' }],
+    });
+
+    render(<DryRunDialog {...defaultProps} detail={detail} />);
+    expect(screen.getByText(/Instruction-driven runtime detected/)).toBeInTheDocument();
+  });
+
+  it('prefers package_examples presets when provided', () => {
+    const onExecute = vi.fn();
+    const detail = createDetail({
+      name: 'package-driven',
+      display_name: 'Package Driven',
+      tools: [{ name: 'package-driven', description: 'Package-only tool' }],
+      package_examples: [
+        {
+          id: 'pkg-example-1a',
+          label: 'Package Example 1',
+          description: 'Package fallback',
+          input: { task: 'from package example 1' },
+          expectedFocus: ['package_examples'],
+          objective: 'package-1',
+        },
+        {
+          id: 'pkg-example-2b',
+          label: 'Package Example 2',
+          description: 'Package second',
+          input: { task: 'from package example 2' },
+          expectedFocus: ['package_examples'],
+          objective: 'package-2',
+        },
+      ],
+    });
+
+    render(<DryRunDialog {...defaultProps} detail={detail} onExecute={onExecute} />);
+    expect(screen.getByTestId('tool-flow-select-pkg-example-1a')).toBeInTheDocument();
+    expect(screen.getByTestId('tool-flow-select-pkg-example-2b')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('dry-run-execute'));
+    expect(onExecute).toHaveBeenCalledWith(
+      'package-driven',
+      expect.objectContaining({ task: 'from package example 1' }),
+      false,
+    );
+  });
+
+  it('falls back to tool presets when package_examples are absent', () => {
+    const detail = createDetail({
+      name: 'notebooklm',
+      display_name: 'NotebookLM',
+      package_examples: [],
+      tools: [{ name: 'notebooklm', description: 'NotebookLM helper' }],
+    });
+
+    render(<DryRunDialog {...defaultProps} detail={detail} />);
+    expect(screen.getByTestId('tool-flow-select-example-1-notebook-query')).toBeInTheDocument();
+  });
+
+  it('prefers notebooklm package_examples when present', () => {
+    const detail = createDetail({
+      name: 'notebooklm',
+      display_name: 'NotebookLM',
+      package_examples: [
+        {
+          id: 'quick-start-from-skill-md',
+          label: 'Quick Start · SKILL.md',
+          description: 'Run package quick start',
+          input: { action: 'create', task: 'Run the package quick start flow' },
+          expectedFocus: ['skill.md #quick-start'],
+          objective: 'package quick start',
+        },
+      ],
+      tools: [{ name: 'notebooklm', description: 'NotebookLM helper' }],
+    });
+
+    render(<DryRunDialog {...defaultProps} detail={detail} />);
+    expect(screen.getByTestId('tool-flow-select-quick-start-from-skill-md')).toBeInTheDocument();
+    expect(screen.queryByTestId('tool-flow-select-example-1-notebook-query')).not.toBeInTheDocument();
+    expect(screen.getByText(/Selected execution payload/)).toHaveTextContent('"action":"create"');
+  });
+
+  it('renders audit metadata for package_examples when source/confidence are provided', () => {
+    const detail = createDetail({
+      name: 'audit-skill',
+      display_name: 'Audit Skill',
+      package_examples: [
+        {
+          id: 'workflow-1-check-auth',
+          label: 'Workflow 1 · Check auth',
+          description: 'Check auth via command workflow.',
+          input: { script: 'auth_manager.py', operation: 'status' },
+          expectedFocus: ['skill.md #workflow-steps'],
+          objective: 'Validate workflow step: check auth.',
+          source: 'SKILL.md#workflow-steps',
+          confidence: 'high',
+          confidence_reason: 'title matched flow/workflow semantics; command parsed into structured arguments',
+          confidence_breakdown: { title_match: 1, step_structure: 1, command_parse: 1, score: 0.93 },
+        },
+      ],
+      tools: [{ name: 'audit-skill', description: 'Audit helper' }],
+    });
+
+    render(<DryRunDialog {...defaultProps} detail={detail} />);
+    expect(screen.getByTestId('tool-flow-audit-workflow-1-check-auth')).toHaveTextContent('Source: SKILL.md#workflow-steps');
+    expect(screen.getByTestId('tool-flow-audit-workflow-1-check-auth')).toHaveTextContent('Confidence: high');
+    expect(screen.getByTestId('tool-flow-audit-workflow-1-check-auth')).toHaveTextContent('(93%)');
+    expect(screen.getByTestId('tool-flow-confidence-tooltip-workflow-1-check-auth')).toHaveAttribute(
+      'title',
+      expect.stringContaining('title matched flow/workflow semantics'),
+    );
   });
 
   it('renders generic presets for additional community skills', () => {
@@ -657,6 +830,35 @@ describe('DryRunDialog', () => {
       'ext__planning-with-files',
       expect.objectContaining({ action: 'status' }),
       false,
+    );
+  });
+
+  it('allows live execute for external planning package_examples even when action field is hidden', () => {
+    const onExecute = vi.fn();
+    const detail = createPlanningToolDetail();
+    detail.package_examples = [
+      {
+        id: 'example-1-research-task',
+        label: 'Example 1 · Research Task',
+        description: 'Package-derived planning example without explicit action field',
+        input: { command: 'Write task_plan.md', task: 'Research morning exercise benefits and write a summary' },
+        expectedFocus: ['examples.md#example-1'],
+        objective: 'Validate package-native workflow for Example 1',
+      },
+    ];
+
+    render(<DryRunDialog {...defaultProps} detail={detail} onExecute={onExecute} />);
+    fireEvent.click(screen.getByTestId('dry-run-live-toggle'));
+    fireEvent.click(screen.getByTestId('dry-run-execute'));
+
+    expect(onExecute).toHaveBeenCalledWith(
+      'ext__planning-with-files',
+      expect.objectContaining({
+        action: 'create',
+        command: 'Write task_plan.md',
+        task: 'Research morning exercise benefits and write a summary',
+      }),
+      true,
     );
   });
 

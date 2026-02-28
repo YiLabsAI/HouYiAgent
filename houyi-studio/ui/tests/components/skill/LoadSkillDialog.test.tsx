@@ -63,6 +63,20 @@ describe('LoadSkillDialog', () => {
     expect(input.getAttribute('placeholder')).toContain('skills');
   });
 
+  it('shows browse control only in local-file mode', () => {
+    render(<LoadSkillDialog {...defaultProps} />);
+    expect(screen.getByTestId('load-skill-browse-file')).toBeInTheDocument();
+    expect(screen.queryByTestId('load-skill-browse-folder')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('load-mode-directory'));
+    expect(screen.queryByTestId('load-skill-browse-file')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('load-skill-browse-folder')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('load-mode-url'));
+    expect(screen.queryByTestId('load-skill-browse-file')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('load-skill-browse-folder')).not.toBeInTheDocument();
+  });
+
   // ─── Submit behavior ──────────────────────────────────────────
 
   it('submit button is disabled when input is empty', () => {
@@ -86,7 +100,7 @@ describe('LoadSkillDialog', () => {
       target: { value: '/skills/my-skill/SKILL.md' },
     });
     fireEvent.click(screen.getByTestId('load-skill-submit'));
-    expect(onLoad).toHaveBeenCalledWith('/skills/my-skill/SKILL.md');
+    expect(onLoad).toHaveBeenCalledWith('/skills/my-skill/SKILL.md', 'copy');
     // Should NOT close immediately — waits for server response
     expect(onClose).not.toHaveBeenCalled();
     // Shows loading state
@@ -100,7 +114,7 @@ describe('LoadSkillDialog', () => {
       target: { value: '  /path/to/SKILL.md  ' },
     });
     fireEvent.click(screen.getByTestId('load-skill-submit'));
-    expect(onLoad).toHaveBeenCalledWith('/path/to/SKILL.md');
+    expect(onLoad).toHaveBeenCalledWith('/path/to/SKILL.md', 'copy');
   });
 
   // ─── Server response handling ───────────────────────────────
@@ -208,6 +222,121 @@ describe('LoadSkillDialog', () => {
     expect(onLoad).toHaveBeenCalledWith('https://github.com/user/repo/blob/main/SKILL.md');
   });
 
+  it('shows install strategy controls in directory mode and defaults to symlink', () => {
+    render(<LoadSkillDialog {...defaultProps} />);
+    fireEvent.click(screen.getByTestId('load-mode-directory'));
+    expect(screen.getByTestId('directory-install-strategy')).toBeInTheDocument();
+    expect(screen.getByTestId('install-strategy-copy')).toBeInTheDocument();
+    expect(screen.getByTestId('install-strategy-symlink')).toBeInTheDocument();
+  });
+
+  it('submits directory mode with default symlink strategy', () => {
+    const onLoad = vi.fn();
+    render(<LoadSkillDialog {...defaultProps} onLoad={onLoad} />);
+    fireEvent.click(screen.getByTestId('load-mode-directory'));
+    fireEvent.change(screen.getByTestId('load-skill-source-input'), {
+      target: { value: '/path/to/skills' },
+    });
+    fireEvent.click(screen.getByTestId('load-skill-submit'));
+    expect(onLoad).toHaveBeenCalledWith('/path/to/skills', 'symlink');
+  });
+
+  it('rejects relative directory names and requires absolute path', () => {
+    const onLoad = vi.fn();
+    render(<LoadSkillDialog {...defaultProps} onLoad={onLoad} />);
+    fireEvent.click(screen.getByTestId('load-mode-directory'));
+    fireEvent.change(screen.getByTestId('load-skill-source-input'), {
+      target: { value: 'crawl' },
+    });
+    fireEvent.click(screen.getByTestId('load-skill-submit'));
+
+    expect(onLoad).not.toHaveBeenCalled();
+    expect(screen.getByText(/Directory path must be absolute/i)).toBeInTheDocument();
+  });
+
+  it('submits directory mode with selected symlink strategy', () => {
+    const onLoad = vi.fn();
+    render(<LoadSkillDialog {...defaultProps} onLoad={onLoad} />);
+    fireEvent.click(screen.getByTestId('load-mode-directory'));
+    fireEvent.click(screen.getByTestId('install-strategy-symlink'));
+    fireEvent.change(screen.getByTestId('load-skill-source-input'), {
+      target: { value: '/path/to/skills' },
+    });
+    fireEvent.click(screen.getByTestId('load-skill-submit'));
+    expect(onLoad).toHaveBeenCalledWith('/path/to/skills', 'symlink');
+  });
+
+  it('shows install lifecycle commands for GitHub URL input', () => {
+    render(<LoadSkillDialog {...defaultProps} />);
+    fireEvent.click(screen.getByTestId('load-mode-url'));
+    fireEvent.change(screen.getByTestId('load-skill-source-input'), {
+      target: { value: 'https://github.com/obra/superpowers' },
+    });
+
+    expect(screen.getByTestId('install-lifecycle-plan')).toBeInTheDocument();
+    expect(
+      screen.getByText('git clone https://github.com/obra/superpowers.git ~/.houyi/sources/github.com/obra/superpowers'),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/# verify: ls -la ~\/\.houyi\/skills\/superpowers/)).toBeInTheDocument();
+    expect(screen.getByText(/# update: git -C ~\/\.houyi\/sources\/github\.com\/obra\/superpowers pull/)).toBeInTheDocument();
+    expect(screen.getByText(/# uninstall: rm ~\/\.houyi\/skills\/superpowers/)).toBeInTheDocument();
+  });
+
+  it('shows install lifecycle commands for GitHub blob URL input', () => {
+    render(<LoadSkillDialog {...defaultProps} />);
+    fireEvent.click(screen.getByTestId('load-mode-url'));
+    fireEvent.change(screen.getByTestId('load-skill-source-input'), {
+      target: { value: 'https://github.com/anthropics/skills/blob/main/skills/docx/SKILL.md' },
+    });
+
+    expect(screen.getByTestId('install-lifecycle-plan')).toBeInTheDocument();
+    expect(
+      screen.getByText('git clone https://github.com/anthropics/skills.git ~/.houyi/sources/github.com/anthropics/skills'),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText('ln -s ~/.houyi/sources/github.com/anthropics/skills/skills/docx ~/.houyi/skills/docx'),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/# verify: ls -la ~\/\.houyi\/skills\/docx/)).toBeInTheDocument();
+  });
+
+  it('shows install lifecycle commands for GitHub raw URL input', () => {
+    render(<LoadSkillDialog {...defaultProps} />);
+    fireEvent.click(screen.getByTestId('load-mode-url'));
+    fireEvent.change(screen.getByTestId('load-skill-source-input'), {
+      target: { value: 'https://raw.githubusercontent.com/anthropics/skills/main/skills/pdf/SKILL.md' },
+    });
+
+    expect(screen.getByTestId('install-lifecycle-plan')).toBeInTheDocument();
+    expect(
+      screen.getByText('git clone https://github.com/anthropics/skills.git ~/.houyi/sources/github.com/anthropics/skills'),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText('ln -s ~/.houyi/sources/github.com/anthropics/skills/skills/pdf ~/.houyi/skills/pdf'),
+    ).toBeInTheDocument();
+  });
+
+  it('does not show install lifecycle commands for non-GitHub URL input', () => {
+    render(<LoadSkillDialog {...defaultProps} />);
+    fireEvent.click(screen.getByTestId('load-mode-url'));
+    fireEvent.change(screen.getByTestId('load-skill-source-input'), {
+      target: { value: 'https://example.com/skills/SKILL.md' },
+    });
+
+    expect(screen.queryByTestId('install-lifecycle-plan')).not.toBeInTheDocument();
+  });
+
+  it('hides install lifecycle panel when switching away from URL mode', () => {
+    render(<LoadSkillDialog {...defaultProps} />);
+    fireEvent.click(screen.getByTestId('load-mode-url'));
+    fireEvent.change(screen.getByTestId('load-skill-source-input'), {
+      target: { value: 'https://github.com/obra/superpowers' },
+    });
+    expect(screen.getByTestId('install-lifecycle-plan')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('load-mode-file'));
+    expect(screen.queryByTestId('install-lifecycle-plan')).not.toBeInTheDocument();
+  });
+
   // ─── Enter key submission ─────────────────────────────────────
 
   it('submits on Enter key in input field', () => {
@@ -216,7 +345,21 @@ describe('LoadSkillDialog', () => {
     const input = screen.getByTestId('load-skill-source-input');
     fireEvent.change(input, { target: { value: '/path/to/SKILL.md' } });
     fireEvent.keyDown(input, { key: 'Enter' });
-    expect(onLoad).toHaveBeenCalledWith('/path/to/SKILL.md');
+    expect(onLoad).toHaveBeenCalledWith('/path/to/SKILL.md', 'copy');
+  });
+
+  it('accepts dropped plain-text local path in file mode', () => {
+    render(<LoadSkillDialog {...defaultProps} />);
+    const dropzone = screen.getByTestId('load-skill-dropzone');
+
+    fireEvent.drop(dropzone, {
+      dataTransfer: {
+        files: [],
+        getData: (key: string) => (key === 'text/plain' ? '/tmp/my-skill/SKILL.md' : ''),
+      },
+    });
+
+    expect(screen.getByTestId('load-skill-source-input')).toHaveValue('/tmp/my-skill/SKILL.md');
   });
 
   // ─── Close behavior ───────────────────────────────────────────

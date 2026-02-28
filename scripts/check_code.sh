@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Code quality check script — fail-fast mode
 # Run this before committing code.
 # Stops at the FIRST failure so the error output stays visible.

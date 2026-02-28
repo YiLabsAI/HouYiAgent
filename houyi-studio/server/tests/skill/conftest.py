@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -24,6 +25,19 @@ from _fakes import _FakePermissions, _FakePermKind, _FakePolicy, _FakeSkillSpec 
 @pytest.fixture
 def registry():
     return SkillRegistry()
+
+
+@pytest.fixture(autouse=True)
+def isolate_skill_loader_project_root(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    """Route SkillLoader managed skill installs to test-local tmp roots.
+
+    This keeps generated packages under ``<tmp>/.houyi/skills`` instead of the
+    workspace root, so tests never leave artifact directories behind.
+    """
+
+    from houyi_studio.server.skill.loader import ENV_MANAGED_SKILLS_DIR
+
+    monkeypatch.setenv(ENV_MANAGED_SKILLS_DIR, str(tmp_path / ".houyi" / "skills"))
 
 
 @pytest.fixture

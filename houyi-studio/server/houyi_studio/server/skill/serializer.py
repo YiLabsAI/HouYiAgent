@@ -8,8 +8,10 @@ pure data transformation.
 from __future__ import annotations
 
 import inspect
+import json
 import logging
 import re
+import shlex
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -113,17 +115,21 @@ class SkillSerializer:
         meta = self._resolve_frontmatter_meta(skill)
         version = getattr(skill, "version", None) or meta.get("version") or DEFAULT_VERSION
         author = getattr(skill, "author", None) or meta.get("author")
+        permissions = self._serialize_permissions(skill)
+        policy = self._serialize_policy(skill)
+        instructions = getattr(skill, "instructions", None)
+        package_examples = self._load_package_examples(skill)
         return {
             **summary,
             "version": version,
             "author": author,
             "tools": self._serialize_tools(skill),
-            "permissions": self._serialize_permissions(skill),
-            "policy": self._serialize_policy(skill),
+            "permissions": permissions,
+            "policy": policy,
             "hooks": self._serialize_hooks(skill),
-            "instructions": getattr(skill, "instructions", None),
+            "instructions": instructions,
             "hook_specs": self._serialize_hook_specs(skill),
-            "package_examples": self._load_package_examples(skill),
+            "package_examples": package_examples,
         }
 
     @staticmethod
@@ -187,6 +193,9 @@ class SkillSerializer:
             parsed = SkillSerializer._parse_markdown_examples(doc)
             if parsed:
                 return parsed
+        skill_doc = base_dir / "SKILL.md"
+        if skill_doc.exists() and skill_doc.is_file():
+            return SkillSerializer._parse_skill_usage_examples(skill_doc)
         return []
 
     @staticmethod
@@ -203,14 +212,6 @@ class SkillSerializer:
 
         def _slug(text: str) -> str:
             return re.sub(r"[^a-z0-9]+", "-", text.strip().lower()).strip("-")
-
-        def _infer_action(title_text: str, block_text: str) -> str:
-            signal = f"{title_text}\n{block_text}".lower()
-            if "bug fix" in signal or "fix" in signal:
-                return "update"
-            if "feature" in signal or "error recovery" in signal or "status" in signal:
-                return "status"
-            return "create"
 
         def _fallback_task(title_text: str, block_text: str) -> str:
             lines = [line.strip() for line in block_text.splitlines() if line.strip()]
@@ -235,18 +236,7 @@ class SkillSerializer:
 
             request_match = re.search(r'\*\*User Request:\*\*\s*"([^"]+)"', block)
             task = request_match.group(1).strip() if request_match else _fallback_task(title, block)
-            phase_lines = [
-                line.strip()
-                for line in re.findall(
-                    r"^-\s*\[[ xX]\]\s*(Phase\s*\d+:[^\n]+)", block, re.MULTILINE
-                )
-            ]
-
-            input_data: dict[str, Any] = {"action": _infer_action(title, block)}
-            if task:
-                input_data["task"] = task
-            if phase_lines:
-                input_data["subtasks"] = phase_lines
+            input_data = SkillSerializer._derive_example_input_from_text(block, fallback_task=task)
 
             examples.append(
                 {
@@ -256,10 +246,381 @@ class SkillSerializer:
                     "input": input_data,
                     "expectedFocus": [f"{path.name.lower()} #example-{number}"],
                     "objective": f"Validate package-native workflow for Example {number}: {title}.",
+                    "source": f"{path.name}#example-{number}",
+                    "confidence": "high",
+                    "confidence_reason": "Explicit Example section with structured payload.",
+                    "confidence_breakdown": {
+                        "title_match": 1.0,
+                        "step_structure": 1.0,
+                        "command_parse": 1.0,
+                        "score": 1.0,
+                    },
                 }
             )
 
         return examples
+
+    @staticmethod
+    def _parse_skill_usage_examples(path: Path) -> list[dict[str, Any]]:
+        """Best-effort fallback parser for SKILL.md usage snippets.
+
+        When a package does not ship explicit Example sections, derive a single
+        dry-run preset from the Quick Start code block.
+        """
+        try:
+            content = path.read_text(encoding="utf-8")
+        except Exception:
+            return []
+
+        examples: list[dict[str, Any]] = []
+        examples.extend(
+            SkillSerializer._parse_flow_semantic_examples(content, path.name.lower(), path.name)
+        )
+
+        quick_start_match = re.search(
+            r"^##\s+Quick\s+Start\b([\s\S]*?)(?=^##\s+|\Z)",
+            content,
+            re.MULTILINE,
+        )
+        scan_text = quick_start_match.group(1) if quick_start_match else content
+
+        command_text = SkillSerializer._extract_shell_command(scan_text)
+        if command_text:
+            task = "Run the package quick start flow"
+            request_match = re.search(r'"input"\s*:\s*"([^"]+)"', command_text)
+            if request_match:
+                task = request_match.group(1).strip()
+
+            input_data = SkillSerializer._derive_example_input_from_text(
+                scan_text,
+                fallback_task=task,
+            )
+
+            examples.append(
+                {
+                    "id": "quick-start-from-skill-md",
+                    "label": "Quick Start · SKILL.md",
+                    "description": task,
+                    "input": input_data,
+                    "expectedFocus": [f"{path.name.lower()} #quick-start"],
+                    "objective": f"Validate quick-start flow derived from {path.name}.",
+                    "source": f"{path.name}#quick-start",
+                    "confidence": "medium",
+                    "confidence_reason": "Quick Start command inferred from fallback parsing.",
+                    "confidence_breakdown": {
+                        "title_match": 0.8,
+                        "step_structure": 0.6,
+                        "command_parse": 0.7,
+                        "score": 0.7,
+                    },
+                }
+            )
+
+        return examples
+
+    @staticmethod
+    def _parse_flow_semantic_examples(
+        content: str, path_name_lower: str, path_name: str
+    ) -> list[dict[str, Any]]:
+        sections = SkillSerializer._extract_semantic_flow_sections(content)
+        if not sections:
+            return []
+
+        examples: list[dict[str, Any]] = []
+        for section_title, anchor, section_confidence, section_body in sections:
+            step_lines = SkillSerializer._extract_flow_step_lines(section_body)
+            if not step_lines:
+                continue
+
+            id_prefix = SkillSerializer._flow_id_prefix(section_title)
+            section_label = section_title.strip() or "Flow"
+
+            for idx, line in enumerate(step_lines, start=1):
+                step, command = SkillSerializer._split_flow_step_and_command(line)
+                if not command:
+                    continue
+
+                input_data = SkillSerializer._input_from_shell_command(command)
+                if "task" not in input_data:
+                    input_data["task"] = step
+
+                confidence, confidence_reason, confidence_breakdown = (
+                    SkillSerializer._score_flow_example_confidence(
+                        section_title=section_title,
+                        step_line=line,
+                        parsed_input=input_data,
+                    )
+                )
+
+                slug = SkillSerializer._slugify(step) or str(idx)
+                examples.append(
+                    {
+                        "id": f"{id_prefix}-{idx}-{slug}",
+                        "label": f"{section_label} {idx} · {step}",
+                        "description": f"{step} via command workflow.",
+                        "input": input_data,
+                        "expectedFocus": [f"{path_name_lower} #{anchor}"],
+                        "objective": f"Validate {section_label.lower()} step: {step}.",
+                        "source": f"{path_name}#{anchor}",
+                        "confidence": confidence or section_confidence,
+                        "confidence_reason": confidence_reason,
+                        "confidence_breakdown": confidence_breakdown,
+                    }
+                )
+
+        return examples
+
+    @staticmethod
+    def _extract_semantic_flow_sections(content: str) -> list[tuple[str, str, str, str]]:
+        heading_re = re.compile(r"^(#{2,4})\s+(.+?)\s*$", re.MULTILINE)
+        matches = list(heading_re.finditer(content))
+        if not matches:
+            return []
+
+        sections: list[tuple[str, str, str, str]] = []
+        for idx, match in enumerate(matches):
+            title = match.group(2).strip()
+            title_lower = title.lower()
+
+            if not any(
+                keyword in title_lower
+                for keyword in ("flow", "workflow", "steps", "process", "how it works")
+            ):
+                continue
+
+            start = match.end()
+            end = matches[idx + 1].start() if idx + 1 < len(matches) else len(content)
+            body = content[start:end]
+            if not body.strip():
+                continue
+
+            if (
+                ("decision" in title_lower and "flow" in title_lower)
+                or "workflow" in title_lower
+                or "flow" in title_lower
+            ):
+                confidence = "high"
+            else:
+                confidence = "medium"
+
+            sections.append((title, SkillSerializer._slugify(title) or "flow", confidence, body))
+
+        return sections
+
+    @staticmethod
+    def _extract_flow_step_lines(section_body: str) -> list[str]:
+        lines: list[str] = []
+        for raw_line in section_body.splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+
+            if any(token in line for token in ("→", "->", "=>")):
+                lines.append(line)
+                continue
+
+            normalized = line
+            bullet_match = re.match(r"^(?:[-*]\s+|\d+[.)]\s+)(.+)$", line)
+            if bullet_match:
+                normalized = bullet_match.group(1).strip()
+
+            if SkillSerializer._extract_shell_commands(normalized):
+                lines.append(normalized)
+
+        return lines
+
+    @staticmethod
+    def _flow_id_prefix(section_title: str) -> str:
+        title_lower = section_title.lower()
+        if "decision" in title_lower and "flow" in title_lower:
+            return "decision-flow"
+        if "workflow" in title_lower:
+            return "workflow"
+        if "steps" in title_lower:
+            return "steps"
+        if "process" in title_lower:
+            return "process"
+        return "flow"
+
+    @staticmethod
+    def _split_flow_step_and_command(line: str) -> tuple[str, str]:
+        for separator in ("→", "->", "=>"):
+            if separator in line:
+                left, _, right = line.partition(separator)
+                step = left.strip("` ") or "Flow step"
+                commands = SkillSerializer._extract_shell_commands(right)
+                if commands:
+                    return step, commands[0]
+
+        if ":" in line:
+            left, _, right = line.partition(":")
+            step = left.strip("` ") or "Flow step"
+            commands = SkillSerializer._extract_shell_commands(right)
+            if commands:
+                return step, commands[0]
+
+        commands = SkillSerializer._extract_shell_commands(line)
+        step = line.strip("` ") or "Flow step"
+        return step, (commands[0] if commands else "")
+
+    @staticmethod
+    def _score_flow_example_confidence(
+        section_title: str,
+        step_line: str,
+        parsed_input: dict[str, Any],
+    ) -> tuple[str, str, dict[str, float]]:
+        title_lower = section_title.lower()
+        line = step_line.strip()
+
+        title_score = 1.0 if ("workflow" in title_lower or "flow" in title_lower) else 0.75
+        step_score = 1.0 if any(token in line for token in ("→", "->", "=>", ":")) else 0.65
+
+        command_score = 0.45
+        if parsed_input:
+            if "command" not in parsed_input or len(parsed_input.keys()) > 1:
+                command_score = 1.0
+            else:
+                command_score = 0.7
+
+        score = round((title_score * 0.4) + (step_score * 0.25) + (command_score * 0.35), 2)
+        if score >= 0.82:
+            confidence = "high"
+        elif score >= 0.58:
+            confidence = "medium"
+        else:
+            confidence = "low"
+
+        reason_parts: list[str] = []
+        if title_score >= 1.0:
+            reason_parts.append("title matched flow/workflow semantics")
+        else:
+            reason_parts.append("title weakly matched process semantics")
+
+        if step_score >= 1.0:
+            reason_parts.append("step formatting matched workflow pattern")
+        else:
+            reason_parts.append("step formatting inferred from loose command line")
+
+        if command_score >= 1.0:
+            reason_parts.append("command parsed into structured arguments")
+        elif command_score >= 0.7:
+            reason_parts.append("command detected but parsed as raw shell command")
+        else:
+            reason_parts.append("command evidence is weak")
+
+        breakdown = {
+            "title_match": round(title_score, 2),
+            "step_structure": round(step_score, 2),
+            "command_parse": round(command_score, 2),
+            "score": score,
+        }
+
+        return confidence, "; ".join(reason_parts), breakdown
+
+    @staticmethod
+    def _derive_example_input_from_text(
+        text: str, fallback_task: str | None = None
+    ) -> dict[str, Any]:
+        # 1) explicit JSON payload inside markdown
+        json_blocks = re.findall(r"```json\n([\s\S]*?)```", text)
+        for block in json_blocks:
+            try:
+                payload = json.loads(block.strip())
+                if isinstance(payload, dict):
+                    return payload
+            except (ValueError, TypeError):
+                continue
+
+        # 2) command-line example payload
+        command = SkillSerializer._extract_shell_command(text)
+        input_data = SkillSerializer._input_from_shell_command(command) if command else {}
+
+        if fallback_task and "task" not in input_data:
+            input_data["task"] = fallback_task
+
+        return input_data
+
+    @staticmethod
+    def _extract_shell_command(text: str) -> str:
+        commands = SkillSerializer._extract_shell_commands(text)
+        return commands[0] if commands else ""
+
+    @staticmethod
+    def _extract_shell_commands(text: str) -> list[str]:
+        commands: list[str] = []
+        code_blocks = re.findall(r"```(?:bash|sh|zsh)?\n([\s\S]*?)```", text)
+        for block in code_blocks:
+            lines = [line.strip() for line in block.splitlines() if line.strip()]
+            for line in lines:
+                if line.startswith("python ") or line.startswith("./") or line.startswith("sh "):
+                    commands.append(line)
+        if code_blocks:
+            first_line = code_blocks[0].strip().splitlines()
+            if first_line:
+                commands.append(first_line[0].strip())
+
+        inline_candidates = re.findall(r"(python\s+[^\n`]+|\./[^\n`]+|sh\s+[^\n`]+)", text)
+        for candidate in inline_candidates:
+            cmd = candidate.strip().rstrip(",.;)")
+            if cmd:
+                commands.append(cmd)
+
+        deduped: list[str] = []
+        seen: set[str] = set()
+        for cmd in commands:
+            if cmd in seen:
+                continue
+            seen.add(cmd)
+            deduped.append(cmd)
+
+        return deduped
+
+    @staticmethod
+    def _slugify(text: str) -> str:
+        return re.sub(r"[^a-z0-9]+", "-", text.strip().lower()).strip("-")
+
+    @staticmethod
+    def _input_from_shell_command(command: str) -> dict[str, Any]:
+        try:
+            tokens = shlex.split(command)
+        except ValueError:
+            return {"command": command} if command else {}
+        if not tokens:
+            return {}
+
+        run_idx = -1
+        for idx, tok in enumerate(tokens):
+            if tok.endswith("scripts/run.py"):
+                run_idx = idx
+                break
+
+        if run_idx >= 0 and run_idx + 1 < len(tokens):
+            script = tokens[run_idx + 1]
+            args = tokens[run_idx + 2 :]
+            payload: dict[str, Any] = {"script": script}
+            positional: list[str] = []
+            i = 0
+            while i < len(args):
+                token = args[i]
+                if token.startswith("--"):
+                    key = token[2:].replace("-", "_")
+                    if i + 1 < len(args) and not args[i + 1].startswith("--"):
+                        payload[key] = args[i + 1]
+                        i += 2
+                    else:
+                        payload[key] = True
+                        i += 1
+                    continue
+                positional.append(token)
+                i += 1
+
+            if positional:
+                payload["operation"] = positional[0]
+                if len(positional) > 1:
+                    payload["args"] = positional[1:]
+            return payload
+
+        return {"command": command}
 
     # ── Private helpers ───────────────────────────────────────────
 
@@ -438,6 +799,11 @@ class SkillSerializer:
     @staticmethod
     def _runtime_binding(skill: SkillSpec) -> str:
         """Classify how this skill executes at runtime for UI explainability."""
+        extra = getattr(skill, "extra_frontmatter", None)
+        if isinstance(extra, dict):
+            compat = extra.get("runtime_binding")
+            if isinstance(compat, str) and compat.strip():
+                return compat.strip()
         if callable(getattr(skill, "executor", None)):
             return "python_executor"
         instructions = getattr(skill, "instructions", None)

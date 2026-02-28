@@ -11,6 +11,8 @@ import pytest
 from houyi_studio.server.rag.ingest_service import IngestService
 from houyi_studio.server.rag.library_repository import LibraryRepository
 
+from houyi.rag.indexed.document.loaders import SUPPORTED_DOCUMENT_SUFFIXES
+
 
 @pytest.fixture
 def repo(tmp_path: Path) -> LibraryRepository:
@@ -42,11 +44,66 @@ def _make_files(directory: Path, names: list[str]) -> list[str]:
     return paths
 
 
+def _supported_named_files() -> list[str]:
+    return [
+        f"f{idx:02d}{suffix}" for idx, suffix in enumerate(SUPPORTED_DOCUMENT_SUFFIXES, start=1)
+    ]
+
+
 # ── Basic ingest scenarios ───────────────────────────────────────
 
 
 class TestIngestFiles:
     """Core ingest_files entry point (RAG engine mocked away)."""
+
+    @pytest.mark.asyncio
+    async def test_ingest_with_rag_covers_all_supported_suffixes(
+        self,
+        svc: IngestService,
+        repo: LibraryRepository,
+        library_id: str,
+        tmp_path: Path,
+    ):
+        from houyi.rag.config import EmbeddingConfig
+
+        file_names = _supported_named_files()
+        paths = _make_files(tmp_path / "all-formats", file_names)
+
+        class _SuccessRAG:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            async def index(self, paths):
+                assert len(paths) == 1
+                return {"chunks": 1}
+
+        with (
+            patch(
+                "houyi_studio.server.rag.ingest_service.resolve_embedding_config",
+                return_value=(
+                    EmbeddingConfig(
+                        provider="openai",
+                        model="text-embedding-3-small",
+                        dimension=1536,
+                    ),
+                    "openai",
+                ),
+            ),
+            patch("houyi.rag.RAG", _SuccessRAG),
+        ):
+            result = await svc.ingest_files(library_id, paths)
+
+        assert result["success"] is True
+        assert result["stats"]["files_processed"] == len(file_names)
+        assert result["stats"]["files_failed"] == 0
+        assert result["stats"]["chunks_created"] == len(file_names)
+
+        lib = repo.get_library(library_id)
+        assert lib["doc_count"] == len(file_names)
+        assert lib["chunk_count"] == len(file_names)
+        indexed_names = {d["file_name"] for d in lib["documents"].values()}
+        assert indexed_names == set(file_names)
+        assert all(d["status"] == "indexed" for d in lib["documents"].values())
 
     @pytest.mark.asyncio
     async def test_nonexistent_library(self, svc: IngestService):
@@ -82,6 +139,151 @@ class TestIngestFiles:
 
         lib = repo.get_library(library_id)
         assert lib["doc_count"] == 2
+
+    @pytest.mark.asyncio
+    async def test_failed_new_file_does_not_inflate_doc_count(
+        self,
+        svc: IngestService,
+        repo: LibraryRepository,
+        library_id: str,
+        tmp_path: Path,
+    ):
+        from houyi.rag.config import EmbeddingConfig
+
+        paths = _make_files(tmp_path / "failed", ["broken.md"])
+
+        class _BrokenRAG:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            async def index(self, paths):
+                raise RuntimeError(f"index failed for {paths[0]}")
+
+        with (
+            patch(
+                "houyi_studio.server.rag.ingest_service.resolve_embedding_config",
+                return_value=(
+                    EmbeddingConfig(
+                        provider="openai", model="text-embedding-3-small", dimension=1536
+                    ),
+                    "openai",
+                ),
+            ),
+            patch("houyi.rag.RAG", _BrokenRAG),
+        ):
+            result = await svc.ingest_files(library_id, paths)
+
+        assert result["success"] is False
+        lib = repo.get_library(library_id)
+        assert lib["doc_count"] == 0
+
+    @pytest.mark.asyncio
+    async def test_local_provider_missing_fastembed_falls_back_to_metadata_ingest(
+        self,
+        svc: IngestService,
+        repo: LibraryRepository,
+        library_id: str,
+        tmp_path: Path,
+    ):
+        from houyi.rag.config import EmbeddingConfig
+
+        paths = _make_files(tmp_path / "local", ["a.md"])
+
+        def _block_fastembed(name, *args, **kwargs):
+            if name == "fastembed" or name.startswith("fastembed."):
+                raise ImportError("blocked for test")
+            return original_import(name, *args, **kwargs)
+
+        import builtins
+
+        original_import = builtins.__import__
+        with (
+            patch(
+                "houyi_studio.server.rag.ingest_service.resolve_embedding_config",
+                return_value=(
+                    EmbeddingConfig(
+                        provider="local", model="BAAI/bge-small-en-v1.5", dimension=384
+                    ),
+                    "local",
+                ),
+            ),
+            patch("builtins.__import__", side_effect=_block_fastembed),
+        ):
+            result = await svc.ingest_files(library_id, paths)
+
+        assert result["success"] is True
+        lib = repo.get_library(library_id)
+        assert lib["doc_count"] == 1
+        assert lib["chunk_count"] == 0
+        assert lib["status"] == "degraded"
+
+    @pytest.mark.asyncio
+    async def test_reingest_success_clears_stale_document_error(
+        self,
+        svc: IngestService,
+        repo: LibraryRepository,
+        library_id: str,
+        tmp_path: Path,
+    ):
+        from houyi.rag.config import EmbeddingConfig
+
+        paths = _make_files(tmp_path / "retry", ["retry.md"])
+        file_name = Path(paths[0]).name
+
+        class _FailRAG:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            async def index(self, paths):
+                raise RuntimeError(f"fastembed package required for local embedding: {paths[0]}")
+
+        class _SuccessRAG:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            async def index(self, paths):
+                return {"chunks": 3}
+
+        with (
+            patch(
+                "houyi_studio.server.rag.ingest_service.resolve_embedding_config",
+                return_value=(
+                    EmbeddingConfig(
+                        provider="openai",
+                        model="text-embedding-3-small",
+                        dimension=1536,
+                    ),
+                    "openai",
+                ),
+            ),
+            patch("houyi.rag.RAG", _FailRAG),
+        ):
+            first = await svc.ingest_files(library_id, paths)
+        assert first["success"] is False
+
+        with (
+            patch(
+                "houyi_studio.server.rag.ingest_service.resolve_embedding_config",
+                return_value=(
+                    EmbeddingConfig(
+                        provider="openai",
+                        model="text-embedding-3-small",
+                        dimension=1536,
+                    ),
+                    "openai",
+                ),
+            ),
+            patch("houyi.rag.RAG", _SuccessRAG),
+        ):
+            second = await svc.ingest_files(library_id, paths)
+        assert second["success"] is True
+
+        lib = repo.get_library(library_id)
+        doc = next(d for d in lib["documents"].values() if d["file_name"] == file_name)
+        assert doc["status"] == "indexed"
+        assert doc["chunk_count"] == 3
+        assert "error_message" not in doc
+        assert not doc.get("metadata", {}).get("error")
 
 
 # ── Cancellation ─────────────────────────────────────────────────
@@ -131,12 +333,11 @@ class TestCollectFiles:
     """_collect_files expands directories and filters index paths."""
 
     def test_expands_directory(self, tmp_path: Path):
-        _make_files(tmp_path, ["a.md", "b.txt", "c.csv"])
+        expected = _supported_named_files()
+        _make_files(tmp_path, expected)
         files = IngestService._collect_files([str(tmp_path)])
         names = {f.name for f in files}
-        assert "a.md" in names
-        assert "b.txt" in names
-        assert "c.csv" in names
+        assert names == set(expected)
 
     def test_single_file(self, tmp_path: Path):
         paths = _make_files(tmp_path, ["solo.md"])

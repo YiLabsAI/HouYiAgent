@@ -105,6 +105,39 @@ _PROVIDER_DEFAULTS: dict[str, tuple[str, int]] = {
 }
 
 
+def _is_provider_runtime_available(provider: str) -> bool:
+    """Return whether runtime deps for *provider* are importable."""
+    if provider == "local":
+        try:
+            import fastembed  # noqa: F401
+
+            return True
+        except ImportError:
+            return False
+    if provider in ("gemini", "vertex"):
+        try:
+            from google import genai  # noqa: F401
+
+            return True
+        except ImportError:
+            return False
+    if provider == "openai":
+        try:
+            import openai  # noqa: F401
+
+            return True
+        except ImportError:
+            return False
+    return True
+
+
+def _raise_or_warn_provider_unavailable(provider: str, source: str, strict_explicit: bool) -> None:
+    message = f"Embedding provider '{provider}' from {source} is unavailable at runtime"
+    if strict_explicit:
+        raise RuntimeError(message)
+    logger.warning("%s; falling back to auto-detect", message)
+
+
 def _make_embedding_config(
     provider: str,
     model: str | None = None,
@@ -135,6 +168,7 @@ def resolve_embedding_config(
     preferred_provider: str | None = None,
     preferred_model: str | None = None,
     preferred_dimension: int | None = None,
+    strict_explicit: bool = False,
 ) -> tuple[Any, str] | tuple[None, str]:
     """Resolve the embedding config using a clear priority chain.
 
@@ -152,20 +186,26 @@ def resolve_embedding_config(
         ``(EmbeddingConfig, provider_name)`` or ``(None, "no_provider")``.
     """
     if preferred_provider:
-        cfg = _make_embedding_config(
-            preferred_provider,
-            preferred_model,
-            preferred_dimension,
+        if _is_provider_runtime_available(preferred_provider):
+            cfg = _make_embedding_config(
+                preferred_provider,
+                preferred_model,
+                preferred_dimension,
+            )
+            logger.debug("Embedding: using explicit provider '%s'", preferred_provider)
+            return cfg, preferred_provider
+        _raise_or_warn_provider_unavailable(
+            preferred_provider, "preferred provider", strict_explicit
         )
-        logger.debug("Embedding: using explicit provider '%s'", preferred_provider)
-        return cfg, preferred_provider
 
     env_provider = os.environ.get(ENV_EMBEDDING_PROVIDER)
     env_model = os.environ.get(ENV_EMBEDDING_MODEL)
     if env_provider:
-        cfg = _make_embedding_config(env_provider, env_model)
-        logger.debug("Embedding: using env var provider '%s'", env_provider)
-        return cfg, env_provider
+        if _is_provider_runtime_available(env_provider):
+            cfg = _make_embedding_config(env_provider, env_model)
+            logger.debug("Embedding: using env var provider '%s'", env_provider)
+            return cfg, env_provider
+        _raise_or_warn_provider_unavailable(env_provider, "env", strict_explicit)
 
     return _auto_detect_embedding()
 
@@ -186,7 +226,9 @@ def _auto_detect_embedding() -> tuple[Any, str] | tuple[None, str]:
             logger.debug("Embedding auto-detect: gemini (GOOGLE_API_KEY)")
             return cfg, "gemini"
         except ImportError:
-            logger.debug("google-genai not installed, skipping Gemini")
+            logger.warning(
+                "Embedding auto-detect: GOOGLE_API_KEY is set but google-genai is unavailable; skipping Gemini"
+            )
 
     google_project = os.environ.get(ENV_GOOGLE_CLOUD_PROJECT)
     if not google_project:
@@ -205,12 +247,18 @@ def _auto_detect_embedding() -> tuple[Any, str] | tuple[None, str]:
             logger.debug("Embedding auto-detect: gemini (GOOGLE_CLOUD_PROJECT)")
             return cfg, "gemini"
         except ImportError:
-            logger.debug("google-genai not installed, skipping Gemini")
+            logger.warning(
+                "Embedding auto-detect: GOOGLE_CLOUD_PROJECT is set but google-genai is unavailable; skipping Vertex/Gemini"
+            )
 
     if os.environ.get(ENV_OPENAI_API_KEY):
-        cfg = _make_embedding_config("openai")
-        logger.debug("Embedding auto-detect: openai")
-        return cfg, "openai"
+        if _is_provider_runtime_available("openai"):
+            cfg = _make_embedding_config("openai")
+            logger.debug("Embedding auto-detect: openai")
+            return cfg, "openai"
+        logger.warning(
+            "Embedding auto-detect: OPENAI_API_KEY is set but openai package is unavailable; skipping OpenAI"
+        )
 
     try:
         import fastembed  # noqa: F401
@@ -219,7 +267,7 @@ def _auto_detect_embedding() -> tuple[Any, str] | tuple[None, str]:
         logger.debug("Embedding auto-detect: local (fastembed)")
         return cfg, "local"
     except ImportError:
-        pass
+        logger.warning("Embedding auto-detect: fastembed is unavailable; local embedding disabled")
 
     return None, "no_provider"
 

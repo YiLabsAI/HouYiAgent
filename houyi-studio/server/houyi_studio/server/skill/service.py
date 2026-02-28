@@ -151,8 +151,12 @@ class SkillService:
     def is_skill_loaded(self, skill_name: str) -> bool:
         return self._loader.is_loaded(skill_name)
 
-    def load_skill(self, source: str) -> tuple[bool, str, str | None]:
-        return self._loader.load(source)
+    def load_skill(
+        self,
+        source: str,
+        install_strategy: str | None = None,
+    ) -> tuple[bool, str, str | None]:
+        return self._loader.load(source, install_strategy=install_strategy)
 
     def unload_skill(self, skill_name: str) -> tuple[bool, str | None]:
         return self._loader.unload(skill_name)

@@ -79,11 +79,43 @@ class ProviderProbe(ABC):
         """
 
     @abstractmethod
-    async def fetch_models(self, base_url: str = "", api_key: str = "") -> dict[str, Any]:
+    async def fetch_models(
+        self,
+        base_url: str = "",
+        api_key: str = "",
+        force_refresh: bool = False,
+    ) -> dict[str, Any]:
         """Fetch available models from the provider.
 
         Returns: { "models": [{ "id": str, "owned_by": str }], "error": str|None }
         """
+
+
+_FETCH_MODELS_CACHE_TTL_SECONDS = 300
+_fetch_models_cache: dict[str, tuple[float, list[dict[str, str]]]] = {}
+
+
+def _build_models_cache_key(provider_kind: str, base_url: str = "") -> str:
+    normalized_base = (base_url or "").strip().rstrip("/").lower()
+    return f"{provider_kind}:{normalized_base}"
+
+
+def _get_cached_models(cache_key: str) -> list[dict[str, str]] | None:
+    cached = _fetch_models_cache.get(cache_key)
+    if not cached:
+        return None
+    expires_at, models = cached
+    if time.time() >= expires_at:
+        _fetch_models_cache.pop(cache_key, None)
+        return None
+    return list(models)
+
+
+def _set_cached_models(cache_key: str, models: list[dict[str, str]]) -> None:
+    _fetch_models_cache[cache_key] = (
+        time.time() + _FETCH_MODELS_CACHE_TTL_SECONDS,
+        list(models),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -94,6 +126,9 @@ class ProviderProbe(ABC):
 # Returned by fetch_models() since Vertex AI does not have a simple
 # public REST endpoint to list publisher models without extra permissions.
 _VERTEX_KNOWN_MODELS = [
+    {"id": "gemini-3.1-pro-preview", "owned_by": "google"},
+    {"id": "gemini-3-pro-preview", "owned_by": "google"},
+    {"id": "gemini-3-flash-preview", "owned_by": "google"},
     {"id": "gemini-2.5-pro", "owned_by": "google"},
     {"id": "gemini-2.5-flash", "owned_by": "google"},
     {"id": "gemini-2.0-flash", "owned_by": "google"},
@@ -172,14 +207,27 @@ class VertexAIProbe(ProviderProbe):
             latency = int((time.monotonic() - t0) * 1000)
             return {"ok": False, "message": f"Vertex AI: {str(e)[:200]}", "latency_ms": latency}
 
-    async def fetch_models(self, base_url: str = "", api_key: str = "") -> dict[str, Any]:
+    async def fetch_models(
+        self,
+        base_url: str = "",
+        api_key: str = "",
+        force_refresh: bool = False,
+    ) -> dict[str, Any]:
         """Return well-known Gemini models available on Vertex AI.
 
         Vertex AI's publisher models REST API requires specific IAM permissions
         and returns 404 for many project configurations.  Instead, we return a
         curated list of generally-available Gemini models.
         """
-        return {"models": list(_VERTEX_KNOWN_MODELS), "error": None}
+        cache_key = _build_models_cache_key("vertex", base_url)
+        if not force_refresh:
+            cached = _get_cached_models(cache_key)
+            if cached is not None:
+                return {"models": cached, "error": None}
+
+        models = list(_VERTEX_KNOWN_MODELS)
+        _set_cached_models(cache_key, models)
+        return {"models": models, "error": None}
 
 
 # ---------------------------------------------------------------------------
@@ -217,9 +265,20 @@ class OpenAICompatProbe(ProviderProbe):
             latency = int((time.monotonic() - t0) * 1000)
             return {"ok": False, "message": str(e)[:300], "latency_ms": latency}
 
-    async def fetch_models(self, base_url: str = "", api_key: str = "") -> dict[str, Any]:
+    async def fetch_models(
+        self,
+        base_url: str = "",
+        api_key: str = "",
+        force_refresh: bool = False,
+    ) -> dict[str, Any]:
         if not base_url:
             return {"models": [], "error": "base_url is required"}
+
+        cache_key = _build_models_cache_key("openai_compat", base_url)
+        if not force_refresh:
+            cached = _get_cached_models(cache_key)
+            if cached is not None:
+                return {"models": cached, "error": None}
 
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
@@ -242,6 +301,7 @@ class OpenAICompatProbe(ProviderProbe):
                 if m.get("id")
             ]
             models.sort(key=lambda x: x["id"])
+            _set_cached_models(cache_key, models)
             return {"models": models, "error": None}
         except Exception as e:
             return {"models": [], "error": str(e)[:300]}

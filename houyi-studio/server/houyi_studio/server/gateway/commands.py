@@ -172,19 +172,11 @@ class LoadSkillCommand(ClientCommand):
     """
 
     command_type: CommandType = Field(default=CommandType.LOAD_SKILL)
-    path: str = Field(
-        default="",
-        description="(Deprecated) File path — use 'source' instead",
+    source: str = Field(..., description="File path, URL, or directory path to load skill(s) from")
+    install_strategy: str | None = Field(
+        default=None,
+        description="Optional local install strategy: copy or symlink (mainly for directory/file sources)",
     )
-    source: str = Field(
-        default="",
-        description="File path, URL, or directory path to load skill(s) from",
-    )
-
-    @property
-    def resolved_source(self) -> str:
-        """Return the effective source, preferring 'source' over legacy 'path'."""
-        return self.source or self.path
 
 
 class UnloadSkillCommand(ClientCommand):

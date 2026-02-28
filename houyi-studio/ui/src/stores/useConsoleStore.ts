@@ -312,7 +312,18 @@ export const useConsoleStore = create<ConsoleState>((set, get) => ({
       // conversations is chat-only → remap to workflow
       if (prev === 'conversations') next = 'workflow';
     }
-    set({ primaryMode: mode, sidebarTab: next });
+    const updates: Partial<ConsoleState> = {
+      primaryMode: mode,
+      sidebarTab: next,
+    };
+    // When switching to chat conversations, clear cross-tab context so
+    // the right panel can reliably show conversation settings.
+    if (mode === 'chat' && next === 'conversations') {
+      updates.selectedSkillId = null;
+      updates.selectedLibraryId = null;
+      updates.selectedNodeId = null;
+    }
+    set(updates as Pick<ConsoleState, 'primaryMode' | 'sidebarTab' | 'selectedSkillId' | 'selectedLibraryId' | 'selectedNodeId'>);
   },
 
   setSidebarTab: (tab: SidebarTab) => {
@@ -320,7 +331,18 @@ export const useConsoleStore = create<ConsoleState>((set, get) => ({
     const mode = get().primaryMode;
     if (mode === 'graph' && tab === 'conversations') return;
     if (mode === 'chat' && tab === 'workflow') return;
-    set({ sidebarTab: tab });
+    if (tab === 'skills') {
+      // Keep current skill selection for quick context continuity.
+      set({ sidebarTab: tab, selectedLibraryId: null, selectedNodeId: null });
+      return;
+    }
+    if (tab === 'knowledge') {
+      // Keep current library selection; clear stale skill/node selection.
+      set({ sidebarTab: tab, selectedSkillId: null, selectedNodeId: null });
+      return;
+    }
+    // workflow / conversations should not retain skill or knowledge context.
+    set({ sidebarTab: tab, selectedSkillId: null, selectedLibraryId: null });
   },
 
   // Initial state
@@ -367,13 +389,10 @@ export const useConsoleStore = create<ConsoleState>((set, get) => ({
 
   getSecondaryContentMode: (): SecondaryContentMode => {
     const { primaryMode, selectedNodeId, selectedSkillId, selectedLibraryId, sidebarTab } = get();
-    // Priority 1: Graph mode + node selected → node properties
-    if (primaryMode === 'graph' && selectedNodeId) return 'node';
-    // Priority 2: Skill selected (any mode)
-    if (selectedSkillId) return 'skill';
-    // Priority 3: Knowledge library selected (any mode)
-    if (selectedLibraryId && sidebarTab === 'knowledge') return 'knowledge';
-    // Priority 4: Chat mode + conversations tab → conversation settings
+    // Make routing explicit by active tab to avoid stale cross-mode context.
+    if (primaryMode === 'graph' && sidebarTab === 'workflow' && selectedNodeId) return 'node';
+    if (sidebarTab === 'skills' && selectedSkillId) return 'skill';
+    if (sidebarTab === 'knowledge' && selectedLibraryId) return 'knowledge';
     if (primaryMode === 'chat' && sidebarTab === 'conversations') return 'conversation';
     // Default
     return 'empty';

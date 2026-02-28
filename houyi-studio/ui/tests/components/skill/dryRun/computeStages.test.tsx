@@ -151,7 +151,7 @@ describe('computeStages', () => {
     const detail = createDetail({
       name: 'ext__planning-with-files',
       display_name: 'ext__planning-with-files',
-      runtime_binding: 'prompt_instructions',
+      runtime_binding: 'python_executor',
       instructions_length: 5000,
       instructions: `
 Create task_plan.md findings.md progress.md
@@ -213,7 +213,7 @@ reference.md
     const detail = createDetail({
       name: 'ext__planning-with-files',
       display_name: 'ext__planning-with-files',
-      runtime_binding: 'prompt_instructions',
+      runtime_binding: 'python_executor',
       instructions_length: 5000,
       instructions: `
 Create task_plan.md findings.md progress.md
@@ -256,7 +256,7 @@ reference.md
     const detail = createDetail({
       name: 'ext__planning-with-files',
       display_name: 'ext__planning-with-files',
-      runtime_binding: 'prompt_instructions',
+      runtime_binding: 'python_executor',
       instructions_length: 5000,
       instructions: `
 Create task_plan.md findings.md progress.md
@@ -334,7 +334,7 @@ Always invoke the planning tool with action.
     const detail = createDetail({
       name: 'ext__planning-with-files',
       display_name: 'ext__planning-with-files',
-      runtime_binding: 'prompt_instructions',
+      runtime_binding: 'python_executor',
       instructions_length: 5000,
       instructions: `
 Create task_plan.md findings.md progress.md
@@ -376,7 +376,7 @@ reference.md
     const detail = createDetail({
       name: 'ext__planning-with-files',
       display_name: 'ext__planning-with-files',
-      runtime_binding: 'prompt_instructions',
+      runtime_binding: 'python_executor',
       instructions_length: 5000,
       instructions: `
 Create task_plan.md findings.md progress.md
@@ -420,7 +420,7 @@ reference.md
     const detail = createDetail({
       name: 'ext__planning-with-files',
       display_name: 'ext__planning-with-files',
-      runtime_binding: 'prompt_instructions',
+      runtime_binding: 'python_executor',
       instructions_length: 5000,
       instructions: `
 Create task_plan.md findings.md progress.md
@@ -464,7 +464,7 @@ reference.md
     const detail = createDetail({
       name: 'ext__planning-with-files',
       display_name: 'ext__planning-with-files',
-      runtime_binding: 'prompt_instructions',
+      runtime_binding: 'python_executor',
       instructions_length: 5000,
       instructions: `
 Create task_plan.md findings.md progress.md
@@ -505,7 +505,7 @@ reference.md
     const detail = createDetail({
       name: 'ext__planning-with-files',
       display_name: 'ext__planning-with-files',
-      runtime_binding: 'prompt_instructions',
+      runtime_binding: 'python_executor',
       instructions_length: 5000,
       instructions: `
 Create task_plan.md findings.md progress.md
@@ -535,7 +535,7 @@ reference.md
     expect(runtime?.summary).toContain('LLM routing mismatch');
   });
 
-  it('warns runtime routing stage when observed tool-call action evidence is missing', () => {
+  it('passes runtime routing stage when observed action is missing but requested_input proves instruction-driven routing', () => {
     const result = createPassResult({
       llm_verification: {
         success: true,
@@ -573,8 +573,8 @@ reference.md
     });
 
     const runtime = stages.find((s) => s.id === 'planning-flow-runtime');
-    expect(runtime?.status).toBe('warn');
-    expect(runtime?.summary).toContain('observed action evidence is missing');
+    expect(runtime?.status).toBe('pass');
+    expect(runtime?.summary).toContain('instruction-driven mode uses requested_input as routing evidence');
   });
 
   it('adds generic external example stages and passes strict subset routing for notebooklm', () => {
@@ -601,7 +601,7 @@ reference.md
     const detail = createDetail({
       name: 'notebooklm',
       display_name: 'notebooklm',
-      runtime_binding: 'prompt_instructions',
+      runtime_binding: 'script_executor_compat',
       instructions: `Always use run.py\npython scripts/run.py auth_manager.py status\nauthenticate`,
       instructions_length: 1200,
       tools: [{ name: 'notebooklm', description: 'Notebook assistant' }],
@@ -617,6 +617,7 @@ reference.md
     const runtimeStage = stages.find((s) => s.id === 'tool-example-runtime');
     expect(staticStage?.status).toBe('pass');
     expect(runtimeStage?.status).toBe('pass');
+    expect(runtimeStage?.summary).toContain('expected example payload subset');
   });
 
   it('fails generic external example runtime stage when requested/observed subset mismatches', () => {

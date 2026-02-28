@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import time as _time
 from contextlib import asynccontextmanager, suppress
 from datetime import datetime
@@ -22,6 +23,8 @@ from houyi.config.env_config import (
     ENV_CHAT_SYSTEM_PROMPT,
     ENV_DEEPSEEK_MODEL,
     ENV_DEFAULT_LLM_PROVIDER,
+    ENV_EMBEDDING_MODEL,
+    ENV_EMBEDDING_PROVIDER,
     ENV_GEMINI_MODEL,
     ENV_GOOGLE_API_KEY,
     ENV_GOOGLE_APPLICATION_CREDENTIALS,
@@ -46,7 +49,7 @@ from ..logging_config import (
     get_log_level,
     truncate_payload,
 )
-from ..rag import get_knowledge_service
+from ..rag import get_knowledge_service, resolve_embedding_config
 from ..skill.command_handler import SkillCommandHandler
 from ..skill.startup_hooks import register_console_skills
 from .command_dispatcher import CommandDispatcher
@@ -342,6 +345,49 @@ async def lifespan(app: FastAPI):
             except Exception:
                 pass
 
+    configured_embedding_provider = os.getenv(ENV_EMBEDDING_PROVIDER, "")
+    configured_embedding_model = os.getenv(ENV_EMBEDDING_MODEL, "")
+    logger.info(
+        "Embedding config requested: provider=%s model=%s",
+        configured_embedding_provider or "(auto)",
+        configured_embedding_model or "(default)",
+    )
+    try:
+        embedding_cfg, detected_provider = resolve_embedding_config(
+            strict_explicit=configured_embedding_provider == "local"
+        )
+    except RuntimeError as exc:
+        logger.error("Embedding config validation failed: %s", exc)
+        logger.error(
+            "Embedding env snapshot: EMBEDDING_PROVIDER=%s EMBEDDING_MODEL=%s "
+            "OPENAI_API_KEY=%s GOOGLE_API_KEY=%s GOOGLE_CLOUD_PROJECT=%s",
+            configured_embedding_provider or "(unset)",
+            configured_embedding_model or "(unset)",
+            "configured" if os.getenv("OPENAI_API_KEY") else "unset",
+            "configured" if os.getenv(ENV_GOOGLE_API_KEY) else "unset",
+            os.getenv(ENV_GOOGLE_CLOUD_PROJECT) or "(unset)",
+        )
+        logger.error(
+            "Explicit EMBEDDING_PROVIDER=local requires fastembed. Install dependencies with: "
+            "uv sync --extra studio-server --extra rag-embedding"
+        )
+        logger.error(
+            "Quick fallback (auto-detect): unset EMBEDDING_PROVIDER && unset EMBEDDING_MODEL"
+        )
+        raise
+
+    if embedding_cfg is None:
+        logger.warning(
+            "No embedding provider detected at startup; ingest will run in degraded mode until a provider is available"
+        )
+    else:
+        logger.info(
+            "Embedding provider active: %s (model=%s, dim=%d)",
+            detected_provider,
+            embedding_cfg.model,
+            embedding_cfg.dimension,
+        )
+
     logger.info("=" * 60)
     yield
 
@@ -383,26 +429,75 @@ async def list_tools() -> dict:
     Returns both a flat skill list (for the dropdown) and aggregate
     counts so the Header can display "N skills (M tools)".
     """
+
+    def _classify_skill_semantics(skill: object) -> tuple[str, bool, str, list[str]]:
+        has_executor = callable(getattr(skill, "executor", None))
+        instructions = str(getattr(skill, "instructions", "") or "")
+        description = str(getattr(skill, "description", "") or "")
+        allowed_tools = bool(getattr(skill, "allowed_tools", None))
+        hooks = bool(getattr(skill, "hooks", None))
+
+        semantic_text = "\n".join((description, instructions)).lower()
+        has_flow_keywords = any(
+            token in semantic_text for token in ("workflow", "flow", "steps", "process", "decision")
+        )
+        has_command_examples = bool(re.search(r"\b(python\s+\S+|\./\S+|sh\s+\S+)", instructions))
+        has_script_runner = "scripts/run.py" in semantic_text
+
+        signals: list[str] = []
+        if has_executor:
+            signals.append("bound_executor")
+        if has_flow_keywords:
+            signals.append("flow_keywords")
+        if has_command_examples:
+            signals.append("command_examples")
+        if has_script_runner:
+            signals.append("script_runner")
+        if hooks:
+            signals.append("hooks")
+        if allowed_tools:
+            signals.append("allowed_tools")
+
+        if has_executor:
+            return (
+                "executable",
+                has_executor,
+                "Bound runtime executor is available",
+                signals,
+            )
+
+        if has_command_examples and (has_flow_keywords or has_script_runner):
+            return (
+                "executable",
+                has_executor,
+                "SKILL.md defines runnable workflow command examples",
+                signals,
+            )
+
+        if instructions.strip() or hooks or allowed_tools:
+            return (
+                "instruction",
+                has_executor,
+                "SKILL.md describes instruction-first orchestration behavior",
+                signals,
+            )
+
+        return (
+            "instruction",
+            has_executor,
+            "Metadata-only skill definition (no runnable command evidence)",
+            signals,
+        )
+
     skills = DEFAULT_SKILL_REGISTRY.list()
     items = []
     total_tools = 0
     for skill in skills:
         tool_count = len(skill.tools) if hasattr(skill, "tools") and skill.tools else 1
         total_tools += tool_count
-
-        # Classify skill type:
-        #   "executable"   — has a bound Python executor (can run directly)
-        #   "instruction"  — SKILL.md with allowed_tools/hooks (guides LLM behavior)
-        has_executor = hasattr(skill, "executor") and skill.executor is not None
-        has_tools = (hasattr(skill, "allowed_tools") and skill.allowed_tools) or (
-            hasattr(skill, "hooks") and skill.hooks
+        skill_type, has_executor, classification_basis, classification_signals = (
+            _classify_skill_semantics(skill)
         )
-        if has_executor:
-            skill_type = "executable"
-        elif has_tools:
-            skill_type = "instruction"
-        else:
-            skill_type = "instruction"
 
         items.append(
             {
@@ -411,6 +506,8 @@ async def list_tools() -> dict:
                 "type": skill_type,
                 "tool_count": tool_count,
                 "has_executor": has_executor,
+                "classification_basis": classification_basis,
+                "classification_signals": classification_signals,
             }
         )
     return {

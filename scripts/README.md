@@ -4,6 +4,13 @@ This directory contains scripts to help maintain code quality.
 
 It also includes convenience scripts for starting the HouYi Studio backend and UI during development.
 
+## Script Conventions
+
+- Shell scripts use `#!/usr/bin/env bash`.
+- Python scripts use `#!/usr/bin/env python3`.
+
+This is the current repo convention for portability across environments where the interpreter location may differ.
+
 ## Quick Reference
 
 ```bash
@@ -47,6 +54,7 @@ Starts the backend and the UI in a single tmux session.
 Notes:
 - This script expects `tmux` to be installed.
 - The backend is started via `python -m houyi_studio.server`.
+- Before backend startup, it also runs embedding warmup (`scripts/warmup_embeddings.py`).
 
 ### Split: `restart-backend.sh`
 
@@ -55,6 +63,35 @@ Restarts only the backend (useful when iterating on Python code).
 ```bash
 ./scripts/restart-backend.sh
 ```
+
+Notes:
+- This script runs embedding warmup before launching the backend.
+- Default embedding cache path is `${ROOT_DIR}/.cache/fastembed`.
+- You can override it via environment variable:
+
+```bash
+FASTEMBED_CACHE_PATH=/custom/cache/path ./scripts/restart-backend.sh
+```
+
+### Warmup Helper: `warmup_embeddings.py`
+
+You can run warmup directly:
+
+```bash
+uv run python scripts/warmup_embeddings.py
+```
+
+Or run it as an executable script:
+
+```bash
+chmod +x scripts/warmup_embeddings.py
+./scripts/warmup_embeddings.py
+```
+
+It logs:
+- resolved embedding provider/model
+- cache directory snapshots (before/after)
+- warmup duration and likely cache-hit / first-download hint
 
 ### Split: `restart-frontend.sh`
 
@@ -140,7 +177,7 @@ git check   # Full check
 
 Make scripts executable:
 ```bash
-chmod +x scripts/*.sh
+chmod +x scripts/*.sh scripts/warmup_embeddings.py
 ```
 
 ### "Command not found"

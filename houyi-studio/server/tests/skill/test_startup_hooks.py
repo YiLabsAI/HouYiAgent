@@ -1,15 +1,31 @@
 from __future__ import annotations
 
+import pytest
+from houyi_studio.server.skill import startup_hooks as startup_hooks_module
+from houyi_studio.server.skill.service import get_skill_service
 from houyi_studio.server.skill.startup_hooks import (
+    _default_startup_skills_dir,
     _discover_external_skill_names,
     _group_registered_names,
     _hydrate_external_runtime,
+    _init_skill_service,
+    _iter_external_skill_files,
     _prune_stale_external_skills,
+    _read_declared_skill_name,
+    _resolve_external_skill_scan_dirs,
 )
 from pydantic import BaseModel
 
+from houyi.config.env_config import ENV_STARTUP_SKILLS_DIR, EnvConfig
 from houyi.core.skill.spec import SkillSpec
 from houyi.core.skill_registry import SkillRegistry
+
+
+@pytest.fixture(autouse=True)
+def _reset_env_config_singleton():
+    EnvConfig._reset()
+    yield
+    EnvConfig._reset()
 
 
 class _In(BaseModel):
@@ -155,6 +171,79 @@ description: test
     assert discovered == {"rag-skill"}
 
 
+def test_discover_external_skill_names_from_symlinked_package(tmp_path) -> None:
+    skills_dir = tmp_path / "skills"
+    skills_dir.mkdir(parents=True)
+    source_pkg = tmp_path / "sources" / "local" / "frontend-design"
+    source_pkg.mkdir(parents=True)
+    (source_pkg / "SKILL.md").write_text(
+        """---
+name: frontend-design
+description: test
+---
+""",
+        encoding="utf-8",
+    )
+
+    (skills_dir / "frontend-design").symlink_to(source_pkg, target_is_directory=True)
+
+    discovered = _discover_external_skill_names(skills_dir)
+    assert "frontend-design" in discovered
+
+
+def test_iter_external_skill_files_prefers_uppercase_skill_md(tmp_path) -> None:
+    skills_dir = tmp_path / "skills"
+    pkg = skills_dir / "duplicate-entry"
+    pkg.mkdir(parents=True)
+    (pkg / "SKILL.md").write_text("---\nname: duplicate-entry\n---\n", encoding="utf-8")
+    (pkg / "skill.md").write_text("---\nname: duplicate-entry\n---\n", encoding="utf-8")
+
+    files = _iter_external_skill_files(skills_dir)
+
+    assert len(files) == 1
+    assert files[0].name == "SKILL.md"
+
+
+def test_read_declared_skill_name_returns_frontmatter_name(tmp_path) -> None:
+    skill_file = tmp_path / "SKILL.md"
+    skill_file.write_text("---\nname: notebooklm\n---\n", encoding="utf-8")
+
+    assert _read_declared_skill_name(skill_file) == "notebooklm"
+
+
+def test_load_external_skills_skips_duplicate_declared_name(monkeypatch, tmp_path) -> None:
+    skills_dir = tmp_path / "skills"
+    src_a = skills_dir / "src-a"
+    src_b = skills_dir / "src-b"
+    src_a.mkdir(parents=True)
+    src_b.mkdir(parents=True)
+    (src_a / "SKILL.md").write_text("---\nname: notebooklm\n---\n", encoding="utf-8")
+    (src_b / "SKILL.md").write_text("---\nname: notebooklm\n---\n", encoding="utf-8")
+
+    class _FakeRegistry:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def register_from_skill_file(self, source: str, overwrite: bool = False) -> str:
+            self.calls.append(source)
+            return "notebooklm"
+
+    fake_registry = _FakeRegistry()
+    monkeypatch.setattr(startup_hooks_module, "DEFAULT_SKILL_REGISTRY", fake_registry)
+    monkeypatch.setattr(
+        startup_hooks_module, "_resolve_external_skill_scan_dirs", lambda: [skills_dir]
+    )
+    monkeypatch.setattr(
+        startup_hooks_module, "_prune_stale_external_skills", lambda *args, **kwargs: []
+    )
+
+    registered: list[str] = []
+    startup_hooks_module._load_external_skills(registered)
+
+    assert len(fake_registry.calls) == 1
+    assert registered == ["notebooklm"]
+
+
 def test_prune_stale_external_skills_removes_missing_skill(tmp_path) -> None:
     registry = SkillRegistry()
     skills_dir = tmp_path / "skills"
@@ -198,3 +287,20 @@ def test_prune_keeps_ext_alias_when_canonical_name_is_discovered(tmp_path) -> No
 
     assert pruned == []
     assert registry.get("ext__planning-with-files") is not None
+
+
+def test_resolve_external_skill_scan_dirs_defaults_to_user_houyi() -> None:
+    dirs = _resolve_external_skill_scan_dirs()
+    assert dirs == [_default_startup_skills_dir()]
+
+
+def test_resolve_external_skill_scan_dirs_honors_configured_dir(monkeypatch, tmp_path) -> None:
+    configured = tmp_path / "custom-skills"
+    monkeypatch.setenv(ENV_STARTUP_SKILLS_DIR, str(configured))
+    dirs = _resolve_external_skill_scan_dirs()
+    assert dirs == [configured]
+
+
+def test_init_skill_service_initializes_global_service() -> None:
+    _init_skill_service()
+    assert get_skill_service() is not None

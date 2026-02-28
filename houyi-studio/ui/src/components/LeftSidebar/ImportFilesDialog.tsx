@@ -4,6 +4,7 @@
  */
 import React, { useState, useRef, useEffect } from 'react';
 import { X, FolderOpen, File, AlertCircle, StopCircle, Upload, Clock, Loader2 } from 'lucide-react';
+import { ConfirmDialog } from '@/components/common/ConfirmDialog';
 
 const IMPORT_HISTORY_KEY = 'houyi_import_history';
 const MAX_HISTORY_ITEMS = 10;
@@ -77,13 +78,19 @@ export const ImportFilesDialog: React.FC<ImportFilesDialogProps> = ({
   const [isUploading, setIsUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [importHistory, setImportHistory] = useState<ImportHistoryEntry[]>([]);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [pendingImportPaths, setPendingImportPaths] = useState<string[]>([]);
   const dragCounter = useRef(0);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const folderInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     if (isOpen) {
       // Reset state when dialog opens
       setPaths('');
       setUploadError(null);
+      setConfirmOpen(false);
+      setPendingImportPaths([]);
       // Filter history to only show imports for the current library
       const allHistory = loadImportHistory();
       const filtered = allHistory.filter((h) => {
@@ -111,10 +118,25 @@ export const ImportFilesDialog: React.FC<ImportFilesDialogProps> = ({
       .filter((p) => p.length > 0);
 
     if (pathList.length > 0) {
-      // Don't save to history here - only save on successful completion
-      // The store will call addSuccessfulImport() when ingest succeeds
-      onImport(pathList);
+      setPendingImportPaths(pathList);
+      setConfirmOpen(true);
     }
+  };
+
+  const handleConfirmImport = () => {
+    if (pendingImportPaths.length === 0) {
+      setConfirmOpen(false);
+      return;
+    }
+    // Don't save to history here - only save on successful completion
+    // The store will call addSuccessfulImport() when ingest succeeds
+    onImport(pendingImportPaths);
+    setConfirmOpen(false);
+    setPendingImportPaths([]);
+  };
+
+  const handleCancelConfirm = () => {
+    setConfirmOpen(false);
   };
 
   const handleHistorySelect = (entry: ImportHistoryEntry) => {
@@ -150,6 +172,26 @@ export const ImportFilesDialog: React.FC<ImportFilesDialogProps> = ({
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
+  };
+
+  const appendPaths = (incoming: string[]) => {
+    const normalized = incoming
+      .map((item) => item.trim())
+      .filter((item) => item.length > 0);
+    if (normalized.length === 0) {
+      return;
+    }
+    const existing = paths
+      .split('\n')
+      .map((item) => item.trim())
+      .filter((item) => item.length > 0);
+    const merged = [...existing];
+    for (const p of normalized) {
+      if (!merged.includes(p)) {
+        merged.push(p);
+      }
+    }
+    setPaths(merged.join('\n'));
   };
 
   // Helper to read directory entries recursively
@@ -189,6 +231,74 @@ export const ImportFilesDialog: React.FC<ImportFilesDialogProps> = ({
     return files;
   };
 
+  const uploadDroppedOrPickedFiles = async (files: File[]) => {
+    if (files.length === 0) {
+      setUploadError('No files found. If you dropped a directory, it may be empty.');
+      return;
+    }
+
+    setIsUploading(true);
+    try {
+      const formData = new FormData();
+      files.forEach((file) => {
+        formData.append('files', file);
+      });
+
+      const response = await fetch(`/api/knowledge/${libraryId}/upload`, {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || `Upload failed: ${response.status}`);
+      }
+
+      const result = await response.json();
+
+      if (result.errors && result.errors.length > 0) {
+        setUploadError(`Some files failed: ${result.errors.join(', ')}`);
+      }
+
+      if (result.uploaded_paths && result.uploaded_paths.length > 0) {
+        appendPaths(result.uploaded_paths);
+        setImportType('files');
+      }
+    } catch (error) {
+      setUploadError(error instanceof Error ? error.message : 'Upload failed');
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
+  const handleBrowseFile = () => {
+    fileInputRef.current?.click();
+  };
+
+  const handleBrowseFolder = () => {
+    folderInputRef.current?.click();
+  };
+
+  const handleFilePicked = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const selected = e.target.files;
+    if (!selected || selected.length === 0) {
+      return;
+    }
+    setUploadError(null);
+    await uploadDroppedOrPickedFiles(Array.from(selected));
+    e.target.value = '';
+  };
+
+  const handleFolderPicked = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const selected = e.target.files;
+    if (!selected || selected.length === 0) {
+      return;
+    }
+    setUploadError(null);
+    await uploadDroppedOrPickedFiles(Array.from(selected));
+    e.target.value = '';
+  };
+
   // Get all files from dataTransfer, including directory contents
   const getFilesFromDataTransfer = async (dataTransfer: DataTransfer): Promise<File[]> => {
     const files: File[] = [];
@@ -223,49 +333,16 @@ export const ImportFilesDialog: React.FC<ImportFilesDialogProps> = ({
     dragCounter.current = 0;
     setUploadError(null);
 
-    // Get files including directory contents
-    setIsUploading(true);
-    try {
-      const files = await getFilesFromDataTransfer(e.dataTransfer);
-      if (files.length === 0) {
-        setUploadError('No files found. If you dropped a directory, it may be empty.');
-        setIsUploading(false);
-        return;
-      }
-
-      const formData = new FormData();
-      files.forEach((file) => {
-        formData.append('files', file);
-      });
-
-      const response = await fetch(`/api/knowledge/${libraryId}/upload`, {
-        method: 'POST',
-        body: formData,
-      });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || `Upload failed: ${response.status}`);
-      }
-
-      const result = await response.json();
-
-      if (result.errors && result.errors.length > 0) {
-        setUploadError(`Some files failed: ${result.errors.join(', ')}`);
-      }
-
-      if (result.uploaded_paths && result.uploaded_paths.length > 0) {
-        // Add uploaded paths to the textarea
-        const existing = paths.trim();
-        const newPaths = result.uploaded_paths.join('\n');
-        setPaths(existing ? `${existing}\n${newPaths}` : newPaths);
-        setImportType('files');
-      }
-    } catch (error) {
-      setUploadError(error instanceof Error ? error.message : 'Upload failed');
-    } finally {
-      setIsUploading(false);
+    const droppedText = e.dataTransfer.getData('text/plain').trim();
+    if (droppedText) {
+      appendPaths([droppedText]);
+      setImportType('directory');
+      return;
     }
+
+    // Get files including directory contents
+    const files = await getFilesFromDataTransfer(e.dataTransfer);
+    await uploadDroppedOrPickedFiles(files);
   };
 
   return (
@@ -320,6 +397,30 @@ export const ImportFilesDialog: React.FC<ImportFilesDialogProps> = ({
             </button>
           </div>
 
+          <div className="flex gap-2">
+            {importType === 'files' ? (
+              <button
+                type="button"
+                onClick={handleBrowseFile}
+                disabled={isUploading}
+                className="flex-1 px-3 py-2 rounded border border-gray-700 bg-gray-900/40 text-xs text-gray-300 hover:border-gray-600 disabled:opacity-50"
+                data-testid="import-browse-file"
+              >
+                Browse Files
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={handleBrowseFolder}
+                disabled={isUploading}
+                className="flex-1 px-3 py-2 rounded border border-gray-700 bg-gray-900/40 text-xs text-gray-300 hover:border-gray-600 disabled:opacity-50"
+                data-testid="import-browse-folder"
+              >
+                Browse Folder
+              </button>
+            )}
+          </div>
+
           {/* Drop zone + Path input */}
           <div
             onDragEnter={handleDragEnter}
@@ -361,11 +462,34 @@ export const ImportFilesDialog: React.FC<ImportFilesDialogProps> = ({
                   autoFocus
                 />
                 <div className="px-3 pb-2 text-[10px] text-gray-600">
-                  or drag &amp; drop files here to upload them
+                  drag &amp; drop local files/folders to upload, or drop a plain-text path
                 </div>
               </div>
             )}
           </div>
+
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            onChange={handleFilePicked}
+            className="hidden"
+            data-testid="import-file-picker"
+          />
+          <input
+            ref={folderInputRef}
+            type="file"
+            multiple
+            // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+            // @ts-ignore - webkitdirectory is supported in Chromium-based runtimes.
+            webkitdirectory=""
+            // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+            // @ts-ignore - directory is non-standard but supported by some environments.
+            directory=""
+            onChange={handleFolderPicked}
+            className="hidden"
+            data-testid="import-folder-picker"
+          />
 
           {/* Upload error */}
           {uploadError && (
@@ -409,7 +533,7 @@ export const ImportFilesDialog: React.FC<ImportFilesDialogProps> = ({
           <div className="flex items-start gap-2 p-2 bg-gray-900 rounded">
             <AlertCircle size={14} className="text-blue-400 mt-0.5 flex-shrink-0" />
             <div className="text-[10px] text-gray-400">
-              Supported formats: .md, .txt, .pdf, .json, .csv, .html
+              Supported formats: .md, .txt, .pdf, .json, .csv, .html/.htm, .xlsx/.xlsm/.xls, .doc/.docx, .pptx, .epub
               <br />
               Drag &amp; drop files to upload, or enter server paths manually
             </div>
@@ -434,6 +558,18 @@ export const ImportFilesDialog: React.FC<ImportFilesDialogProps> = ({
           </div>
         </form>
       </div>
+
+      <ConfirmDialog
+        isOpen={confirmOpen}
+        title="Confirm Import"
+        message={`Start knowledge import for ${pendingImportPaths.length} path(s)?`}
+        itemName={libraryName}
+        confirmText="Start Import"
+        cancelText="Back"
+        variant="default"
+        onConfirm={handleConfirmImport}
+        onCancel={handleCancelConfirm}
+      />
     </div>
   );
 };

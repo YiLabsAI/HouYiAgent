@@ -2,6 +2,14 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { GlobalSettingsPage } from '@/components/Chat/GlobalSettingsPage';
 
+const { invalidateModelCacheMock } = vi.hoisted(() => ({
+  invalidateModelCacheMock: vi.fn(),
+}));
+
+vi.mock('@/hooks/useAvailableModels', () => ({
+  invalidateModelCache: invalidateModelCacheMock,
+}));
+
 // Mock fetch
 const mockFetch = vi.fn();
 global.fetch = mockFetch;
@@ -39,6 +47,7 @@ describe('GlobalSettingsPage', () => {
     // (clearAllMocks only clears call history, leaving unconsumed mockResolvedValueOnce entries)
     vi.resetAllMocks();
     global.fetch = mockFetch;
+    invalidateModelCacheMock.mockReset();
   });
 
   it('returns null when not open', () => {
@@ -133,6 +142,10 @@ describe('GlobalSettingsPage', () => {
       expect(mockFetch).toHaveBeenCalledWith('/api/chat/settings', expect.objectContaining({
         method: 'PUT',
       }));
+    });
+
+    await waitFor(() => {
+      expect(invalidateModelCacheMock).toHaveBeenCalledTimes(1);
     });
   });
 

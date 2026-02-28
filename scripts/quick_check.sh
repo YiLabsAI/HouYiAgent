@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Quick code quality check (faster, for frequent use)
 # Use this during development for quick feedback
 

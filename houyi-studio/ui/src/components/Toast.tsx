@@ -64,7 +64,7 @@ export const ToastContainer: React.FC<ToastContainerProps> = ({ toasts, onRemove
   const hiddenCount = toasts.length - visibleToasts.length;
 
   return (
-    <div className="fixed top-4 right-4 z-50 flex flex-col gap-2">
+    <div className="fixed top-4 right-4 z-[70] flex flex-col gap-2" data-testid="toast-container">
       {hiddenCount > 0 && (
         <div className="text-xs text-gray-400 text-right px-2">
           +{hiddenCount} more

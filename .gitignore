@@ -86,6 +86,7 @@ node_modules/
 # Houyi runtime data
 .houyi/
 .plan/
+.cache/
 knowledge/
 
 # pnpm store cache

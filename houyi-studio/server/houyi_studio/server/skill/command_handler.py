@@ -265,7 +265,7 @@ class SkillCommandHandler:
 
     async def _handle_load_skill(self, command: LoadSkillCommand, session_id: str) -> None:
         skill_service = self._skill_service_getter()
-        source = command.resolved_source
+        source = command.source
         if not source:
             error_event = SkillErrorEvent(
                 event_id=f"evt_{uuid4().hex[:8]}",
@@ -285,7 +285,10 @@ class SkillCommandHandler:
         # Snapshot existing skill names for duplicate detection
         existing_names = {s["name"] for s in skill_service.list_skills()}
 
-        success, name_or_code, error_msg = skill_service.load_skill(source)
+        success, name_or_code, error_msg = skill_service.load_skill(
+            source,
+            install_strategy=command.install_strategy,
+        )
         if success:
             loaded_names = [n.strip() for n in name_or_code.split(",")]
             reloaded = [n for n in loaded_names if n in existing_names]

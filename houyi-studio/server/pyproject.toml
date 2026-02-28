@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "HouYi Studio server (FastAPI/WebSocket)"
 requires-python = ">=3.11"
 dependencies = [
-  "houyi[studio-server]",
+  "houyi[studio-server,rag-embedding]",
   "fastapi>=0.104.0",
   "uvicorn[standard]>=0.24.0",
   "websockets>=12.0",

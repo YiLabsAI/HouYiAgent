@@ -430,7 +430,11 @@ async def _live_verify(
         tool_call_args = tool_call.get("arguments")
         tool_exec_status: str | None = None
         tool_exec_payload: dict[str, Any] | None = None
-        if result.get("success") and skill.executor:
+        executor = skill.executor if callable(getattr(skill, "executor", None)) else None
+        if result.get("success") and executor is None:
+            executor = _derive_script_compat_executor(skill)
+
+        if result.get("success") and executor:
             try:
                 import asyncio
                 import inspect
@@ -440,14 +444,15 @@ async def _live_verify(
                         tool_call_args = json.loads(tool_call_args)
 
                 argument_source = "observed_tool_call"
-                if not isinstance(tool_call_args, dict) and requested_input:
+                if _is_missing_args(tool_call_args) and requested_input:
                     tool_call_args = dict(requested_input)
                     argument_source = "requested_input_fallback"
+                    tool_call["arguments"] = tool_call_args
                     tool_call["arguments_source"] = argument_source
                     result["tool_call"] = tool_call
 
                 if isinstance(tool_call_args, dict):
-                    exec_fn = skill.executor
+                    exec_fn = executor
                     if inspect.iscoroutinefunction(exec_fn):
                         exec_result = await exec_fn(**tool_call_args)
                     else:
@@ -657,6 +662,91 @@ def _simplify_schema(schema: dict[str, Any]) -> dict[str, Any]:
         else:
             cleaned[key] = value
     return cleaned
+
+
+def _derive_script_compat_executor(skill: SkillSpec) -> Any | None:
+    """Best-effort runtime binding for instruction-driven script skills."""
+    instructions = getattr(skill, "instructions", None)
+    raw_skill_dir = getattr(skill, "skill_dir", None)
+    if not isinstance(instructions, str) or not instructions.strip() or not raw_skill_dir:
+        return None
+
+    try:
+        from pathlib import Path
+
+        from .loader import SkillLoader
+
+        skill_dir = Path(raw_skill_dir).resolve()
+        templates = SkillLoader._extract_script_command_templates(instructions)
+        if not templates:
+            return None
+    except Exception:
+        return None
+
+    async def _executor(**kwargs):
+        import asyncio
+        import json
+        import sys
+
+        command = SkillLoader._build_script_compat_command(kwargs, templates)
+        if not command:
+            return {
+                "success": False,
+                "message": "No executable script command could be derived from payload",
+                "payload": kwargs,
+            }
+
+        normalized_cmd: list[str] = []
+        for idx, token in enumerate(command):
+            if idx == 0 and token == "python":
+                normalized_cmd.append(sys.executable)
+                continue
+            if token.startswith("-"):
+                normalized_cmd.append(token)
+                continue
+
+            path_token = Path(token)
+            if not path_token.is_absolute():
+                candidate = (skill_dir / path_token).resolve()
+                if candidate.exists():
+                    normalized_cmd.append(str(candidate))
+                    continue
+            normalized_cmd.append(token)
+
+        proc = await asyncio.create_subprocess_exec(
+            *normalized_cmd,
+            cwd=str(skill_dir),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=180.0)
+        except TimeoutError:
+            proc.kill()
+            await proc.wait()
+            return {
+                "success": False,
+                "message": "Script compatibility execution timed out",
+                "command": normalized_cmd,
+            }
+
+        stdout_text = stdout.decode("utf-8", errors="replace").strip()
+        stderr_text = stderr.decode("utf-8", errors="replace").strip()
+
+        parsed_output: object = stdout_text
+        if stdout_text:
+            with contextlib.suppress(Exception):
+                parsed_output = json.loads(stdout_text)
+
+        return {
+            "success": proc.returncode == 0,
+            "exit_code": proc.returncode,
+            "command": normalized_cmd,
+            "output": parsed_output,
+            "stderr": stderr_text,
+        }
+
+    return _executor
 
 
 def _parse_tool_arguments(raw: Any) -> Any:

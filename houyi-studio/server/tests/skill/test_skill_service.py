@@ -195,13 +195,172 @@ When something fails, DON'T hide it:
         examples = {e["id"]: e for e in detail["package_examples"]}
 
         bug_fix = examples["example-2-bug-fix-task"]
-        assert bug_fix["input"]["action"] == "update"
+        assert "action" not in bug_fix["input"]
         assert bug_fix["input"]["task"] == "Fix the login bug in the authentication module"
 
         error_recovery = examples["example-4-error-recovery-pattern"]
-        assert error_recovery["input"]["action"] == "status"
+        assert "action" not in error_recovery["input"]
         assert isinstance(error_recovery["input"].get("task"), str)
         assert error_recovery["input"]["task"]
+
+    def test_detail_includes_quick_start_fallback_from_skill_md(self, registry, tmp_path):
+        from houyi_studio.server.skill.service import SkillService
+        from pydantic import BaseModel
+
+        from houyi.core.skill.spec import SkillSpec
+
+        class _In(BaseModel):
+            q: str
+
+        class _Out(BaseModel):
+            r: str
+
+        skill_dir = tmp_path / "search"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            """
+---
+name: search
+description: Search the web.
+---
+
+## Quick Start
+
+```bash
+./scripts/search.sh '{"input": "latest ai agent tools"}'
+```
+""".strip(),
+            encoding="utf-8",
+        )
+
+        skill = SkillSpec(
+            name="search",
+            description="search",
+            input_schema=_In,
+            output_schema=_Out,
+            skill_dir=skill_dir,
+        )
+        registry.register(skill, overwrite=True)
+        svc = SkillService(registry=registry)
+
+        detail = svc.get_skill_detail("search")
+        assert detail is not None
+        assert len(detail["package_examples"]) == 1
+        fallback = detail["package_examples"][0]
+        assert fallback["id"] == "quick-start-from-skill-md"
+        assert (
+            fallback["input"]["command"]
+            == './scripts/search.sh \'{"input": "latest ai agent tools"}\''
+        )
+        assert fallback["input"]["task"] == "latest ai agent tools"
+
+    def test_detail_extracts_decision_flow_examples_from_skill_md(self, registry, tmp_path):
+        from houyi_studio.server.skill.service import SkillService
+        from pydantic import BaseModel
+
+        from houyi.core.skill.spec import SkillSpec
+
+        class _In(BaseModel):
+            q: str
+
+        class _Out(BaseModel):
+            r: str
+
+        skill_dir = tmp_path / "notebooklm-like"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            """
+---
+name: notebooklm-like
+description: Notebook workflow helper.
+---
+
+## Decision Flow
+
+Check auth → python scripts/run.py auth_manager.py status
+If not authenticated → python scripts/run.py auth_manager.py setup
+Ask question → python scripts/run.py ask_question.py --question "Summarize architecture"
+""".strip(),
+            encoding="utf-8",
+        )
+
+        skill = SkillSpec(
+            name="notebooklm-like",
+            description="notebook workflow",
+            input_schema=_In,
+            output_schema=_Out,
+            skill_dir=skill_dir,
+        )
+        registry.register(skill, overwrite=True)
+        svc = SkillService(registry=registry)
+
+        detail = svc.get_skill_detail("notebooklm-like")
+        assert detail is not None
+        examples = detail["package_examples"]
+        assert len(examples) >= 3
+        assert examples[0]["id"] == "decision-flow-1-check-auth"
+        assert examples[0]["input"]["script"] == "auth_manager.py"
+        assert examples[0]["input"]["operation"] == "status"
+        assert examples[0]["source"] == "SKILL.md#decision-flow"
+        assert examples[0]["confidence"] == "high"
+        assert "title matched flow/workflow semantics" in examples[0]["confidence_reason"]
+        assert examples[0]["confidence_breakdown"]["score"] >= 0.8
+        assert examples[2]["id"] == "decision-flow-3-ask-question"
+        assert examples[2]["input"]["script"] == "ask_question.py"
+        assert examples[2]["input"]["question"] == "Summarize architecture"
+
+    def test_detail_extracts_semantic_workflow_sections_with_audit_metadata(
+        self, registry, tmp_path
+    ):
+        from houyi_studio.server.skill.service import SkillService
+        from pydantic import BaseModel
+
+        from houyi.core.skill.spec import SkillSpec
+
+        class _In(BaseModel):
+            q: str
+
+        class _Out(BaseModel):
+            r: str
+
+        skill_dir = tmp_path / "workflow-skill"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            """
+---
+name: workflow-skill
+description: Workflow extraction helper.
+---
+
+## Workflow Steps
+
+- Check auth: python scripts/run.py auth_manager.py status
+- Ask question: python scripts/run.py ask_question.py --question "What changed?"
+""".strip(),
+            encoding="utf-8",
+        )
+
+        skill = SkillSpec(
+            name="workflow-skill",
+            description="workflow helper",
+            input_schema=_In,
+            output_schema=_Out,
+            skill_dir=skill_dir,
+        )
+        registry.register(skill, overwrite=True)
+        svc = SkillService(registry=registry)
+
+        detail = svc.get_skill_detail("workflow-skill")
+        assert detail is not None
+        examples = detail["package_examples"]
+        workflow_examples = [e for e in examples if e["id"].startswith("workflow-")]
+        assert len(workflow_examples) >= 2
+        assert workflow_examples[0]["source"] == "SKILL.md#workflow-steps"
+        assert workflow_examples[0]["confidence"] == "high"
+        assert "command parsed" in workflow_examples[0]["confidence_reason"]
+        assert workflow_examples[0]["confidence_breakdown"]["title_match"] == 1.0
+        assert workflow_examples[0]["input"]["script"] == "auth_manager.py"
+        assert workflow_examples[1]["input"]["script"] == "ask_question.py"
 
 
 class TestGetSkillMetrics:

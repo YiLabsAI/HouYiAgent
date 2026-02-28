@@ -43,7 +43,11 @@ class FakeSkillService:
     def get_skill_metrics(self, skill_name: str) -> dict[str, Any] | None:
         return None
 
-    def load_skill(self, source: str) -> tuple[bool, str, str | None]:
+    def load_skill(
+        self,
+        source: str,
+        install_strategy: str | None = None,
+    ) -> tuple[bool, str, str | None]:
         return True, "planner", None
 
     def unload_skill(self, skill_name: str) -> tuple[bool, str | None]:

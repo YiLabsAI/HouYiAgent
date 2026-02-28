@@ -13,10 +13,14 @@ from pathlib import Path
 import pytest
 from houyi_studio.server.rag import KnowledgeService
 
+from houyi.config.env_config import ENV_EMBEDDING_MODEL, ENV_EMBEDDING_PROVIDER
+
 
 @pytest.fixture
-def knowledge_service(tmp_path: Path):
+def knowledge_service(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """Create a fresh KnowledgeService with isolated tmp_path storage."""
+    monkeypatch.delenv(ENV_EMBEDDING_PROVIDER, raising=False)
+    monkeypatch.delenv(ENV_EMBEDDING_MODEL, raising=False)
     svc = KnowledgeService(storage_dir=tmp_path)
     yield svc
 

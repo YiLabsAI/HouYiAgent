@@ -38,6 +38,9 @@ Pydantic-based declarative definitions enable agents, tasks, and workflows to be
 **⚡ Async Event-Driven Execution**
 Built on asyncio with DAG-based task orchestration, supporting parallel execution, dynamic graph evolution, and non-blocking I/O for high-concurrency agent scenarios.
 
+**🧩 SimpleSkills Capability Model**
+Introduces the industry's first cross-platform SimpleSkill specification as the default runtime model, adding the governance layer so skills become secure, evaluable, and host-portable capability units, with advanced hooks and prompt handlers progressively enabled through capability negotiation.
+
 **🔍 Zero-Config Observability**
 Native OpenTelemetry integration auto-instruments every agent execution with distributed tracing across LLM calls, tool invocations, and state transitions—<3% performance overhead, no manual setup required.
 

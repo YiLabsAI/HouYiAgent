@@ -96,6 +96,7 @@ ENV_EXECUTION_BACKEND = "HOUYI_EXECUTION_BACKEND"
 ENV_HOOK_TIMEOUT = "HOUYI_HOOK_TIMEOUT"
 ENV_HOOK_MAX_CONCURRENT = "HOUYI_HOOK_MAX_CONCURRENT"
 ENV_HOOK_FAIL_ON_ERROR = "HOUYI_HOOK_FAIL_ON_ERROR"
+ENV_STARTUP_SKILLS_DIR = "HOUYI_STARTUP_SKILLS_DIR"
 ENV_CONSENT_CACHE_TTL = "HOUYI_CONSENT_CACHE_TTL"
 ENV_CONSENT_REQUIRE_EXPLICIT = "HOUYI_CONSENT_REQUIRE_EXPLICIT"
 ENV_CONSENT_AUTO_DENY_TIMEOUT = "HOUYI_CONSENT_AUTO_DENY_TIMEOUT"
@@ -163,6 +164,7 @@ class EnvConfig:
         self._rag_knowledge_dir: str = _DEFAULT_RAG_KNOWLEDGE_DIR
         self._embedding_provider: str = _DEFAULT_EMBEDDING_PROVIDER
         self._embedding_model: str = _DEFAULT_EMBEDDING_MODEL
+        self._startup_skills_dir: str | None = None
 
     @classmethod
     def get(cls) -> EnvConfig:
@@ -248,6 +250,10 @@ class EnvConfig:
         self._rag_knowledge_dir = os.getenv(ENV_RAG_KNOWLEDGE_DIR, _DEFAULT_RAG_KNOWLEDGE_DIR)
         self._embedding_provider = os.getenv(ENV_EMBEDDING_PROVIDER, _DEFAULT_EMBEDDING_PROVIDER)
         self._embedding_model = os.getenv(ENV_EMBEDDING_MODEL, _DEFAULT_EMBEDDING_MODEL)
+
+        # --- Skill startup ---
+        startup_dir = os.getenv(ENV_STARTUP_SKILLS_DIR, "").strip()
+        self._startup_skills_dir = startup_dir or None
 
         # --- Warnings ---
         if not self._siliconflow_api_key:
@@ -368,6 +374,11 @@ class EnvConfig:
         """EMBEDDING_MODEL or default ``"BAAI/bge-small-en-v1.5"``."""
         return self._embedding_model
 
+    @property
+    def startup_skills_dir(self) -> str | None:
+        """HOUYI_STARTUP_SKILLS_DIR or ``None`` when unset."""
+        return self._startup_skills_dir
+
     # ------------------------------------------------------------------
     # Utilities
     # ------------------------------------------------------------------
@@ -395,6 +406,7 @@ class EnvConfig:
             "rag_knowledge_dir": self._rag_knowledge_dir,
             "embedding_provider": self._embedding_provider,
             "embedding_model": self._embedding_model,
+            "startup_skills_dir": self._startup_skills_dir or "(not set)",
         }
 
     def __repr__(self) -> str:

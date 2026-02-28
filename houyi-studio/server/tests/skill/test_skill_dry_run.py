@@ -761,6 +761,49 @@ class TestLiveVerifyIntegration:
         assert exec_phase["data"]["argument_source"] == "requested_input_fallback"
 
     @pytest.mark.asyncio
+    async def test_tool_execution_falls_back_when_observed_args_are_empty_dict(self):
+        """If provider returns empty arguments object, use requested_input as fallback evidence."""
+        from houyi_studio.server.skill.dry_run import _live_verify
+
+        async def _executor(**kwargs):
+            return {"success": True, "received": kwargs}
+
+        skill = _Skill(name="notebooklm", description="NotebookLM")
+        skill.executor = _executor
+
+        mock_response = MagicMock()
+        mock_response.tool_calls = [
+            {
+                "type": "function",
+                "function": {"name": "notebooklm", "arguments": "{}"},
+            }
+        ]
+
+        mock_adapter = AsyncMock()
+        mock_adapter.chat.return_value = mock_response
+
+        requested_input = {
+            "question": "Summarize architecture decisions",
+            "notebook_url": "https://notebooklm.google.com/notebook/example",
+        }
+
+        with patch(_FACTORY_PATCH) as factory:
+            factory.create.return_value = mock_adapter
+            result = await _live_verify(
+                skill,
+                "notebooklm",
+                "notebooklm",
+                requested_input,
+            )
+
+        assert result["success"] is True
+        assert result["tool_call"]["arguments_source"] == "requested_input_fallback"
+        assert result["tool_call"]["arguments"] == requested_input
+        exec_phase = next(p for p in result["phases"] if p["name"] == "tool_execution")
+        assert exec_phase["status"] == "pass"
+        assert exec_phase["data"]["argument_source"] == "requested_input_fallback"
+
+    @pytest.mark.asyncio
     async def test_live_verify_adds_final_response_after_tool_execution(self):
         from houyi_studio.server.skill.dry_run import _live_verify
 
@@ -870,6 +913,51 @@ class TestLiveVerifyIntegration:
         assert isinstance(preview, dict)
         assert preview.get("success") is False
         assert "Missing required field for create: task" in str(preview.get("message", ""))
+
+    @pytest.mark.asyncio
+    async def test_live_verify_derives_script_executor_from_instructions(self):
+        """Instruction-driven script skills should execute in dry-run even without bound executor."""
+        from houyi_studio.server.skill.dry_run import _live_verify
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            script_path = tmp_path / "run_demo.py"
+            script_path.write_text(
+                "import json\nprint(json.dumps({'success': True, 'mode': 'script-compat'}))\n",
+                encoding="utf-8",
+            )
+
+            skill = _Skill(name="script-skill", description="Script skill")
+            skill.skill_dir = tmp_path
+            skill.instructions = """
+## Workflow Steps
+```bash
+python run_demo.py --action status
+```
+"""
+
+            mock_response = MagicMock()
+            mock_response.tool_calls = [
+                {
+                    "type": "function",
+                    "function": {"name": "script-skill", "arguments": "{}"},
+                }
+            ]
+            mock_adapter = AsyncMock()
+            mock_adapter.chat.return_value = mock_response
+
+            with patch(_FACTORY_PATCH) as factory:
+                factory.create.return_value = mock_adapter
+                result = await _live_verify(
+                    skill,
+                    "script-skill",
+                    "script-skill",
+                    {"action": "status"},
+                )
+
+        exec_phase = next(p for p in result["phases"] if p["name"] == "tool_execution")
+        assert exec_phase["status"] != "skip"
+        assert exec_phase["data"].get("argument_source") == "requested_input_fallback"
 
 
 # ── Full async validate + live ────────────────────────────────────────

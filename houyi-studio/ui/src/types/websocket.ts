@@ -375,6 +375,10 @@ export interface SkillDetail {
     input: Record<string, unknown>;
     expectedFocus: string[];
     objective: string;
+    source?: string;
+    confidence?: 'high' | 'medium' | 'low' | string;
+    confidence_reason?: string;
+    confidence_breakdown?: Record<string, number>;
   }>;
 }
 
@@ -713,7 +717,8 @@ export interface GetSkillMetricsCommand extends ClientCommand {
 
 export interface LoadSkillCommand extends ClientCommand {
   command_type: 'load_skill';
-  path: string;
+  source: string;
+  install_strategy?: 'copy' | 'symlink';
 }
 
 export interface UnloadSkillCommand extends ClientCommand {

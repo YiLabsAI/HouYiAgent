@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Restart backend service and stream logs
 
 set -euo pipefail
@@ -11,7 +11,7 @@ if ! command -v uv &> /dev/null; then
 fi
 
 if [ ! -d "${ROOT_DIR}/.venv" ]; then
-    echo "❌ .venv not found. Run: uv sync --extra dev"
+    echo "❌ .venv not found. Run: uv sync --extra dev --extra rag-full"
     exit 1
 fi
 
@@ -33,8 +33,8 @@ echo ""
 cd "$ROOT_DIR"
 
 # Ensure SDK + RAG deps are synced
-echo "� Syncing SDK dependencies..."
-uv sync --extra dev --extra rag --extra websearch-ddg --extra websearch-tavily --extra websearch-readability --quiet
+echo "🔄 Syncing SDK dependencies..."
+uv sync --extra dev --extra rag-full --extra websearch-ddg --extra websearch-tavily --extra websearch-readability --quiet
 
 # Ensure houyi-studio-server is installed (uv sync may uninstall it)
 if ! uv run python -c "import houyi_studio" 2>/dev/null; then
@@ -42,7 +42,13 @@ if ! uv run python -c "import houyi_studio" 2>/dev/null; then
     uv pip install -e houyi-studio/server --quiet
 fi
 
-echo "�🚀 Starting backend service..."
+FASTEMBED_CACHE_PATH=${FASTEMBED_CACHE_PATH:-${ROOT_DIR}/.cache/fastembed}
+
+echo "🚀 Warming up embedding models..."
+env FASTEMBED_CACHE_PATH=${FASTEMBED_CACHE_PATH} uv run python "${ROOT_DIR}/scripts/warmup_embeddings.py"
+echo "✅ Embedding warmup complete"
+
+echo "🚀 Starting backend service..."
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 
@@ -53,4 +59,4 @@ WEB_SEARCH_CACHE_MAX_SIZE=${WEB_SEARCH_CACHE_MAX_SIZE:-256}
 WEB_SEARCH_CACHE_LOG_HITS=${WEB_SEARCH_CACHE_LOG_HITS:-1}
 WEB_SEARCH_PROVIDER=${WEB_SEARCH_PROVIDER:-ddg}
 
-env WEB_SEARCH_CACHE_ENABLED=${WEB_SEARCH_CACHE_ENABLED} WEB_SEARCH_CACHE_TTL=${WEB_SEARCH_CACHE_TTL} WEB_SEARCH_CACHE_MAX_SIZE=${WEB_SEARCH_CACHE_MAX_SIZE} WEB_SEARCH_CACHE_LOG_HITS=${WEB_SEARCH_CACHE_LOG_HITS} WEB_SEARCH_PROVIDER=${WEB_SEARCH_PROVIDER} uv run python -m houyi_studio.server
+env FASTEMBED_CACHE_PATH=${FASTEMBED_CACHE_PATH} WEB_SEARCH_CACHE_ENABLED=${WEB_SEARCH_CACHE_ENABLED} WEB_SEARCH_CACHE_TTL=${WEB_SEARCH_CACHE_TTL} WEB_SEARCH_CACHE_MAX_SIZE=${WEB_SEARCH_CACHE_MAX_SIZE} WEB_SEARCH_CACHE_LOG_HITS=${WEB_SEARCH_CACHE_LOG_HITS} WEB_SEARCH_PROVIDER=${WEB_SEARCH_PROVIDER} uv run python -m houyi_studio.server
