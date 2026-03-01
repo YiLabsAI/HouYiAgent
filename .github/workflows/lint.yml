@@ -21,6 +21,10 @@ jobs:
     - name: Set up uv
       uses: astral-sh/setup-uv@v3
 
+    - name: Validate uv.lock registry sources
+      run: |
+        make lock-check
+
     - name: Install dependencies
       env:
         UV_INDEX_URL: https://pypi.org/simple

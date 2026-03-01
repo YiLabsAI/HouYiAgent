@@ -1,4 +1,4 @@
-.PHONY: help install install-dev install-studio install-all dev test test-server test-cov test-fast test-integration test-e2e lint lint-fix lint-imports quick-check check clean format typecheck
+.PHONY: help install install-dev install-studio install-all lock lock-check dev test test-server test-cov test-fast test-integration test-e2e lint lint-fix lint-imports quick-check check clean format typecheck
 
 # Default target
 help:
@@ -10,6 +10,8 @@ help:
 	@echo "  make install-dev      Install development dependencies"
 	@echo "  make install-studio   Install Studio server + UI deps into .venv"
 	@echo "  make install-all      Full setup (dev + rag + studio + UI)"
+	@echo "  make lock             Refresh uv.lock from official PyPI"
+	@echo "  make lock-check       Fail if uv.lock contains non-PyPI registries"
 	@echo "  make setup-hooks      Setup pre-commit hooks"
 	@echo ""
 	@echo "Development:"
@@ -54,6 +56,12 @@ install-all:
 	uv pip install -e houyi-studio/server --quiet
 	@cd houyi-studio/ui && pnpm install --frozen-lockfile
 	@echo "✓ All dependencies installed (SDK + RAG + Studio + UI)"
+
+lock:
+	UV_INDEX_URL=https://pypi.org/simple UV_EXTRA_INDEX_URL='' uv lock --refresh
+
+lock-check:
+	@python3 -c "from pathlib import Path; import re, sys; registries=set(re.findall(r'registry = \"([^\"]+)\"', Path('uv.lock').read_text(encoding='utf-8'))); bad=sorted(r for r in registries if r != 'https://pypi.org/simple'); print('Unexpected lock registries: ' + ', '.join(bad)) if bad else print('uv.lock registry sources are pinned to official PyPI.'); sys.exit(1 if bad else 0)"
 
 setup-hooks:
 	uv run pre-commit install
