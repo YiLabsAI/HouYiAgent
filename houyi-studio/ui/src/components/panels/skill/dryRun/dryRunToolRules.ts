@@ -10,6 +10,17 @@ export interface ToolDryRunPreset {
   label: string;
   description: string;
   input: Record<string, unknown>;
+  /** Optional command template rendered with placeholders before execution. */
+  command_template?: string;
+  /** Optional workflow identifier when the example comes from workflow extraction. */
+  workflow_id?: string;
+  /** Optional workflow evidence text used in dry-run audit panel. */
+  evidence?: string;
+  /** Optional workflow validation state copied from extraction output. */
+  validation_status?: 'pass' | 'warn' | 'fail';
+  validation_issues?: string[];
+  /** Tracks where this example originated for merge/trace UI. */
+  origin?: 'package_examples' | 'tool_preset' | 'frontmatter_workflow' | 'instruction_workflow';
   expectedFocus: string[];
   objective?: string;
   source?: string;
@@ -20,20 +31,57 @@ export interface ToolDryRunPreset {
 
 export type PlanningFlowPreset = ToolDryRunPreset;
 
-const PLANNING_TOOL_NAMES = new Set(['planning-with-files', 'ext__planning-with-files']);
-const EXTERNAL_PLANNING_TOOL_NAME = 'ext__planning-with-files';
+const PLANNING_ACTIONS = new Set(['create', 'update', 'complete', 'status']);
 
 const getAction = (value: unknown): string => (typeof value === 'string' ? value : '');
 
-export const isPlanningWithFilesTool = (toolName: string): boolean => PLANNING_TOOL_NAMES.has(toolName);
-export const isExternalPlanningWithFilesTool = (toolName: string): boolean => toolName === EXTERNAL_PLANNING_TOOL_NAME;
+interface PlanningDetectionOptions {
+  inputSchema?: Record<string, unknown>;
+}
+
+const planningActionFromSchema = (inputSchema?: Record<string, unknown>): string[] => {
+  if (!inputSchema) return [];
+  const properties = inputSchema.properties;
+  if (!properties || typeof properties !== 'object' || Array.isArray(properties)) return [];
+  const actionSchema = (properties as Record<string, unknown>).action;
+  if (!actionSchema || typeof actionSchema !== 'object' || Array.isArray(actionSchema)) return [];
+  const enumValues = (actionSchema as Record<string, unknown>).enum;
+  if (!Array.isArray(enumValues)) return [];
+  return enumValues.filter((value): value is string => typeof value === 'string');
+};
+
+const hasPlanningPresetActions = (toolName: string): boolean => {
+  const presets = getToolDryRunPresets(toolName);
+  return presets.some((preset) => PLANNING_ACTIONS.has(getAction(preset.input.action)));
+};
+
+const inferPlanningBySchema = (inputSchema?: Record<string, unknown>): boolean => {
+  const actions = planningActionFromSchema(inputSchema);
+  if (actions.length === 0) return false;
+  return actions.some((action) => PLANNING_ACTIONS.has(action));
+};
+
+// Data-driven planning detection:
+// - Prefer schema capability (action enum contains planning actions).
+// - Fallback to tool preset examples when schema is absent.
+export const isPlanningWithFilesTool = (
+  toolName: string,
+  options?: PlanningDetectionOptions,
+): boolean => inferPlanningBySchema(options?.inputSchema) || hasPlanningPresetActions(toolName);
+
+// External planning mode now follows namespace convention instead of one fixed tool id.
+export const isExternalPlanningWithFilesTool = (
+  toolName: string,
+  options?: PlanningDetectionOptions,
+): boolean => isPlanningWithFilesTool(toolName, options) && toolName.startsWith('ext__');
 
 export const getToolFieldRules = (
   toolName: string,
   field: DryRunSchemaField,
   formValues: Record<string, string>,
+  options?: PlanningDetectionOptions,
 ): DryRunFieldRules => {
-  if (!isPlanningWithFilesTool(toolName)) {
+  if (!isPlanningWithFilesTool(toolName, options)) {
     return { visible: true, required: field.required };
   }
 
@@ -67,8 +115,9 @@ export const applyToolSpecificValidation = (
   toolName: string,
   input: Record<string, unknown>,
   errors: Record<string, string>,
+  options?: PlanningDetectionOptions,
 ): void => {
-  if (!isPlanningWithFilesTool(toolName)) return;
+  if (!isPlanningWithFilesTool(toolName, options)) return;
 
   const action = getAction(input.action);
 
@@ -90,8 +139,9 @@ export const applyToolSpecificValidation = (
 export const normalizeToolInput = (
   toolName: string,
   input: Record<string, unknown>,
+  options?: PlanningDetectionOptions,
 ): Record<string, unknown> => {
-  if (!isPlanningWithFilesTool(toolName)) return input;
+  if (!isPlanningWithFilesTool(toolName, options)) return input;
 
   const normalized = { ...input };
   const action = getAction(normalized.action);
@@ -103,14 +153,35 @@ export const normalizeToolInput = (
         .map((item) => item.trim())
         .filter((item) => item.length > 0);
     }
+    delete normalized.subtask_index;
+    delete normalized.completed;
+    return normalized;
   }
+
+  if (action === 'update') {
+    delete normalized.task;
+    delete normalized.subtasks;
+    delete normalized.command;
+    return normalized;
+  }
+
+  if (action === 'complete' || action === 'status') {
+    delete normalized.task;
+    delete normalized.subtasks;
+    delete normalized.subtask_index;
+    delete normalized.completed;
+    delete normalized.command;
+    return normalized;
+  }
+
   return normalized;
 };
 
 export const shouldShowActionHint = (
   toolName: string,
   formValues: Record<string, string>,
-): boolean => isPlanningWithFilesTool(toolName) && !getAction(formValues.action);
+  options?: PlanningDetectionOptions,
+): boolean => isPlanningWithFilesTool(toolName, options) && !getAction(formValues.action);
 
 const toFormStringValues = (input: Record<string, unknown>): Record<string, string> => {
   const out: Record<string, string> = {};
@@ -317,13 +388,36 @@ export const toolPresetFormValues = (toolName: string, presetId: string): Record
   return toFormStringValues(preset.input);
 };
 
-export const PLANNING_FLOW_PRESETS: PlanningFlowPreset[] = getToolDryRunPresets(EXTERNAL_PLANNING_TOOL_NAME);
+const resolvePlanningPresetSourceTool = (): string | null => {
+  const entries = Object.entries(TOOL_DRY_RUN_PRESETS);
+  for (const [toolName, presets] of entries) {
+    const actions = new Set(
+      presets
+        .map((preset) => getAction(preset.input.action))
+        .filter((action) => PLANNING_ACTIONS.has(action)),
+    );
+    if (actions.has('create') && actions.has('update') && actions.has('status')) {
+      return toolName;
+    }
+  }
+  return null;
+};
+
+const PLANNING_PRESET_SOURCE_TOOL = resolvePlanningPresetSourceTool();
+
+export const PLANNING_FLOW_PRESETS: PlanningFlowPreset[] = PLANNING_PRESET_SOURCE_TOOL
+  ? getToolDryRunPresets(PLANNING_PRESET_SOURCE_TOOL)
+  : [];
 
 /* Backward-compatible wrappers for planning-specific call sites/tests */
 export const getPlanningFlowPreset = (presetId: string): PlanningFlowPreset | null => (
-  getToolDryRunPreset(EXTERNAL_PLANNING_TOOL_NAME, presetId)
+  PLANNING_PRESET_SOURCE_TOOL
+    ? getToolDryRunPreset(PLANNING_PRESET_SOURCE_TOOL, presetId)
+    : null
 );
 
 export const planningPresetFormValues = (presetId: string): Record<string, string> => (
-  toolPresetFormValues(EXTERNAL_PLANNING_TOOL_NAME, presetId)
+  PLANNING_PRESET_SOURCE_TOOL
+    ? toolPresetFormValues(PLANNING_PRESET_SOURCE_TOOL, presetId)
+    : {}
 );

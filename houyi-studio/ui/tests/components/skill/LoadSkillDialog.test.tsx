@@ -71,6 +71,7 @@ describe('LoadSkillDialog', () => {
     fireEvent.click(screen.getByTestId('load-mode-directory'));
     expect(screen.queryByTestId('load-skill-browse-file')).not.toBeInTheDocument();
     expect(screen.queryByTestId('load-skill-browse-folder')).not.toBeInTheDocument();
+    expect(screen.getByTestId('directory-path-web-note')).toBeInTheDocument();
 
     fireEvent.click(screen.getByTestId('load-mode-url'));
     expect(screen.queryByTestId('load-skill-browse-file')).not.toBeInTheDocument();
@@ -175,6 +176,32 @@ describe('LoadSkillDialog', () => {
     expect(submitBtn).not.toBeDisabled();
   });
 
+  it('clears success message when switching source mode tabs', () => {
+    const onLoad = vi.fn();
+    const onClose = vi.fn();
+    const { rerender } = render(
+      <LoadSkillDialog isOpen={true} onLoad={onLoad} onClose={onClose} loadResult={null} />,
+    );
+
+    fireEvent.change(screen.getByTestId('load-skill-source-input'), {
+      target: { value: '/path/SKILL.md' },
+    });
+    fireEvent.click(screen.getByTestId('load-skill-submit'));
+
+    rerender(
+      <LoadSkillDialog
+        isOpen={true}
+        onLoad={onLoad}
+        onClose={onClose}
+        loadResult={{ success: true, message: 'Skill "test" loaded' }}
+      />,
+    );
+
+    expect(screen.getByTestId('load-skill-success')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('load-mode-url'));
+    expect(screen.queryByTestId('load-skill-success')).not.toBeInTheDocument();
+  });
+
   // ─── Validation ───────────────────────────────────────────────
 
   it('shows error for empty path on submit', () => {
@@ -228,6 +255,44 @@ describe('LoadSkillDialog', () => {
     expect(screen.getByTestId('directory-install-strategy')).toBeInTheDocument();
     expect(screen.getByTestId('install-strategy-copy')).toBeInTheDocument();
     expect(screen.getByTestId('install-strategy-symlink')).toBeInTheDocument();
+  });
+
+  it('updates install strategy hint text when toggling copy/symlink', () => {
+    render(<LoadSkillDialog {...defaultProps} />);
+    fireEvent.click(screen.getByTestId('load-mode-directory'));
+
+    expect(screen.getByTestId('install-strategy-hint')).toHaveTextContent(
+      'symlink keeps managed local sources pointing to your original directory and links that into skills.',
+    );
+
+    fireEvent.click(screen.getByTestId('install-strategy-copy'));
+    expect(screen.getByTestId('install-strategy-hint')).toHaveTextContent(
+      'copy snapshots the directory into managed local sources before linking into skills.',
+    );
+
+    fireEvent.click(screen.getByTestId('install-strategy-symlink'));
+    expect(screen.getByTestId('install-strategy-hint')).toHaveTextContent(
+      'symlink keeps managed local sources pointing to your original directory and links that into skills.',
+    );
+  });
+
+  it('toggles selected install strategy button styles between symlink and copy', () => {
+    render(<LoadSkillDialog {...defaultProps} />);
+    fireEvent.click(screen.getByTestId('load-mode-directory'));
+
+    const copyBtn = screen.getByTestId('install-strategy-copy');
+    const symlinkBtn = screen.getByTestId('install-strategy-symlink');
+
+    expect(symlinkBtn.className).toContain('border-blue-500/50');
+    expect(copyBtn.className).not.toContain('border-blue-500/50');
+
+    fireEvent.click(copyBtn);
+    expect(copyBtn.className).toContain('border-blue-500/50');
+    expect(symlinkBtn.className).not.toContain('border-blue-500/50');
+
+    fireEvent.click(symlinkBtn);
+    expect(symlinkBtn.className).toContain('border-blue-500/50');
+    expect(copyBtn.className).not.toContain('border-blue-500/50');
   });
 
   it('submits directory mode with default symlink strategy', () => {

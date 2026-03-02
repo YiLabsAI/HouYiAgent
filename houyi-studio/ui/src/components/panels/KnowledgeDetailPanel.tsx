@@ -54,6 +54,7 @@ export const KnowledgeDetailPanel: React.FC<KnowledgeDetailPanelProps> = ({
   const selectedLibraryId = useConsoleStore((s) => s.selectedLibraryId);
   const knowledgeLibraries = useConsoleStore((s) => s.knowledgeLibraries);
   const isIngesting = useConsoleStore((s) => s.isIngesting);
+  const ingestOperation = useConsoleStore((s) => s.ingestOperation);
   const ingestLibraryId = useConsoleStore((s) => s.ingestLibraryId);
   const ingestProgress = useConsoleStore((s) => s.ingestProgress);
 
@@ -74,6 +75,7 @@ export const KnowledgeDetailPanel: React.FC<KnowledgeDetailPanelProps> = ({
   const modeStyle = MODE_STYLES[library.mode] ?? MODE_STYLES.auto;
   const indexStatus = getIndexStatus(library.doc_count, library.chunk_count);
   const isCurrentIngesting = isIngesting && ingestLibraryId === library.library_id;
+  const showImportProgress = isCurrentIngesting && ingestOperation === 'import';
 
   return (
     <div className="flex flex-col gap-3 p-3 text-xs">
@@ -119,7 +121,7 @@ export const KnowledgeDetailPanel: React.FC<KnowledgeDetailPanelProps> = ({
           <span className="text-gray-400">Index Status</span>
           <span className={`font-medium ${indexStatus.color}`}>{indexStatus.label}</span>
         </div>
-        {isCurrentIngesting && (
+        {showImportProgress && (
           <div className="mt-2">
             <div className="flex items-center justify-between text-[10px] text-gray-400 mb-1">
               <span>Ingesting...</span>

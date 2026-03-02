@@ -7,7 +7,7 @@ import { History, Flag, Search, Bookmark, Palette } from 'lucide-react';
 
 // NOTE(core): Title Bar "mode" is a lightweight UI toggle (top-level workspace view switch).
 interface HeaderProps {
-  onOpenBottomPanel?: (tab: 'observability' | 'checkpoints' | 'context' | 'logs' | 'knowledge') => void;
+  onOpenBottomPanel?: (tab: 'observability' | 'checkpoints' | 'context' | 'logs') => void;
   primaryMode: PrimaryMode;
   onSetPrimaryMode: (mode: PrimaryMode) => void;
   onOpenGlobalSettings?: () => void;

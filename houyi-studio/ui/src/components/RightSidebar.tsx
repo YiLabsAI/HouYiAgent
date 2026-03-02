@@ -30,6 +30,7 @@ interface RightSidebarProps {
   onConfigureSkill?: () => void;
   onDryRunSkill?: () => void;
   onUnloadSkill?: (skillName: string) => void;
+  onRemoveSkillFromDisk?: (skillName: string) => void;
   /** Called when user clicks [Full Settings...] in ConversationSettingsPanel. */
   onOpenChatSettings?: () => void;
   /** Called when user clicks [Configure...] in KnowledgeDetailPanel. */
@@ -67,6 +68,7 @@ interface SecondaryContentProps {
   onConfigureSkill?: () => void;
   onDryRunSkill?: () => void;
   onUnloadSkill?: (skillName: string) => void;
+  onRemoveSkillFromDisk?: (skillName: string) => void;
   onOpenChatSettings?: () => void;
   onConfigureKnowledge?: (libraryId: string) => void;
   onRebuildKnowledgeIndex?: (libraryId: string) => void;
@@ -80,6 +82,7 @@ const SecondaryContent: React.FC<SecondaryContentProps> = ({
   onConfigureSkill,
   onDryRunSkill,
   onUnloadSkill,
+  onRemoveSkillFromDisk,
   onOpenChatSettings,
   onConfigureKnowledge,
   onRebuildKnowledgeIndex,
@@ -96,6 +99,7 @@ const SecondaryContent: React.FC<SecondaryContentProps> = ({
           onConfigure={onConfigureSkill}
           onDryRun={onDryRunSkill}
           onUnload={onUnloadSkill}
+          onRemoveFromDisk={onRemoveSkillFromDisk}
         />
       );
     case 'knowledge':
@@ -123,6 +127,7 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
   onConfigureSkill,
   onDryRunSkill,
   onUnloadSkill,
+  onRemoveSkillFromDisk,
   onOpenChatSettings,
   onConfigureKnowledge,
   onRebuildKnowledgeIndex,
@@ -191,6 +196,7 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
               onConfigureSkill={onConfigureSkill}
               onDryRunSkill={onDryRunSkill}
               onUnloadSkill={onUnloadSkill}
+              onRemoveSkillFromDisk={onRemoveSkillFromDisk}
               onOpenChatSettings={onOpenChatSettings}
               onConfigureKnowledge={onConfigureKnowledge}
               onRebuildKnowledgeIndex={onRebuildKnowledgeIndex}

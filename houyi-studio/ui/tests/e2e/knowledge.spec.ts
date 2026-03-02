@@ -390,6 +390,18 @@ async function openKnowledgePanel(page: Page): Promise<void> {
   await page.waitForTimeout(300);
 }
 
+async function expectKnowledgeResultsInCenterStage(page: Page): Promise<void> {
+  await expect(page.getByTestId('center-stage-panel')).toBeVisible({ timeout: 5000 });
+  await expect(page.getByText('Knowledge Results')).toBeVisible({ timeout: 5000 });
+}
+
+async function switchToChatMode(page: Page): Promise<void> {
+  await page.locator('button', { hasText: 'Chat' }).first().click();
+  await expect(
+    page.getByTestId('chat-empty-state').or(page.getByTestId('chat-page')),
+  ).toBeVisible({ timeout: 5000 });
+}
+
 /**
  * Create a library using the UI
  */
@@ -498,6 +510,38 @@ test.describe('Knowledge UI - Basic Operations', () => {
     // Library should be gone
     await expect(page.locator('.bg-gray-900.border.rounded').filter({ hasText: 'Library To Delete' })).not.toBeVisible({ timeout: 5000 });
   });
+
+  test('keeps knowledge search result experience consistent in Graph and Chat', async ({ page }) => {
+    await createLibrary(page, 'Cross Mode Library');
+    await clickLibraryCard(page, 'Cross Mode Library');
+
+    const searchInput = page.getByPlaceholder(/search/i);
+    await searchInput.fill('graph mode query');
+    await searchInput.press('Enter');
+
+    await expectKnowledgeResultsInCenterStage(page);
+    await expect(page.getByText(/Mock result for: graph mode query/i)).toBeVisible({ timeout: 5000 });
+
+    await page.getByTestId('center-stage-close').click();
+    await switchToChatMode(page);
+    const knowledgeHeading = page.getByText('Knowledge Libraries');
+    if (!(await knowledgeHeading.isVisible())) {
+      await page.getByLabel('Knowledge').click();
+      await expect(knowledgeHeading).toBeVisible({ timeout: 10000 });
+    }
+    await clickLibraryCard(page, 'Cross Mode Library');
+
+    await page.evaluate(() => {
+      const store = (window as any).__consoleStore;
+      const state = store.getState();
+      const targetLibId = state.selectedLibraryId || state.knowledgeLibraries?.[0]?.library_id;
+      state.searchKnowledge('chat mode query', targetLibId);
+    });
+
+    await expectKnowledgeResultsInCenterStage(page);
+    await expect(page.getByText(/Mock result for: chat mode query/i)).toBeVisible({ timeout: 5000 });
+    await expect(page.getByRole('button', { name: 'Observability' })).not.toBeVisible();
+  });
 });
 
 test.describe('Knowledge UI - Search', () => {
@@ -519,8 +563,7 @@ test.describe('Knowledge UI - Search', () => {
     await searchInput.fill('test query');
     await searchInput.press('Enter');
 
-    // Open Knowledge tab in bottom panel
-    await page.getByRole('button', { name: 'Knowledge' }).last().click();
+    await expectKnowledgeResultsInCenterStage(page);
 
     // Should show results
     await expect(page.getByText(/Mock result for/i)).toBeVisible({ timeout: 5000 });
@@ -539,7 +582,7 @@ test.describe('Knowledge UI - Search', () => {
     await searchInput.fill('test');
     await searchInput.press('Enter');
 
-    await page.getByRole('button', { name: 'Knowledge' }).last().click();
+    await expectKnowledgeResultsInCenterStage(page);
     await expect(page.getByText(/Mock result/i)).toBeVisible({ timeout: 5000 });
 
     // Click stats button to show statistics
@@ -818,8 +861,7 @@ test.describe('Knowledge UI - Search Results Display', () => {
     await searchInput.fill('test query');
     await searchInput.press('Enter');
 
-    // Open Knowledge tab in bottom panel
-    await page.getByRole('button', { name: 'Knowledge' }).last().click();
+    await expectKnowledgeResultsInCenterStage(page);
 
     // Wait for results
     await expect(page.getByText(/Mock result for/i)).toBeVisible({ timeout: 5000 });
@@ -864,7 +906,7 @@ test.describe('Knowledge UI - Search Results Display', () => {
     await searchInput.fill('nonexistent');
     await searchInput.press('Enter');
 
-    await page.getByRole('button', { name: 'Knowledge' }).last().click();
+    await expectKnowledgeResultsInCenterStage(page);
 
     // Should show no results message (exact text to avoid matching library name)
     await expect(page.getByText('No results found')).toBeVisible({ timeout: 5000 });
@@ -878,7 +920,7 @@ test.describe('Knowledge UI - Search Results Display', () => {
     await searchInput.fill('test');
     await searchInput.press('Enter');
 
-    await page.getByRole('button', { name: 'Knowledge' }).last().click();
+    await expectKnowledgeResultsInCenterStage(page);
     await expect(page.getByText(/Mock result/i)).toBeVisible({ timeout: 5000 });
 
     // Clear the search input
@@ -1010,8 +1052,7 @@ test.describe('Knowledge UI - v1.1 Quality Summary', () => {
     await searchInput.fill('test query');
     await searchInput.press('Enter');
 
-    // Open Knowledge tab in bottom panel
-    await page.getByRole('button', { name: 'Knowledge' }).last().click();
+    await expectKnowledgeResultsInCenterStage(page);
 
     // Wait for results
     await expect(page.getByText(/Mock result for/i)).toBeVisible({ timeout: 5000 });
@@ -1028,7 +1069,7 @@ test.describe('Knowledge UI - v1.1 Quality Summary', () => {
     await searchInput.fill('test');
     await searchInput.press('Enter');
 
-    await page.getByRole('button', { name: 'Knowledge' }).last().click();
+    await expectKnowledgeResultsInCenterStage(page);
     await expect(page.getByText(/Mock result/i)).toBeVisible({ timeout: 5000 });
 
     // Should show quality indicators
@@ -1045,7 +1086,7 @@ test.describe('Knowledge UI - v1.1 Quality Summary', () => {
     await searchInput.fill('distribution test');
     await searchInput.press('Enter');
 
-    await page.getByRole('button', { name: 'Knowledge' }).last().click();
+    await expectKnowledgeResultsInCenterStage(page);
     await expect(page.getByText(/Mock result/i)).toBeVisible({ timeout: 5000 });
 
     // Should show score range (min - max)
@@ -1061,7 +1102,7 @@ test.describe('Knowledge UI - v1.1 Quality Summary', () => {
     await searchInput.fill('score test');
     await searchInput.press('Enter');
 
-    await page.getByRole('button', { name: 'Knowledge' }).last().click();
+    await expectKnowledgeResultsInCenterStage(page);
     await expect(page.getByText(/Mock result/i)).toBeVisible({ timeout: 5000 });
 
     // Should show individual scores (95%, 82%, 65%)
@@ -1078,7 +1119,7 @@ test.describe('Knowledge UI - v1.1 Quality Summary', () => {
     await searchInput.fill('toggle test');
     await searchInput.press('Enter');
 
-    await page.getByRole('button', { name: 'Knowledge' }).last().click();
+    await expectKnowledgeResultsInCenterStage(page);
     await expect(page.getByText(/Mock result/i)).toBeVisible({ timeout: 5000 });
 
     // Quality Summary should be visible by default
@@ -1164,7 +1205,7 @@ test.describe('Knowledge UI - Retrieval Strategies', () => {
     await searchInput.fill('test strategies');
     await searchInput.press('Enter');
 
-    await page.getByRole('button', { name: 'Knowledge' }).last().click();
+    await expectKnowledgeResultsInCenterStage(page);
     await expect(page.getByText('Test result with strategies')).toBeVisible({ timeout: 5000 });
 
     // Should show strategies indicator (BM25+VECTOR)
@@ -1226,7 +1267,7 @@ test.describe('Knowledge UI - Retrieval Strategies', () => {
     await searchInput.fill('graph test');
     await searchInput.press('Enter');
 
-    await page.getByRole('button', { name: 'Knowledge' }).last().click();
+    await expectKnowledgeResultsInCenterStage(page);
     await expect(page.getByText('Test result with graph')).toBeVisible({ timeout: 5000 });
 
     // Should show all three strategies
@@ -1288,7 +1329,7 @@ test.describe('Knowledge UI - Retrieval Strategies', () => {
     await searchInput.fill('bm25 test');
     await searchInput.press('Enter');
 
-    await page.getByRole('button', { name: 'Knowledge' }).last().click();
+    await expectKnowledgeResultsInCenterStage(page);
     await expect(page.getByText('BM25 only result')).toBeVisible({ timeout: 5000 });
 
     // Should show only BM25 strategy (no VECTOR or GRAPH)

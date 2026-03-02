@@ -55,6 +55,13 @@ describe('SkillDetailPanel', () => {
     expect(screen.getByText('Loading skill detail...')).toBeInTheDocument();
   });
 
+  it('should keep current detail visible while refreshing', () => {
+    render(<SkillDetailPanel detail={createDetail()} metrics={null} isLoading={true} />);
+    expect(screen.getByText('Planning with Files')).toBeInTheDocument();
+    expect(screen.getByTestId('skill-detail-loading-indicator')).toHaveTextContent('Refreshing...');
+    expect(screen.queryByText('Loading skill detail...')).not.toBeInTheDocument();
+  });
+
   // ─── Empty state ───────────────────────────────────────────────
 
   it('should show empty state when no detail', () => {
@@ -321,12 +328,26 @@ describe('SkillDetailPanel', () => {
 
   // ─── Action buttons ────────────────────────────────────────────
 
-  it('should render Configure, Dry-run, and Unload buttons', () => {
+  it('should render Configure, Dry-run, and More actions buttons', () => {
     render(<SkillDetailPanel detail={createDetail()} metrics={null} isLoading={false} />);
     const actions = screen.getByTestId('skill-actions');
     expect(actions).toHaveTextContent('Configure...');
     expect(actions).toHaveTextContent('Dry-run');
-    expect(actions).toHaveTextContent('Unload');
+    expect(actions).toHaveTextContent('More actions');
+    expect(screen.queryByText('Unload')).not.toBeInTheDocument();
+    expect(screen.queryByText('Remove from disk')).not.toBeInTheDocument();
+  });
+
+  it('should hide remove-from-disk action for core skills', () => {
+    render(
+      <SkillDetailPanel
+        detail={createDetail({ is_core: true, source: 'builtin' as any })}
+        metrics={null}
+        isLoading={false}
+      />,
+    );
+    fireEvent.click(screen.getByTestId('skill-more-actions-button'));
+    expect(screen.queryByTestId('skill-remove-disk-button')).not.toBeInTheDocument();
   });
 
   it('should trigger onConfigure when Configure is clicked', () => {
@@ -368,6 +389,8 @@ describe('SkillDetailPanel', () => {
         onUnload={onUnload}
       />
     );
+    fireEvent.click(screen.getByTestId('skill-more-actions-button'));
+
     // Click Unload — should NOT immediately call onUnload
     fireEvent.click(screen.getByText('Unload'));
     expect(onUnload).not.toHaveBeenCalled();
@@ -391,6 +414,7 @@ describe('SkillDetailPanel', () => {
       />
     );
     // Open confirm dialog
+    fireEvent.click(screen.getByTestId('skill-more-actions-button'));
     fireEvent.click(screen.getByText('Unload'));
 
     // Click the confirm button inside the dialog (labeled "Unload")
@@ -411,6 +435,7 @@ describe('SkillDetailPanel', () => {
       />
     );
     // Open confirm dialog
+    fireEvent.click(screen.getByTestId('skill-more-actions-button'));
     fireEvent.click(screen.getByText('Unload'));
 
     // Click Cancel
@@ -419,6 +444,28 @@ describe('SkillDetailPanel', () => {
 
     // Dialog should be closed
     expect(screen.queryByText('Unload Skill')).not.toBeInTheDocument();
+  });
+
+  it('should require two confirmations before removing from disk', () => {
+    const onRemoveFromDisk = vi.fn();
+    render(
+      <SkillDetailPanel
+        detail={createDetail()}
+        metrics={null}
+        isLoading={false}
+        onRemoveFromDisk={onRemoveFromDisk}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId('skill-more-actions-button'));
+    fireEvent.click(screen.getByTestId('skill-remove-disk-button'));
+    expect(screen.getByText('Remove Skill from Disk')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText('Continue'));
+    expect(screen.getByText('Confirm Permanent Removal')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText('Remove Permanently'));
+    expect(onRemoveFromDisk).toHaveBeenCalledWith('planning-with-files');
   });
 
   // ─── Capability section ──────────────────────────────────────────

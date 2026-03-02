@@ -1,5 +1,5 @@
 import React from 'react';
-import { Package, RefreshCw, ChevronRight, Shield, Zap, AlertTriangle, Check, Plus } from 'lucide-react';
+import { Package, RefreshCw, ChevronRight, ChevronDown, Shield, Zap, AlertTriangle, Check, Plus } from 'lucide-react';
 import type { SkillSummary } from '../../types/websocket';
 
 interface SkillsListProps {
@@ -157,65 +157,142 @@ export const SkillsList: React.FC<SkillsListProps> = ({
   const coreSkills = skills.filter((s) => s.is_core);
   const builtinSkills = skills.filter((s) => !s.is_core && (s.source || 'local') === 'builtin');
   const externalSkills = skills.filter((s) => !s.is_core && (s.source || 'local') !== 'builtin');
+  const [collapsedExternalGroups, setCollapsedExternalGroups] = React.useState<Record<string, boolean>>(() => {
+    if (typeof window === 'undefined') {
+      return {};
+    }
+    try {
+      const raw = window.sessionStorage.getItem('skills.external.groups.collapsed');
+      if (!raw) {
+        return {};
+      }
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object') {
+        return parsed as Record<string, boolean>;
+      }
+    } catch {
+      // ignore parse/storage errors
+    }
+    return {};
+  });
+
+  const toggleExternalGroup = (groupKey: string) => {
+    setCollapsedExternalGroups((prev) => {
+      const next = {
+        ...prev,
+        [groupKey]: !prev[groupKey],
+      };
+      if (typeof window !== 'undefined') {
+        try {
+          window.sessionStorage.setItem('skills.external.groups.collapsed', JSON.stringify(next));
+        } catch {
+          // ignore storage errors
+        }
+      }
+      return next;
+    });
+  };
+
+  const externalGroups = externalSkills.reduce<Record<string, SkillSummary[]>>((acc, skill) => {
+    const key = (skill.source_group || '').trim() || 'others';
+    if (!acc[key]) {
+      acc[key] = [];
+    }
+    acc[key].push(skill);
+    return acc;
+  }, {});
+
+  const renderSkillCard = (skill: SkillSummary) => (
+    <button
+      key={skill.name}
+      onClick={() => onSelectSkill(skill.name)}
+      className={`w-full text-left p-2 rounded transition-colors ${
+        selectedSkill === skill.name
+          ? 'bg-blue-900/50 border border-blue-700'
+          : 'bg-gray-900 border border-gray-700 hover:border-gray-600'
+      }`}
+    >
+      <div className="flex items-start justify-between">
+        <div className="flex items-center gap-2 min-w-0">
+          <Package size={14} className="text-gray-400 shrink-0" />
+          <div className="min-w-0">
+            <div className="text-xs font-medium text-gray-200 truncate">
+              {skill.display_name}
+            </div>
+            {skill.description && (
+              <div className="text-[10px] text-gray-500 truncate mt-0.5">
+                {skill.description}
+              </div>
+            )}
+          </div>
+        </div>
+        <ChevronRight size={14} className="text-gray-500 shrink-0 mt-0.5" />
+      </div>
+
+      <div className="flex items-center gap-1.5 mt-2 flex-wrap">
+        {skill.is_core && <CoreBadge />}
+        {skill.is_external_alias && (
+          <span
+            className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] border bg-amber-900/40 text-amber-300 border-amber-700/60"
+            title={skill.alias_target ? `External alias of core skill: ${skill.alias_target}` : 'External alias skill'}
+          >
+            {skill.alias_target ? `ext→${skill.alias_target}` : 'ext'}
+          </span>
+        )}
+        <SourceBadge source={skill.source} isCore={skill.is_core} />
+        <PolicyBadge action={skill.policy_action} />
+        <SideEffectBadge effect={skill.side_effect} />
+        <CertificationBadge level={skill.certification} />
+        <RuntimeBadge capabilityTier={skill.capability_tier} runtimeStatus={skill.runtime_status} />
+        {skill.tools.length > 0 && (
+          <span className="text-[10px] text-gray-500">
+            {skill.tools.length} tool{skill.tools.length > 1 ? 's' : ''}
+          </span>
+        )}
+      </div>
+    </button>
+  );
 
   const renderSection = (title: string, items: SkillSummary[]) => {
     if (items.length === 0) return null;
+
+    if (title === 'External') {
+      const groupKeys = Object.keys(externalGroups).sort((a, b) => {
+        if (a === 'others') return 1;
+        if (b === 'others') return -1;
+        return a.localeCompare(b);
+      });
+      return (
+        <div className="space-y-1" data-testid="skills-group-external">
+          <div className="px-1 pt-2 pb-1 text-[10px] uppercase tracking-wide text-gray-500">
+            {title} ({items.length})
+          </div>
+          {groupKeys.map((groupKey) => (
+            <div key={groupKey} className="space-y-1" data-testid={`skills-subgroup-${groupKey}`}>
+              <button
+                type="button"
+                onClick={() => toggleExternalGroup(groupKey)}
+                className="w-full flex items-center justify-between px-1 py-1 rounded hover:bg-gray-800/70 transition-colors"
+              >
+                <div className="flex items-center gap-1 text-[10px] text-gray-400">
+                  {collapsedExternalGroups[groupKey] ? <ChevronRight size={11} /> : <ChevronDown size={11} />}
+                  <span>{groupKey === 'others' ? 'Other External Skills' : groupKey}</span>
+                </div>
+                <span className="text-[10px] text-gray-500">{externalGroups[groupKey].length}</span>
+              </button>
+              {!collapsedExternalGroups[groupKey] && externalGroups[groupKey].map((skill) => renderSkillCard(skill))}
+            </div>
+          ))}
+        </div>
+      );
+    }
+
     return (
       <div className="space-y-1" data-testid={`skills-group-${title.toLowerCase()}`}>
         <div className="px-1 pt-2 pb-1 text-[10px] uppercase tracking-wide text-gray-500">
           {title} ({items.length})
         </div>
-        {items.map((skill) => (
-          <button
-            key={skill.name}
-            onClick={() => onSelectSkill(skill.name)}
-            className={`w-full text-left p-2 rounded transition-colors ${
-              selectedSkill === skill.name
-                ? 'bg-blue-900/50 border border-blue-700'
-                : 'bg-gray-900 border border-gray-700 hover:border-gray-600'
-            }`}
-          >
-            <div className="flex items-start justify-between">
-              <div className="flex items-center gap-2 min-w-0">
-                <Package size={14} className="text-gray-400 shrink-0" />
-                <div className="min-w-0">
-                  <div className="text-xs font-medium text-gray-200 truncate">
-                    {skill.display_name}
-                  </div>
-                  {skill.description && (
-                    <div className="text-[10px] text-gray-500 truncate mt-0.5">
-                      {skill.description}
-                    </div>
-                  )}
-                </div>
-              </div>
-              <ChevronRight size={14} className="text-gray-500 shrink-0 mt-0.5" />
-            </div>
-
-            {/* Badges Row */}
-            <div className="flex items-center gap-1.5 mt-2 flex-wrap">
-              {skill.is_core && <CoreBadge />}
-              {skill.is_external_alias && (
-                <span
-                  className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] border bg-amber-900/40 text-amber-300 border-amber-700/60"
-                  title={skill.alias_target ? `External alias of core skill: ${skill.alias_target}` : 'External alias skill'}
-                >
-                  {skill.alias_target ? `ext→${skill.alias_target}` : 'ext'}
-                </span>
-              )}
-              <SourceBadge source={skill.source} isCore={skill.is_core} />
-              <PolicyBadge action={skill.policy_action} />
-              <SideEffectBadge effect={skill.side_effect} />
-              <CertificationBadge level={skill.certification} />
-              <RuntimeBadge capabilityTier={skill.capability_tier} runtimeStatus={skill.runtime_status} />
-              {skill.tools.length > 0 && (
-                <span className="text-[10px] text-gray-500">
-                  {skill.tools.length} tool{skill.tools.length > 1 ? 's' : ''}
-                </span>
-              )}
-            </div>
-          </button>
-        ))}
+        {items.map((skill) => renderSkillCard(skill))}
       </div>
     );
   };
@@ -238,7 +315,7 @@ export const SkillsList: React.FC<SkillsListProps> = ({
             onClick={onRefresh}
             className="p-1 hover:bg-gray-700 rounded text-gray-400 hover:text-gray-200 transition-colors"
             title="Refresh skills"
-            disabled={isLoading}
+            aria-busy={isLoading}
           >
             <RefreshCw size={14} className={isLoading ? 'animate-spin' : ''} />
           </button>
@@ -264,7 +341,7 @@ export const SkillsList: React.FC<SkillsListProps> = ({
       )}
 
       {/* Skills List */}
-      {isLoading ? (
+      {isLoading && skills.length === 0 ? (
         <div className="text-xs text-gray-500 text-center py-4">Loading skills...</div>
       ) : skills.length === 0 ? (
         <div className="bg-gray-900 border border-gray-700 rounded p-3 text-center">

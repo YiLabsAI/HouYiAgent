@@ -83,6 +83,7 @@ class SkillSerializer:
         side = SIDE_EFFECT_NONE
         if hasattr(skill, "permissions") and skill.permissions:
             side = dominant_side_effect(skill.permissions)
+        source = self._source(skill)
 
         name = str(getattr(skill, "name", "") or "")
         is_external_alias = name.startswith("ext__")
@@ -99,7 +100,8 @@ class SkillSerializer:
             "side_effect": side,
             "certification": getattr(skill, "certification", "unverified"),
             "is_core": bool(getattr(skill, "is_core", False)),
-            "source": self._source(skill),
+            "source": source,
+            "source_group": self._source_group(skill, source),
             "capability_tier": self._capability_tier(skill),
             "runtime_status": self._runtime_status(skill),
             "is_external_alias": is_external_alias,
@@ -119,6 +121,12 @@ class SkillSerializer:
         policy = self._serialize_policy(skill)
         instructions = getattr(skill, "instructions", None)
         package_examples = self._load_package_examples(skill)
+        try:
+            from .dry_run import _collect_available_workflows
+
+            available_workflows = _collect_available_workflows(skill)
+        except Exception:
+            available_workflows = []
         return {
             **summary,
             "version": version,
@@ -130,6 +138,7 @@ class SkillSerializer:
             "instructions": instructions,
             "hook_specs": self._serialize_hook_specs(skill),
             "package_examples": package_examples,
+            "available_workflows": available_workflows,
         }
 
     @staticmethod
@@ -526,7 +535,9 @@ class SkillSerializer:
         for block in json_blocks:
             try:
                 payload = json.loads(block.strip())
-                if isinstance(payload, dict):
+                if isinstance(payload, dict) and SkillSerializer._looks_like_invocation_payload(
+                    payload
+                ):
                     return payload
             except (ValueError, TypeError):
                 continue
@@ -539,6 +550,34 @@ class SkillSerializer:
             input_data["task"] = fallback_task
 
         return input_data
+
+    @staticmethod
+    def _looks_like_invocation_payload(payload: dict[str, Any]) -> bool:
+        keys = {str(k) for k in payload}
+        if not keys:
+            return False
+
+        schema_only_keys = {
+            "$id",
+            "$schema",
+            "title",
+            "description",
+            "type",
+            "properties",
+            "required",
+            "items",
+            "definitions",
+            "$defs",
+            "additionalProperties",
+            "oneOf",
+            "anyOf",
+            "allOf",
+        }
+
+        if keys <= schema_only_keys:
+            return False
+
+        return not ({"type", "properties"}.issubset(keys) and len(keys - schema_only_keys) == 0)
 
     @staticmethod
     def _extract_shell_command(text: str) -> str:
@@ -810,6 +849,56 @@ class SkillSerializer:
         if isinstance(instructions, str) and instructions.strip():
             return "prompt_instructions"
         return "none"
+
+    @staticmethod
+    def _source_group(skill: SkillSpec, source: str) -> str | None:
+        """Best-effort package grouping key for external/community skills.
+
+        Example: ~/.houyi/skills/superpowers/skills/using-git-worktrees/SKILL.md
+        => source_group = "superpowers"
+        """
+        if source == SOURCE_BUILTIN or bool(getattr(skill, "is_core", False)):
+            return None
+
+        skill_md_path = str(getattr(skill, "skill_md_path", "") or "")
+        if not skill_md_path or skill_md_path.startswith(("http://", "https://")):
+            return None
+
+        try:
+            resolved = Path(skill_md_path).resolve()
+        except Exception:
+            return None
+
+        parts = list(resolved.parts)
+        for idx in range(len(parts) - 2):
+            if parts[idx] == ".houyi" and parts[idx + 1] == "skills":
+                candidate = parts[idx + 2].strip()
+                return candidate or None
+
+        for idx in range(len(parts) - 3):
+            if (
+                parts[idx] == ".houyi"
+                and parts[idx + 1] == "sources"
+                and parts[idx + 2]
+                in {
+                    "local",
+                    "remote",
+                }
+            ):
+                candidate = parts[idx + 3].strip()
+                return candidate or None
+
+        # Generic fallback for ecosystem layouts:
+        #   <package>/skills/<skill-name>/SKILL.md
+        # Detect the package segment right before "skills".
+        for idx, part in enumerate(parts):
+            if part != "skills" or idx == 0:
+                continue
+            candidate = str(parts[idx - 1]).strip()
+            if candidate and candidate not in {".houyi", "sources", "local", "remote", "skills"}:
+                return candidate
+
+        return None
 
     @staticmethod
     def _explicit_trust_source(skill: SkillSpec) -> str | None:

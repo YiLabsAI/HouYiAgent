@@ -556,6 +556,10 @@ class SkillSummary(BaseModel):
         default="local",
         description="Skill source classification (builtin/community/third_party/local)",
     )
+    source_group: str | None = Field(
+        default=None,
+        description="Optional package/group key for external skills",
+    )
     capability_tier: str = Field(
         default="metadata",
         description="How deeply integrated: metadata / schema / executable",
@@ -628,6 +632,10 @@ class SkillDetail(BaseModel):
         default="local",
         description="Skill source classification (builtin/community/third_party/local)",
     )
+    source_group: str | None = Field(
+        default=None,
+        description="Optional package/group key for external skills",
+    )
     capability_tier: str = Field(
         default="metadata",
         description="How deeply integrated: metadata / schema / executable",
@@ -663,6 +671,10 @@ class SkillDetail(BaseModel):
     package_examples: list[dict[str, Any]] = Field(
         default_factory=list,
         description="Package-native dry-run examples loaded from skill assets",
+    )
+    available_workflows: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="Extracted workflow candidates for script-compatible skills",
     )
 
 
@@ -847,6 +859,10 @@ class DryRunResult(BaseModel):
     estimated_side_effects: list[str] = Field(
         default_factory=list,
         description="Predicted side effects",
+    )
+    available_workflows: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="Extracted workflow candidates for script-compatible skills",
     )
     llm_verification: LlmVerificationResult | None = Field(
         default=None,

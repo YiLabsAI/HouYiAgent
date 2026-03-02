@@ -8,6 +8,7 @@ from houyi_studio.server.gateway.commands import (
     DryRunSkillCommand,
     GetSkillDetailCommand,
     ListSkillsCommand,
+    RemoveSkillFromDiskCommand,
 )
 from houyi_studio.server.gateway.events import (
     DryRunResultEvent,
@@ -15,6 +16,7 @@ from houyi_studio.server.gateway.events import (
     SkillDetailEvent,
     SkillErrorEvent,
     SkillListEvent,
+    SkillUnloadedEvent,
 )
 from houyi_studio.server.skill.command_handler import SkillCommandHandler
 
@@ -53,6 +55,11 @@ class FakeSkillService:
     def unload_skill(self, skill_name: str) -> tuple[bool, str | None]:
         return True, None
 
+    def remove_skill_from_disk(self, skill_name: str) -> tuple[bool, str | None]:
+        if skill_name == "missing":
+            return False, "Skill not found"
+        return True, None
+
     def configure_skill(
         self, skill_name: str, policy_action: str | None = None, auto_invoke: bool | None = None
     ) -> tuple[bool, str | None]:
@@ -75,6 +82,16 @@ class FakeSkillService:
             "policy_result": "allow",
             "capability_gaps": [],
             "estimated_side_effects": [],
+            "available_workflows": [
+                {
+                    "id": "template_1",
+                    "title": "soffice.py",
+                    "command": "python scripts/office/soffice.py --headless --convert-to docx document.doc",
+                    "params": ["convert_to"],
+                    "depends_on": ["soffice"],
+                    "source": "instructions",
+                }
+            ],
         }
 
     def respond_to_consent(self, request_id: str, granted: bool, remember: bool) -> bool:
@@ -133,6 +150,16 @@ async def test_get_skill_detail_defaults_version_when_none() -> None:
         "certification": "silver",
         "side_effect": "none",
         "source": "community",
+        "available_workflows": [
+            {
+                "id": "template_2",
+                "title": "unpack.py",
+                "command": "python scripts/office/unpack.py document.docx unpacked/",
+                "params": ["output_dir"],
+                "depends_on": [],
+                "source": "instructions",
+            }
+        ],
     }
 
     async def send_event(session_id: str, event: object) -> None:
@@ -147,6 +174,8 @@ async def test_get_skill_detail_defaults_version_when_none() -> None:
     assert isinstance(events[0], SkillDetailEvent)
     assert events[0].skill.version is None
     assert events[0].skill.source == "community"
+    assert len(events[0].skill.available_workflows) == 1
+    assert events[0].skill.available_workflows[0]["id"] == "template_2"
 
 
 @pytest.mark.asyncio
@@ -196,3 +225,49 @@ async def test_dry_run_sends_result_event() -> None:
     assert len(events) == 1
     assert isinstance(events[0], DryRunResultEvent)
     assert events[0].result.valid is True
+    assert len(events[0].result.available_workflows) == 1
+    assert events[0].result.available_workflows[0]["id"] == "template_1"
+
+
+@pytest.mark.asyncio
+async def test_remove_skill_from_disk_success_sends_unloaded_event() -> None:
+    events: list[object] = []
+    service = FakeSkillService()
+
+    async def send_event(session_id: str, event: object) -> None:
+        events.append(event)
+
+    handler = SkillCommandHandler(send_event=send_event, skill_service_getter=lambda: service)
+    command = RemoveSkillFromDiskCommand(
+        command_id="cmd_6",
+        session_id="s1",
+        skill_name="planner",
+    )
+
+    await handler.handle(command, "s1")
+
+    assert len(events) == 1
+    assert isinstance(events[0], SkillUnloadedEvent)
+    assert events[0].skill_name == "planner"
+
+
+@pytest.mark.asyncio
+async def test_remove_skill_from_disk_failure_sends_error_event() -> None:
+    events: list[object] = []
+    service = FakeSkillService()
+
+    async def send_event(session_id: str, event: object) -> None:
+        events.append(event)
+
+    handler = SkillCommandHandler(send_event=send_event, skill_service_getter=lambda: service)
+    command = RemoveSkillFromDiskCommand(
+        command_id="cmd_7",
+        session_id="s1",
+        skill_name="missing",
+    )
+
+    await handler.handle(command, "s1")
+
+    assert len(events) == 1
+    assert isinstance(events[0], SkillErrorEvent)
+    assert events[0].error_code == "remove_from_disk_failed"

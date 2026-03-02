@@ -98,6 +98,7 @@ export interface SkillDetailPanelProps {
   onConfigure?: () => void;
   onDryRun?: () => void;
   onUnload?: (skillName: string) => void;
+  onRemoveFromDisk?: (skillName: string) => void;
 }
 
 export const SkillDetailPanel: React.FC<SkillDetailPanelProps> = ({
@@ -107,11 +108,15 @@ export const SkillDetailPanel: React.FC<SkillDetailPanelProps> = ({
   onConfigure,
   onDryRun,
   onUnload,
+  onRemoveFromDisk,
 }) => {
   const [showUnloadConfirm, setShowUnloadConfirm] = useState(false);
+  const [showRemoveConfirm, setShowRemoveConfirm] = useState(false);
+  const [showRemoveFinalConfirm, setShowRemoveFinalConfirm] = useState(false);
+  const [showDangerActions, setShowDangerActions] = useState(false);
   const [descriptionExpanded, setDescriptionExpanded] = useState(false);
 
-  if (isLoading) {
+  if (isLoading && !detail) {
     return (
       <div className="p-4 text-center text-gray-400 text-sm">
         <div className="animate-pulse">Loading skill detail...</div>
@@ -137,6 +142,7 @@ export const SkillDetailPanel: React.FC<SkillDetailPanelProps> = ({
   const hasVersion = Boolean(detail.version && detail.version !== '0.0.0');
   const instructionsLength = detail.instructions_length ?? (detail.instructions?.length ?? 0);
   const hasInstructions = Boolean(detail.instructions && detail.instructions.trim().length > 0);
+  const canRemoveFromDisk = !detail.is_core && (detail.source || 'local') !== 'builtin';
   const hookSpecs = detail.hook_specs ?? [];
   const description = detail.description ?? '';
   const isLongDescription = description.length > 260 || description.split('\n').length > 5;
@@ -163,19 +169,19 @@ export const SkillDetailPanel: React.FC<SkillDetailPanelProps> = ({
     <div className="flex flex-col gap-3 p-3 text-xs">
       {/* ─── Header ─────────────────────────────────────────── */}
       <div className="flex items-start justify-between" data-testid="skill-header">
-        <div>
-          <div className="flex items-center gap-2">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
             <div className="text-sm font-semibold text-gray-200">
               {detail.display_name || detail.name}
             </div>
             {hasVersion && (
-              <span className="px-1.5 py-0.5 rounded bg-gray-700/60 text-[10px] text-gray-300" data-testid="skill-version-chip">
+              <span className="inline-flex items-center h-6 px-2 rounded bg-gray-700/60 text-[10px] text-gray-300" data-testid="skill-version-chip">
                 {versionLabel}
               </span>
             )}
             {detail.is_core && (
               <span
-                className="px-1.5 py-0.5 rounded bg-cyan-900/40 text-[10px] text-cyan-300 border border-cyan-700/60"
+                className="inline-flex items-center h-6 px-2 rounded bg-cyan-900/40 text-[10px] text-cyan-300 border border-cyan-700/60"
                 data-testid="skill-core-chip"
                 title="Host core protected skill"
               >
@@ -184,21 +190,26 @@ export const SkillDetailPanel: React.FC<SkillDetailPanelProps> = ({
             )}
             {detail.is_external_alias && (
               <span
-                className="px-1.5 py-0.5 rounded bg-amber-900/40 text-[10px] text-amber-300 border border-amber-700/60"
+                className="inline-flex items-center h-6 px-2 rounded bg-amber-900/40 text-[10px] text-amber-300 border border-amber-700/60"
                 data-testid="skill-external-alias-chip"
                 title={detail.alias_target ? `External alias of core skill: ${detail.alias_target}` : 'External alias skill'}
               >
                 {detail.alias_target ? `EXT → ${detail.alias_target}` : 'EXT'}
               </span>
             )}
+            <span className={`inline-flex items-center h-6 px-2 rounded text-[10px] font-medium ${cert.bg} ${cert.text}`}>
+              {cert.label}
+            </span>
           </div>
           <div className="text-gray-500 mt-0.5">
             {detail.author ? <span>by {detail.author}</span> : hasVersion ? <span>Version {versionLabel}</span> : null}
+            {isLoading && (
+              <span className="ml-2 text-[10px] text-gray-500" data-testid="skill-detail-loading-indicator">
+                Refreshing...
+              </span>
+            )}
           </div>
         </div>
-        <span className={`px-2 py-0.5 rounded text-[10px] font-medium ${cert.bg} ${cert.text}`}>
-          {cert.label}
-        </span>
       </div>
 
       {description && (
@@ -435,29 +446,59 @@ export const SkillDetailPanel: React.FC<SkillDetailPanelProps> = ({
       </div>
 
       {/* ─── Action bar ─────────────────────────────────────── */}
-      <div className="flex items-center gap-2 pt-1 border-t border-gray-700" data-testid="skill-actions">
+      <div className="space-y-2 pt-1 border-t border-gray-700" data-testid="skill-actions">
         <button
           type="button"
           onClick={onConfigure}
-          className="flex-1 px-2 py-1.5 bg-gray-700 hover:bg-gray-600 text-gray-300 text-[11px] rounded transition-colors"
+          className="w-full px-2 py-1.5 bg-gray-700 hover:bg-gray-600 text-gray-300 text-[11px] rounded transition-colors"
         >
           Configure...
         </button>
         <button
           type="button"
           onClick={() => onDryRun?.()}
-          className="flex-1 px-2 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-[11px] rounded transition-colors"
+          className="w-full px-2 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-[11px] rounded transition-colors"
           data-testid="skill-dry-run-button"
         >
           Dry-run
         </button>
+
         <button
           type="button"
-          onClick={() => setShowUnloadConfirm(true)}
-          className="px-2 py-1.5 bg-red-900/50 hover:bg-red-800/60 text-red-300 text-[11px] rounded transition-colors"
+          onClick={() => setShowDangerActions((prev) => !prev)}
+          className="w-full px-2 py-1.5 bg-gray-800 hover:bg-gray-700 text-gray-300 text-[11px] rounded transition-colors"
+          data-testid="skill-more-actions-button"
         >
-          Unload
+          {showDangerActions ? 'Hide destructive actions' : 'More actions'}
         </button>
+
+        {showDangerActions && (
+          <div className="space-y-1 rounded border border-gray-700/80 bg-gray-900/40 p-1.5" data-testid="skill-danger-actions">
+            <button
+              type="button"
+              onClick={() => {
+                setShowDangerActions(false);
+                setShowUnloadConfirm(true);
+              }}
+              className="w-full px-2 py-1.5 bg-red-900/50 hover:bg-red-800/60 text-red-300 text-[11px] rounded transition-colors"
+            >
+              Unload
+            </button>
+            {canRemoveFromDisk && (
+              <button
+                type="button"
+                onClick={() => {
+                  setShowDangerActions(false);
+                  setShowRemoveConfirm(true);
+                }}
+                className="w-full px-2 py-1.5 bg-red-950/70 hover:bg-red-900/70 text-red-200 text-[11px] rounded transition-colors"
+                data-testid="skill-remove-disk-button"
+              >
+                Remove from disk
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
       {/* ─── Unload confirmation dialog ──────────────────────── */}
@@ -474,6 +515,36 @@ export const SkillDetailPanel: React.FC<SkillDetailPanelProps> = ({
           onUnload?.(detail.name);
         }}
         onCancel={() => setShowUnloadConfirm(false)}
+      />
+
+      <ConfirmDialog
+        isOpen={showRemoveConfirm}
+        title="Remove Skill from Disk"
+        message="This will delete managed local package links/data for this skill (both ~/.houyi/skills and ~/.houyi/sources/local if present). Continue?"
+        itemName={detail.display_name || detail.name}
+        confirmText="Continue"
+        cancelText="Cancel"
+        variant="danger"
+        onConfirm={() => {
+          setShowRemoveConfirm(false);
+          setShowRemoveFinalConfirm(true);
+        }}
+        onCancel={() => setShowRemoveConfirm(false)}
+      />
+
+      <ConfirmDialog
+        isOpen={showRemoveFinalConfirm}
+        title="Confirm Permanent Removal"
+        message="Final confirmation: remove this managed skill package from disk now?"
+        itemName={detail.display_name || detail.name}
+        confirmText="Remove Permanently"
+        cancelText="Cancel"
+        variant="danger"
+        onConfirm={() => {
+          setShowRemoveFinalConfirm(false);
+          onRemoveFromDisk?.(detail.name);
+        }}
+        onCancel={() => setShowRemoveFinalConfirm(false)}
       />
     </div>
   );

@@ -16,6 +16,7 @@ import { CenterStage } from './components/CenterStage';
 import { useConsoleStore } from './stores/useConsoleStore';
 import { useThemeStore } from './stores/useThemeStore';
 import { ObsFullView } from './components/panels/ObsFullView';
+import { KnowledgeResultsPanel } from './components/panels/KnowledgeResultsPanel';
 import { useSkillsLogic } from './components/LeftSidebar/useSkillsLogic';
 import { SkillConfigDialog } from './components/panels/skill/SkillConfigDialog';
 import { DryRunDialog } from './components/panels/skill/DryRunDialog';
@@ -44,6 +45,8 @@ function App() {
   const setRunSettingsOpen = useConsoleStore((state) => state.setRunSettingsOpen);
   const primaryMode = useConsoleStore((s) => s.primaryMode);
   const sidebarTab = useConsoleStore((s) => s.sidebarTab);
+  const isSearchingKnowledge = useConsoleStore((s) => s.isSearchingKnowledge);
+  const knowledgeSearchQuery = useConsoleStore((s) => s.knowledgeSearchQuery);
   const setPrimaryMode = useConsoleStore((s) => s.setPrimaryMode);
   const setSidebarTab = useConsoleStore((s) => s.setSidebarTab);
   // Ensure theme store is initialized at app boot (applies theme class to <html>).
@@ -63,8 +66,11 @@ function App() {
   const [showSkillConfig, setShowSkillConfig] = React.useState(false);
   const [showDryRun, setShowDryRun] = React.useState(false);
   const [showLoadSkill, setShowLoadSkill] = React.useState(false);
-  // Center Stage L state for Panel expand
-  const [centerStageTab, setCenterStageTab] = React.useState<string | null>(null);
+  const [configureKnowledgeLibraryId, setConfigureKnowledgeLibraryId] = React.useState<string | null>(null);
+  // Center Stage L state for Panel expand and knowledge search results.
+  const [centerStageTab, setCenterStageTab] = React.useState<
+    'observability' | 'checkpoints' | 'context' | 'logs' | 'knowledge' | null
+  >(null);
   // Shared checkpoint selection state between BottomPanel and CenterStage
   const [sharedCheckedCheckpoints, setSharedCheckedCheckpoints] = React.useState<Array<{ checkpointId: string; executionId: string }>>([]);
   const [bottomHeight, setBottomHeight] = React.useState(DEFAULT_BOTTOM_HEIGHT);
@@ -174,11 +180,21 @@ function App() {
   };
 
   const handleOpenBottomPanel = (
-    tab: 'observability' | 'checkpoints' | 'context' | 'logs' | 'knowledge',
+    tab: 'observability' | 'checkpoints' | 'context' | 'logs',
   ) => {
     setBottomPanelTab(tab);
     setBottomCollapsed(false);
   };
+
+  const handleConfigureKnowledge = React.useCallback((libraryId: string) => {
+    const store = useConsoleStore.getState();
+    store.selectKnowledgeLibrary(libraryId);
+    store.setSidebarTab('knowledge');
+    setLeftCollapsed(false);
+    setConfigureKnowledgeLibraryId(libraryId);
+  }, []);
+
+  const showGraphBottomPanel = primaryMode === 'graph';
 
   const handleStartResizeRight = (e: React.MouseEvent<HTMLDivElement>) => {
     isResizingRightRef.current = true;
@@ -247,6 +263,16 @@ function App() {
       (window as any).__consoleStore = useConsoleStore;
     }
   }, []);
+
+  // Keep knowledge search results presentation consistent in both Graph and Chat:
+  // open Center Stage L when a new search starts.
+  const wasSearchingKnowledgeRef = React.useRef(false);
+  React.useEffect(() => {
+    if (isSearchingKnowledge && !wasSearchingKnowledgeRef.current && knowledgeSearchQuery.trim()) {
+      setCenterStageTab('knowledge');
+    }
+    wasSearchingKnowledgeRef.current = isSearchingKnowledge;
+  }, [isSearchingKnowledge, knowledgeSearchQuery]);
 
   // Skills logic
   const sendCommand = React.useCallback(
@@ -317,13 +343,17 @@ function App() {
                 selectedSkill={skillsLogic.selectedSkill}
                 onSelectSkill={(name) => {
                   skillsLogic.selectSkill(name);
-                  // Sync to global store so Secondary Sidebar can route
-                  useConsoleStore.getState().selectSkill(name);
-                  // Expand Secondary Sidebar to show skill detail
-                  setRightCollapsed(false);
+                  if (primaryMode === 'graph') {
+                    // Sync to global store so Secondary Sidebar can route
+                    useConsoleStore.getState().selectSkill(name);
+                    // Expand Secondary Sidebar to show skill detail
+                    setRightCollapsed(false);
+                  }
                 }}
                 onRefreshSkills={skillsLogic.refreshSkills}
                 onLoadSkill={() => setShowLoadSkill(true)}
+                configureKnowledgeLibraryId={configureKnowledgeLibraryId}
+                onKnowledgeConfigureHandled={() => setConfigureKnowledgeLibraryId(null)}
               />
             </div>
             <div
@@ -342,14 +372,14 @@ function App() {
             <DAGCanvas />
           </div>
 
-          {primaryMode === 'graph' && !bottomCollapsed && (
+          {showGraphBottomPanel && !bottomCollapsed && (
             <div
               className="h-px shrink-0 cursor-row-resize bg-gray-700 hover:bg-blue-500 transition-colors"
               onMouseDown={handleStartResizeBottom}
               title="Resize panel"
             />
           )}
-          {primaryMode === 'graph' && (
+          {showGraphBottomPanel && (
             <BottomPanel
               isCollapsed={bottomCollapsed}
               onToggleCollapse={() => setBottomCollapsed(!bottomCollapsed)}
@@ -381,8 +411,10 @@ function App() {
                 onConfigureSkill={() => setShowSkillConfig(true)}
                 onDryRunSkill={() => setShowDryRun(true)}
                 onUnloadSkill={skillsLogic.unloadSkill}
+                onRemoveSkillFromDisk={skillsLogic.removeSkillFromDisk}
                 onOpenChatSettings={() => setShowChatSettings(true)}
-                onRebuildKnowledgeIndex={(libId) => useConsoleStore.getState().rebuildKnowledgeIndex(libId)}
+                onConfigureKnowledge={handleConfigureKnowledge}
+                onRebuildKnowledgeIndex={(libId) => useConsoleStore.getState().rebuildKnowledgeIndex(libId, true)}
               />
             </div>
           </>
@@ -408,21 +440,25 @@ function App() {
             centerStageTab === 'observability' ? 'Observability' :
             centerStageTab === 'logs' ? 'Logs' :
             centerStageTab === 'context' ? 'Context' :
-            centerStageTab === 'knowledge' ? 'Knowledge' :
+            centerStageTab === 'knowledge' ? 'Knowledge Results' :
             'Panel'
           }
         >
-          <div className="h-full">
-            <BottomPanel
-              isCollapsed={false}
-              onToggleCollapse={() => setCenterStageTab(null)}
-              activeTab={centerStageTab as any}
-              onTabChange={(tab) => setCenterStageTab(tab)}
-              fillHeight
-              checkedCheckpoints={sharedCheckedCheckpoints}
-              onCheckedCheckpointsChange={setSharedCheckedCheckpoints}
-            />
-          </div>
+          {centerStageTab === 'knowledge' ? (
+            <KnowledgeResultsPanel className="h-full" />
+          ) : (
+            <div className="h-full">
+              <BottomPanel
+                isCollapsed={false}
+                onToggleCollapse={() => setCenterStageTab(null)}
+                activeTab={centerStageTab}
+                onTabChange={(tab) => setCenterStageTab(tab)}
+                fillHeight
+                checkedCheckpoints={sharedCheckedCheckpoints}
+                onCheckedCheckpointsChange={setSharedCheckedCheckpoints}
+              />
+            </div>
+          )}
         </CenterStage>
       )}
 

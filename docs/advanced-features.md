@@ -124,6 +124,47 @@ agent = Agent(
 - **Automatic Retry**: Exponential backoff on failures
 - **Pydantic Validation**: Type-safe inputs/outputs
 
+## Connection Resilience and Fault Tolerance
+
+HouYi uses a unified, provider-agnostic retry model designed for production stability.
+The same retry semantics are applied across HTTP-based LLM adapters, including Vertex AI,
+SiliconFlow, and OpenAI integration paths.
+
+### Why this is production-grade
+
+- **Unified policy model**: One retry policy abstraction for all adapters (total budget + error class budgets).
+- **Failure-class aware retries**: Distinguishes connection, read, status, and other failures.
+- **Server-directed pacing**: Honors `Retry-After` for rate-limit and service-unavailable responses.
+- **Jittered exponential backoff**: Uses full-jitter to reduce synchronized retry storms.
+- **Streaming-safe retry semantics**: Retries only before the first streamed token/chunk is emitted.
+
+### Retry decision model
+
+The retry controller evaluates both global and per-class budgets:
+
+- `total` retry budget
+- `connect` retry budget
+- `read` retry budget
+- `status` retry budget
+- `other` retry budget
+
+This allows strict control over reliability behavior under different failure modes.
+
+### `Retry-After` precedence
+
+For retryable HTTP statuses such as `429` and `503`:
+
+1. If `Retry-After` is present and valid, HouYi uses that delay.
+2. Otherwise, HouYi falls back to local exponential backoff with jitter.
+
+### Streaming behavior: pre-first-chunk retry only
+
+For streaming responses, HouYi retries only if the request fails **before** any output
+chunk is emitted. Once at least one chunk has been delivered to the caller, automatic
+retry is disabled for that request to avoid duplicate output or broken stream ordering.
+
+This provides a practical reliability/consistency trade-off for real-world streaming APIs.
+
 ## DAG Execution Engine
 
 Parallel execution with dependency management.

@@ -254,6 +254,71 @@ description: Search the web.
         )
         assert fallback["input"]["task"] == "latest ai agent tools"
 
+    def test_detail_quick_start_ignores_json_schema_block_when_building_example_input(
+        self, registry, tmp_path
+    ):
+        from houyi_studio.server.skill.service import SkillService
+        from pydantic import BaseModel
+
+        from houyi.core.skill.spec import SkillSpec
+
+        class _In(BaseModel):
+            q: str
+
+        class _Out(BaseModel):
+            r: str
+
+        skill_dir = tmp_path / "planning-with-files"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            """
+---
+name: planning-with-files
+description: Planning helper.
+---
+
+## Quick Start
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "action": { "type": "string", "enum": ["create", "update", "complete", "status"] },
+    "task": { "type": "string" }
+  },
+  "required": ["action"]
+}
+```
+
+```bash
+python scripts/run.py task_planner.py create --task "Write task_plan.md"
+```
+""".strip(),
+            encoding="utf-8",
+        )
+
+        skill = SkillSpec(
+            name="ext__planning-with-files",
+            description="planning",
+            input_schema=_In,
+            output_schema=_Out,
+            skill_dir=skill_dir,
+        )
+        registry.register(skill, overwrite=True)
+        svc = SkillService(registry=registry)
+
+        detail = svc.get_skill_detail("ext__planning-with-files")
+        assert detail is not None
+        assert len(detail["package_examples"]) >= 1
+
+        quick_start = detail["package_examples"][0]
+        payload = quick_start["input"]
+        assert isinstance(payload, dict)
+        assert payload.get("script") == "task_planner.py"
+        assert payload.get("operation") == "create"
+        assert "properties" not in payload
+        assert payload.get("task")
+
     def test_detail_extracts_decision_flow_examples_from_skill_md(self, registry, tmp_path):
         from houyi_studio.server.skill.service import SkillService
         from pydantic import BaseModel

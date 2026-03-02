@@ -115,6 +115,28 @@ llm = AnthropicAdapter(
 )
 ```
 
+### Retry and Streaming Semantics (HTTP-based adapters)
+
+HouYi applies a unified retry controller to HTTP-based LLM adapter paths.
+
+**Retry classes:**
+- `connect` (connection establishment failures)
+- `read` (read/timeout/protocol interruptions)
+- `status` (retryable HTTP statuses)
+- `other` (other transient errors)
+
+**Budget model:**
+- Global `total` retry budget
+- Per-class budgets (`connect`, `read`, `status`, `other`)
+
+**Retryable status behavior:**
+- For `429` / `503` (and other configured retryable statuses), HouYi checks `Retry-After` first.
+- If `Retry-After` is missing or invalid, HouYi uses local exponential backoff with jitter.
+
+**Streaming safety rule:**
+- Retry is allowed only before the first output chunk is emitted.
+- After any chunk has been emitted, automatic retry is disabled for that request.
+
 ## Evaluation
 
 ### evaluate()

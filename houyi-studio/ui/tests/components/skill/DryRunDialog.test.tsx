@@ -272,6 +272,17 @@ const revealAllStages = () => {
 };
 
 describe('DryRunDialog', () => {
+  const setNavigatorUserAgentDataPlatform = (platform?: string) => {
+    if (!platform) {
+      Reflect.deleteProperty(window.navigator, 'userAgentData');
+      return;
+    }
+    Object.defineProperty(window.navigator, 'userAgentData', {
+      value: { platform },
+      configurable: true,
+    });
+  };
+
   const defaultProps = {
     isOpen: true,
     detail: createDetail(),
@@ -284,6 +295,7 @@ describe('DryRunDialog', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.clearAllMocks();
+    setNavigatorUserAgentDataPlatform(undefined);
   });
 
   it('renders weather country/provider as dropdowns', () => {
@@ -353,6 +365,7 @@ describe('DryRunDialog', () => {
       'web_search',
       expect.objectContaining({ query: 'houyi', provider: 'ddg', mode: 'browse' }),
       false,
+      expect.objectContaining({ workflowId: undefined }),
     );
   });
 
@@ -395,7 +408,7 @@ describe('DryRunDialog', () => {
     const onExecute = vi.fn();
     render(<DryRunDialog {...defaultProps} detail={createNotebooklmDetail()} onExecute={onExecute} />);
 
-    expect(screen.getByText(/Selected execution payload/)).toHaveTextContent('"question":"Summarize the architecture decisions in this notebook"');
+    expect(screen.getByTestId('dry-run-selected-execution-payload')).toHaveTextContent('"question": "Summarize the architecture decisions in this notebook"');
 
     fireEvent.click(screen.getByTestId('dry-run-execute'));
 
@@ -406,6 +419,7 @@ describe('DryRunDialog', () => {
         notebook_url: 'https://notebooklm.google.com/notebook/example',
       }),
       false,
+      expect.objectContaining({ workflowId: undefined }),
     );
   });
 
@@ -413,10 +427,440 @@ describe('DryRunDialog', () => {
     render(<DryRunDialog {...defaultProps} detail={createNotebooklmDetail()} />);
 
     fireEvent.click(screen.getByTestId('tool-flow-select-example-2-library-discovery-add'));
-    expect(screen.getByText(/Selected execution payload/)).toHaveTextContent('"operation":"add_notebook"');
+    expect(screen.getByTestId('dry-run-selected-execution-payload')).toHaveTextContent('"operation": "add_notebook"');
 
     fireEvent.click(screen.getByTestId('tool-flow-select-example-1-notebook-query'));
-    expect(screen.getByText(/Selected execution payload/)).toHaveTextContent('"question":"Summarize the architecture decisions in this notebook"');
+    expect(screen.getByTestId('dry-run-selected-execution-payload')).toHaveTextContent('"question": "Summarize the architecture decisions in this notebook"');
+  });
+
+  it('renders workflow candidate audit metadata from skill detail', () => {
+    const detail = createDetail({
+      name: 'docx',
+      display_name: 'DOCX',
+      runtime_binding: 'script_executor_compat',
+      tools: [{ name: 'docx', description: 'DOCX workflow helper' }],
+      available_workflows: [
+        {
+          id: 'template_1',
+          title: 'soffice.py',
+          command: 'python scripts/office/soffice.py --headless --convert-to docx document.doc',
+          params: ['headless', 'convert_to'],
+          depends_on: ['soffice'],
+          source: 'instructions',
+          evidence: 'python scripts/office/soffice.py --headless --convert-to docx document.doc',
+          confidence: 'medium',
+          confidence_score: 0.75,
+          validation: {
+            status: 'warn',
+            issues: ['Missing dependency: soffice'],
+            missing_dependencies: ['soffice'],
+          },
+        },
+      ],
+    });
+
+    render(<DryRunDialog {...defaultProps} detail={detail} />);
+    expect(screen.getByTestId('tool-flow-presets')).toBeInTheDocument();
+    expect(screen.getByTestId('dry-run-workflow-command-preview')).toHaveTextContent('python scripts/office/soffice.py');
+    expect(screen.getByTestId('dry-run-workflow-audit')).toHaveTextContent('Source: instructions');
+    expect(screen.getByTestId('dry-run-workflow-audit')).toHaveTextContent('Confidence: medium');
+    expect(screen.getByTestId('dry-run-workflow-validation')).toHaveTextContent('Validation: WARN');
+    expect(screen.getByTestId('dry-run-workflow-evidence')).toHaveTextContent('Evidence: python scripts/office/soffice.py');
+  });
+
+  it('shows dependency recovery panel when selected workflow reports missing dependencies', () => {
+    setNavigatorUserAgentDataPlatform('macOS');
+
+    const detail = createDetail({
+      name: 'docx',
+      display_name: 'DOCX',
+      runtime_binding: 'script_executor_compat',
+      tools: [{ name: 'docx', description: 'DOCX workflow helper' }],
+      available_workflows: [
+        {
+          id: 'template_1',
+          title: 'soffice.py',
+          command: 'python scripts/office/soffice.py --headless --convert-to docx document.doc',
+          params: ['headless', 'convert_to'],
+          depends_on: ['soffice'],
+          source: 'instructions',
+          validation: {
+            status: 'warn',
+            issues: ['Missing dependency: soffice'],
+            missing_dependencies: ['soffice'],
+          },
+        },
+      ],
+    });
+
+    render(<DryRunDialog {...defaultProps} detail={detail} />);
+
+    expect(screen.getByTestId('dry-run-missing-deps-panel')).toHaveTextContent('Missing runtime dependencies: soffice');
+    expect(screen.getByTestId('dry-run-install-commands')).toHaveTextContent('brew install --cask libreoffice');
+    expect(screen.getByTestId('dry-run-install-commands')).toHaveTextContent('which soffice');
+  });
+
+  it('copies install commands from dependency recovery panel', async () => {
+    setNavigatorUserAgentDataPlatform('macOS');
+
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText },
+      configurable: true,
+    });
+
+    const detail = createDetail({
+      name: 'docx',
+      display_name: 'DOCX',
+      runtime_binding: 'script_executor_compat',
+      tools: [{ name: 'docx', description: 'DOCX workflow helper' }],
+      available_workflows: [
+        {
+          id: 'template_1',
+          title: 'soffice.py',
+          command: 'python scripts/office/soffice.py --headless --convert-to docx document.doc',
+          params: ['headless', 'convert_to'],
+          depends_on: ['soffice'],
+          source: 'instructions',
+          validation: {
+            status: 'warn',
+            issues: ['Missing dependency: soffice'],
+            missing_dependencies: ['soffice'],
+          },
+        },
+      ],
+    });
+
+    render(<DryRunDialog {...defaultProps} detail={detail} />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('dry-run-copy-install-commands'));
+    });
+
+    expect(writeText).toHaveBeenCalledWith('brew install --cask libreoffice\nwhich soffice');
+    expect(screen.getByTestId('dry-run-copy-install-commands')).toHaveTextContent('Copied');
+  });
+
+  it('shows windows install commands when platform is windows', () => {
+    setNavigatorUserAgentDataPlatform('Windows');
+
+    const detail = createDetail({
+      name: 'docx',
+      display_name: 'DOCX',
+      runtime_binding: 'script_executor_compat',
+      tools: [{ name: 'docx', description: 'DOCX workflow helper' }],
+      available_workflows: [
+        {
+          id: 'template_1',
+          title: 'soffice.py',
+          command: 'python scripts/office/soffice.py --headless --convert-to docx document.doc',
+          params: ['headless', 'convert_to'],
+          depends_on: ['soffice'],
+          source: 'instructions',
+          validation: {
+            status: 'warn',
+            issues: ['Missing dependency: soffice'],
+            missing_dependencies: ['soffice'],
+          },
+        },
+      ],
+    });
+
+    render(<DryRunDialog {...defaultProps} detail={detail} />);
+
+    expect(screen.getByTestId('dry-run-install-commands')).toHaveTextContent('winget install TheDocumentFoundation.LibreOffice');
+    expect(screen.getByTestId('dry-run-install-commands')).toHaveTextContent('where soffice');
+  });
+
+  it('executes selected workflow_id and passes options payload', () => {
+    const onExecute = vi.fn();
+    const detail = createDetail({
+      name: 'docx',
+      display_name: 'DOCX',
+      runtime_binding: 'script_executor_compat',
+      tools: [{ name: 'docx', description: 'DOCX workflow helper' }],
+      available_workflows: [
+        {
+          id: 'template_1',
+          title: 'convert',
+          command: 'python scripts/office/soffice.py --headless --convert-to docx document.doc',
+          params: ['headless'],
+          depends_on: ['soffice'],
+          source: 'instructions',
+        },
+        {
+          id: 'template_2',
+          title: 'unpack',
+          command: 'python scripts/office/unpack.py document.docx unpacked/',
+          params: [],
+          depends_on: [],
+          source: 'instructions',
+        },
+      ],
+    });
+
+    render(<DryRunDialog {...defaultProps} detail={detail} onExecute={onExecute} />);
+    fireEvent.click(screen.getByTestId('dry-run-workflow-select-template_2'));
+    fireEvent.click(screen.getByTestId('dry-run-execute'));
+
+    expect(onExecute).toHaveBeenCalledWith(
+      'docx',
+      expect.objectContaining({
+        command: 'python scripts/office/unpack.py document.docx unpacked/',
+      }),
+      false,
+      expect.objectContaining({ workflowId: 'template_2' }),
+    );
+  });
+
+  it('executes selected workflow command even when skill example is selected', () => {
+    const onExecute = vi.fn();
+    const detail = createDetail({
+      name: 'notebooklm',
+      display_name: 'notebooklm',
+      runtime_binding: 'script_executor_compat',
+      tools: [{ name: 'notebooklm', description: 'NotebookLM workflow helper' }],
+      package_examples: [{
+        id: 'quick-workflow-1',
+        label: 'Quick Workflow 1 · Check library',
+        description: 'Check library via command workflow',
+        objective: 'Validate quick workflow step: Check library.',
+        expectedFocus: ['routing'],
+        input: {
+          script: 'notebook_manager.py',
+          operation: 'list',
+          task: 'Check library',
+        },
+      }],
+      available_workflows: [
+        {
+          id: 'template_1',
+          title: 'ask_question.py',
+          command: 'python scripts/run.py ask_question.py --question "What is the content of this notebook?"',
+          params: ['question'],
+          depends_on: ['python'],
+          source: 'instructions',
+        },
+        {
+          id: 'template_2',
+          title: 'notebook_manager.py · add',
+          command: 'python scripts/run.py notebook_manager.py add --url "[URL]" --name "[Based on content]"',
+          params: ['url', 'name'],
+          depends_on: ['python'],
+          source: 'instructions',
+        },
+      ],
+    });
+
+    render(<DryRunDialog {...defaultProps} detail={detail} onExecute={onExecute} />);
+    fireEvent.click(screen.getByTestId('dry-run-workflow-select-template_2'));
+    fireEvent.click(screen.getByTestId('dry-run-execute'));
+
+    expect(onExecute).toHaveBeenCalledWith(
+      'notebooklm',
+      expect.objectContaining({
+        command: 'python scripts/run.py notebook_manager.py add --url [URL] --name [Based on content]',
+      }),
+      false,
+      expect.objectContaining({ workflowId: 'template_2' }),
+    );
+  });
+
+  it('updates selected execution payload preview when switching workflow candidate', () => {
+    const detail = createDetail({
+      name: 'docx',
+      display_name: 'DOCX',
+      runtime_binding: 'script_executor_compat',
+      tools: [{ name: 'docx', description: 'DOCX workflow helper' }],
+      package_examples: [{
+        id: 'quick-start',
+        label: 'Quick Start',
+        description: 'run quick start',
+        objective: 'quick-start verification',
+        expectedFocus: ['routing'],
+        input: { task: 'quick-start' },
+      }],
+      available_workflows: [
+        {
+          id: 'template_1',
+          title: 'convert',
+          command: 'python scripts/office/soffice.py --convert-to docx document.doc',
+          params: ['convert_to'],
+          depends_on: ['soffice'],
+          source: 'instructions',
+        },
+        {
+          id: 'template_2',
+          title: 'unpack',
+          command: 'python scripts/office/unpack.py document.docx unpacked/',
+          params: [],
+          depends_on: [],
+          source: 'instructions',
+        },
+      ],
+    });
+
+    render(<DryRunDialog {...defaultProps} detail={detail} />);
+    fireEvent.click(screen.getByTestId('dry-run-workflow-select-template_2'));
+
+    expect(screen.getByTestId('dry-run-selected-execution-payload')).toHaveTextContent('"workflow_id": "template_2"');
+    expect(screen.getByTestId('dry-run-selected-execution-payload')).toHaveTextContent('unpack.py document.docx unpacked/');
+  });
+
+  it('collapses workflow candidates to first 3 by default and expands on More', () => {
+    const detail = createDetail({
+      name: 'docx',
+      display_name: 'DOCX',
+      runtime_binding: 'script_executor_compat',
+      tools: [{ name: 'docx', description: 'DOCX workflow helper' }],
+      available_workflows: [
+        {
+          id: 'template_1',
+          title: 'wf-1',
+          command: 'python scripts/run.py a.py one',
+          params: [],
+          depends_on: [],
+          source: 'instructions',
+        },
+        {
+          id: 'template_2',
+          title: 'wf-2',
+          command: 'python scripts/run.py b.py two',
+          params: [],
+          depends_on: [],
+          source: 'instructions',
+        },
+        {
+          id: 'template_3',
+          title: 'wf-3',
+          command: 'python scripts/run.py c.py three',
+          params: [],
+          depends_on: [],
+          source: 'instructions',
+        },
+        {
+          id: 'template_4',
+          title: 'wf-4',
+          command: 'python scripts/run.py d.py four',
+          params: [],
+          depends_on: [],
+          source: 'instructions',
+        },
+        {
+          id: 'template_5',
+          title: 'wf-5',
+          command: 'python scripts/run.py e.py five',
+          params: [],
+          depends_on: [],
+          source: 'instructions',
+        },
+      ],
+    });
+
+    render(<DryRunDialog {...defaultProps} detail={detail} />);
+
+    expect(screen.getByTestId('dry-run-workflow-select-template_1')).toBeInTheDocument();
+    expect(screen.getByTestId('dry-run-workflow-select-template_2')).toBeInTheDocument();
+    expect(screen.getByTestId('dry-run-workflow-select-template_3')).toBeInTheDocument();
+    expect(screen.queryByTestId('dry-run-workflow-select-template_4')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('dry-run-workflow-select-template_5')).not.toBeInTheDocument();
+    expect(screen.getByTestId('dry-run-workflow-collapse-state')).toHaveTextContent('Showing 3 of 5 examples.');
+    expect(screen.getByTestId('dry-run-workflow-toggle')).toHaveTextContent('More (2)');
+
+    fireEvent.click(screen.getByTestId('dry-run-workflow-toggle'));
+    expect(screen.getByTestId('dry-run-workflow-select-template_4')).toBeInTheDocument();
+    expect(screen.getByTestId('dry-run-workflow-select-template_5')).toBeInTheDocument();
+    expect(screen.getByTestId('dry-run-workflow-toggle')).toHaveTextContent('Show less');
+  });
+
+  it('supports show more/less for long selected execution payload preview', () => {
+    const detail = createDetail({
+      name: 'docx',
+      display_name: 'DOCX',
+      tools: [{ name: 'docx', description: 'DOCX workflow helper' }],
+      package_examples: [{
+        id: 'quick-start',
+        label: 'Quick Start',
+        description: 'run quick start',
+        objective: 'quick-start verification',
+        expectedFocus: ['routing'],
+        input: {
+          task: 'x'.repeat(500),
+        },
+      }],
+    });
+
+    render(<DryRunDialog {...defaultProps} detail={detail} />);
+
+    const payloadBlock = screen.getByTestId('dry-run-selected-execution-payload').querySelector('pre');
+    expect(payloadBlock).toBeInTheDocument();
+    expect(payloadBlock?.className).toContain('max-h-20');
+
+    fireEvent.click(screen.getByTestId('dry-run-selected-payload-toggle'));
+    expect(payloadBlock?.className).toContain('max-h-52');
+
+    fireEvent.click(screen.getByTestId('dry-run-selected-payload-toggle'));
+    expect(payloadBlock?.className).toContain('max-h-20');
+  });
+
+  it('propagates customized workflow command from placeholder inputs to execute payload', () => {
+    const onExecute = vi.fn();
+    const detail = createDetail({
+      name: 'docx',
+      display_name: 'DOCX',
+      runtime_binding: 'script_executor_compat',
+      tools: [{ name: 'docx', description: 'DOCX workflow helper' }],
+      available_workflows: [
+        {
+          id: 'template_1',
+          title: 'convert',
+          command: 'python scripts/office/soffice.py --convert-to docx document.doc',
+          params: ['convert_to'],
+          depends_on: ['soffice'],
+          source: 'instructions',
+        },
+      ],
+    });
+
+    render(<DryRunDialog {...defaultProps} detail={detail} onExecute={onExecute} />);
+
+    fireEvent.change(screen.getByTestId('dry-run-workflow-arg-convert_to'), { target: { value: 'pdf' } });
+    fireEvent.change(screen.getByTestId('dry-run-workflow-arg-arg_1'), { target: { value: 'report.docx' } });
+    fireEvent.click(screen.getByTestId('dry-run-execute'));
+
+    expect(onExecute).toHaveBeenCalledWith(
+      'docx',
+      expect.objectContaining({
+        command: 'python scripts/office/soffice.py --convert-to pdf report.docx',
+      }),
+      false,
+      expect.objectContaining({ workflowId: 'template_1' }),
+    );
+  });
+
+  it('keeps quoted notebooklm question as one placeholder value', () => {
+    const detail = createDetail({
+      name: 'notebooklm',
+      display_name: 'notebooklm',
+      runtime_binding: 'script_executor_compat',
+      tools: [{ name: 'notebooklm', description: 'NotebookLM workflow helper' }],
+      available_workflows: [
+        {
+          id: 'template_1',
+          title: 'ask_question.py',
+          command: 'python scripts/run.py ask_question.py --question "What is the content of this notebook?"',
+          params: ['question'],
+          depends_on: ['python'],
+          source: 'instructions',
+        },
+      ],
+    });
+
+    render(<DryRunDialog {...defaultProps} detail={detail} />);
+
+    const questionInput = screen.getByTestId('dry-run-workflow-arg-question') as HTMLInputElement;
+    expect(questionInput.value).toBe('What is the content of this notebook?');
+    expect(screen.queryByTestId('dry-run-workflow-arg-arg_1')).not.toBeInTheDocument();
   });
 
   it('treats prompt-native notebooklm routing as pass when observed args are missing but requested_input matches', () => {
@@ -445,6 +889,89 @@ describe('DryRunDialog', () => {
     const routingStage = screen.getByTestId('dry-run-stage-tool-example-runtime');
     expect(routingStage).toHaveTextContent('PASS');
     expect(routingStage).toHaveTextContent('instruction-driven mode uses requested_input as routing evidence');
+  });
+
+  it('accepts skill-creator routing when requested_input matches and observed args are error envelope', () => {
+    const result: DryRunResultData = {
+      ...createPassResult(),
+      llm_verification: {
+        success: false,
+        message: "LLM returned tool arg formatting error envelope",
+        tool_call: {
+          name: 'skill-creator',
+          arguments: '{"error":"Tool requires valid JSON object input."}',
+        },
+        requested_input: {
+          skill_name: 'pdf-editor',
+          goal: 'Create a reusable skill for rotating and extracting PDF content',
+        },
+        phases: [
+          { name: 'discovery', label: 'Skill Discovery', timestamp_ms: 0, status: 'pass', data: {} },
+          { name: 'activation', label: 'Tool Activation', timestamp_ms: 0, status: 'pass', data: {} },
+          { name: 'negotiation', label: 'LLM Negotiation', timestamp_ms: 0, status: 'pass', data: {} },
+          { name: 'execution', label: 'LLM Execution', timestamp_ms: 1000, status: 'warn', data: { error: 'arg format issue' } },
+          { name: 'tool_execution', label: 'Tool Execution', timestamp_ms: 1000, status: 'skip', data: { reason: 'no executor available' } },
+        ],
+      },
+    };
+
+    render(<DryRunDialog {...defaultProps} detail={createSkillCreatorDetail()} dryRunResult={result} />);
+    revealAllStages();
+    const routingStage = screen.getByTestId('dry-run-stage-tool-example-runtime');
+    expect(routingStage).toHaveTextContent('PASS');
+    expect(routingStage).toHaveTextContent('routing accepted even though llm.success=false');
+  });
+
+  it('re-syncs JSON editor to selected skill-creator preset payload when toggling modes', () => {
+    const detail = createDetail({
+      name: 'skill-creator',
+      display_name: 'skill-creator',
+      runtime_binding: 'prompt_instructions',
+      tools: [{ name: 'skill-creator', description: 'Skill creation guide' }],
+      package_examples: [
+        {
+          id: 'quick-start',
+          label: 'Quick Start · SKILL.md',
+          description: 'Run package quick start flow',
+          input: {
+            skill_name: 'example-skill',
+            evals: [
+              {
+                id: 1,
+                prompt: "User's task prompt",
+                expected_output: 'Description of expected result',
+                files: [],
+              },
+            ],
+          },
+          source: 'SKILL.md#quick-start',
+          expectedFocus: ['quick-start'],
+          objective: 'Validate quick-start payload sync',
+          confidence: 'medium',
+          confidence_breakdown: { score: 0.7 },
+        },
+      ],
+    });
+
+    render(<DryRunDialog {...defaultProps} detail={detail} />);
+
+    fireEvent.click(screen.getByTestId('dry-run-mode-json'));
+    const textarea = screen.getByTestId('dry-run-json-input').querySelector('textarea')!;
+    expect((textarea as HTMLTextAreaElement).value).toContain('example-skill');
+
+    fireEvent.change(textarea, {
+      target: {
+        value: JSON.stringify({ skill_name: 'pdf-editor', goal: 'Create a reusable skill for rotating and extracting PDF content' }, null, 2),
+      },
+    });
+    expect((textarea as HTMLTextAreaElement).value).toContain('pdf-editor');
+
+    fireEvent.click(screen.getByTestId('dry-run-mode-form'));
+    fireEvent.click(screen.getByTestId('dry-run-mode-json'));
+
+    const resetTextarea = screen.getByTestId('dry-run-json-input').querySelector('textarea')!;
+    expect((resetTextarea as HTMLTextAreaElement).value).toContain('example-skill');
+    expect((resetTextarea as HTMLTextAreaElement).value).not.toContain('pdf-editor');
   });
 
   it('shows instruction-driven guidance for script_executor_compat skills without schema', () => {
@@ -495,6 +1022,7 @@ describe('DryRunDialog', () => {
       'package-driven',
       expect.objectContaining({ task: 'from package example 1' }),
       false,
+      expect.objectContaining({ workflowId: undefined }),
     );
   });
 
@@ -530,7 +1058,7 @@ describe('DryRunDialog', () => {
     render(<DryRunDialog {...defaultProps} detail={detail} />);
     expect(screen.getByTestId('tool-flow-select-quick-start-from-skill-md')).toBeInTheDocument();
     expect(screen.queryByTestId('tool-flow-select-example-1-notebook-query')).not.toBeInTheDocument();
-    expect(screen.getByText(/Selected execution payload/)).toHaveTextContent('"action":"create"');
+    expect(screen.getByTestId('dry-run-selected-execution-payload')).toHaveTextContent('"action": "create"');
   });
 
   it('renders audit metadata for package_examples when source/confidence are provided', () => {
@@ -592,6 +1120,37 @@ describe('DryRunDialog', () => {
     }
   });
 
+  it('shows built-in fallback notice and source label for tool presets', () => {
+    render(<DryRunDialog {...defaultProps} detail={createFrontendDesignDetail()} />);
+
+    expect(screen.getByTestId('dry-run-example-source-fallback')).toBeInTheDocument();
+    expect(screen.getByTestId('tool-flow-audit-example-1-landing-page')).toHaveTextContent('Source: built-in preset');
+  });
+
+  it('does not show built-in fallback notice when package examples are provided', () => {
+    const detail = createDetail({
+      name: 'docx',
+      display_name: 'DOCX',
+      runtime_binding: 'script_executor_compat',
+      tools: [{ name: 'docx', description: 'DOCX workflow helper' }],
+      package_examples: [
+        {
+          id: 'quick-start',
+          label: 'Quick Start',
+          description: 'run quick start',
+          objective: 'quick-start verification',
+          expectedFocus: ['routing'],
+          input: { command: 'python scripts/office/unpack.py input.docx unpacked/' },
+        },
+      ],
+    });
+
+    render(<DryRunDialog {...defaultProps} detail={detail} />);
+
+    expect(screen.queryByTestId('dry-run-example-source-fallback')).not.toBeInTheDocument();
+    expect(screen.getByTestId('tool-flow-audit-quick-start')).toHaveTextContent('Source: package_examples');
+  });
+
   it('executes selected second preset payload for additional community skills', () => {
     const samples: Array<{ detail: SkillDetail; selectId: string; tool: string; expected: Record<string, unknown> }> = [
       {
@@ -623,6 +1182,7 @@ describe('DryRunDialog', () => {
         sample.tool,
         expect.objectContaining(sample.expected),
         false,
+        expect.objectContaining({ workflowId: undefined }),
       );
       unmount();
     }
@@ -631,13 +1191,14 @@ describe('DryRunDialog', () => {
   it('keeps example 4 status payload stable after switching examples', () => {
     render(<DryRunDialog {...defaultProps} detail={createPlanningToolDetail()} />);
 
+    fireEvent.click(screen.getByTestId('dry-run-workflow-toggle'));
     fireEvent.click(screen.getByTestId('planning-flow-select-example-4-error-recovery'));
-    expect(screen.getByText(/Selected execution payload/)).toHaveTextContent('"action":"status"');
+    expect(screen.getByTestId('dry-run-selected-execution-payload')).toHaveTextContent('"action": "status"');
 
     fireEvent.click(screen.getByTestId('planning-flow-select-example-2-bug-fix'));
     fireEvent.click(screen.getByTestId('planning-flow-select-example-4-error-recovery'));
 
-    expect(screen.getByText(/Selected execution payload/)).toHaveTextContent('"action":"status"');
+    expect(screen.getByTestId('dry-run-selected-execution-payload')).toHaveTextContent('"action": "status"');
   });
 
   it('updates weather city suggestions when country changes', () => {
@@ -662,6 +1223,7 @@ describe('DryRunDialog', () => {
   });
 
   afterEach(() => {
+    setNavigatorUserAgentDataPlatform(undefined);
     vi.useRealTimers();
   });
 
@@ -747,9 +1309,73 @@ describe('DryRunDialog', () => {
   it('activates planning create-flow preset and fills create payload', () => {
     render(<DryRunDialog {...defaultProps} detail={createPlanningToolDetail()} />);
     fireEvent.click(screen.getByTestId('planning-flow-select-example-1-research-task'));
-    expect(screen.getByText(/Selected execution payload/)).toHaveTextContent('"action":"create"');
+    expect(screen.getByTestId('dry-run-selected-execution-payload')).toHaveTextContent('"action": "create"');
     const taskInput = screen.getByTestId('dry-run-input-task') as HTMLInputElement;
     expect(taskInput.value).toContain('Research morning exercise benefits and write summary');
+  });
+
+  it('updates selected execution payload when planning action changes in form mode', () => {
+    const detail = createDetail({
+      name: 'planning-with-files',
+      display_name: 'planning-with-files',
+      tools: [
+        {
+          name: 'planning-with-files',
+          description: 'Planning workflow skill',
+          input_schema: {
+            type: 'object',
+            properties: {
+              action: { type: 'string', enum: ['create', 'update', 'complete', 'status'] },
+              task: { type: 'string' },
+            },
+            required: ['action'],
+          },
+        },
+      ],
+      package_examples: [
+        {
+          id: 'quick-start-from-skill-md',
+          label: 'Quick Start · SKILL.md',
+          description: 'Run package quick start flow',
+          input: { action: 'create', task: 'Run quick start' },
+          expectedFocus: ['skill.md #quick-start'],
+          objective: 'package quick start',
+        },
+      ],
+    });
+
+    render(<DryRunDialog {...defaultProps} detail={detail} />);
+
+    const actionSelect = screen.getByTestId('dry-run-input-action') as HTMLSelectElement;
+    fireEvent.change(actionSelect, { target: { value: 'update' } });
+
+    expect(screen.getByTestId('dry-run-selected-execution-payload')).toHaveTextContent('"action": "update"');
+  });
+
+  it('defaults planning action to create when selected example only provides command/task', () => {
+    const detail = createPlanningToolDetail();
+    detail.package_examples = [
+      {
+        id: 'quick-start-from-skill-md',
+        label: 'Quick Start · SKILL.md',
+        description: 'Run package quick start flow',
+        input: { command: '/plan create "Implement user authentication"', task: 'Run quick start flow' },
+        expectedFocus: ['skill.md #quick-start'],
+        objective: 'package quick start',
+      },
+    ];
+
+    render(<DryRunDialog {...defaultProps} detail={detail} />);
+
+    expect(screen.queryByTestId('dry-run-input-action')).not.toBeInTheDocument();
+    expect(screen.getByTestId('dry-run-selected-execution-payload')).toHaveTextContent('"action": "create"');
+  });
+
+  it('hides command placeholders and workflow command preview for planning tool examples', () => {
+    render(<DryRunDialog {...defaultProps} detail={createPlanningToolDetail()} />);
+
+    expect(screen.queryByTestId('dry-run-workflow-command-preview')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('dry-run-workflow-arg-fields')).not.toBeInTheDocument();
   });
 
   it('prefills first planning example on first open and executes without reselection', () => {
@@ -767,6 +1393,7 @@ describe('DryRunDialog', () => {
         task: expect.stringContaining('Research morning exercise benefits and write summary'),
       }),
       false,
+      expect.objectContaining({ workflowId: undefined }),
     );
   });
 
@@ -783,6 +1410,21 @@ describe('DryRunDialog', () => {
 
     expect(ex1.checked).toBe(false);
     expect(ex2.checked).toBe(true);
+  });
+
+  it('does not clear result when re-clicking the already selected example', () => {
+    const onClearResult = vi.fn();
+    render(
+      <DryRunDialog
+        {...defaultProps}
+        detail={createPlanningToolDetail()}
+        onClearResult={onClearResult}
+      />,
+    );
+
+    onClearResult.mockClear();
+    fireEvent.click(screen.getByTestId('planning-flow-select-example-1-research-task'));
+    expect(onClearResult).not.toHaveBeenCalled();
   });
 
   it('does not render planning flow presets for core planning tool', () => {
@@ -810,6 +1452,7 @@ describe('DryRunDialog', () => {
         knowledge_dir: 'knowledge/',
       }),
       false,
+      expect.objectContaining({ workflowId: undefined }),
     );
   });
 
@@ -823,6 +1466,7 @@ describe('DryRunDialog', () => {
 
     render(<DryRunDialog {...defaultProps} detail={noSchemaExternalPlanning} onExecute={onExecute} />);
 
+    fireEvent.click(screen.getByTestId('dry-run-workflow-toggle'));
     fireEvent.click(screen.getByTestId('planning-flow-select-example-4-error-recovery'));
     fireEvent.click(screen.getByTestId('dry-run-execute'));
 
@@ -830,6 +1474,7 @@ describe('DryRunDialog', () => {
       'ext__planning-with-files',
       expect.objectContaining({ action: 'status' }),
       false,
+      expect.objectContaining({ workflowId: undefined }),
     );
   });
 
@@ -859,6 +1504,7 @@ describe('DryRunDialog', () => {
         task: 'Research morning exercise benefits and write a summary',
       }),
       true,
+      expect.objectContaining({ workflowId: undefined }),
     );
   });
 
@@ -898,7 +1544,12 @@ describe('DryRunDialog', () => {
       target: { value: 'test query' },
     });
     fireEvent.click(screen.getByTestId('dry-run-execute'));
-    expect(onExecute).toHaveBeenCalledWith('web_search', expect.objectContaining({ query: 'test query' }), false);
+    expect(onExecute).toHaveBeenCalledWith(
+      'web_search',
+      expect.objectContaining({ query: 'test query' }),
+      false,
+      expect.objectContaining({ workflowId: undefined }),
+    );
   });
 
   it('does NOT bypass validation for empty form (no "availability check" shortcut)', () => {
@@ -971,10 +1622,15 @@ describe('DryRunDialog', () => {
       target: { value: '5' },
     });
     fireEvent.click(screen.getByTestId('dry-run-execute'));
-    expect(onExecute).toHaveBeenCalledWith('web_search', {
-      query: 'test query',
-      max_results: 5,
-    }, false);
+    expect(onExecute).toHaveBeenCalledWith(
+      'web_search',
+      {
+        query: 'test query',
+        max_results: 5,
+      },
+      false,
+      expect.objectContaining({ workflowId: undefined }),
+    );
   });
 
   it('executes with JSON input', () => {
@@ -984,7 +1640,12 @@ describe('DryRunDialog', () => {
     const textarea = screen.getByTestId('dry-run-json-input').querySelector('textarea')!;
     fireEvent.change(textarea, { target: { value: '{"query": "hello"}' } });
     fireEvent.click(screen.getByTestId('dry-run-execute'));
-    expect(onExecute).toHaveBeenCalledWith('web_search', { query: 'hello' }, false);
+    expect(onExecute).toHaveBeenCalledWith(
+      'web_search',
+      { query: 'hello' },
+      false,
+      expect.objectContaining({ workflowId: undefined }),
+    );
   });
 
   it('shows error for invalid JSON', () => {
@@ -1013,7 +1674,12 @@ describe('DryRunDialog', () => {
     });
     fireEvent.click(screen.getByTestId('dry-run-live-toggle'));
     fireEvent.click(screen.getByTestId('dry-run-execute'));
-    expect(onExecute).toHaveBeenCalledWith('web_search', expect.objectContaining({ query: 'test' }), true);
+    expect(onExecute).toHaveBeenCalledWith(
+      'web_search',
+      expect.objectContaining({ query: 'test' }),
+      true,
+      expect.objectContaining({ workflowId: undefined }),
+    );
   });
 
   it('changes button text in live mode', () => {

@@ -9,6 +9,7 @@ and token usage tracking.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import json
 import logging
@@ -18,12 +19,15 @@ from typing import Any
 from houyi.llm.base import DEFAULT_TEMPERATURE, LLMAdapter, LLMMessage, LLMResponse
 from houyi.llm.retry import (
     DEFAULT_MAX_RETRIES,
+    DEFAULT_RETRY_BASE_DELAY,
+    DEFAULT_RETRY_MAX_DELAY,
+    SSE_DATA_PREFIX,
     SSE_DONE_SIGNAL,
     USAGE_KEY_COMPLETION_TOKENS,
     USAGE_KEY_PROMPT_TOKENS,
     USAGE_KEY_TOTAL_TOKENS,
-    exponential_backoff,
-    is_retryable_status,
+    RetryController,
+    RetryPolicy,
 )
 
 logger = logging.getLogger(__name__)
@@ -183,37 +187,67 @@ class SiliconFlowAdapter(LLMAdapter):
         }
 
         proxy_url = detect_proxy()
-
-        max_retries = DEFAULT_MAX_RETRIES
+        retry_controller = RetryController(
+            RetryPolicy(
+                total_retries=DEFAULT_MAX_RETRIES,
+                status_retries=DEFAULT_MAX_RETRIES,
+                backoff_base=DEFAULT_RETRY_BASE_DELAY,
+                backoff_cap=DEFAULT_RETRY_MAX_DELAY,
+            )
+        )
         last_error: Exception | None = None
 
-        for attempt in range(max_retries + 1):
-            async with httpx.AsyncClient(
-                proxy=proxy_url,
-                timeout=httpx.Timeout(60.0, connect=10.0),
-            ) as client:
-                resp = await client.post(url, json=body, headers=headers)
-
-                if is_retryable_status(resp.status_code) and attempt < max_retries:
+        while True:
+            try:
+                async with httpx.AsyncClient(
+                    proxy=proxy_url,
+                    timeout=httpx.Timeout(60.0, connect=10.0),
+                ) as client:
+                    resp = await client.post(url, json=body, headers=headers)
+            except httpx.TransportError as exc:
+                decision = retry_controller.on_transport_exception(exc, method="POST")
+                if decision.retry:
+                    last_error = exc
                     logger.warning(
-                        "SiliconFlow chat HTTP %d (retry %d/%d)",
-                        resp.status_code,
-                        attempt + 1,
-                        max_retries,
+                        "SiliconFlow chat transport error: bucket=%s retry=%d/%d wait=%.2fs error=%s",
+                        decision.bucket,
+                        retry_controller.retries_used,
+                        retry_controller.policy.total_retries,
+                        decision.delay_seconds,
+                        exc,
                     )
+                    await asyncio.sleep(decision.delay_seconds)
+                    continue
+                raise
+
+            if resp.status_code in retry_controller.policy.status_forcelist:
+                decision = retry_controller.on_status_code(
+                    resp.status_code,
+                    method="POST",
+                    headers=resp.headers,
+                )
+                if decision.retry:
                     last_error = RuntimeError(
                         f"SiliconFlow HTTP {resp.status_code}: {resp.text[:500]}"
                     )
-                    await exponential_backoff(attempt)
+                    logger.warning(
+                        "SiliconFlow chat HTTP %d retry=%d/%d wait=%.2fs",
+                        resp.status_code,
+                        retry_controller.retries_used,
+                        retry_controller.policy.total_retries,
+                        decision.delay_seconds,
+                    )
+                    await asyncio.sleep(decision.delay_seconds)
                     continue
 
-                if resp.status_code >= 400:
-                    error_text = resp.text[:1000]
-                    raise RuntimeError(f"SiliconFlow HTTP {resp.status_code}: {error_text}")
+            if resp.status_code >= 400:
+                error_text = resp.text[:1000]
+                raise RuntimeError(f"SiliconFlow HTTP {resp.status_code}: {error_text}")
 
-                data = resp.json()
-                break
-        else:
+            data = resp.json()
+            break
+
+        if not data:
             raise last_error or RuntimeError("SiliconFlow chat: max retries exhausted")
 
         result = LLMResponse.from_raw_dict(data, model_fallback=model)
@@ -402,11 +436,17 @@ class SiliconFlowAdapter(LLMAdapter):
 
         from houyi.net.proxy import detect_proxy
 
-        http_client = httpx.AsyncClient(
-            proxy=detect_proxy(),
-            timeout=httpx.Timeout(300.0, connect=10.0, read=300.0),
-            limits=httpx.Limits(max_keepalive_connections=5, max_connections=10),
+        retry_controller = RetryController(
+            RetryPolicy(
+                total_retries=DEFAULT_MAX_RETRIES,
+                connect_retries=DEFAULT_MAX_RETRIES,
+                read_retries=DEFAULT_MAX_RETRIES,
+                status_retries=DEFAULT_MAX_RETRIES,
+                backoff_base=DEFAULT_RETRY_BASE_DELAY,
+                backoff_cap=DEFAULT_RETRY_MAX_DELAY,
+            )
         )
+        proxy_url = detect_proxy()
 
         extra_body: dict[str, object] = {}
         if enable_reasoning and thinking_budget:
@@ -437,73 +477,115 @@ class SiliconFlowAdapter(LLMAdapter):
         reasoning_count = 0
         self.last_usage = None
 
-        try:
-            async with http_client.stream("POST", url, json=payload, headers=headers) as resp:
-                if resp.status_code >= 400:
-                    error_body = await resp.aread()
-                    logger.error(
-                        "httpx API error %d: %s",
-                        resp.status_code,
-                        error_body.decode("utf-8", errors="replace")[:2000],
-                    )
-                resp.raise_for_status()
-                async for line in resp.aiter_lines():
-                    if not line:
-                        continue
-                    if not line.startswith("data:"):
-                        continue
-                    data = line[len("data:") :].strip()
-                    if not data:
-                        continue
-                    if data == SSE_DONE_SIGNAL:
-                        break
-
-                    try:
-                        event = json.loads(data)
-                    except Exception:
-                        logger.debug("Failed to decode SSE chunk: %r", data)
-                        continue
-
-                    if isinstance(event, dict) and "usage" in event:
-                        usage_data = event["usage"]
-                        if isinstance(usage_data, dict):
-                            self.last_usage = {
-                                USAGE_KEY_PROMPT_TOKENS: usage_data.get(USAGE_KEY_PROMPT_TOKENS, 0),
-                                USAGE_KEY_COMPLETION_TOKENS: usage_data.get(
-                                    USAGE_KEY_COMPLETION_TOKENS, 0
-                                ),
-                                USAGE_KEY_TOTAL_TOKENS: usage_data.get(USAGE_KEY_TOTAL_TOKENS, 0),
-                            }
-
-                    choices = event.get("choices") if isinstance(event, dict) else None
-                    if not isinstance(choices, list) or not choices:
-                        continue
-
-                    delta = choices[0].get("delta") if isinstance(choices[0], dict) else None
-                    if not isinstance(delta, dict):
-                        continue
-
-                    content = delta.get("content")
-                    reasoning = delta.get("reasoning_content")
-
-                    if isinstance(content, str) and content:
-                        chunk_count += 1
-                    if isinstance(reasoning, str) and reasoning:
-                        reasoning_count += 1
-
-                    if (isinstance(content, str) and content) or (
-                        isinstance(reasoning, str) and reasoning
-                    ):
-                        yield (content or "", reasoning if isinstance(reasoning, str) else None)
-
-            logger.info(
-                "httpx stream completed: %d content, %d reasoning chunks, usage=%s",
-                chunk_count,
-                reasoning_count,
-                self.last_usage,
+        while True:
+            http_client = httpx.AsyncClient(
+                proxy=proxy_url,
+                timeout=httpx.Timeout(300.0, connect=10.0, read=300.0),
+                limits=httpx.Limits(max_keepalive_connections=5, max_connections=10),
             )
-        except Exception as e:
-            logger.error("httpx fallback API error: %s", e, exc_info=True)
-            raise
-        finally:
-            await http_client.aclose()
+            try:
+                async with http_client.stream("POST", url, json=payload, headers=headers) as resp:
+                    if resp.status_code >= 400:
+                        error_body = await resp.aread()
+                        error_text = error_body.decode("utf-8", errors="replace")[:2000]
+                        if resp.status_code in retry_controller.policy.status_forcelist:
+                            decision = retry_controller.on_status_code(
+                                resp.status_code,
+                                method="POST",
+                                headers=resp.headers,
+                            )
+                            if decision.retry:
+                                logger.warning(
+                                    "httpx API error %d (retry bucket=%s used=%d/%d wait=%.2fs): %s",
+                                    resp.status_code,
+                                    decision.bucket,
+                                    retry_controller.retries_used,
+                                    retry_controller.policy.total_retries,
+                                    decision.delay_seconds,
+                                    error_text,
+                                )
+                                await asyncio.sleep(decision.delay_seconds)
+                                continue
+                        logger.error("httpx API error %d: %s", resp.status_code, error_text)
+                        resp.raise_for_status()
+
+                    async for line in resp.aiter_lines():
+                        if not line:
+                            continue
+                        if not line.startswith(SSE_DATA_PREFIX):
+                            continue
+                        data = line[len(SSE_DATA_PREFIX) :].strip()
+                        if not data:
+                            continue
+                        if data == SSE_DONE_SIGNAL:
+                            break
+
+                        try:
+                            event = json.loads(data)
+                        except Exception:
+                            logger.debug("Failed to decode SSE chunk: %r", data)
+                            continue
+
+                        if isinstance(event, dict) and "usage" in event:
+                            usage_data = event["usage"]
+                            if isinstance(usage_data, dict):
+                                self.last_usage = {
+                                    USAGE_KEY_PROMPT_TOKENS: usage_data.get(
+                                        USAGE_KEY_PROMPT_TOKENS, 0
+                                    ),
+                                    USAGE_KEY_COMPLETION_TOKENS: usage_data.get(
+                                        USAGE_KEY_COMPLETION_TOKENS, 0
+                                    ),
+                                    USAGE_KEY_TOTAL_TOKENS: usage_data.get(
+                                        USAGE_KEY_TOTAL_TOKENS, 0
+                                    ),
+                                }
+
+                        choices = event.get("choices") if isinstance(event, dict) else None
+                        if not isinstance(choices, list) or not choices:
+                            continue
+
+                        delta = choices[0].get("delta") if isinstance(choices[0], dict) else None
+                        if not isinstance(delta, dict):
+                            continue
+
+                        content = delta.get("content")
+                        reasoning = delta.get("reasoning_content")
+
+                        if isinstance(content, str) and content:
+                            chunk_count += 1
+                        if isinstance(reasoning, str) and reasoning:
+                            reasoning_count += 1
+
+                        if (isinstance(content, str) and content) or (
+                            isinstance(reasoning, str) and reasoning
+                        ):
+                            yield (content or "", reasoning if isinstance(reasoning, str) else None)
+
+                logger.info(
+                    "httpx stream completed: %d content, %d reasoning chunks, usage=%s",
+                    chunk_count,
+                    reasoning_count,
+                    self.last_usage,
+                )
+                return
+            except httpx.TransportError as exc:
+                decision = retry_controller.on_transport_exception(exc, method="POST")
+                if decision.retry:
+                    logger.warning(
+                        "httpx stream transport error: bucket=%s used=%d/%d wait=%.2fs error=%s",
+                        decision.bucket,
+                        retry_controller.retries_used,
+                        retry_controller.policy.total_retries,
+                        decision.delay_seconds,
+                        exc,
+                    )
+                    await asyncio.sleep(decision.delay_seconds)
+                    continue
+                logger.error("httpx fallback transport error: %s", exc, exc_info=True)
+                raise
+            except Exception as e:
+                logger.error("httpx fallback API error: %s", e, exc_info=True)
+                raise
+            finally:
+                await http_client.aclose()

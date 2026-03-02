@@ -22,14 +22,15 @@ from houyi.llm.base import DEFAULT_TEMPERATURE, LLMAdapter, LLMMessage, LLMRespo
 from houyi.llm.retry import (
     DEFAULT_MAX_RETRIES,
     DEFAULT_RETRY_BASE_DELAY,
+    DEFAULT_RETRY_MAX_DELAY,
     SSE_DATA_PREFIX,
     SSE_DONE_SIGNAL,
     USAGE_KEY_COMPLETION_TOKENS,
     USAGE_KEY_PROMPT_TOKENS,
     USAGE_KEY_TOTAL_TOKENS,
     VERTEX_MAX_OUTPUT_TOKENS,
-    exponential_backoff,
-    is_retryable_status,
+    RetryController,
+    RetryPolicy,
 )
 
 logger = logging.getLogger(__name__)
@@ -175,18 +176,66 @@ class VertexAIAdapter(LLMAdapter):
             }
 
             proxy_url = detect_proxy()
-
-            async with httpx.AsyncClient(
-                proxy=proxy_url,
-                timeout=httpx.Timeout(20.0, connect=10.0),
-            ) as client:
-                resp = await client.post(
-                    self._sa["token_uri"],
-                    data=form_data,
-                    headers={"Content-Type": "application/x-www-form-urlencoded"},
+            retry_controller = RetryController(
+                RetryPolicy(
+                    total_retries=DEFAULT_MAX_RETRIES,
+                    status_retries=DEFAULT_MAX_RETRIES,
+                    backoff_base=DEFAULT_RETRY_BASE_DELAY,
+                    backoff_cap=DEFAULT_RETRY_MAX_DELAY,
                 )
-                resp.raise_for_status()
-                token_data = resp.json()
+            )
+
+            while True:
+                try:
+                    async with httpx.AsyncClient(
+                        proxy=proxy_url,
+                        timeout=httpx.Timeout(20.0, connect=10.0),
+                    ) as client:
+                        resp = await client.post(
+                            self._sa["token_uri"],
+                            data=form_data,
+                            headers={"Content-Type": "application/x-www-form-urlencoded"},
+                        )
+                except httpx.TransportError as exc:
+                    decision = retry_controller.on_transport_exception(exc, method="POST")
+                    if decision.retry:
+                        logger.warning(
+                            "Vertex token transport error: bucket=%s retry=%d/%d wait=%.2fs error=%s",
+                            decision.bucket,
+                            retry_controller.retries_used,
+                            retry_controller.policy.total_retries,
+                            decision.delay_seconds,
+                            exc,
+                        )
+                        await asyncio.sleep(decision.delay_seconds)
+                        continue
+                    raise
+
+                if resp.status_code == 401:
+                    self._access_token = None
+                    self._token_expiry = 0
+
+                if resp.status_code in retry_controller.policy.status_forcelist:
+                    decision = retry_controller.on_status_code(
+                        resp.status_code,
+                        method="POST",
+                        headers=getattr(resp, "headers", {}),
+                    )
+                    if decision.retry:
+                        logger.warning(
+                            "Vertex token HTTP %d retry=%d/%d wait=%.2fs",
+                            resp.status_code,
+                            retry_controller.retries_used,
+                            retry_controller.policy.total_retries,
+                            decision.delay_seconds,
+                        )
+                        await asyncio.sleep(decision.delay_seconds)
+                        continue
+
+                break
+
+            resp.raise_for_status()
+            token_data = resp.json()
 
             self._access_token = token_data["access_token"]
             self._token_expiry = now + token_data.get("expires_in", 3600)
@@ -244,11 +293,16 @@ class VertexAIAdapter(LLMAdapter):
         from houyi.net.proxy import detect_proxy
 
         proxy_url = detect_proxy()
+        retry_controller = RetryController(
+            RetryPolicy(
+                total_retries=DEFAULT_MAX_RETRIES,
+                status_retries=DEFAULT_MAX_RETRIES,
+                backoff_base=DEFAULT_RETRY_BASE_DELAY,
+                backoff_cap=DEFAULT_RETRY_MAX_DELAY,
+            )
+        )
 
-        max_retries = DEFAULT_MAX_RETRIES
-        last_error: Exception | None = None
-
-        for attempt in range(max_retries + 1):
+        while True:
             access_token = await self._get_access_token()
             if not access_token:
                 return LLMResponse(
@@ -260,46 +314,61 @@ class VertexAIAdapter(LLMAdapter):
                     metadata={"error": "Failed to authenticate with Vertex AI"},
                 )
 
-            async with httpx.AsyncClient(
-                proxy=proxy_url,
-                timeout=httpx.Timeout(120.0, connect=10.0),
-            ) as client:
-                resp = await client.post(
-                    url,
-                    headers={
-                        "Authorization": f"Bearer {access_token}",
-                        "Content-Type": "application/json",
-                    },
-                    json=body,
-                )
-
-                if resp.status_code == 401:
-                    self._access_token = None
-                    self._token_expiry = 0
-
-                if is_retryable_status(resp.status_code) and attempt < max_retries:
-                    wait = DEFAULT_RETRY_BASE_DELAY * (2**attempt)
+            try:
+                async with httpx.AsyncClient(
+                    proxy=proxy_url,
+                    timeout=httpx.Timeout(120.0, connect=10.0),
+                ) as client:
+                    resp = await client.post(
+                        url,
+                        headers={
+                            "Authorization": f"Bearer {access_token}",
+                            "Content-Type": "application/json",
+                        },
+                        json=body,
+                    )
+            except httpx.TransportError as exc:
+                decision = retry_controller.on_transport_exception(exc, method="POST")
+                if decision.retry:
                     logger.warning(
-                        "Vertex AI chat HTTP %d (retry %d/%d, wait %.1fs)",
+                        "Vertex AI chat transport error: bucket=%s retry=%d/%d wait=%.2fs error=%s",
+                        decision.bucket,
+                        retry_controller.retries_used,
+                        retry_controller.policy.total_retries,
+                        decision.delay_seconds,
+                        exc,
+                    )
+                    await asyncio.sleep(decision.delay_seconds)
+                    continue
+                raise exc
+
+            if resp.status_code == 401:
+                self._access_token = None
+                self._token_expiry = 0
+
+            if resp.status_code in retry_controller.policy.status_forcelist:
+                decision = retry_controller.on_status_code(
+                    resp.status_code,
+                    method="POST",
+                    headers=getattr(resp, "headers", {}),
+                )
+                if decision.retry:
+                    logger.warning(
+                        "Vertex AI chat HTTP %d retry=%d/%d wait=%.2fs",
                         resp.status_code,
-                        attempt + 1,
-                        max_retries,
-                        wait,
+                        retry_controller.retries_used,
+                        retry_controller.policy.total_retries,
+                        decision.delay_seconds,
                     )
-                    last_error = RuntimeError(
-                        f"Vertex AI HTTP {resp.status_code}: {resp.text[:500]}"
-                    )
-                    await asyncio.sleep(wait)
+                    await asyncio.sleep(decision.delay_seconds)
                     continue
 
-                if resp.status_code >= 400:
-                    error_text = resp.text[:1000]
-                    raise RuntimeError(f"Vertex AI HTTP {resp.status_code}: {error_text}")
+            if resp.status_code >= 400:
+                error_text = resp.text[:1000]
+                raise RuntimeError(f"Vertex AI HTTP {resp.status_code}: {error_text}")
 
-                data = resp.json()
-                break
-        else:
-            raise last_error or RuntimeError("Vertex AI chat: max retries exhausted")
+            data = resp.json()
+            break
 
         result = LLMResponse.from_raw_dict(data, model_fallback=model)
         self.last_usage = dict(result.usage)
@@ -366,20 +435,28 @@ class VertexAIAdapter(LLMAdapter):
         from houyi.net.proxy import detect_proxy
 
         _proxy_url = detect_proxy()
-
-        max_retries = DEFAULT_MAX_RETRIES
+        retry_controller = RetryController(
+            RetryPolicy(
+                total_retries=DEFAULT_MAX_RETRIES,
+                connect_retries=DEFAULT_MAX_RETRIES,
+                read_retries=DEFAULT_MAX_RETRIES,
+                status_retries=DEFAULT_MAX_RETRIES,
+                backoff_base=DEFAULT_RETRY_BASE_DELAY,
+                backoff_cap=DEFAULT_RETRY_MAX_DELAY,
+            )
+        )
         last_error: Exception | None = None
 
-        for attempt in range(max_retries + 1):
+        while True:
             access_token = await self._get_access_token()
             if not access_token:
                 yield ("[Error: Failed to authenticate with Vertex AI]", None)
                 return
 
             logger.info(
-                "Vertex AI request (attempt %d/%d): model=%s, url=%s, messages=%d",
-                attempt + 1,
-                max_retries + 1,
+                "Vertex AI request: retry_used=%d/%d model=%s url=%s messages=%d",
+                retry_controller.retries_used,
+                retry_controller.policy.total_retries,
                 model,
                 url,
                 len(normalized),
@@ -408,17 +485,24 @@ class VertexAIAdapter(LLMAdapter):
                             self._access_token = None
                             self._token_expiry = 0
 
-                        if is_retryable_status(status) and attempt < max_retries:
-                            logger.warning(
-                                "Vertex AI HTTP %d (retryable, attempt %d/%d): %s",
+                        if status in retry_controller.policy.status_forcelist:
+                            decision = retry_controller.on_status_code(
                                 status,
-                                attempt + 1,
-                                max_retries + 1,
-                                error_text[:200],
+                                method="POST",
+                                headers=getattr(resp, "headers", {}),
                             )
-                            last_error = Exception(f"Vertex AI HTTP {status}: {error_text}")
-                            await exponential_backoff(attempt)
-                            continue
+                            if decision.retry:
+                                logger.warning(
+                                    "Vertex AI HTTP %d retry bucket=%s used=%d/%d wait=%.2fs",
+                                    status,
+                                    decision.bucket,
+                                    retry_controller.retries_used,
+                                    retry_controller.policy.total_retries,
+                                    decision.delay_seconds,
+                                )
+                                last_error = RuntimeError(f"Vertex AI HTTP {status}: {error_text}")
+                                await asyncio.sleep(decision.delay_seconds)
+                                continue
 
                         logger.error(
                             "Vertex AI HTTP %d (non-retryable): %s\nRequest body: %s",
@@ -467,31 +551,21 @@ class VertexAIAdapter(LLMAdapter):
                     )
                     return
 
-            except httpx.TimeoutException as e:
-                last_error = e
-                if attempt < max_retries:
+            except httpx.TransportError as exc:
+                decision = retry_controller.on_transport_exception(exc, method="POST")
+                last_error = exc
+                if decision.retry:
                     logger.warning(
-                        "Vertex AI timeout (attempt %d/%d): %s",
-                        attempt + 1,
-                        max_retries + 1,
-                        e,
+                        "Vertex AI stream transport error: bucket=%s used=%d/%d wait=%.2fs error=%s",
+                        decision.bucket,
+                        retry_controller.retries_used,
+                        retry_controller.policy.total_retries,
+                        decision.delay_seconds,
+                        exc,
                     )
-                    await exponential_backoff(attempt)
+                    await asyncio.sleep(decision.delay_seconds)
                     continue
-                logger.error("Vertex AI timeout after %d attempts: %s", max_retries + 1, e)
-                raise
-            except httpx.ConnectError as e:
-                last_error = e
-                if attempt < max_retries:
-                    logger.warning(
-                        "Vertex AI connection error (attempt %d/%d): %s",
-                        attempt + 1,
-                        max_retries + 1,
-                        e,
-                    )
-                    await exponential_backoff(attempt)
-                    continue
-                logger.error("Vertex AI connection error after %d attempts: %s", max_retries + 1, e)
+                logger.error("Vertex AI stream transport error (non-retryable): %s", exc)
                 raise
             except Exception as e:
                 logger.error("Vertex AI API error: %s", e, exc_info=True)

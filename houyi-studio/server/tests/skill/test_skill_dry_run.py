@@ -11,6 +11,7 @@ from houyi_studio.server.skill.dry_run import (
     DryRunValidator,
     _build_natural_query,
     _build_tool_definitions,
+    _derive_script_compat_executor,
     _parse_llm_response,
     _simplify_schema,
 )
@@ -41,13 +42,25 @@ class _Tool:
 
 
 class _Skill:
-    def __init__(self, name="s", tools=None, perms=None, policy=None, schema=None, description=""):
+    def __init__(
+        self,
+        name="s",
+        tools=None,
+        perms=None,
+        policy=None,
+        schema=None,
+        description="",
+        instructions=None,
+        extra_frontmatter=None,
+    ):
         self.name = name
         self.tools = tools or []
         self.permissions = perms
         self.invocation_policy = policy
         self.input_schema = schema
         self.description = description
+        self.instructions = instructions
+        self.extra_frontmatter = extra_frontmatter or {}
         self.provider = ""
         self.qualified_name = name
         self.executor = None
@@ -229,6 +242,119 @@ class TestValidate:
         v = self._make_validator(registry)
         r = await v.validate("s", "t", {"wrong": 1})
         assert r["valid"] is False
+
+    @pytest.mark.asyncio
+    async def test_validate_includes_available_workflows_from_instructions(self, registry):
+        instructions = (
+            "```bash\n"
+            "python scripts/office/unpack.py document.docx unpacked/\n"
+            "python scripts/office/soffice.py --headless --convert-to docx document.doc\n"
+            "```"
+        )
+        registry.register(_Skill(name="docx", instructions=instructions), overwrite=True)
+
+        v = self._make_validator(registry)
+        r = await v.validate("docx", "docx", {}, live=False)
+
+        workflows = r.get("available_workflows", [])
+        assert len(workflows) == 2
+        assert workflows[0]["source"] == "instructions"
+        assert workflows[0]["command"].startswith("python ")
+        assert workflows[0]["evidence"].startswith("python ")
+        assert workflows[0]["confidence"] in {"medium", "high"}
+        assert isinstance(workflows[0]["confidence_score"], float)
+        assert workflows[0]["validation"]["status"] in {"pass", "warn"}
+        assert "missing_dependencies" in workflows[0]["validation"]
+
+    @pytest.mark.asyncio
+    async def test_validate_prefers_frontmatter_workflows_over_instruction_templates(
+        self, registry
+    ):
+        instructions = "```bash\npython scripts/office/unpack.py document.docx unpacked/\n```"
+        extra_frontmatter = {
+            "workflows": [
+                {
+                    "id": "read_docx",
+                    "title": "Read docx",
+                    "command": "python scripts/office/unpack.py document.docx unpacked/",
+                    "params": ["input_path", "output_dir"],
+                    "depends_on": ["pandoc"],
+                }
+            ]
+        }
+        registry.register(
+            _Skill(name="docx", instructions=instructions, extra_frontmatter=extra_frontmatter),
+            overwrite=True,
+        )
+
+        v = self._make_validator(registry)
+        r = await v.validate("docx", "docx", {}, live=False)
+
+        workflows = r.get("available_workflows", [])
+        assert len(workflows) == 1
+        assert workflows[0]["id"] == "read_docx"
+        assert workflows[0]["source"] == "frontmatter"
+        assert workflows[0]["depends_on"] == ["pandoc"]
+        assert workflows[0]["evidence"] == "frontmatter.workflows[0]"
+        assert workflows[0]["confidence"] == "high"
+
+    @pytest.mark.asyncio
+    async def test_validate_filters_non_executable_noise_from_instructions(self, registry):
+        instructions = (
+            "```bash\n"
+            "# this is just commentary\n"
+            "python\n"
+            "python scripts/run.py auth_manager.py status\n"
+            "python scripts/run.py auth_manager.py status\n"
+            "```"
+        )
+        registry.register(_Skill(name="notebooklm", instructions=instructions), overwrite=True)
+
+        v = self._make_validator(registry)
+        r = await v.validate("notebooklm", "notebooklm", {}, live=False)
+
+        workflows = r.get("available_workflows", [])
+        assert len(workflows) == 1
+        assert workflows[0]["command"] == "python scripts/run.py auth_manager.py status"
+
+    @pytest.mark.asyncio
+    async def test_derived_script_compat_executor_falls_back_when_primary_template_missing_dependency(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as td:
+            skill_dir = Path(td)
+            office_dir = skill_dir / "scripts" / "office"
+            office_dir.mkdir(parents=True)
+
+            (office_dir / "soffice.py").write_text("import sys\nsys.exit(0)\n", encoding="utf-8")
+            (office_dir / "unpack.py").write_text(
+                "import json\nprint(json.dumps({'mode':'unpack'}))\n",
+                encoding="utf-8",
+            )
+
+            instructions = (
+                "```bash\n"
+                "python scripts/office/soffice.py --headless --convert-to docx document.doc\n"
+                "python scripts/office/unpack.py document.docx unpacked/\n"
+                "```"
+            )
+            skill = _Skill(name="docx", instructions=instructions)
+            skill.skill_dir = str(skill_dir)
+
+            executor = _derive_script_compat_executor(skill)
+            assert callable(executor)
+
+            def _which(binary: str):
+                if binary == "soffice":
+                    return None
+                return "/usr/bin/" + binary
+
+            with patch("houyi_studio.server.skill.loader.shutil.which", side_effect=_which):
+                result = await executor(convert_to="docx")
+
+            assert result.get("success") is True
+            command = result.get("command", [])
+            assert any(str(token).endswith("scripts/office/unpack.py") for token in command)
 
 
 # ── _build_tool_definitions ───────────────────────────────────────────

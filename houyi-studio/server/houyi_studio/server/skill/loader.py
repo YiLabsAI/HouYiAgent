@@ -146,6 +146,137 @@ class SkillLoader:
         self._registry.unregister(skill_name)
         return True, None
 
+    def refresh_managed_external_skills(self) -> None:
+        """Rescan managed skill directories and prune stale registry entries.
+
+        This keeps ``list_skills`` aligned with disk changes (manual delete/move),
+        especially for managed ``~/.houyi/skills`` + ``~/.houyi/sources/local``.
+        """
+        managed_skills_root = self._managed_global_skills_root()
+        managed_local_sources_root = self._managed_local_sources_root()
+
+        if managed_skills_root.exists() and managed_skills_root.is_dir():
+            for pattern in (SKILL_MD_UPPER, SKILL_MD_LOWER):
+                try:
+                    self._registry.register_from_directory(
+                        str(managed_skills_root),
+                        pattern=pattern,
+                        recursive=True,
+                        overwrite=False,
+                    )
+                except Exception as exc:
+                    logger.debug(
+                        "Managed skill refresh scan failed for pattern %s in %s: %s",
+                        pattern,
+                        managed_skills_root,
+                        exc,
+                    )
+
+        managed_roots = tuple(
+            root.resolve()
+            for root in (managed_skills_root, managed_local_sources_root)
+            if root.exists()
+        )
+        if not managed_roots:
+            return
+
+        for skill in list(self._registry.list()):
+            if bool(getattr(skill, "is_core", False)):
+                continue
+            raw_skill_md_path = str(getattr(skill, "skill_md_path", "") or "")
+            if not raw_skill_md_path or raw_skill_md_path.startswith(("http://", "https://")):
+                continue
+            try:
+                resolved = Path(raw_skill_md_path).resolve()
+            except Exception:
+                continue
+
+            under_managed_root = any(
+                resolved == root or root in resolved.parents for root in managed_roots
+            )
+            if not under_managed_root:
+                continue
+            if resolved.exists():
+                continue
+
+            skill_name = str(getattr(skill, "name", "") or "")
+            if skill_name:
+                self._registry.unregister(skill_name)
+
+    def remove_from_disk(self, skill_name: str) -> tuple[bool, str | None]:
+        """Delete managed on-disk package links/data for *skill_name* and unload it.
+
+        Removal scope is intentionally restricted to managed skill roots:
+        - ``~/.houyi/skills/<package>``
+        - ``~/.houyi/sources/local/<package>``
+        """
+        skill = self._registry.get(skill_name)
+        if not skill:
+            return False, f"Skill not found: {skill_name}"
+        if bool(getattr(skill, "is_core", False)):
+            return False, "Core skills cannot be removed from disk"
+
+        managed_skills_root = self._managed_global_skills_root().resolve()
+        managed_local_sources_root = self._managed_local_sources_root().resolve()
+
+        package_names: set[str] = set()
+        skill_md_path = str(getattr(skill, "skill_md_path", "") or "")
+        if skill_md_path and not skill_md_path.startswith(("http://", "https://")):
+            raw_path = Path(skill_md_path).expanduser()
+            try:
+                resolved = Path(skill_md_path).resolve()
+            except Exception:
+                resolved = None
+
+            for root in (managed_skills_root, managed_local_sources_root):
+                for candidate in (raw_path, resolved):
+                    if candidate is None:
+                        continue
+                    try:
+                        absolute_candidate = (
+                            candidate if candidate.is_absolute() else candidate.resolve()
+                        )
+                    except Exception:
+                        continue
+                    if absolute_candidate == root or root in absolute_candidate.parents:
+                        rel_parts = absolute_candidate.relative_to(root).parts
+                        if rel_parts:
+                            package_names.add(rel_parts[0].strip())
+
+        if not package_names:
+            source_group = str(getattr(skill, "source_group", "") or "").strip()
+            if source_group:
+                package_names.add(source_group)
+
+        package_names = {name for name in package_names if name and name not in {".", ".."}}
+        if not package_names:
+            return False, "Skill is not managed on local disk; nothing to remove"
+
+        delete_targets: list[Path] = []
+        for package in sorted(package_names):
+            delete_targets.append(managed_skills_root / package)
+            delete_targets.append(managed_local_sources_root / package)
+
+        removed_any = False
+        for target in delete_targets:
+            if not target.exists() and not target.is_symlink():
+                continue
+            try:
+                if target.is_symlink() or target.is_file():
+                    target.unlink()
+                else:
+                    shutil.rmtree(target)
+                removed_any = True
+            except Exception as exc:
+                return False, f"Failed to remove managed path '{target}': {exc}"
+
+        if not removed_any:
+            return False, "No managed skill files found to remove"
+
+        self._registry.unregister(skill_name)
+        self.refresh_managed_external_skills()
+        return True, None
+
     # ── Private: individual source strategies ─────────────────────
 
     def _load_from_manifest(self, source: str) -> LoadResult:
@@ -742,46 +873,157 @@ class SkillLoader:
             import json
             import sys
 
+            def _normalize_command(command: list[str]) -> list[str]:
+                normalized: list[str] = []
+                for idx, token in enumerate(command):
+                    if idx == 0 and token == "python":
+                        normalized.append(sys.executable)
+                        continue
+                    if token.startswith("-"):
+                        normalized.append(token)
+                        continue
+
+                    path_token = Path(token)
+                    if not path_token.is_absolute():
+                        candidate = (skill_dir / path_token).resolve()
+                        if candidate.exists():
+                            normalized.append(str(candidate))
+                            continue
+                    normalized.append(token)
+                return normalized
+
+            def _dependency_state(command: list[str]) -> tuple[list[str], list[str]]:
+                required = self._infer_required_binaries(command)
+                return required, self._missing_binaries(required)
+
+            explicit_command = isinstance(kwargs.get("command"), str) and bool(
+                str(kwargs.get("command", "")).strip()
+            )
+            explicit_workflow = isinstance(kwargs.get("workflow_id"), str) and bool(
+                str(kwargs.get("workflow_id", "")).strip()
+            )
+
             cmd = self._build_script_compat_command(kwargs, templates)
             if not cmd:
                 raise ValueError("No executable script command could be derived from payload")
 
-            normalized_cmd: list[str] = []
-            for idx, token in enumerate(cmd):
-                if idx == 0 and token == "python":
-                    normalized_cmd.append(sys.executable)
-                    continue
-                if token.startswith("-"):
-                    normalized_cmd.append(token)
-                    continue
-
-                path_token = Path(token)
-                if not path_token.is_absolute():
-                    candidate = (skill_dir / path_token).resolve()
-                    if candidate.exists():
-                        normalized_cmd.append(str(candidate))
+            normalized_cmd = _normalize_command(cmd)
+            _, missing_bins = _dependency_state(normalized_cmd)
+            if missing_bins and not explicit_command and not explicit_workflow:
+                for idx in range(len(templates)):
+                    candidate_payload = dict(kwargs)
+                    candidate_payload["workflow_id"] = f"template_{idx + 1}"
+                    candidate_cmd = self._build_script_compat_command(candidate_payload, templates)
+                    if not candidate_cmd:
                         continue
-                normalized_cmd.append(token)
+                    candidate_normalized = _normalize_command(candidate_cmd)
+                    _, candidate_missing = _dependency_state(candidate_normalized)
+                    if candidate_missing:
+                        continue
+                    normalized_cmd = candidate_normalized
+                    _, missing_bins = _dependency_state(normalized_cmd)
+                    break
 
-            proc = await asyncio.create_subprocess_exec(
-                *normalized_cmd,
-                cwd=str(skill_dir),
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
+            if missing_bins:
+                missing_msg = (
+                    "Missing required runtime dependency: "
+                    + ", ".join(missing_bins)
+                    + ". Please install it (e.g. LibreOffice provides 'soffice')."
+                )
+                return {
+                    "ok": False,
+                    "exit_code": 127,
+                    "error_code": "missing_dependency",
+                    "missing_dependencies": missing_bins,
+                    "command": normalized_cmd,
+                    "output": "",
+                    "stderr": missing_msg,
+                }
+
+            async def _run_command_once(command: list[str]) -> tuple[int, str, str]:
+                proc = await asyncio.create_subprocess_exec(
+                    *command,
+                    cwd=str(skill_dir),
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                try:
+                    stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=180.0)
+                except TimeoutError:
+                    proc.kill()
+                    await proc.wait()
+                    raise
+                return (
+                    proc.returncode,
+                    stdout.decode("utf-8", errors="replace").strip(),
+                    stderr.decode("utf-8", errors="replace").strip(),
+                )
+
+            def _is_broken_skill_venv(returncode: int, stderr_text: str) -> bool:
+                if returncode == 250 and "Library not loaded: @rpath/libpython" in stderr_text:
+                    return True
+                lowered = stderr_text.lower()
+                return "libpython" in lowered and "no such file" in lowered
+
+            def _is_missing_venv_pip(stderr_text: str) -> bool:
+                lowered = stderr_text.lower()
+                return ".venv/bin/pip" in lowered and "no such file or directory" in lowered
+
+            async def _repair_skill_venv_if_possible() -> bool:
+                setup_script = skill_dir / "scripts" / "setup_environment.py"
+                if not setup_script.exists():
+                    return False
+                repair_cmd = [sys.executable, str(setup_script)]
+                repair_code, repair_stdout, repair_stderr = await _run_command_once(repair_cmd)
+                if repair_code != 0:
+                    if _is_missing_venv_pip(repair_stderr):
+                        broken_venv = skill_dir / ".venv"
+                        with contextlib.suppress(Exception):
+                            if broken_venv.exists():
+                                shutil.rmtree(broken_venv)
+                        repair_code, repair_stdout, repair_stderr = await _run_command_once(
+                            repair_cmd
+                        )
+                        if repair_code == 0:
+                            logger.info(
+                                "Script compatibility runtime rebuilt broken skill .venv and repaired environment"
+                            )
+                            return True
+                    logger.warning(
+                        "Script compatibility runtime failed to repair skill env: cmd=%s code=%d stdout=%s stderr=%s",
+                        repair_cmd,
+                        repair_code,
+                        repair_stdout[:500],
+                        repair_stderr[:500],
+                    )
+                    return False
+                logger.info(
+                    "Script compatibility runtime repaired skill env via setup_environment.py"
+                )
+                return True
+
             try:
-                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=180.0)
+                code, stdout_text, stderr_text = await _run_command_once(normalized_cmd)
             except TimeoutError:
-                proc.kill()
-                await proc.wait()
                 return {
                     "ok": False,
                     "error": "Script compatibility execution timed out",
                     "command": normalized_cmd,
                 }
 
-            stdout_text = stdout.decode("utf-8", errors="replace").strip()
-            stderr_text = stderr.decode("utf-8", errors="replace").strip()
+            if _is_broken_skill_venv(code, stderr_text):
+                repaired = False
+                with contextlib.suppress(TimeoutError):
+                    repaired = await _repair_skill_venv_if_possible()
+                if repaired:
+                    try:
+                        code, stdout_text, stderr_text = await _run_command_once(normalized_cmd)
+                    except TimeoutError:
+                        return {
+                            "ok": False,
+                            "error": "Script compatibility execution timed out",
+                            "command": normalized_cmd,
+                        }
 
             parsed_output: object = stdout_text
             if stdout_text:
@@ -789,8 +1031,8 @@ class SkillLoader:
                     parsed_output = json.loads(stdout_text)
 
             return {
-                "ok": proc.returncode == 0,
-                "exit_code": proc.returncode,
+                "ok": code == 0,
+                "exit_code": code,
                 "command": normalized_cmd,
                 "output": parsed_output,
                 "stderr": stderr_text,
@@ -880,6 +1122,17 @@ class SkillLoader:
         if not templates:
             return []
 
+        workflow_id = str(payload.get("workflow_id", "")).strip().lower()
+        if workflow_id.startswith("template_"):
+            suffix = workflow_id.removeprefix("template_")
+            with contextlib.suppress(ValueError):
+                selected_index = int(suffix) - 1
+                if 0 <= selected_index < len(templates):
+                    selected_template = templates[selected_index]
+                    selected_tokens = [str(t) for t in (selected_template.get("base_tokens") or [])]
+                    if selected_tokens:
+                        return selected_tokens
+
         operation = str(payload.get("operation", "")).strip().lower()
         script = str(payload.get("script", "")).strip().lower()
 
@@ -896,7 +1149,14 @@ class SkillLoader:
                     score += 2
             return score
 
-        selected = max(templates, key=_score)
+        scored_templates = [(template, _score(template)) for template in templates]
+        selected, best_score = max(scored_templates, key=lambda item: item[1])
+
+        # If we have multiple executable examples but payload does not map to any
+        # of them, avoid defaulting to the first template unexpectedly.
+        if len(templates) > 1 and best_score <= 0:
+            return []
+
         base_tokens = [str(t) for t in (selected.get("base_tokens") or [])]
         flags = [str(f) for f in (selected.get("flags") or [])]
         if not base_tokens:
@@ -907,10 +1167,8 @@ class SkillLoader:
         operation_value = str(payload.get("operation", "")).strip()
         if len(base_tokens) >= 2 and base_tokens[1].endswith("scripts/run.py") and script_value:
             runner = base_tokens[0]
-            script_token = (
-                script_value if script_value.startswith("scripts/") else f"scripts/{script_value}"
-            )
-            cmd = [runner, script_token]
+            script_token = Path(script_value).name
+            cmd = [runner, base_tokens[1], script_token]
             if operation_value:
                 cmd.append(operation_value)
 
@@ -947,6 +1205,7 @@ class SkillLoader:
             "script",
             "operation",
             "command",
+            "workflow_id",
         }
 
         for key, value in payload.items():
@@ -983,6 +1242,33 @@ class SkillLoader:
             resolved = resolver.resolve(skill)
             if resolved is not skill:
                 self._registry.register(resolved, overwrite=True)
+
+    @staticmethod
+    def _infer_required_binaries(command: list[str]) -> list[str]:
+        required: list[str] = []
+        if not command:
+            return required
+
+        head = Path(command[0]).name.lower()
+        if head in {"soffice", "pandoc", "pdftoppm"}:
+            required.append(head)
+
+        lowered_tokens = [str(token).lower() for token in command]
+        if any(token.endswith("scripts/office/soffice.py") for token in lowered_tokens):
+            required.append("soffice")
+
+        unique: list[str] = []
+        seen: set[str] = set()
+        for item in required:
+            if item in seen:
+                continue
+            seen.add(item)
+            unique.append(item)
+        return unique
+
+    @staticmethod
+    def _missing_binaries(required: list[str]) -> list[str]:
+        return [binary for binary in required if shutil.which(binary) is None]
 
     @staticmethod
     def _has_schema(schema: object | None) -> bool:

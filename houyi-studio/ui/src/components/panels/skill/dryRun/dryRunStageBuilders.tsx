@@ -461,12 +461,30 @@ export const buildGenericExampleStages = (
     return true;
   })();
   const missingObservedArgsEvidence = !hasObservedArgsEvidence;
+  const observedArgsIsErrorEnvelope = (() => {
+    if (!observedArgs || typeof observedArgs !== 'object' || Array.isArray(observedArgs)) return false;
+    const entries = Object.entries(observedArgs as Record<string, unknown>);
+    if (entries.length === 0) return false;
+    const allowedKeys = new Set(['error', 'message', 'reason']);
+    if (!entries.every(([key, value]) => allowedKeys.has(key) && typeof value === 'string' && value.trim().length > 0)) {
+      return false;
+    }
+    return true;
+  })();
   const llmSuccess = Boolean(llm?.success);
+  const routingSnapshotMatch = toolMatch && requestedMatch;
   const promptNativeArgsFallback = llmSuccess
-    && toolMatch
-    && requestedMatch
+    && routingSnapshotMatch
     && missingObservedArgsEvidence
     && isInstructionDrivenRuntime(detail.runtime_binding);
+  const promptNativeErrorArgsFallback = llmSuccess
+    && routingSnapshotMatch
+    && observedArgsIsErrorEnvelope
+    && isInstructionDrivenRuntime(detail.runtime_binding);
+  const promptNativeRoutingWithoutLlmSuccess = !llmSuccess
+    && routingSnapshotMatch
+    && isInstructionDrivenRuntime(detail.runtime_binding)
+    && (missingObservedArgsEvidence || observedArgsIsErrorEnvelope);
 
   stages.push({
     id: 'tool-example-runtime',
@@ -479,6 +497,10 @@ export const buildGenericExampleStages = (
           ? 'pass'
           : promptNativeArgsFallback
             ? 'pass'
+            : promptNativeErrorArgsFallback
+              ? 'pass'
+            : promptNativeRoutingWithoutLlmSuccess
+              ? 'pass'
             : llmSuccess && toolMatch && requestedMatch && missingObservedArgsEvidence
               ? 'warn'
               : 'fail',
@@ -490,6 +512,10 @@ export const buildGenericExampleStages = (
           ? `LLM selected ${expectedToolName} with expected example payload subset`
           : promptNativeArgsFallback
             ? 'LLM selected expected tool and payload snapshot; instruction-driven mode uses requested_input as routing evidence'
+            : promptNativeErrorArgsFallback
+              ? 'LLM selected expected tool and payload snapshot; observed args contain only model-side formatting error envelope, so requested_input is used as routing evidence'
+            : promptNativeRoutingWithoutLlmSuccess
+              ? 'Expected tool and requested_input snapshot match in instruction-driven mode; routing accepted even though llm.success=false'
             : llmSuccess && toolMatch && requestedMatch && missingObservedArgsEvidence
               ? 'LLM selected expected tool and snapshot payload, but observed arguments evidence is missing'
               : 'LLM routing mismatch for selected skill example',

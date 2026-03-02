@@ -132,8 +132,8 @@ interface ConsoleState {
   loadingWorkflowName: string | null; // Track which workflow is being loaded
   workflows: WorkflowSummary[];
   isLoadingWorkflows: boolean;
-  bottomPanelTab: 'observability' | 'checkpoints' | 'context' | 'logs' | 'knowledge';
-  setBottomPanelTab: (tab: 'observability' | 'checkpoints' | 'context' | 'logs' | 'knowledge') => void;
+  bottomPanelTab: 'observability' | 'checkpoints' | 'context' | 'logs';
+  setBottomPanelTab: (tab: 'observability' | 'checkpoints' | 'context' | 'logs') => void;
 
   // React Flow state
   nodes: any[];
@@ -225,12 +225,13 @@ interface ConsoleState {
   isLoadingLibraries: boolean;
   // Ingest state
   isIngesting: boolean;
+  ingestOperation: 'import' | 'rebuild' | null;
   ingestLibraryId: string | null;
   ingestProgress: number;
   ingestCurrentFile: string;
   ingestFilesProcessed: number;
   ingestTotalFiles: number;
-  requestKnowledgeLibraries: () => void;
+  requestKnowledgeLibraries: (options?: { manual?: boolean }) => void;
   setKnowledgeLibraries: (libraries: KnowledgeLibrary[]) => void;
   createKnowledgeLibrary: (config: {
     name: string;
@@ -391,7 +392,7 @@ export const useConsoleStore = create<ConsoleState>((set, get) => ({
     const { primaryMode, selectedNodeId, selectedSkillId, selectedLibraryId, sidebarTab } = get();
     // Make routing explicit by active tab to avoid stale cross-mode context.
     if (primaryMode === 'graph' && sidebarTab === 'workflow' && selectedNodeId) return 'node';
-    if (sidebarTab === 'skills' && selectedSkillId) return 'skill';
+    if (primaryMode === 'graph' && sidebarTab === 'skills' && selectedSkillId) return 'skill';
     if (sidebarTab === 'knowledge' && selectedLibraryId) return 'knowledge';
     if (primaryMode === 'chat' && sidebarTab === 'conversations') return 'conversation';
     // Default

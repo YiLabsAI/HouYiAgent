@@ -22,6 +22,7 @@ export interface KnowledgeState {
   isLoadingLibraries: boolean;
   // Ingest state
   isIngesting: boolean;
+  ingestOperation: 'import' | 'rebuild' | null;
   ingestLibraryId: string | null;
   ingestLibraryName: string;  // Track library name for history
   ingestPaths: string[];      // Track paths for history
@@ -51,6 +52,7 @@ export const initialKnowledgeState: KnowledgeState = {
   isLoadingLibraries: false,
   // Ingest state
   isIngesting: false,
+  ingestOperation: null,
   ingestLibraryId: null,
   ingestLibraryName: '',
   ingestPaths: [],
@@ -69,28 +71,58 @@ export const initialKnowledgeState: KnowledgeState = {
 };
 
 export const createKnowledgeActions = (set: StoreSet, get: StoreGet) => ({
+  // Internal closure flags for refresh feedback
+  // (persist across action calls for this store instance)
+  _knowledgeRefreshManualPending: false as boolean,
+  _knowledgeLibrariesFingerprint: '' as string,
+  _knowledgeLibrariesRequestInFlight: false as boolean,
+  _knowledgeRebuildInFlightByLibrary: {} as Record<string, boolean>,
+  _knowledgeLastToastKey: '' as string,
+  _knowledgeLastToastAt: 0 as number,
+
   // List knowledge libraries
-  requestKnowledgeLibraries: () => {
-    set({ isLoadingLibraries: true });
+  requestKnowledgeLibraries: (options?: { manual?: boolean }) => {
+    const manual = Boolean(options?.manual);
+    if (get()._knowledgeLibrariesRequestInFlight) {
+      return;
+    }
+    if (manual) {
+      set({ _knowledgeRefreshManualPending: true });
+    }
+    set({ isLoadingLibraries: true, _knowledgeLibrariesRequestInFlight: true });
     const command = {
       command_type: 'list_knowledge_libraries',
       command_id: `cmd_${Date.now()}`,
       session_id: get().sessionId,
     };
-    const sent = get().sendCommand(command);
-    if (!sent) {
-      // WebSocket not connected, reset loading state
-      set({ isLoadingLibraries: false });
-    }
+    get().sendCommand(command);
     logger.debug('Knowledge', 'Requesting library list');
   },
 
   // Set libraries (called when receiving list event)
   setKnowledgeLibraries: (libraries: KnowledgeLibrary[]) => {
+    const prevFingerprint = get()._knowledgeLibrariesFingerprint || '';
+    const nextFingerprint = [...(libraries || [])]
+      .map((lib: KnowledgeLibrary) => `${lib.library_id}::${lib.updated_at || ''}::${lib.doc_count || 0}::${lib.chunk_count || 0}`)
+      .sort()
+      .join('|');
+    const manualPending = Boolean(get()._knowledgeRefreshManualPending);
+
     set({
       knowledgeLibraries: libraries,
       isLoadingLibraries: false,
+      _knowledgeLibrariesFingerprint: nextFingerprint,
+      _knowledgeRefreshManualPending: false,
+      _knowledgeLibrariesRequestInFlight: false,
     });
+
+    if (manualPending) {
+      if (nextFingerprint === prevFingerprint) {
+        get().showToast('Knowledge libraries already up to date', 'info');
+      } else {
+        get().showToast(`Knowledge libraries refreshed (${libraries.length})`, 'success');
+      }
+    }
     logger.debug('Knowledge', 'Updated libraries:', libraries.length);
   },
 
@@ -175,7 +207,6 @@ export const createKnowledgeActions = (set: StoreSet, get: StoreGet) => ({
       isSearchingKnowledge: true,
       knowledgeSearchQuery: query,
       knowledgeSearchResults: [],
-      bottomPanelTab: 'knowledge', // Auto-switch to Knowledge tab
     });
 
     const command = {
@@ -217,7 +248,19 @@ export const createKnowledgeActions = (set: StoreSet, get: StoreGet) => ({
 
   // Handle knowledge error
   handleKnowledgeError: (error: string, operation: string) => {
-    set({ isSearchingKnowledge: false, isLoadingLibraries: false, isIngesting: false });
+    const ingestLibraryId = get().ingestLibraryId;
+    const rebuildMap = { ...(get()._knowledgeRebuildInFlightByLibrary || {}) };
+    if (ingestLibraryId) {
+      delete rebuildMap[ingestLibraryId];
+    }
+    set({
+      isSearchingKnowledge: false,
+      isLoadingLibraries: false,
+      isIngesting: false,
+      ingestOperation: null,
+      _knowledgeLibrariesRequestInFlight: false,
+      _knowledgeRebuildInFlightByLibrary: rebuildMap,
+    });
     get().showToast(`Knowledge ${operation} failed: ${error}`, 'error');
     logger.error('Knowledge', 'Error:', operation, error);
   },
@@ -240,6 +283,7 @@ export const createKnowledgeActions = (set: StoreSet, get: StoreGet) => ({
 
     set({
       isIngesting: true,
+      ingestOperation: 'import',
       ingestLibraryId: libraryId,
       ingestLibraryName: libraryName,
       ingestPaths: paths,
@@ -284,15 +328,40 @@ export const createKnowledgeActions = (set: StoreSet, get: StoreGet) => ({
     message: string;
     warning?: string;
   }) => {
-    const { ingestLibraryId, ingestLibraryName, ingestPaths } = get();
+    const {
+      ingestLibraryId,
+      ingestLibraryName,
+      ingestPaths,
+      _knowledgeRebuildInFlightByLibrary,
+    } = get();
+
+    const completedLibraryId = ingestLibraryId || data.library_id;
+    const rebuildMap = { ...(_knowledgeRebuildInFlightByLibrary || {}) };
+    if (completedLibraryId) {
+      delete rebuildMap[completedLibraryId];
+    }
+
+    const showToastDedup = (message: string, type: 'success' | 'warning' | 'info' | 'error') => {
+      const key = `${type}:${message}`;
+      const now = Date.now();
+      const lastKey = get()._knowledgeLastToastKey || '';
+      const lastAt = Number(get()._knowledgeLastToastAt || 0);
+      if (key === lastKey && now - lastAt < 1200) {
+        return;
+      }
+      set({ _knowledgeLastToastKey: key, _knowledgeLastToastAt: now });
+      get().showToast(message, type);
+    };
 
     set({
       isIngesting: false,
+      ingestOperation: null,
       ingestLibraryId: null,
       ingestLibraryName: '',
       ingestPaths: [],
       ingestProgress: 0,
       ingestCurrentFile: '',
+      _knowledgeRebuildInFlightByLibrary: rebuildMap,
     });
 
     const filesProcessed = data.stats?.files_processed || 0;
@@ -310,7 +379,7 @@ export const createKnowledgeActions = (set: StoreSet, get: StoreGet) => ({
       // Check for degraded state (warning from backend)
       if (data.warning) {
         const message = `Imported ${filesProcessed} files — but no embedding provider found. Semantic search is unavailable. Install an embedding provider and rebuild the index.`;
-        get().showToast(message, 'warning');
+        showToastDedup(message, 'warning');
       } else {
         let message = `Import complete: ${filesProcessed} files, ${chunksCreated} chunks`;
         if (filesSkipped > 0) {
@@ -318,23 +387,26 @@ export const createKnowledgeActions = (set: StoreSet, get: StoreGet) => ({
         }
         if (filesFailed > 0) {
           message += ` (${filesFailed} failed)`;
-          get().showToast(message, 'warning');
+          showToastDedup(message, 'warning');
         } else {
-          get().showToast(message, 'success');
+          showToastDedup(message, 'success');
         }
       }
     } else if (data.success) {
       // Success but no files processed (e.g., incremental rebuild with no changes)
       if (data.warning) {
-        get().showToast(data.warning, 'warning');
+        showToastDedup(data.warning, 'warning');
       } else {
         const message = data.message || 'No changes detected';
-        get().showToast(message, 'info');
+        showToastDedup(message, 'info');
       }
     } else {
       const errorMsg = data.message || `All ${filesFailed} files failed to process`;
-      get().showToast(`Import failed: ${errorMsg}`, 'error');
+      showToastDedup(`Import failed: ${errorMsg}`, 'error');
     }
+    // Always refresh library metadata after ingest/rebuild completion,
+    // even when no files changed, to keep UI timestamps/status in sync.
+    get().requestKnowledgeLibraries();
     logger.info('Knowledge', 'Ingest complete:', data);
   },
 
@@ -370,6 +442,11 @@ export const createKnowledgeActions = (set: StoreSet, get: StoreGet) => ({
       return;
     }
 
+    const rebuildMap = get()._knowledgeRebuildInFlightByLibrary || {};
+    if (rebuildMap[libraryId]) {
+      return;
+    }
+
     // Find library info for history tracking
     const libraries = get().knowledgeLibraries || [];
     const library = libraries.find((lib: KnowledgeLibrary) => lib.library_id === libraryId);
@@ -381,6 +458,7 @@ export const createKnowledgeActions = (set: StoreSet, get: StoreGet) => ({
 
     set({
       isIngesting: true,
+      ingestOperation: 'rebuild',
       ingestLibraryId: libraryId,
       ingestLibraryName: libraryName,
       ingestPaths: existingPaths,  // Use existing document paths
@@ -388,6 +466,10 @@ export const createKnowledgeActions = (set: StoreSet, get: StoreGet) => ({
       ingestCurrentFile: '',
       ingestFilesProcessed: 0,
       ingestTotalFiles: 0,
+      _knowledgeRebuildInFlightByLibrary: {
+        ...rebuildMap,
+        [libraryId]: true,
+      },
     });
 
     const command = {
@@ -417,14 +499,19 @@ export const createKnowledgeActions = (set: StoreSet, get: StoreGet) => ({
     get().sendCommand(command);
     logger.info('Knowledge', 'Cancelling ingest for library:', libraryId);
 
+    const rebuildMap = { ...(get()._knowledgeRebuildInFlightByLibrary || {}) };
+    delete rebuildMap[libraryId];
+
     // Optimistically clear ingest state
     set({
       isIngesting: false,
+      ingestOperation: null,
       ingestLibraryId: null,
       ingestProgress: 0,
       ingestCurrentFile: '',
       ingestFilesProcessed: 0,
       ingestTotalFiles: 0,
+      _knowledgeRebuildInFlightByLibrary: rebuildMap,
     });
     get().showToast('Import cancelled', 'info');
   },

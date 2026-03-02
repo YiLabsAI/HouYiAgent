@@ -812,6 +812,7 @@ for _skill_command_type in (
     "get_skill_metrics",
     "load_skill",
     "unload_skill",
+    "remove_skill_from_disk",
     "configure_skill",
     "dry_run_skill",
     "consent_response",

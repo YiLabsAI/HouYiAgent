@@ -144,6 +144,27 @@ class TestToSummary:
         d = self.ser.to_summary(s)
         assert d["source"] == "community"
 
+    def test_source_group_from_managed_skills_directory(self):
+        s = _Skill(
+            skill_md_path="/Users/test/.houyi/skills/superpowers/skills/brainstorming/SKILL.md"
+        )
+        d = self.ser.to_summary(s)
+        assert d["source_group"] == "superpowers"
+
+    def test_source_group_from_managed_local_source_directory(self):
+        s = _Skill(
+            skill_md_path="/Users/test/.houyi/sources/local/superpowers/skills/using-superpowers/SKILL.md"
+        )
+        d = self.ser.to_summary(s)
+        assert d["source_group"] == "superpowers"
+
+    def test_source_group_from_generic_package_layout(self):
+        s = _Skill(
+            skill_md_path="/workspace/superpowers/skills/dispatching-parallel-agents/SKILL.md"
+        )
+        d = self.ser.to_summary(s)
+        assert d["source_group"] == "superpowers"
+
     def test_source_trust_source_override(self):
         s = _Skill(extra_frontmatter={"trust": {"source": "community"}})
         d = self.ser.to_summary(s)
@@ -217,6 +238,27 @@ class TestToDetail:
         assert d["instructions"] == "body"
         assert d["hook_specs"][0]["matcher"] == "Write|Edit"
         assert d["hook_specs"][0]["command"] == "echo hi"
+
+    def test_includes_available_workflows_from_instruction_templates(self):
+        s = _Skill(
+            instructions=(
+                "```bash\n"
+                "python scripts/office/soffice.py --headless --convert-to docx document.doc\n"
+                "python scripts/office/unpack.py document.docx unpacked/\n"
+                "```"
+            )
+        )
+        d = self.ser.to_detail(s)
+        workflows = d.get("available_workflows", [])
+        assert len(workflows) == 2
+        assert workflows[0]["id"] == "template_1"
+        assert workflows[1]["id"] == "template_2"
+        assert workflows[0]["depends_on"] == ["soffice"]
+        assert workflows[0]["evidence"].startswith("python scripts/office/soffice.py")
+        assert workflows[0]["confidence"] in {"medium", "high"}
+        assert isinstance(workflows[0]["confidence_score"], float)
+        assert workflows[0]["validation"]["status"] in {"pass", "warn"}
+        assert "missing_dependencies" in workflows[0]["validation"]
 
 
 # ── capability_tier / runtime_status serialization ─────────────────

@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import type { SkillSummary, SkillDetail, SkillMetricsData } from '../../types/websocket';
+import type { SkillSummary, SkillDetail, SkillMetricsData, DryRunWorkflowCandidate } from '../../types/websocket';
 import { useConsoleStore } from '../../stores/useConsoleStore';
 
 export interface DisclosurePhase {
@@ -31,6 +31,7 @@ export interface DryRunResultData {
   policy_result: string;
   capability_gaps: string[];
   estimated_side_effects: string[];
+  available_workflows?: DryRunWorkflowCandidate[];
   llm_verification?: LlmVerificationResult;
 }
 
@@ -51,6 +52,7 @@ export interface SkillConfigValues {
 export interface DryRunLiveOptions {
   llmProvider?: string;
   llmModel?: string;
+  workflowId?: string;
 }
 
 export interface LoadResultData {
@@ -76,6 +78,7 @@ interface UseSkillsLogicReturn {
   refreshSkills: () => void;
   loadSkill: (source: string, installStrategy?: SkillInstallStrategy) => void;
   unloadSkill: (skillName: string) => void;
+  removeSkillFromDisk: (skillName: string) => void;
   configureSkill: (skillName: string, config: SkillConfigValues) => void;
   dryRunSkill: (
     skillName: string,
@@ -91,6 +94,17 @@ interface UseSkillsLogicReturn {
 
 /** Safety timeout (ms) for list_skills commands. */
 const LIST_TIMEOUT_MS = 10_000;
+const SKILLS_TIMEOUT_ERROR = 'Skills list request timed out';
+const SKILLS_UP_TO_DATE_MESSAGE = 'Skills already up to date';
+
+type RefreshReason = 'initial' | 'manual' | 'system';
+
+function fingerprintSkills(skills: SkillSummary[]): string {
+  return skills
+    .map((skill) => `${skill.name}::${skill.source ?? ''}::${skill.source_group ?? ''}::${skill.runtime_status ?? ''}`)
+    .sort()
+    .join('|');
+}
 
 export function useSkillsLogic(
   sessionId: string,
@@ -116,6 +130,10 @@ export function useSkillsLogic(
   // Ref to track the safety timeout for list_skills.
   // Shared between initial load and manual refresh so it's always cleared properly.
   const listTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const listRequestInFlightRef = useRef(false);
+  const refreshReasonRef = useRef<RefreshReason>('initial');
+  const skillsFingerprintRef = useRef<string>('');
+  const removeFromDiskPendingRef = useRef<Set<string>>(new Set());
 
   const clearListTimeout = useCallback(() => {
     if (listTimeoutRef.current) {
@@ -124,7 +142,12 @@ export function useSkillsLogic(
     }
   }, []);
 
-  const refreshSkills = useCallback(() => {
+  const requestSkillsList = useCallback((reason: RefreshReason = 'manual') => {
+    if (listRequestInFlightRef.current && reason === 'manual') {
+      return;
+    }
+    refreshReasonRef.current = reason;
+    listRequestInFlightRef.current = true;
     setIsLoadingList(true);
     setError(null);
     sendCommand({
@@ -138,20 +161,41 @@ export function useSkillsLogic(
     listTimeoutRef.current = setTimeout(() => {
       setIsLoadingList((prev) => {
         if (prev) {
-          setError('Skills list request timed out');
+          setError(SKILLS_TIMEOUT_ERROR);
         }
         return false;
       });
+      listRequestInFlightRef.current = false;
     }, LIST_TIMEOUT_MS);
   }, [sendCommand, sessionId, clearListTimeout]);
+
+  const refreshSkills = useCallback(() => {
+    requestSkillsList('manual');
+  }, [requestSkillsList]);
 
   // Register event handlers once (no `selectedSkill` in deps — uses ref instead).
   useEffect(() => {
     const unsubscribeList = registerEventHandler('skill_list', (event: unknown) => {
       const e = event as { skills: SkillSummary[] };
-      setSkills(e.skills || []);
+      const incomingSkills = e.skills || [];
+      const nextFingerprint = fingerprintSkills(incomingSkills);
+      const prevFingerprint = skillsFingerprintRef.current;
+      const reason = refreshReasonRef.current;
+
+      setSkills(incomingSkills);
+      skillsFingerprintRef.current = nextFingerprint;
       setIsLoadingList(false);
+      listRequestInFlightRef.current = false;
       clearListTimeout();
+
+      if (reason === 'manual') {
+        if (nextFingerprint === prevFingerprint) {
+          useConsoleStore.getState().showToast(SKILLS_UP_TO_DATE_MESSAGE, 'info');
+        } else {
+          useConsoleStore.getState().showToast(`Skills refreshed (${incomingSkills.length})`, 'success');
+        }
+      }
+      refreshReasonRef.current = 'system';
     });
 
     const unsubscribeDetail = registerEventHandler('skill_detail', (event: unknown) => {
@@ -167,9 +211,13 @@ export function useSkillsLogic(
 
     const unsubscribeError = registerEventHandler('skill_error', (event: unknown) => {
       const e = event as { message: string; error_code?: string };
+      if (e.error_code === 'remove_from_disk_failed' && selectedSkillRef.current) {
+        removeFromDiskPendingRef.current.delete(selectedSkillRef.current);
+      }
       setError(e.message);
       setIsLoadingList(false);
       setIsLoadingDetail(false);
+      listRequestInFlightRef.current = false;
       clearListTimeout();
       // Propagate load-specific errors to LoadSkillDialog
       const loadCodes = new Set([
@@ -186,7 +234,7 @@ export function useSkillsLogic(
 
     const unsubscribeLoaded = registerEventHandler('skill_loaded', (event: unknown) => {
       const e = event as { skill_name: string; message?: string };
-      refreshSkills();
+      requestSkillsList('system');
       setLoadResult({ success: true, message: e.message || `Skill "${e.skill_name}" loaded` });
       useConsoleStore.getState().showToast(
         `Skill "${e.skill_name}" loaded`,
@@ -195,15 +243,21 @@ export function useSkillsLogic(
     });
 
     const unsubscribeUnloaded = registerEventHandler('skill_unloaded', (event: unknown) => {
-      refreshSkills();
+      requestSkillsList('system');
       const e = event as { skill_name: string };
+      const removedFromDisk = removeFromDiskPendingRef.current.has(e.skill_name);
+      if (removedFromDisk) {
+        removeFromDiskPendingRef.current.delete(e.skill_name);
+      }
       if (selectedSkillRef.current === e.skill_name) {
         setSelectedSkill(null);
         setSkillDetail(null);
         setSkillMetrics(null);
       }
       useConsoleStore.getState().showToast(
-        `Skill "${e.skill_name}" unloaded`,
+        removedFromDisk
+          ? `Skill "${e.skill_name}" removed from disk`
+          : `Skill "${e.skill_name}" unloaded`,
         'info',
       );
     });
@@ -245,7 +299,7 @@ export function useSkillsLogic(
           skill_name: e.skill_name,
         });
       }
-      refreshSkills();
+      requestSkillsList('system');
       useConsoleStore.getState().showToast(
         `Skill "${e.skill_name}" configuration saved`,
         'success',
@@ -258,7 +312,7 @@ export function useSkillsLogic(
     });
 
     // Initial load.
-    refreshSkills();
+    requestSkillsList('initial');
 
     return () => {
       unsubscribeList();
@@ -272,12 +326,14 @@ export function useSkillsLogic(
       unsubscribeConfigured();
       unsubscribeBlocked();
       clearListTimeout();
+      listRequestInFlightRef.current = false;
     };
-  }, [registerEventHandler, refreshSkills, clearListTimeout, sendCommand, sessionId]);
+  }, [registerEventHandler, requestSkillsList, clearListTimeout, sendCommand, sessionId]);
 
   const selectSkill = useCallback((skillName: string) => {
+    const isReselectingSameSkill = selectedSkillRef.current === skillName;
     setSelectedSkill(skillName);
-    setIsLoadingDetail(true);
+    setIsLoadingDetail(!isReselectingSameSkill);
     setError(null);
     setDryRunResult(null);
 
@@ -290,6 +346,16 @@ export function useSkillsLogic(
 
     sendCommand({
       command_type: 'get_skill_metrics',
+      command_id: `cmd_${crypto.randomUUID().slice(0, 8)}`,
+      session_id: sessionId,
+      skill_name: skillName,
+    });
+  }, [sendCommand, sessionId]);
+
+  const removeSkillFromDisk = useCallback((skillName: string) => {
+    removeFromDiskPendingRef.current.add(skillName);
+    sendCommand({
+      command_type: 'remove_skill_from_disk',
       command_id: `cmd_${crypto.randomUUID().slice(0, 8)}`,
       session_id: sessionId,
       skill_name: skillName,
@@ -351,13 +417,18 @@ export function useSkillsLogic(
     setDryRunResult(null);
     const llmProvider = options?.llmProvider?.trim();
     const llmModel = options?.llmModel?.trim();
+    const workflowId = options?.workflowId?.trim();
+    const payloadInput = {
+      ...(input ?? {}),
+      ...(workflowId ? { workflow_id: workflowId } : {}),
+    };
     sendCommand({
       command_type: 'dry_run_skill',
       command_id: `cmd_${crypto.randomUUID().slice(0, 8)}`,
       session_id: sessionId,
       skill_name: skillName,
       tool_name: toolName,
-      input: input ?? {},
+      input: payloadInput,
       live: live ?? false,
       llm_provider: llmProvider || undefined,
       llm_model: llmModel || undefined,
@@ -395,6 +466,7 @@ export function useSkillsLogic(
     refreshSkills,
     loadSkill,
     unloadSkill,
+    removeSkillFromDisk,
     configureSkill,
     dryRunSkill,
     respondToConsent,

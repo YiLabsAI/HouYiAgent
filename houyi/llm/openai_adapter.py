@@ -2,12 +2,23 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import os
 from collections.abc import AsyncIterator
 from typing import Any
 
 from houyi.config.env_config import ENV_OPENAI_API_KEY
 from houyi.llm.base import DEFAULT_TEMPERATURE, LLMAdapter, LLMMessage, LLMResponse
+from houyi.llm.retry import (
+    DEFAULT_MAX_RETRIES,
+    DEFAULT_RETRY_BASE_DELAY,
+    DEFAULT_RETRY_MAX_DELAY,
+    RetryController,
+    RetryPolicy,
+)
+
+logger = logging.getLogger(__name__)
 
 
 class OpenAIAdapter(LLMAdapter):
@@ -32,6 +43,12 @@ class OpenAIAdapter(LLMAdapter):
         self.api_key = api_key or os.getenv(ENV_OPENAI_API_KEY)
         self.model = model
         self.base_url = base_url
+        self._retry_policy = RetryPolicy(
+            total_retries=DEFAULT_MAX_RETRIES,
+            status_retries=DEFAULT_MAX_RETRIES,
+            backoff_base=DEFAULT_RETRY_BASE_DELAY,
+            backoff_cap=DEFAULT_RETRY_MAX_DELAY,
+        )
 
         if not self.api_key:
             raise ValueError(
@@ -43,11 +60,29 @@ class OpenAIAdapter(LLMAdapter):
         try:
             from openai import AsyncOpenAI
 
-            self.client = AsyncOpenAI(api_key=self.api_key, base_url=self.base_url)
+            self.client = AsyncOpenAI(
+                api_key=self.api_key,
+                base_url=self.base_url,
+                max_retries=DEFAULT_MAX_RETRIES,
+            )
         except ImportError as e:
             raise ImportError(
                 "OpenAI package not installed. Install with: pip install openai>=1.0.0"
             ) from e
+
+    @staticmethod
+    def _extract_status_code(exc: Exception) -> int | None:
+        status_code = getattr(exc, "status_code", None)
+        if isinstance(status_code, int):
+            return status_code
+        response = getattr(exc, "response", None)
+        response_status = getattr(response, "status_code", None)
+        if isinstance(response_status, int):
+            return response_status
+        return None
+
+    def _build_retry_controller(self) -> RetryController:
+        return RetryController(self._retry_policy)
 
     async def chat(
         self,
@@ -88,8 +123,37 @@ class OpenAIAdapter(LLMAdapter):
         # Add any additional parameters
         params.update(kwargs)
 
-        # Make API call
-        response = await self.client.chat.completions.create(**params)
+        retry_controller = self._build_retry_controller()
+        while True:
+            try:
+                response = await self.client.chat.completions.create(**params)
+                break
+            except Exception as exc:
+                status_code = self._extract_status_code(exc)
+                decision = None
+                if status_code is not None:
+                    headers = getattr(getattr(exc, "response", None), "headers", {})
+                    decision = retry_controller.on_status_code(
+                        status_code,
+                        method="POST",
+                        headers=headers,
+                    )
+                if decision is None:
+                    decision = retry_controller.on_transport_exception(exc, method="POST")
+
+                if decision.retry:
+                    logger.warning(
+                        "OpenAI chat retry: bucket=%s used=%d/%d wait=%.2fs status=%s error=%s",
+                        decision.bucket,
+                        retry_controller.retries_used,
+                        retry_controller.policy.total_retries,
+                        decision.delay_seconds,
+                        status_code,
+                        exc,
+                    )
+                    await asyncio.sleep(decision.delay_seconds)
+                    continue
+                raise
 
         return LLMResponse.from_openai(response)
 
@@ -130,8 +194,42 @@ class OpenAIAdapter(LLMAdapter):
 
         params.update(kwargs)
 
-        stream = await self.client.chat.completions.create(**params)
+        retry_controller = self._build_retry_controller()
+        while True:
+            emitted = False
+            try:
+                stream = await self.client.chat.completions.create(**params)
+                async for chunk in stream:
+                    if chunk.choices[0].delta.content:
+                        emitted = True
+                        yield (chunk.choices[0].delta.content, None)
+                return
+            except Exception as exc:
+                if emitted:
+                    raise
 
-        async for chunk in stream:
-            if chunk.choices[0].delta.content:
-                yield (chunk.choices[0].delta.content, None)
+                status_code = self._extract_status_code(exc)
+                decision = None
+                if status_code is not None:
+                    headers = getattr(getattr(exc, "response", None), "headers", {})
+                    decision = retry_controller.on_status_code(
+                        status_code,
+                        method="POST",
+                        headers=headers,
+                    )
+                if decision is None:
+                    decision = retry_controller.on_transport_exception(exc, method="POST")
+
+                if decision.retry:
+                    logger.warning(
+                        "OpenAI stream retry: bucket=%s used=%d/%d wait=%.2fs status=%s error=%s",
+                        decision.bucket,
+                        retry_controller.retries_used,
+                        retry_controller.policy.total_retries,
+                        decision.delay_seconds,
+                        status_code,
+                        exc,
+                    )
+                    await asyncio.sleep(decision.delay_seconds)
+                    continue
+                raise

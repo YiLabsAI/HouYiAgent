@@ -124,6 +124,7 @@ class SkillService:
     # ── Read operations (delegate to serializer) ──────────────────
 
     def list_skills(self) -> list[dict[str, Any]]:
+        self._loader.refresh_managed_external_skills()
         return [self._serializer.to_summary(s) for s in self._registry.list()]
 
     def get_skill_detail(self, skill_name: str) -> dict[str, Any] | None:
@@ -160,6 +161,9 @@ class SkillService:
 
     def unload_skill(self, skill_name: str) -> tuple[bool, str | None]:
         return self._loader.unload(skill_name)
+
+    def remove_skill_from_disk(self, skill_name: str) -> tuple[bool, str | None]:
+        return self._loader.remove_from_disk(skill_name)
 
     def configure_skill(
         self,

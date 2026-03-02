@@ -12,9 +12,15 @@ import { DocumentListDialog } from './DocumentListDialog';
 
 interface KnowledgePanelProps {
   onOpenCreateDialog: () => void;
+  configureLibraryId?: string | null;
+  onConfigureHandled?: () => void;
 }
 
-export const KnowledgePanel: React.FC<KnowledgePanelProps> = ({ onOpenCreateDialog }) => {
+export const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
+  onOpenCreateDialog,
+  configureLibraryId = null,
+  onConfigureHandled,
+}) => {
   const {
     knowledgeLibraries,
     selectedLibraryId,
@@ -24,6 +30,7 @@ export const KnowledgePanel: React.FC<KnowledgePanelProps> = ({ onOpenCreateDial
     requestKnowledgeLibraries,
     ingestKnowledgeFiles,
     isIngesting,
+    ingestOperation,
     ingestProgress,
     ingestCurrentFile,
     ingestFilesProcessed,
@@ -70,6 +77,19 @@ export const KnowledgePanel: React.FC<KnowledgePanelProps> = ({ onOpenCreateDial
     // Request libraries on mount
     requestKnowledgeLibraries();
   }, [requestKnowledgeLibraries]);
+
+  React.useEffect(() => {
+    if (!configureLibraryId) {
+      return;
+    }
+    const target = knowledgeLibraries.find((lib: KnowledgeLibrary) => lib.library_id === configureLibraryId);
+    if (!target) {
+      return;
+    }
+    setLibraryToEdit(target);
+    setEditDialogOpen(true);
+    onConfigureHandled?.();
+  }, [configureLibraryId, knowledgeLibraries, onConfigureHandled]);
 
   const handleDeleteClick = (e: React.MouseEvent, library: KnowledgeLibrary) => {
     e.stopPropagation();
@@ -224,7 +244,7 @@ export const KnowledgePanel: React.FC<KnowledgePanelProps> = ({ onOpenCreateDial
         <div className="text-xs font-semibold text-gray-200">Knowledge Libraries</div>
         <div className="flex gap-1">
           <button
-            onClick={() => requestKnowledgeLibraries()}
+            onClick={() => requestKnowledgeLibraries({ manual: true })}
             className="p-1 hover:bg-gray-700 rounded text-gray-400 hover:text-gray-200"
             title="Refresh"
           >
@@ -360,7 +380,7 @@ export const KnowledgePanel: React.FC<KnowledgePanelProps> = ({ onOpenCreateDial
                         <button
                           onClick={(e) => { handleRebuildClick(e, library); setMenuOpenId(null); }}
                           className="w-full px-3 py-1.5 text-left text-[11px] text-gray-300 hover:bg-gray-700 flex items-center gap-2"
-                          disabled={isIngesting}
+                          disabled={isIngesting && ingestLibraryId === library.library_id}
                         >
                           <RotateCw size={12} /> Rebuild Index
                         </button>
@@ -382,7 +402,7 @@ export const KnowledgePanel: React.FC<KnowledgePanelProps> = ({ onOpenCreateDial
 
         {/* Ingest Progress */}
         <IngestProgress
-          isIngesting={isIngesting}
+          isIngesting={isIngesting && ingestOperation === 'import'}
           progress={ingestProgress}
           currentFile={ingestCurrentFile}
           filesProcessed={ingestFilesProcessed}

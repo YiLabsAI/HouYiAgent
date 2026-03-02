@@ -32,6 +32,8 @@ interface LeftSidebarProps {
   onSelectSkill?: (skillName: string) => void;
   onRefreshSkills?: () => void;
   onLoadSkill?: () => void;
+  configureKnowledgeLibraryId?: string | null;
+  onKnowledgeConfigureHandled?: () => void;
 }
 
 export const LeftSidebar: React.FC<LeftSidebarProps> = ({
@@ -47,6 +49,8 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
   onSelectSkill = () => {},
   onRefreshSkills = () => {},
   onLoadSkill,
+  configureKnowledgeLibraryId = null,
+  onKnowledgeConfigureHandled,
 }) => {
   const logic = useLeftSidebarLogic();
   const [isKnowledgeDialogOpen, setIsKnowledgeDialogOpen] = React.useState(false);
@@ -107,7 +111,11 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
     return (
       <>
         <KnowledgeSearch />
-        <KnowledgePanel onOpenCreateDialog={() => setIsKnowledgeDialogOpen(true)} />
+        <KnowledgePanel
+          onOpenCreateDialog={() => setIsKnowledgeDialogOpen(true)}
+          configureLibraryId={configureKnowledgeLibraryId}
+          onConfigureHandled={onKnowledgeConfigureHandled}
+        />
       </>
     );
   };

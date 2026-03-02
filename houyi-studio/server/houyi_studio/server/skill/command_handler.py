@@ -50,6 +50,7 @@ from ..gateway.commands import (
     GetSkillMetricsCommand,
     ListSkillsCommand,
     LoadSkillCommand,
+    RemoveSkillFromDiskCommand,
     UnloadSkillCommand,
 )
 from ..gateway.events import (
@@ -76,6 +77,7 @@ SkillCommand = (
     | GetSkillMetricsCommand
     | LoadSkillCommand
     | UnloadSkillCommand
+    | RemoveSkillFromDiskCommand
     | ConfigureSkillCommand
     | DryRunSkillCommand
     | ConsentResponseCommand
@@ -128,6 +130,7 @@ class SkillCommandHandler:
                 GetSkillMetricsCommand,
                 LoadSkillCommand,
                 UnloadSkillCommand,
+                RemoveSkillFromDiskCommand,
                 ConfigureSkillCommand,
                 DryRunSkillCommand,
                 ConsentResponseCommand,
@@ -145,6 +148,8 @@ class SkillCommandHandler:
             await self._handle_load_skill(command, session_id)
         elif isinstance(command, UnloadSkillCommand):
             await self._handle_unload_skill(command, session_id)
+        elif isinstance(command, RemoveSkillFromDiskCommand):
+            await self._handle_remove_skill_from_disk(command, session_id)
         elif isinstance(command, ConfigureSkillCommand):
             await self._handle_configure_skill(command, session_id)
         elif isinstance(command, DryRunSkillCommand):
@@ -166,6 +171,7 @@ class SkillCommandHandler:
                 certification=s.get("certification", "unverified"),
                 is_core=bool(s.get("is_core", False)),
                 source=s.get("source", "local"),
+                source_group=s.get("source_group"),
                 capability_tier=s.get("capability_tier", "metadata"),
                 runtime_status=s.get("runtime_status", "unavailable"),
                 is_external_alias=bool(s.get("is_external_alias", False)),
@@ -210,6 +216,7 @@ class SkillCommandHandler:
                 side_effect=detail_data.get("side_effect", "none"),
                 is_core=bool(detail_data.get("is_core", False)),
                 source=detail_data.get("source", "local"),
+                source_group=detail_data.get("source_group"),
                 capability_tier=detail_data.get("capability_tier", "metadata"),
                 runtime_status=detail_data.get("runtime_status", "unavailable"),
                 is_external_alias=bool(detail_data.get("is_external_alias", False)),
@@ -219,6 +226,7 @@ class SkillCommandHandler:
                 instructions=detail_data.get("instructions"),
                 hook_specs=detail_data.get("hook_specs", []),
                 package_examples=detail_data.get("package_examples", []),
+                available_workflows=detail_data.get("available_workflows", []),
             )
             event = SkillDetailEvent(
                 event_id=f"evt_{uuid4().hex[:8]}",
@@ -235,6 +243,34 @@ class SkillCommandHandler:
             error_code="skill_not_found",
             message=f"Skill '{command.skill_name}' not found",
             suggestions=["Check skill name", "List available skills"],
+        )
+        await self._send_event(session_id, error_event)
+
+    async def _handle_remove_skill_from_disk(
+        self, command: RemoveSkillFromDiskCommand, session_id: str
+    ) -> None:
+        skill_service = self._skill_service_getter()
+        success, error_msg = skill_service.remove_skill_from_disk(command.skill_name)
+        if success:
+            event = SkillUnloadedEvent(
+                event_id=f"evt_{uuid4().hex[:8]}",
+                session_id=session_id,
+                skill_name=command.skill_name,
+            )
+            await self._send_event(session_id, event)
+            self._logger.info("Removed skill from disk: %s", command.skill_name)
+            return
+
+        error_event = SkillErrorEvent(
+            event_id=f"evt_{uuid4().hex[:8]}",
+            session_id=session_id,
+            skill_name=command.skill_name,
+            error_code="remove_from_disk_failed",
+            message=error_msg or "Failed to remove skill from disk",
+            suggestions=[
+                "Check skill name",
+                "Ensure the skill is managed under ~/.houyi/skills or ~/.houyi/sources/local",
+            ],
         )
         await self._send_event(session_id, error_event)
 
@@ -416,6 +452,7 @@ class SkillCommandHandler:
             policy_result=result_data.get("policy_result", "allow"),
             capability_gaps=result_data.get("capability_gaps", []),
             estimated_side_effects=result_data.get("estimated_side_effects", []),
+            available_workflows=result_data.get("available_workflows", []),
             llm_verification=llm_verification,
         )
         event = DryRunResultEvent(

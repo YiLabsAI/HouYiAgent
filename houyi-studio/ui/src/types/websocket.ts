@@ -313,6 +313,7 @@ export interface SkillSummary {
   certification: 'unverified' | 'bronze' | 'silver' | 'gold';
   is_core: boolean;
   source?: 'builtin' | 'community' | 'third_party' | 'local';
+  source_group?: string;
   capability_tier?: 'metadata' | 'schema' | 'executable';
   runtime_status?: 'ready' | 'degraded' | 'unavailable';
   is_external_alias?: boolean;
@@ -360,6 +361,7 @@ export interface SkillDetail {
   side_effect: 'none' | 'network' | 'filesystem' | 'exec';
   is_core: boolean;
   source?: 'builtin' | 'community' | 'third_party' | 'local';
+  source_group?: string;
   capability_tier?: 'metadata' | 'schema' | 'executable';
   runtime_status?: 'ready' | 'degraded' | 'unavailable';
   is_external_alias?: boolean;
@@ -380,6 +382,7 @@ export interface SkillDetail {
     confidence_reason?: string;
     confidence_breakdown?: Record<string, number>;
   }>;
+  available_workflows?: DryRunWorkflowCandidate[];
 }
 
 export interface SkillDetailEvent extends ServerEvent {
@@ -448,12 +451,30 @@ export interface SkillBlockedEvent extends ServerEvent {
   reason: string;
 }
 
+export interface DryRunWorkflowCandidate {
+  id: string;
+  title: string;
+  command: string;
+  params: string[];
+  depends_on: string[];
+  source: 'frontmatter' | 'instructions';
+  evidence?: string;
+  confidence?: 'low' | 'medium' | 'high';
+  confidence_score?: number;
+  validation?: {
+    status: 'pass' | 'warn' | 'fail';
+    issues: string[];
+    missing_dependencies: string[];
+  };
+}
+
 export interface DryRunResult {
   valid: boolean;
   schema_errors: string[];
   policy_result: 'allow' | 'allow_with_consent' | 'deny';
   capability_gaps: string[];
   estimated_side_effects: string[];
+  available_workflows?: DryRunWorkflowCandidate[];
 }
 
 export interface DryRunResultEvent extends ServerEvent {
@@ -536,6 +557,7 @@ export type CommandType =
   | 'get_skill_metrics'
   | 'load_skill'
   | 'unload_skill'
+  | 'remove_skill_from_disk'
   | 'dry_run_skill'
   | 'consent_response';
 
@@ -726,6 +748,11 @@ export interface UnloadSkillCommand extends ClientCommand {
   skill_name: string;
 }
 
+export interface RemoveSkillFromDiskCommand extends ClientCommand {
+  command_type: 'remove_skill_from_disk';
+  skill_name: string;
+}
+
 export interface DryRunSkillCommand extends ClientCommand {
   command_type: 'dry_run_skill';
   skill_name: string;
@@ -773,5 +800,6 @@ export type AnyClientCommand =
   | GetSkillMetricsCommand
   | LoadSkillCommand
   | UnloadSkillCommand
+  | RemoveSkillFromDiskCommand
   | DryRunSkillCommand
   | ConsentResponseCommand;

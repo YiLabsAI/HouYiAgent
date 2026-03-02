@@ -2,7 +2,7 @@
  * Tests for BottomPanel after P3-15/P3-16 refactor.
  *
  * Covers:
- *   - New 5-tab structure (observability, checkpoints, context, logs, knowledge)
+ *   - New 4-tab structure (observability, checkpoints, context, logs)
  *   - Checkpoints dual-view (list / compare)
  *   - Expand button (P3-17)
  *   - Collapsed summary text
@@ -18,10 +18,6 @@ vi.mock('@/stores/useConsoleStore', () => ({
 
 vi.mock('@/components/panels/ComparePanel', () => ({
   ComparePanel: () => <div data-testid="compare-panel">ComparePanel</div>,
-}));
-
-vi.mock('@/components/panels/KnowledgeResultsPanel', () => ({
-  KnowledgeResultsPanel: () => <div data-testid="knowledge-panel">KnowledgeResultsPanel</div>,
 }));
 
 vi.mock('@/components/panels/LogsPanel', () => ({
@@ -70,13 +66,13 @@ describe('BottomPanel', () => {
   });
 
   // Tab rendering
-  it('renders all 5 tabs', () => {
+  it('renders all 4 tabs', () => {
     render(<BottomPanel isCollapsed={false} onToggleCollapse={vi.fn()} />);
     expect(screen.getByText('Observability')).toBeInTheDocument();
     expect(screen.getByText('Checkpoints')).toBeInTheDocument();
     expect(screen.getByText('Context')).toBeInTheDocument();
     expect(screen.getByText('Logs')).toBeInTheDocument();
-    expect(screen.getByText('Knowledge')).toBeInTheDocument();
+    expect(screen.queryByText('Knowledge')).not.toBeInTheDocument();
   });
 
   it('does NOT render old tabs (compare, skills, execution-replay)', () => {

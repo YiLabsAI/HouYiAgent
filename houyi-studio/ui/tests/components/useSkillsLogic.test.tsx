@@ -13,9 +13,10 @@
  *   - crypto.randomUUID() command_id format
  */
 import { renderHook, act } from '@testing-library/react';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { useSkillsLogic } from '@/components/LeftSidebar/useSkillsLogic';
 import type { SkillSummary, SkillDetail, SkillMetricsData } from '@/types/websocket';
+import { useConsoleStore } from '@/stores/useConsoleStore';
 
 // --- Helpers ---
 
@@ -111,9 +112,16 @@ beforeEach(() => {
 
 describe('useSkillsLogic', () => {
   let mocks: ReturnType<typeof createMocks>;
+  let showToastMock: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
     mocks = createMocks();
+    showToastMock = vi.fn();
+    vi.spyOn(useConsoleStore, 'getState').mockReturnValue({ showToast: showToastMock } as any);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   // --- Initial state ---
@@ -197,6 +205,11 @@ describe('useSkillsLogic', () => {
       useSkillsLogic(SESSION_ID, mocks.sendCommand, mocks.registerEventHandler),
     );
 
+    // Complete initial in-flight request first.
+    act(() => {
+      mocks.emitEvent('skill_list', { skills: MOCK_SKILLS });
+    });
+
     mocks.sendCommand.mockClear();
 
     act(() => {
@@ -233,6 +246,26 @@ describe('useSkillsLogic', () => {
     });
     expect(result.current.isLoadingList).toBe(false);
     expect(result.current.skills).toEqual(MOCK_SKILLS);
+  });
+
+  it('manual refresh shows up-to-date toast when fingerprint does not change', () => {
+    const { result } = renderHook(() =>
+      useSkillsLogic(SESSION_ID, mocks.sendCommand, mocks.registerEventHandler),
+    );
+
+    act(() => {
+      mocks.emitEvent('skill_list', { skills: MOCK_SKILLS });
+    });
+
+    showToastMock.mockClear();
+    act(() => {
+      result.current.refreshSkills();
+    });
+    act(() => {
+      mocks.emitEvent('skill_list', { skills: MOCK_SKILLS });
+    });
+
+    expect(showToastMock).toHaveBeenCalledWith('Skills already up to date', 'info');
   });
 
   it('refreshSkills times out after 10s if no response', () => {
@@ -350,6 +383,25 @@ describe('useSkillsLogic', () => {
       expect.objectContaining({
         command_type: 'unload_skill',
         skill_name: 'get_weather',
+      }),
+    );
+  });
+
+  it('removeSkillFromDisk sends remove_skill_from_disk command', () => {
+    const { result } = renderHook(() =>
+      useSkillsLogic(SESSION_ID, mocks.sendCommand, mocks.registerEventHandler),
+    );
+
+    mocks.sendCommand.mockClear();
+
+    act(() => {
+      result.current.removeSkillFromDisk('using-superpowers');
+    });
+
+    expect(mocks.sendCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command_type: 'remove_skill_from_disk',
+        skill_name: 'using-superpowers',
       }),
     );
   });
@@ -540,6 +592,25 @@ describe('useSkillsLogic', () => {
 
       expect(mocks.sendCommand).toHaveBeenCalledWith(
         expect.objectContaining({ command_type: 'list_skills' }),
+      );
+    });
+
+    it('skill_unloaded shows removed-from-disk toast after remove command flow', () => {
+      const { result } = renderHook(() =>
+        useSkillsLogic(SESSION_ID, mocks.sendCommand, mocks.registerEventHandler),
+      );
+
+      act(() => {
+        result.current.removeSkillFromDisk('using-superpowers');
+      });
+
+      act(() => {
+        mocks.emitEvent('skill_unloaded', { skill_name: 'using-superpowers' });
+      });
+
+      expect(showToastMock).toHaveBeenCalledWith(
+        'Skill "using-superpowers" removed from disk',
+        'info',
       );
     });
 

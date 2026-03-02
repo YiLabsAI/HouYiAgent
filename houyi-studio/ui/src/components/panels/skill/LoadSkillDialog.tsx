@@ -204,6 +204,9 @@ export const LoadSkillDialog: React.FC<LoadSkillDialogProps> = ({
   const [isDraggingPath, setIsDraggingPath] = useState(false);
   const installLifecyclePlan = buildInstallLifecyclePlan(mode, source);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const installStrategyHint = installStrategy === 'copy'
+    ? 'copy snapshots the directory into managed local sources before linking into skills.'
+    : 'symlink keeps managed local sources pointing to your original directory and links that into skills.';
 
   const currentMode = MODES.find((m) => m.key === mode)!;
 
@@ -372,6 +375,7 @@ export const LoadSkillDialog: React.FC<LoadSkillDialogProps> = ({
                   setMode(m.key);
                   setSource('');
                   setError(null);
+                  setSuccessMessage(null);
                 }}
                 className={`flex flex-col items-center gap-1.5 p-3 rounded-lg border transition-colors ${
                   mode === m.key
@@ -420,8 +424,8 @@ export const LoadSkillDialog: React.FC<LoadSkillDialogProps> = ({
                 symlink
               </button>
             </div>
-            <p className="mt-1 text-[10px] text-gray-500">
-              symlink is recommended for source governance; copy is for isolated snapshots.
+            <p className="mt-1 text-[10px] text-gray-500" data-testid="install-strategy-hint">
+              {installStrategyHint}
             </p>
           </div>
         )}
@@ -476,6 +480,11 @@ export const LoadSkillDialog: React.FC<LoadSkillDialogProps> = ({
           />
           {mode !== 'url' && (
             <div className="mt-1 text-[10px] text-gray-600">Tip: drag and drop local file/folder path into the input.</div>
+          )}
+          {mode === 'directory' && (
+            <div className="mt-1 text-[10px] text-amber-400/90" data-testid="directory-path-web-note">
+              Web mode cannot read absolute directory paths from folder picker; paste an absolute path directly.
+            </div>
           )}
           {error && (
             <div className="mt-1.5 flex items-start gap-1.5 text-[11px] text-red-400">

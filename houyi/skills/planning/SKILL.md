@@ -41,6 +41,25 @@ permissions:
     paths:
       - "${WORKSPACE}/**/*.md"
       - "${WORKSPACE}/.plan/**"
+
+workflows:
+  - id: quick_start_create
+    title: Quick Start · Create Plan
+    command: /plan create "Implement user authentication"
+    params:
+      - task
+  - id: quick_update_subtask
+    title: Update Subtask Progress
+    command: /plan update 0 true
+    params:
+      - subtask_index
+      - completed
+  - id: quick_status
+    title: Check Plan Status
+    command: /plan status
+  - id: quick_complete
+    title: Complete Plan
+    command: /plan complete
 ---
 
 # Planning with Files
@@ -66,6 +85,22 @@ The skill will:
 1. Create a `PLAN.md` file with task breakdown
 2. Track progress as you work through subtasks
 3. Prevent premature completion until all subtasks are done
+
+Common action examples:
+
+```bash
+# Create a plan
+/plan create "Implement user authentication"
+
+# Update subtask #0 to completed=true
+/plan update 0 true
+
+# Check plan status
+/plan status
+
+# Mark plan complete (only when all subtasks are done)
+/plan complete
+```
 
 ## Plan File Format
 
@@ -109,6 +144,7 @@ If incomplete tasks remain, prompts to continue or explicitly acknowledge incomp
     "action": {
       "type": "string",
       "enum": ["create", "update", "complete", "status"],
+      "default": "create",
       "description": "Action to perform on the plan"
     },
     "task": {

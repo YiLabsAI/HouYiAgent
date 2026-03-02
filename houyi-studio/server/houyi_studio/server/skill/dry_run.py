@@ -17,7 +17,9 @@ import contextlib
 import json
 import logging
 import re
+import shlex
 import time
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from houyi.core.skill_registry import SkillRegistry
@@ -79,6 +81,10 @@ class DryRunValidator:
             result["valid"] = False
             result["schema_errors"].append(f"Skill not found: {skill_name}")
             return result
+
+        available_workflows = _collect_available_workflows(skill)
+        if available_workflows:
+            result["available_workflows"] = available_workflows
 
         self._check_schema(skill, tool_name, input_data, result)
         self._check_policy(skill_name, tool_name, result)
@@ -672,8 +678,6 @@ def _derive_script_compat_executor(skill: SkillSpec) -> Any | None:
         return None
 
     try:
-        from pathlib import Path
-
         from .loader import SkillLoader
 
         skill_dir = Path(raw_skill_dir).resolve()
@@ -688,6 +692,36 @@ def _derive_script_compat_executor(skill: SkillSpec) -> Any | None:
         import json
         import sys
 
+        def _normalize_command(command: list[str]) -> list[str]:
+            normalized: list[str] = []
+            for idx, token in enumerate(command):
+                if idx == 0 and token == "python":
+                    normalized.append(sys.executable)
+                    continue
+                if token.startswith("-"):
+                    normalized.append(token)
+                    continue
+
+                path_token = Path(token)
+                if not path_token.is_absolute():
+                    candidate = (skill_dir / path_token).resolve()
+                    if candidate.exists():
+                        normalized.append(str(candidate))
+                        continue
+                normalized.append(token)
+            return normalized
+
+        def _dependency_state(command: list[str]) -> tuple[list[str], list[str]]:
+            required = SkillLoader._infer_required_binaries(command)
+            return required, SkillLoader._missing_binaries(required)
+
+        explicit_command = isinstance(kwargs.get("command"), str) and bool(
+            str(kwargs.get("command", "")).strip()
+        )
+        explicit_workflow = isinstance(kwargs.get("workflow_id"), str) and bool(
+            str(kwargs.get("workflow_id", "")).strip()
+        )
+
         command = SkillLoader._build_script_compat_command(kwargs, templates)
         if not command:
             return {
@@ -696,22 +730,40 @@ def _derive_script_compat_executor(skill: SkillSpec) -> Any | None:
                 "payload": kwargs,
             }
 
-        normalized_cmd: list[str] = []
-        for idx, token in enumerate(command):
-            if idx == 0 and token == "python":
-                normalized_cmd.append(sys.executable)
-                continue
-            if token.startswith("-"):
-                normalized_cmd.append(token)
-                continue
-
-            path_token = Path(token)
-            if not path_token.is_absolute():
-                candidate = (skill_dir / path_token).resolve()
-                if candidate.exists():
-                    normalized_cmd.append(str(candidate))
+        normalized_cmd = _normalize_command(command)
+        _, missing_bins = _dependency_state(normalized_cmd)
+        if missing_bins and not explicit_command and not explicit_workflow:
+            for idx in range(len(templates)):
+                candidate_payload = dict(kwargs)
+                candidate_payload["workflow_id"] = f"template_{idx + 1}"
+                candidate_cmd = SkillLoader._build_script_compat_command(
+                    candidate_payload, templates
+                )
+                if not candidate_cmd:
                     continue
-            normalized_cmd.append(token)
+                candidate_normalized = _normalize_command(candidate_cmd)
+                _, candidate_missing = _dependency_state(candidate_normalized)
+                if candidate_missing:
+                    continue
+                normalized_cmd = candidate_normalized
+                _, missing_bins = _dependency_state(normalized_cmd)
+                break
+
+        if missing_bins:
+            missing_msg = (
+                "Missing required runtime dependency: "
+                + ", ".join(missing_bins)
+                + ". Please install it (e.g. LibreOffice provides 'soffice')."
+            )
+            return {
+                "success": False,
+                "exit_code": 127,
+                "error_code": "missing_dependency",
+                "missing_dependencies": missing_bins,
+                "command": normalized_cmd,
+                "output": "",
+                "stderr": missing_msg,
+            }
 
         proc = await asyncio.create_subprocess_exec(
             *normalized_cmd,
@@ -747,6 +799,242 @@ def _derive_script_compat_executor(skill: SkillSpec) -> Any | None:
         }
 
     return _executor
+
+
+def _collect_available_workflows(skill: SkillSpec) -> list[dict[str, Any]]:
+    extra = getattr(skill, "extra_frontmatter", None)
+    if isinstance(extra, dict):
+        workflows = _collect_frontmatter_workflows(extra)
+        if workflows:
+            return workflows
+
+    instructions = getattr(skill, "instructions", None)
+    if not isinstance(instructions, str) or not instructions.strip():
+        return []
+
+    try:
+        from .loader import SkillLoader
+
+        templates = SkillLoader._extract_script_command_templates(instructions)
+    except Exception:
+        return []
+
+    workflows: list[dict[str, Any]] = []
+    for idx, template in enumerate(templates, start=1):
+        base_tokens = [str(t) for t in (template.get("base_tokens") or [])]
+        raw = str(template.get("raw") or "").strip()
+        if not _is_meaningful_workflow_template(base_tokens=base_tokens, raw=raw):
+            continue
+        command_text = raw or " ".join(base_tokens)
+
+        wf_id = f"template_{idx}"
+        flags = [str(flag) for flag in (template.get("flags") or [])]
+        required_bins = SkillLoader._infer_required_binaries(base_tokens)
+        missing_bins = SkillLoader._missing_binaries(required_bins)
+
+        confidence_score, confidence_level = _workflow_confidence(
+            source="instructions",
+            base_tokens=base_tokens,
+            command_text=command_text,
+        )
+        validation_status = "pass" if not missing_bins else "warn"
+        validation_issues = []
+        if missing_bins:
+            validation_issues.append(
+                "Missing dependency: "
+                f"{', '.join(missing_bins)}"
+                " (workflow is discoverable but execution will fail until installed)"
+            )
+
+        workflows.append(
+            {
+                "id": wf_id,
+                "title": _workflow_title_from_template(base_tokens=base_tokens, workflow_id=wf_id),
+                "command": command_text,
+                "params": flags,
+                "depends_on": required_bins,
+                "source": "instructions",
+                "evidence": raw or " ".join(base_tokens),
+                "confidence": confidence_level,
+                "confidence_score": confidence_score,
+                "validation": {
+                    "status": validation_status,
+                    "issues": validation_issues,
+                    "missing_dependencies": missing_bins,
+                },
+            }
+        )
+
+    return _dedupe_workflows(workflows)
+
+
+def _collect_frontmatter_workflows(extra_frontmatter: dict[str, Any]) -> list[dict[str, Any]]:
+    raw = extra_frontmatter.get("workflows")
+    if not isinstance(raw, list):
+        return []
+
+    workflows: list[dict[str, Any]] = []
+    for index, item in enumerate(raw, start=1):
+        if not isinstance(item, dict):
+            continue
+
+        command = item.get("command")
+        if not isinstance(command, str) or not command.strip():
+            continue
+
+        workflow_id = str(item.get("id") or f"workflow_{index}").strip()
+        title = str(item.get("title") or workflow_id).strip()
+
+        params: list[str] = []
+        raw_params = item.get("params")
+        if isinstance(raw_params, list):
+            params = [str(p).strip() for p in raw_params if str(p).strip()]
+        elif isinstance(raw_params, dict):
+            params = [str(k).strip() for k in raw_params if str(k).strip()]
+
+        depends_on: list[str] = []
+        raw_depends_on = item.get("depends_on")
+        if isinstance(raw_depends_on, list):
+            depends_on = [str(d).strip() for d in raw_depends_on if str(d).strip()]
+
+        with contextlib.suppress(Exception):
+            from .loader import SkillLoader
+
+            depends_on = depends_on or SkillLoader._infer_required_binaries(shlex.split(command))
+
+        missing_dependencies: list[str] = []
+        with contextlib.suppress(Exception):
+            from .loader import SkillLoader
+
+            missing_dependencies = SkillLoader._missing_binaries(depends_on)
+
+        confidence_score, confidence_level = _workflow_confidence(
+            source="frontmatter",
+            base_tokens=shlex.split(command),
+            command_text=command,
+        )
+        validation_status = "pass" if not missing_dependencies else "warn"
+        validation_issues = []
+        if missing_dependencies:
+            validation_issues.append(
+                "Missing dependency: "
+                f"{', '.join(missing_dependencies)}"
+                " (workflow is discoverable but execution will fail until installed)"
+            )
+
+        workflows.append(
+            {
+                "id": workflow_id,
+                "title": title,
+                "command": command.strip(),
+                "params": params,
+                "depends_on": depends_on,
+                "source": "frontmatter",
+                "evidence": f"frontmatter.workflows[{index - 1}]",
+                "confidence": confidence_level,
+                "confidence_score": confidence_score,
+                "validation": {
+                    "status": validation_status,
+                    "issues": validation_issues,
+                    "missing_dependencies": missing_dependencies,
+                },
+            }
+        )
+
+    return _dedupe_workflows(workflows)
+
+
+def _is_meaningful_workflow_template(*, base_tokens: list[str], raw: str) -> bool:
+    if not base_tokens:
+        return False
+    joined = " ".join(base_tokens).lower()
+    if not joined.strip():
+        return False
+    if joined in {"python", "sh"}:
+        return False
+    if raw.strip().startswith("#"):
+        return False
+    if any(token.endswith(".py") for token in base_tokens):
+        return True
+    if base_tokens[0].startswith("./"):
+        return True
+    return base_tokens[0] in {"python", "sh"} and len(base_tokens) >= 2
+
+
+def _workflow_title_from_template(*, base_tokens: list[str], workflow_id: str) -> str:
+    if not base_tokens:
+        return workflow_id
+
+    script_index = -1
+    script_name = ""
+    for idx, token in enumerate(base_tokens):
+        if token.endswith(".py"):
+            script_index = idx
+            script_name = Path(token).name
+            break
+
+    if not script_name:
+        return workflow_id
+
+    # Improve readability for script runner patterns like:
+    # python scripts/run.py auth_manager.py status
+    if script_name == "run.py" and script_index >= 0:
+        script_token = (
+            Path(base_tokens[script_index + 1]).name
+            if script_index + 1 < len(base_tokens)
+            and not base_tokens[script_index + 1].startswith("--")
+            else ""
+        )
+        operation_token = (
+            base_tokens[script_index + 2]
+            if script_index + 2 < len(base_tokens)
+            and not base_tokens[script_index + 2].startswith("--")
+            else ""
+        )
+        if script_token and operation_token and not operation_token.endswith(".py"):
+            return f"{script_token} · {operation_token}"
+        if script_token:
+            return script_token
+
+    return script_name
+
+
+def _workflow_confidence(
+    *, source: str, base_tokens: list[str], command_text: str
+) -> tuple[float, str]:
+    score = 0.35
+    if source == "frontmatter":
+        score += 0.5
+    else:
+        score += 0.25
+    if any(token.endswith(".py") for token in base_tokens):
+        score += 0.1
+    if " --" in f" {command_text}":
+        score += 0.05
+
+    bounded = max(0.0, min(1.0, round(score, 2)))
+    if bounded >= 0.85:
+        return bounded, "high"
+    if bounded >= 0.65:
+        return bounded, "medium"
+    return bounded, "low"
+
+
+def _dedupe_workflows(workflows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    deduped: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    seen_commands: set[str] = set()
+    for workflow in workflows:
+        workflow_id = str(workflow.get("id") or "").strip()
+        command = str(workflow.get("command") or "").strip().lower()
+        if not workflow_id or not command:
+            continue
+        if workflow_id in seen_ids or command in seen_commands:
+            continue
+        seen_ids.add(workflow_id)
+        seen_commands.add(command)
+        deduped.append(workflow)
+    return deduped
 
 
 def _parse_tool_arguments(raw: Any) -> Any:

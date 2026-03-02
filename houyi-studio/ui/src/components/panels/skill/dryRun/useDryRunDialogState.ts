@@ -45,6 +45,7 @@ export function useDryRunDialogState({
   const [inputCollapsed, setInputCollapsed] = useState<boolean>(!!dryRunResult);
   const [toolDescriptionExpanded, setToolDescriptionExpanded] = useState(false);
   const [selectedExampleId, setSelectedExampleId] = useState<string>(defaultPlanningFlowId);
+  const [selectedWorkflowId, setSelectedWorkflowId] = useState<string>('');
   const [executedContext, setExecutedContext] = useState<DryRunPipelineContext | null>(null);
   const [revealedCount, setRevealedCount] = useState(0);
 
@@ -63,6 +64,7 @@ export function useDryRunDialogState({
     setToolDescriptionExpanded(false);
     setRevealedCount(0);
     setExecutedContext(null);
+    setSelectedWorkflowId('');
     onClearResult?.();
 
     if (detailTools.length > 0) {
@@ -108,18 +110,23 @@ export function useDryRunDialogState({
     setFormErrors({});
     setJsonInput(initialPreset ? JSON.stringify(initialPreset.input, null, 2) : '{}');
     setExecutedContext(null);
+    setSelectedWorkflowId('');
     setInputCollapsed(false);
     onClearResult?.();
   }, [getInitialPresetForTool, getLiveDefaultsForTool, onClearResult]);
 
   const handleSelectPreset = useCallback((preset: ToolDryRunPreset) => {
+    if (preset.id === selectedExampleId) {
+      return;
+    }
     setSelectedExampleId(preset.id);
     setFormValues(presetToFormValues(preset));
     setJsonInput(JSON.stringify(preset.input, null, 2));
     setInputCollapsed(false);
     setExecutedContext(null);
+    setSelectedWorkflowId('');
     onClearResult?.();
-  }, [onClearResult]);
+  }, [onClearResult, selectedExampleId]);
 
   const handleSwitchInputMode = useCallback((mode: 'form' | 'json') => {
     setInputMode(mode);
@@ -148,6 +155,7 @@ export function useDryRunDialogState({
     }
     setExecutedContext(null);
     setInputCollapsed(false);
+    setSelectedWorkflowId('');
     onClearResult?.();
   }, [liveLlmProvider, liveLlmModel, selectedTool, getLiveDefaultsForTool, onClearResult]);
 
@@ -178,6 +186,7 @@ export function useDryRunDialogState({
     inputCollapsed,
     toolDescriptionExpanded,
     selectedExampleId,
+    selectedWorkflowId,
     executedContext,
     revealedCount,
     setJsonError,
@@ -188,6 +197,7 @@ export function useDryRunDialogState({
     setInputCollapsed,
     setToolDescriptionExpanded,
     setSelectedExampleId,
+    setSelectedWorkflowId,
     setFormValues,
     setJsonInput,
     setExecutedContext,

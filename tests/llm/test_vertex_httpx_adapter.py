@@ -346,16 +346,7 @@ class TestVertexAIAdapterRetry:
             adapter._access_token = "fake-token"
             adapter._token_expiry = 9999999999.0
 
-            async def noop_backoff(*args, **kwargs):
-                pass
-
-            with (
-                patch("httpx.AsyncClient", return_value=MockHttpxClient()),
-                patch(
-                    "houyi.llm.vertex_httpx_adapter.exponential_backoff",
-                    side_effect=noop_backoff,
-                ),
-            ):
+            with patch("httpx.AsyncClient", return_value=MockHttpxClient()):
                 chunks = []
                 async for c, _r in adapter.stream_chat(
                     [{"role": "user", "content": "hi"}],
@@ -495,15 +486,8 @@ class TestVertexAIAdapterRetry:
             adapter._access_token = "fake-token"
             adapter._token_expiry = 9999999999.0
 
-            async def noop_backoff(*args, **kwargs):
-                pass
-
             with (
                 patch("httpx.AsyncClient", return_value=MockHttpxClient()),
-                patch(
-                    "houyi.llm.vertex_httpx_adapter.exponential_backoff",
-                    side_effect=noop_backoff,
-                ),
                 pytest.raises(Exception, match="500"),
             ):
                 async for _ in adapter.stream_chat(

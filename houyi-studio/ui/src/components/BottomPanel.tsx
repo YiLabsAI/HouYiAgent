@@ -3,7 +3,6 @@
  */
 import React from 'react';
 import { ComparePanel } from './panels/ComparePanel';
-import { KnowledgeResultsPanel } from './panels/KnowledgeResultsPanel';
 import { LogsPanel } from './panels/LogsPanel';
 import { MetricsPanel } from './panels/MetricsPanel';
 import { ObsFullView } from './panels/ObsFullView';
@@ -228,21 +227,21 @@ const ExecTreeNodeView: React.FC<ExecTreeNodeViewProps> = ({
 interface BottomPanelProps {
   isCollapsed: boolean;
   onToggleCollapse: () => void;
-  activeTab?: 'observability' | 'checkpoints' | 'context' | 'logs' | 'knowledge';
+  activeTab?: 'observability' | 'checkpoints' | 'context' | 'logs';
   onTabChange?: (
-    tab: 'observability' | 'checkpoints' | 'context' | 'logs' | 'knowledge',
+    tab: 'observability' | 'checkpoints' | 'context' | 'logs',
   ) => void;
   height?: number;
   /** When true, ignores `height` and stretches to fill the parent container. */
   fillHeight?: boolean;
   /** Called when user clicks expand button to open current tab in Center Stage L. */
-  onExpandTab?: (tab: string) => void;
+  onExpandTab?: (tab: TabType) => void;
   /** Controlled checked checkpoints (shared between bottom panel and CenterStage). */
   checkedCheckpoints?: Array<{ checkpointId: string; executionId: string }>;
   onCheckedCheckpointsChange?: (checks: Array<{ checkpointId: string; executionId: string }>) => void;
 }
 
-type TabType = 'observability' | 'checkpoints' | 'context' | 'logs' | 'knowledge';
+type TabType = 'observability' | 'checkpoints' | 'context' | 'logs';
 
 export const BottomPanel: React.FC<BottomPanelProps> = ({
   isCollapsed,
@@ -496,7 +495,6 @@ export const BottomPanel: React.FC<BottomPanelProps> = ({
     { id: 'checkpoints', label: 'Checkpoints' },
     { id: 'context', label: 'Context' },
     { id: 'logs', label: 'Logs' },
-    { id: 'knowledge', label: 'Knowledge' },
   ];
 
   // Auto-switch to compare view when 2 checkpoints are checked
@@ -830,8 +828,6 @@ export const BottomPanel: React.FC<BottomPanelProps> = ({
             )}
 
             {activeTab === 'logs' && <LogsPanel viewExecution={viewExecution} />}
-
-            {activeTab === 'knowledge' && <KnowledgeResultsPanel />}
           </div>
 
           <ObsFullView isOpen={showObsFullView} onClose={() => setShowObsFullView(false)} />

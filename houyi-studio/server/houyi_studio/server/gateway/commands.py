@@ -28,6 +28,7 @@ class CommandType(str, Enum):
     GET_SKILL_METRICS = "get_skill_metrics"
     LOAD_SKILL = "load_skill"
     UNLOAD_SKILL = "unload_skill"
+    REMOVE_SKILL_FROM_DISK = "remove_skill_from_disk"
     DRY_RUN_SKILL = "dry_run_skill"
     CONFIGURE_SKILL = "configure_skill"
     CONSENT_RESPONSE = "consent_response"
@@ -184,6 +185,13 @@ class UnloadSkillCommand(ClientCommand):
 
     command_type: CommandType = Field(default=CommandType.UNLOAD_SKILL)
     skill_name: str = Field(..., description="Skill name to unload")
+
+
+class RemoveSkillFromDiskCommand(ClientCommand):
+    """Command to remove a managed skill package from local disk."""
+
+    command_type: CommandType = Field(default=CommandType.REMOVE_SKILL_FROM_DISK)
+    skill_name: str = Field(..., description="Skill name whose managed package should be removed")
 
 
 class DryRunSkillCommand(ClientCommand):

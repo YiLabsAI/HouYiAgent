@@ -16,6 +16,7 @@ function createMockStore() {
     selectedLibraryId: null,
     knowledgeSearchResults: null,
     knowledgeSearchLoading: false,
+    bottomPanelTab: 'logs',
     ws: null,
     sessionId: 'test-session',
   };
@@ -31,6 +32,24 @@ function createMockStore() {
 }
 
 describe('knowledgeActions', () => {
+  describe('requestKnowledgeLibraries', () => {
+    it('keeps loading state true after sending refresh command', async () => {
+      const { state, set, get } = createMockStore();
+
+      const { createKnowledgeActions } = await import('@/stores/storeActions/knowledgeActions');
+      const actions = createKnowledgeActions(set, get);
+      Object.assign(state(), actions);
+      state().sendCommand = vi.fn();
+
+      state().requestKnowledgeLibraries();
+
+      expect(state().isLoadingLibraries).toBe(true);
+      expect(state().sendCommand).toHaveBeenCalledWith(
+        expect.objectContaining({ command_type: 'list_knowledge_libraries' }),
+      );
+    });
+  });
+
   describe('K-001: createKnowledgeLibrary should NOT show toast on send', () => {
     it('should only show toast when library is actually created (on event), not when command is sent', async () => {
       const { state, set, get } = createMockStore();
@@ -281,6 +300,7 @@ describe('knowledgeActions', () => {
         })
       );
       expect(state().isSearchingKnowledge).toBe(true);
+      expect(state().bottomPanelTab).toBe('logs');
     });
 
     it('should show error toast for empty query', async () => {
@@ -500,6 +520,7 @@ describe('knowledgeActions', () => {
       const actions = createKnowledgeActions(set, get);
       Object.assign(state(), actions);
       state().showToast = vi.fn();
+      state().sendCommand = vi.fn();
       state().isIngesting = true;
       state().ingestLibraryId = 'lib-123';
       state().ingestLibraryName = 'Test Library';
@@ -532,6 +553,7 @@ describe('knowledgeActions', () => {
       const actions = createKnowledgeActions(set, get);
       Object.assign(state(), actions);
       state().showToast = vi.fn();
+      state().sendCommand = vi.fn();
       state().isIngesting = true;
 
       state().handleIngestComplete({
