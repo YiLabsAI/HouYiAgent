@@ -32,6 +32,7 @@ export interface ToolDryRunPreset {
 export type PlanningFlowPreset = ToolDryRunPreset;
 
 const PLANNING_ACTIONS = new Set(['create', 'update', 'complete', 'status']);
+const LEGACY_PLANNING_TOOL_NAMES = new Set(['planning-with-files', 'ext__planning-with-files']);
 
 const getAction = (value: unknown): string => (typeof value === 'string' ? value : '');
 
@@ -67,7 +68,11 @@ const inferPlanningBySchema = (inputSchema?: Record<string, unknown>): boolean =
 export const isPlanningWithFilesTool = (
   toolName: string,
   options?: PlanningDetectionOptions,
-): boolean => inferPlanningBySchema(options?.inputSchema) || hasPlanningPresetActions(toolName);
+): boolean => (
+  LEGACY_PLANNING_TOOL_NAMES.has(toolName)
+  || inferPlanningBySchema(options?.inputSchema)
+  || hasPlanningPresetActions(toolName)
+);
 
 // External planning mode now follows namespace convention instead of one fixed tool id.
 export const isExternalPlanningWithFilesTool = (
@@ -372,9 +377,9 @@ const TOOL_DRY_RUN_PRESETS: Record<string, ToolDryRunPreset[]> = {
   ],
 };
 
-export const getToolDryRunPresets = (toolName: string): ToolDryRunPreset[] => (
-  TOOL_DRY_RUN_PRESETS[toolName] ?? []
-);
+export const getToolDryRunPresets = (toolName: string): ToolDryRunPreset[] => {
+  return TOOL_DRY_RUN_PRESETS[toolName] ?? [];
+};
 
 export const getToolDryRunPreset = (toolName: string, presetId: string): ToolDryRunPreset | null => (
   getToolDryRunPresets(toolName).find((p) => p.id === presetId) ?? null

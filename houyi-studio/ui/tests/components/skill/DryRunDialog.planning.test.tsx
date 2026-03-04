@@ -70,6 +70,7 @@ describe('DryRunDialog planning rules', () => {
 
     const action = screen.getByTestId('dry-run-input-action') as HTMLSelectElement;
     expect(action.tagName).toBe('SELECT');
+    expect(action.value).toBe('create');
     expect(Array.from(action.options).map((o) => o.value)).toEqual([
       '',
       'create',
@@ -78,10 +79,10 @@ describe('DryRunDialog planning rules', () => {
       'status',
     ]);
 
-    expect(screen.queryByTestId('dry-run-input-task')).not.toBeInTheDocument();
+    expect(screen.getByTestId('dry-run-input-task')).toBeInTheDocument();
+    expect(screen.getByTestId('dry-run-input-subtasks')).toBeInTheDocument();
     expect(screen.queryByTestId('dry-run-input-subtask_index')).not.toBeInTheDocument();
 
-    fireEvent.change(action, { target: { value: 'create' } });
     const taskField = screen.getByTestId('dry-run-input-task').closest('div');
     expect(taskField).toBeTruthy();
     expect(within(taskField as HTMLElement).getByTitle('Required')).toBeInTheDocument();
@@ -97,12 +98,7 @@ describe('DryRunDialog planning rules', () => {
     render(<DryRunDialog {...defaultProps} onExecute={onExecute} />);
 
     fireEvent.click(screen.getByTestId('dry-run-execute'));
-    expect(screen.getByText('This field is required')).toBeInTheDocument();
-
-    fireEvent.change(screen.getByTestId('dry-run-input-action'), {
-      target: { value: 'create' },
-    });
-    expect(screen.queryByText('This field is required')).not.toBeInTheDocument();
+    expect(screen.getByText('Task is required when action is create')).toBeInTheDocument();
 
     fireEvent.change(screen.getByTestId('dry-run-input-task'), {
       target: { value: 'Create plan task' },
@@ -113,6 +109,7 @@ describe('DryRunDialog planning rules', () => {
       'planning-with-files',
       expect.objectContaining({ action: 'create', task: 'Create plan task' }),
       false,
+      expect.objectContaining({ workflowId: undefined }),
     );
   });
 

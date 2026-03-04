@@ -250,8 +250,8 @@ async def test_vertex_gemini_stream_chat() -> None:
     adapter._client = type("FakeClient", (), {"aio": _Aio()})()
 
     chunks = []
-    async for content, reasoning in adapter.stream_chat([{"role": "user", "content": "hi"}]):
-        chunks.append((content, reasoning))
+    async for chunk in adapter.stream_chat([{"role": "user", "content": "hi"}]):
+        chunks.append((chunk.content_delta, chunk.reasoning_delta))
 
     assert chunks == [("hello", None), (" world", None)]
 

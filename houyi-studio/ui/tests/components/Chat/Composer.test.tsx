@@ -13,7 +13,11 @@ describe('Composer', () => {
 
   it('renders textarea and send button', () => {
     render(<Composer onSend={onSend} onStop={onStop} isStreaming={false} />);
-    expect(screen.getByPlaceholderText(/Type a message/)).toBeInTheDocument();
+    const textarea = screen.getByPlaceholderText(/Type a message/) as HTMLTextAreaElement;
+    expect(textarea).toBeInTheDocument();
+    expect(textarea).toHaveClass('resize-none');
+    expect(textarea).toHaveClass('overflow-y-auto');
+    expect(screen.getByTestId('composer-resize-handle')).toBeInTheDocument();
     expect(screen.getByTitle('Send message')).toBeInTheDocument();
   });
 

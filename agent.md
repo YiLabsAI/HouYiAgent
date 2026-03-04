@@ -303,7 +303,7 @@ make test
 ### Manual Commands
 
 ```bash
-# Lint / format
+# Lint (Ruff)
 uv run ruff check houyi/
 uv run ruff check houyi/ --fix
 
@@ -376,7 +376,7 @@ HouYi uses a two-tier approach:
 
 - **Purpose**: Fast code formatting and comprehensive error detection
 - **Usage**: `ruff check houyi/` or `ruff check houyi/ --fix`
-- **Checks**: PEP 8, import sorting, unused variables, anti-patterns
+- **Checks**: PEP 8, import sorting, unused variables, anti-patterns, complexity thresholds
 - **Speed**: Milliseconds
 
 **Run before committing:**

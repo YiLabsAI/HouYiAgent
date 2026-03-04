@@ -2,6 +2,7 @@
 
 import pytest
 
+from houyi.llm.base import StreamChunk
 from houyi.rag.generation.streaming import (
     StreamEvent,
     StreamEventType,
@@ -87,9 +88,9 @@ class TestStreamingAnswerGenerator:
 
         class MockAdapter:
             async def stream_chat(self, messages: list[Any], **kwargs: Any):
-                yield "The answer "
-                yield "is based on "
-                yield "[1] source."
+                yield StreamChunk(content_delta="The answer ")
+                yield StreamChunk(content_delta="is based on ")
+                yield StreamChunk(content_delta="[1] source.")
 
         generator = StreamingAnswerGenerator(adapter=MockAdapter())  # type: ignore[arg-type]
 
@@ -123,7 +124,7 @@ class TestStreamingAnswerGenerator:
 
         class FailingAdapter:
             async def stream_chat(self, messages: list[Any], **kwargs: Any):
-                yield "Starting..."
+                yield StreamChunk(content_delta="Starting...")
                 raise RuntimeError("Stream failed")
 
         generator = StreamingAnswerGenerator(adapter=FailingAdapter())  # type: ignore[arg-type]

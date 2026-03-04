@@ -73,6 +73,7 @@ const createStoreState = (overrides: Partial<StoreState> = {}): StoreState => {
     ingestProgress: 0,
     runSettings: {
       enable_tool_calls: true,
+      tool_call_strategy: 'balanced',
       tool_names: [],
       tool_choice: null,
       max_tool_calls: 10,

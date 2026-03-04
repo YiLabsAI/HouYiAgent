@@ -137,6 +137,36 @@ HouYi applies a unified retry controller to HTTP-based LLM adapter paths.
 - Retry is allowed only before the first output chunk is emitted.
 - After any chunk has been emitted, automatic retry is disabled for that request.
 
+### Chat Tool-Calling (Studio Server)
+
+`POST /api/chat/conversations/{conversation_id}/messages` supports tool-calling controls:
+
+- `enable_tool_calls: bool | null` — when `false`, hard-disables the tool loop.
+- `tool_call_strategy: "conservative" | "balanced" | "aggressive" | null` — chat gating policy.
+- `enable_skills: list[str] | null` — allow additional skill names for this request.
+- `enable_web_search: bool | null` — include `web_search` when `true`.
+- `max_tool_iterations: int | null` — cap tool-loop rounds (`1..50`).
+
+Gating semantics:
+
+- `conservative`: tools run only for explicit `enable_skills` / `enable_web_search` requests.
+- `balanced` (default): explicit requests always run; otherwise tool-intent heuristics decide.
+- `aggressive`: tools are default-on unless `enable_tool_calls=false`.
+
+Runtime notes:
+
+- Chat mode includes a built-in tool allowlist; `enable_skills` appends extra skills.
+- Tool-loop execution uses parallel tool calls internally.
+
+Tool loop payload protection (for OpenAI-compatible providers with strict context windows):
+
+- `HOUYI_CHAT_TOOL_LOOP_MAX_MESSAGE_CHARS` (default `12000`)
+- `HOUYI_CHAT_TOOL_LOOP_MAX_TOTAL_CHARS` (default `160000`)
+- `HOUYI_TOOLCALL_LOOP_MAX_MESSAGE_CHARS` (default `12000`)
+- `HOUYI_TOOLCALL_LOOP_MAX_TOTAL_CHARS` (default `160000`)
+
+The server sanitizes message content and tool-call arguments to strings, truncates oversized items, and drops oldest non-system turns when budget is exceeded.
+
 ## Evaluation
 
 ### evaluate()

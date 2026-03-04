@@ -284,8 +284,8 @@ class TestVertexAIStreaming:
 
         chunks = []
         async for chunk in adapter.stream_chat(messages, temperature=0.1, max_tokens=100):
-            chunks.append(chunk)
-            print(f"Received chunk: {chunk}")
+            chunks.append(chunk.content_delta)
+            print(f"Received chunk: {chunk.content_delta}")
 
         full_response = "".join(chunks)
         assert full_response

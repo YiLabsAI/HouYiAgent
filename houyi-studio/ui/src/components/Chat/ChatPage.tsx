@@ -14,6 +14,7 @@ import { useChatStore } from '@/stores/useChatStore';
 import { useSettingsStore } from '@/stores/useSettingsStore';
 import { ChatTimeline } from './ChatTimeline';
 import { Composer } from './Composer';
+import { TraceDetailPanel } from './TraceDetailPanel';
 import { MessageCircle } from 'lucide-react';
 
 export const ChatPage: React.FC = () => {
@@ -25,6 +26,7 @@ export const ChatPage: React.FC = () => {
   const sendMessage = useChatStore((s) => s.sendMessage);
   const stopStreaming = useChatStore((s) => s.stopStreaming);
   const clearError = useChatStore((s) => s.clearError);
+  const [tracePanelId, setTracePanelId] = React.useState<string | null>(null);
 
   const fetchSettings = useSettingsStore((s) => s.fetchSettings);
   React.useEffect(() => {
@@ -122,20 +124,33 @@ export const ChatPage: React.FC = () => {
               streamingMessageId={isStreamingHere ? streaming.messageId : null}
               isWaitingForResponse={isStreamingHere && !streaming.messageId}
               conversationId={activeConversation?.conversation_id ?? null}
+              onOpenTrace={setTracePanelId}
             />
 
             {/* Composer */}
             <Composer
-              onSend={(content, options) => sendMessage(content, {
-                enable_reasoning: options?.enableReasoning,
-                enable_web_search: options?.enableWebSearch,
-              }, options?.attachments)}
+              onSend={(content, options) => {
+                const enableSkills: string[] = [];
+                if (options?.enableWebSearch) enableSkills.push('web_search');
+                if (options?.enableDeepResearch) enableSkills.push('deep_research');
+                sendMessage(content, {
+                  enable_reasoning: options?.enableReasoning,
+                  enable_tool_calls: options?.enableToolCalls,
+                  tool_call_strategy: options?.toolCallStrategy,
+                  enable_web_search: options?.enableWebSearch,
+                  enable_skills: enableSkills.length > 0 ? enableSkills : undefined,
+                }, options?.attachments);
+              }}
               onStop={stopStreaming}
               isStreaming={isStreamingHere}
             />
           </>
         );
       })()}
+
+      {tracePanelId && (
+        <TraceDetailPanel traceId={tracePanelId} onClose={() => setTracePanelId(null)} />
+      )}
     </div>
   );
 };

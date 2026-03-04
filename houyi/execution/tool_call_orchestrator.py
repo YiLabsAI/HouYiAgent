@@ -9,6 +9,7 @@ def build_chat_kwargs(
     max_tokens: int | None,
     temperature: float | None,
     parallel_tool_calls: bool | None,
+    max_parallel_calls: int | None,
     prompt_cache_key: str | None,
 ) -> dict[str, Any]:
     kwargs: dict[str, Any] = {}
@@ -18,6 +19,8 @@ def build_chat_kwargs(
         kwargs["temperature"] = temperature
     if parallel_tool_calls is not None:
         kwargs["parallel_tool_calls"] = parallel_tool_calls
+    if max_parallel_calls is not None:
+        kwargs["max_parallel_calls"] = max_parallel_calls
     if prompt_cache_key is not None:
         kwargs["prompt_cache_key"] = prompt_cache_key
     return kwargs

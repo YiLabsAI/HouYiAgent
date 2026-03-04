@@ -14,9 +14,15 @@ import type {
   ContextUsage,
   CreateConversationRequest,
   SendMessageRequest,
+  SSEAgentIteration,
   SSEMessageDelta,
+  SSEMessageFinish,
+  SSEMessageComplete,
   SSEMessageError,
   SSEContextUsage,
+  SSEToolCallError,
+  SSEToolCallResult,
+  SSEToolCallStart,
 } from '@/types/chat';
 
 // --- API helpers ---
@@ -45,6 +51,14 @@ interface StreamingState {
   abortController: AbortController | null;
   // Which conversation owns this stream.  Used to resume UI when switching back.
   streamConversationId: string | null;
+  toolMessageIdsByCallId: Record<string, string>;
+}
+
+interface AgentLoopSummary {
+  rounds: number;
+  toolCalls: number;
+  traceId: string | null;
+  usage: Record<string, any> | null;
 }
 
 interface ChatState {
@@ -62,6 +76,9 @@ interface ChatState {
 
   // Context usage (latest)
   contextUsage: ContextUsage | null;
+
+  // Agent loop summary for current/last streamed assistant response
+  agentLoopSummary: AgentLoopSummary;
 
   // Error
   error: string | null;
@@ -101,8 +118,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
     reasoningBuffer: '',
     abortController: null,
     streamConversationId: null,
+    toolMessageIdsByCallId: {},
   },
   contextUsage: null,
+  agentLoopSummary: { rounds: 0, toolCalls: 0, traceId: null, usage: null },
   error: null,
   scrollToMessageId: null,
 
@@ -323,7 +342,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
         reasoningBuffer: '',
         abortController,
         streamConversationId: activeConversationId,
+        toolMessageIdsByCallId: {},
       },
+      agentLoopSummary: { rounds: 0, toolCalls: 0, traceId: null, usage: null },
       error: null,
     }));
 
@@ -431,7 +452,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
       streaming.abortController.abort();
     }
     set((state) => ({
-      streaming: { ...state.streaming, isStreaming: false, abortController: null },
+      streaming: {
+        ...state.streaming,
+        isStreaming: false,
+        messageId: null,
+        contentBuffer: '',
+        reasoningBuffer: '',
+        abortController: null,
+        streamConversationId: null,
+        toolMessageIdsByCallId: {},
+      },
     }));
   },
 
@@ -473,6 +503,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       await apiFetch(`/conversations/${activeConversationId}/messages/${messageId}`, {
         method: 'DELETE',
       });
+      await get().loadConversation(activeConversationId);
       await get().fetchConversations();
     } catch (e: any) {
       // Revert on failure
@@ -494,7 +525,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
         reasoningBuffer: '',
         abortController,
         streamConversationId: activeConversationId,
+        toolMessageIdsByCallId: {},
       },
+      agentLoopSummary: { rounds: 0, toolCalls: 0, traceId: null, usage: null },
       error: null,
     }));
 
@@ -583,11 +616,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
         }
       }
     } finally {
-      if (get().activeConversationId === activeConversationId) {
-        set((state) => ({
-          streaming: { ...state.streaming, isStreaming: false, abortController: null },
-        }));
-      }
+      set((state) => ({
+        streaming: {
+          ...state.streaming,
+          isStreaming: false,
+          abortController: null,
+          streamConversationId: null,
+        },
+      }));
     }
   },
 
@@ -643,6 +679,16 @@ function handleSSEEvent(
   _get: () => ChatState,
   streamConversationId?: string,
 ) {
+  const stringifyPayload = (payload: unknown): string => {
+    if (payload == null) return '';
+    if (typeof payload === 'string') return payload;
+    try {
+      return JSON.stringify(payload, null, 2);
+    } catch {
+      return String(payload);
+    }
+  };
+
   // Check if user is viewing the conversation that owns this stream.
   const isViewingStream = !streamConversationId || _get().activeConversationId === streamConversationId;
 
@@ -680,15 +726,18 @@ function handleSSEEvent(
         let updatedConversation = state.activeConversation;
         if (updatedConversation) {
           const messages = [...updatedConversation.messages];
-          const lastMsg = messages[messages.length - 1];
+          const targetId = evt.message_id || state.streaming.messageId;
+          const existingIndex = targetId
+            ? messages.findIndex((m) => m.role === 'assistant' && m.message_id === targetId)
+            : -1;
 
           // Content to show in UI: full buffer if streaming, empty placeholder if buffered
           const displayContent = isStreamRender ? newContent : '';
           const displayReasoning = isStreamRender ? (newReasoning || null) : null;
 
-          if (lastMsg && lastMsg.role === 'assistant') {
-            messages[messages.length - 1] = {
-              ...lastMsg,
+          if (existingIndex >= 0) {
+            messages[existingIndex] = {
+              ...messages[existingIndex],
               content: displayContent,
               reasoning_content: displayReasoning,
             };
@@ -723,10 +772,14 @@ function handleSSEEvent(
         // In buffered mode, render the full content now
         if (!isStreamRender && updatedConversation) {
           const messages = [...updatedConversation.messages];
-          const lastMsg = messages[messages.length - 1];
-          if (lastMsg && lastMsg.role === 'assistant') {
-            messages[messages.length - 1] = {
-              ...lastMsg,
+          const evt = data as SSEMessageFinish;
+          const targetId = evt.message_id || state.streaming.messageId;
+          const existingIndex = targetId
+            ? messages.findIndex((m) => m.role === 'assistant' && m.message_id === targetId)
+            : -1;
+          if (existingIndex >= 0) {
+            messages[existingIndex] = {
+              ...messages[existingIndex],
               content: state.streaming.contentBuffer,
               reasoning_content: state.streaming.reasoningBuffer || null,
             };
@@ -737,6 +790,166 @@ function handleSSEEvent(
         return {
           activeConversation: updatedConversation,
           streaming: { ...state.streaming, isStreaming: false },
+        };
+      });
+      break;
+    }
+
+    case 'agent.iteration': {
+      const evt = data as SSEAgentIteration;
+      set((state) => ({
+        agentLoopSummary: {
+          ...state.agentLoopSummary,
+          rounds: Math.max(state.agentLoopSummary.rounds, evt.round_index || 0),
+          traceId: evt.trace_id ?? state.agentLoopSummary.traceId,
+        },
+      }));
+      break;
+    }
+
+    case 'tool_call.start': {
+      const evt = data as SSEToolCallStart;
+      set((state) => {
+        const callId = evt.tool_call_id || '';
+        const existingMessageId = callId ? state.streaming.toolMessageIdsByCallId[callId] : undefined;
+        const toolMessageId = existingMessageId || `tmp-tool-${callId || Date.now()}`;
+        const toolName = evt.tool_name || 'tool';
+        const argsText = stringifyPayload(evt.arguments);
+        const nextToolMap = callId
+          ? { ...state.streaming.toolMessageIdsByCallId, [callId]: toolMessageId }
+          : state.streaming.toolMessageIdsByCallId;
+
+        if (!isViewingStream || !state.activeConversation) {
+          return {
+            streaming: { ...state.streaming, toolMessageIdsByCallId: nextToolMap },
+            agentLoopSummary: {
+              ...state.agentLoopSummary,
+              toolCalls: state.agentLoopSummary.toolCalls + 1,
+              traceId: evt.trace_id ?? state.agentLoopSummary.traceId,
+            },
+          };
+        }
+
+        const messages = [...state.activeConversation.messages];
+        const existingIndex = messages.findIndex((m) => m.message_id === toolMessageId);
+        const toolMsg: ChatMessage = {
+          message_id: toolMessageId,
+          role: 'tool',
+          content: argsText,
+          name: toolName,
+          tool_call_id: evt.tool_call_id ?? null,
+          metadata: {
+            tool_status: 'running',
+            round_index: evt.round_index,
+            parallel_group_id: evt.parallel_group_id,
+          },
+          created_at: Date.now() / 1000,
+        };
+        if (existingIndex >= 0) {
+          messages[existingIndex] = { ...messages[existingIndex], ...toolMsg };
+        } else {
+          messages.push(toolMsg);
+        }
+
+        return {
+          activeConversation: { ...state.activeConversation, messages },
+          streaming: { ...state.streaming, toolMessageIdsByCallId: nextToolMap },
+          agentLoopSummary: {
+            ...state.agentLoopSummary,
+            toolCalls: state.agentLoopSummary.toolCalls + 1,
+            traceId: evt.trace_id ?? state.agentLoopSummary.traceId,
+          },
+        };
+      });
+      break;
+    }
+
+    case 'tool_call.result':
+    case 'tool_call.error': {
+      const evt = eventType === 'tool_call.result'
+        ? (data as SSEToolCallResult)
+        : (data as SSEToolCallError);
+      set((state) => {
+        if (!isViewingStream || !state.activeConversation) {
+          return {
+            agentLoopSummary: {
+              ...state.agentLoopSummary,
+              traceId: evt.trace_id ?? state.agentLoopSummary.traceId,
+            },
+          };
+        }
+
+        const callId = evt.tool_call_id || '';
+        const toolMessageId = callId ? state.streaming.toolMessageIdsByCallId[callId] : undefined;
+        if (!toolMessageId) {
+          return {
+            agentLoopSummary: {
+              ...state.agentLoopSummary,
+              traceId: evt.trace_id ?? state.agentLoopSummary.traceId,
+            },
+          };
+        }
+
+        const payload = eventType === 'tool_call.result'
+          ? stringifyPayload((evt as SSEToolCallResult).result)
+          : stringifyPayload((evt as SSEToolCallError).error);
+        const messages = state.activeConversation.messages.map((m) => {
+          if (m.message_id !== toolMessageId) return m;
+          return {
+            ...m,
+            content: payload,
+            metadata: {
+              ...m.metadata,
+              tool_status: eventType === 'tool_call.result' ? 'ok' : 'error',
+            },
+          };
+        });
+
+        return {
+          activeConversation: { ...state.activeConversation, messages },
+          agentLoopSummary: {
+            ...state.agentLoopSummary,
+            traceId: evt.trace_id ?? state.agentLoopSummary.traceId,
+          },
+        };
+      });
+      break;
+    }
+
+    case 'message.complete': {
+      const evt = data as SSEMessageComplete;
+      set((state) => {
+        const traceId = evt.metadata?.trace_id ?? state.agentLoopSummary.traceId;
+        const usage = evt.metadata?.usage ?? state.agentLoopSummary.usage;
+
+        if (!isViewingStream || !state.activeConversation) {
+          return {
+            agentLoopSummary: {
+              ...state.agentLoopSummary,
+              traceId,
+              usage,
+            },
+          };
+        }
+
+        const messages = state.activeConversation.messages.map((m) => {
+          if (m.message_id !== evt.message_id) return m;
+          return {
+            ...m,
+            metadata: {
+              ...m.metadata,
+              ...evt.metadata,
+            },
+          };
+        });
+
+        return {
+          activeConversation: { ...state.activeConversation, messages },
+          agentLoopSummary: {
+            ...state.agentLoopSummary,
+            traceId,
+            usage,
+          },
         };
       });
       break;

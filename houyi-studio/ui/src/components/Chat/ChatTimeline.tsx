@@ -116,9 +116,21 @@ interface ChatTimelineProps {
   conversationId: string | null;
   isLastMessage?: (msg: ChatMessage) => boolean;
   isWaitingForResponse?: boolean;
+  onOpenTrace?: (traceId: string) => void;
 }
 
-export const ChatTimeline: React.FC<ChatTimelineProps> = ({ messages, streamingMessageId, conversationId, isWaitingForResponse = false }) => {
+type TimelineItem = {
+  message: ChatMessage;
+  toolSteps: ChatMessage[];
+};
+
+export const ChatTimeline: React.FC<ChatTimelineProps> = ({
+  messages,
+  streamingMessageId,
+  conversationId,
+  isWaitingForResponse = false,
+  onOpenTrace,
+}) => {
   const containerRef = React.useRef<HTMLDivElement>(null);
   const contentRef = React.useRef<HTMLDivElement>(null);
   const [autoScroll, setAutoScroll] = React.useState(true);
@@ -135,6 +147,7 @@ export const ChatTimeline: React.FC<ChatTimelineProps> = ({ messages, streamingM
   // protection window.  Without this, wheel scrolling doesn't save snapshots.
   const lastWheelAtRef = React.useRef<number>(0);
   const lastRestoreAtRef = React.useRef<number>(0);
+  const lastAutoLoadMoreAtRef = React.useRef<number>(0);
   const prevMessageCountRef = React.useRef(messages.length);
   const prevConversationIdRef = React.useRef<string | null>(conversationId);
   // The conversation ID we need to restore scroll for.  null = no pending restore.
@@ -159,6 +172,104 @@ export const ChatTimeline: React.FC<ChatTimelineProps> = ({ messages, streamingM
     if (messages.length <= renderLimit) return messages;
     return messages.slice(-renderLimit);
   }, [messages, renderLimit]);
+
+  const timelineItems = React.useMemo<TimelineItem[]>(() => {
+    const items: TimelineItem[] = [];
+    let pendingToolSteps: ChatMessage[] = [];
+    let latestAssistantCarrier: ChatMessage | null = null;
+    const appendPendingToolStep = (step: ChatMessage) => {
+      const incomingCallId = typeof step.tool_call_id === 'string' ? step.tool_call_id : null;
+      const existingIndex = pendingToolSteps.findIndex((pending) => {
+        const pendingCallId = typeof pending.tool_call_id === 'string' ? pending.tool_call_id : null;
+        if (incomingCallId && pendingCallId) return pendingCallId === incomingCallId;
+        return pending.message_id === step.message_id;
+      });
+      if (existingIndex >= 0) {
+        pendingToolSteps[existingIndex] = step;
+        return;
+      }
+      pendingToolSteps.push(step);
+    };
+
+    for (const msg of visibleMessages) {
+      const isAssistantToolCallCarrier = msg.role === 'assistant'
+        && Array.isArray(msg.tool_calls)
+        && msg.tool_calls.length > 0;
+      if (isAssistantToolCallCarrier) {
+        latestAssistantCarrier = msg;
+        msg.tool_calls?.forEach((toolCall, index) => {
+          const callPayload =
+            toolCall && typeof toolCall === 'object'
+              ? (toolCall as Record<string, any>)
+              : {};
+          const fnPayload =
+            callPayload.function && typeof callPayload.function === 'object'
+              ? (callPayload.function as Record<string, any>)
+              : {};
+          const rawArgs = fnPayload.arguments;
+          const argsText = typeof rawArgs === 'string'
+            ? rawArgs
+            : rawArgs != null
+              ? JSON.stringify(rawArgs)
+              : '';
+          appendPendingToolStep({
+            message_id: `${msg.message_id}-tool-call-${index}`,
+            role: 'tool',
+            content: argsText,
+            name: typeof fnPayload.name === 'string' ? fnPayload.name : 'tool',
+            tool_call_id: typeof callPayload.id === 'string' ? callPayload.id : null,
+            metadata: {
+              tool_status: 'ok',
+              round_index: Number(msg.metadata?.round_index || 0) || undefined,
+            },
+            created_at: msg.created_at,
+          });
+        });
+        continue;
+      }
+
+      if (msg.role === 'tool') {
+        appendPendingToolStep(msg);
+        continue;
+      }
+
+      if (msg.role === 'assistant') {
+        latestAssistantCarrier = msg;
+        items.push({ message: msg, toolSteps: pendingToolSteps });
+        pendingToolSteps = [];
+        continue;
+      }
+
+      if (pendingToolSteps.length > 0) {
+        for (const step of pendingToolSteps) {
+          items.push({ message: step, toolSteps: [] });
+        }
+        pendingToolSteps = [];
+      }
+
+      items.push({ message: msg, toolSteps: [] });
+    }
+
+    if (pendingToolSteps.length > 0) {
+      if (latestAssistantCarrier) {
+        const lastIndex = items.length - 1;
+        if (lastIndex >= 0 && items[lastIndex].message.message_id === latestAssistantCarrier.message_id) {
+          items[lastIndex] = {
+            message: items[lastIndex].message,
+            toolSteps: [...items[lastIndex].toolSteps, ...pendingToolSteps],
+          };
+        } else {
+          items.push({ message: latestAssistantCarrier, toolSteps: pendingToolSteps });
+        }
+      } else {
+        for (const step of pendingToolSteps) {
+          items.push({ message: step, toolSteps: [] });
+        }
+      }
+    }
+
+    return items;
+  }, [visibleMessages]);
 
   const priorityIds = React.useMemo(() => {
     const ids = new Set<string>();
@@ -298,10 +409,12 @@ export const ChatTimeline: React.FC<ChatTimelineProps> = ({ messages, streamingM
     prevConversationIdRef.current = conversationId;
   }, [conversationId]);
 
-  // Reset progressive window when switching conversations / swapping message list.
+  // Reset progressive window only when switching conversations.
+  // Keep current window during in-conversation mutations (delete/edit/new stream)
+  // so the viewport does not jump back to the progressive-loading header.
   React.useLayoutEffect(() => {
     setRenderLimit(120);
-  }, [conversationId, messagesFingerprint]);
+  }, [conversationId]);
 
   // --- 2. Restore scroll position after new conversation's messages render ---
   // Fires on every messages change.  Only acts when:
@@ -369,7 +482,7 @@ export const ChatTimeline: React.FC<ChatTimelineProps> = ({ messages, streamingM
 
   // Track streaming content length for scroll trigger
   const streamingContent = streamingMessageId
-    ? visibleMessages.find((m) => m.message_id === streamingMessageId)?.content?.length ?? 0
+    ? timelineItems.find((item) => item.message.message_id === streamingMessageId)?.message.content?.length ?? 0
     : 0;
 
   // --- 4. Auto-scroll during streaming or when a new message is added ---
@@ -463,6 +576,21 @@ export const ChatTimeline: React.FC<ChatTimelineProps> = ({ messages, streamingM
     const distanceFromBottom = Math.min(maxScroll, snap.distFromBottom);
     const atBottom = distanceFromBottom < 60;
     setAutoScroll(atBottom);
+
+    // Progressive loading: when user reaches the older-boundary threshold,
+    // reveal more history automatically in chunks.
+    const hasMoreOlderMessages = messages.length > renderLimit;
+    const nearOlderBoundary = maxScroll - distanceFromBottom < 120;
+    const now = Date.now();
+    if (
+      hasMoreOlderMessages
+      && nearOlderBoundary
+      && now - lastAutoLoadMoreAtRef.current > 250
+    ) {
+      lastAutoLoadMoreAtRef.current = now;
+      setRenderLimit((n) => Math.min(messages.length, n + 120));
+    }
+
     // Continuously save scroll position for the currently rendered conversation.
     // This is more reliable than saving only on conversation switch, because
     // BUG-041's store strategy may keep old messages visible while the new
@@ -483,7 +611,7 @@ export const ChatTimeline: React.FC<ChatTimelineProps> = ({ messages, streamingM
     );
   }
 
-  const lastMsg = visibleMessages[visibleMessages.length - 1];
+  const lastMsg = timelineItems[timelineItems.length - 1]?.message;
 
   return (
     <div
@@ -503,7 +631,7 @@ export const ChatTimeline: React.FC<ChatTimelineProps> = ({ messages, streamingM
               className="text-[11px] text-gray-500 hover:text-gray-300 underline"
               onClick={() => setRenderLimit((n) => Math.min(messages.length, n + 120))}
             >
-              Load older messages
+              Show more
             </button>
             <span className="ml-2 text-[10px] text-gray-600 tabular-nums">
               Showing {visibleMessages.length} / {messages.length}
@@ -511,7 +639,7 @@ export const ChatTimeline: React.FC<ChatTimelineProps> = ({ messages, streamingM
           </div>
         )}
 
-        {visibleMessages.map((msg) => (
+        {timelineItems.map(({ message: msg, toolSteps }) => (
           <div
             key={msg.message_id}
             data-message-id={msg.message_id}
@@ -519,8 +647,10 @@ export const ChatTimeline: React.FC<ChatTimelineProps> = ({ messages, streamingM
           >
             <MessageBubble
               message={msg}
+              toolSteps={toolSteps}
               isStreaming={msg.message_id === streamingMessageId}
-              isLastMessage={msg.message_id === lastMsg.message_id && !isWaitingForResponse}
+              isLastMessage={Boolean(lastMsg && msg.message_id === lastMsg.message_id && !isWaitingForResponse)}
+              onOpenTrace={onOpenTrace}
             />
           </div>
         ))}

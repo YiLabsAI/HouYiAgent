@@ -39,6 +39,9 @@ GEMINI_3_PRO_PREVIEW = "gemini-3-pro-preview"
 GEMINI_3_FLASH_PREVIEW = "gemini-3-flash-preview"
 GEMINI_31_PRO_PREVIEW = "gemini-3.1-pro-preview"
 
+# Moonshot
+KIMI_K2_5 = "moonshotai/Kimi-K2.5"
+
 # ---------------------------------------------------------------------------
 # Provider identifiers (canonical lowercase keys used in config/env/API)
 #
@@ -92,6 +95,7 @@ MODEL_CONTEXT_WINDOWS: dict[str, int] = {
     CLAUDE_35_SONNET: 200_000,
     CLAUDE_35_HAIKU: 200_000,
     GEMINI_25_PRO: 1_048_576,
+    KIMI_K2_5: 131_072,
 }
 
 # Default context window for unknown models

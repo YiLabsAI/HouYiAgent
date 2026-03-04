@@ -9,7 +9,7 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 from houyi.config.env_config import ENV_OPENAI_API_KEY
-from houyi.llm.base import DEFAULT_TEMPERATURE, LLMAdapter, LLMMessage, LLMResponse
+from houyi.llm.base import DEFAULT_TEMPERATURE, LLMAdapter, LLMMessage, LLMResponse, StreamChunk
 from houyi.llm.retry import (
     DEFAULT_MAX_RETRIES,
     DEFAULT_RETRY_BASE_DELAY,
@@ -108,7 +108,7 @@ class OpenAIAdapter(LLMAdapter):
         normalized_messages = self._normalize_messages(messages)
 
         # Build request parameters
-        params = {
+        params: dict[str, Any] = {
             "model": self.model,
             "messages": normalized_messages,
             "temperature": temperature,
@@ -164,26 +164,21 @@ class OpenAIAdapter(LLMAdapter):
         temperature: float = DEFAULT_TEMPERATURE,
         max_tokens: int | None = None,
         **kwargs: Any,
-    ) -> AsyncIterator[tuple[str, str | None]]:
+    ) -> AsyncIterator[StreamChunk]:
         """Streaming chat completion with OpenAI.
 
-        Args:
-            messages: Conversation messages
-            tools: Available tools
-            temperature: Sampling temperature
-            max_tokens: Maximum tokens to generate
-            **kwargs: Additional OpenAI parameters
-
         Yields:
-            ``(content_delta, None)`` tuples (OpenAI does not expose reasoning).
+            ``StreamChunk`` objects.
+            ``tool_calls_delta`` is populated with OpenAI delta dicts when present.
         """
         normalized_messages = self._normalize_messages(messages)
 
-        params = {
+        params: dict[str, Any] = {
             "model": self.model,
             "messages": normalized_messages,
             "temperature": temperature,
             "stream": True,
+            "stream_options": {"include_usage": True},
         }
 
         if max_tokens:
@@ -194,15 +189,58 @@ class OpenAIAdapter(LLMAdapter):
 
         params.update(kwargs)
 
+        self.last_usage: dict[str, int] = {}
+        self.last_finish_reason: str | None = None
+
         retry_controller = self._build_retry_controller()
         while True:
             emitted = False
             try:
                 stream = await self.client.chat.completions.create(**params)
                 async for chunk in stream:
-                    if chunk.choices[0].delta.content:
-                        emitted = True
-                        yield (chunk.choices[0].delta.content, None)
+                    if chunk.usage:
+                        self.last_usage = {
+                            "prompt_tokens": chunk.usage.prompt_tokens or 0,
+                            "completion_tokens": chunk.usage.completion_tokens or 0,
+                            "total_tokens": chunk.usage.total_tokens or 0,
+                        }
+
+                    if not chunk.choices:
+                        continue
+
+                    choice = chunk.choices[0]
+                    delta = choice.delta
+
+                    if choice.finish_reason:
+                        self.last_finish_reason = choice.finish_reason
+
+                    # Extract raw tool_calls delta for StreamResponse accumulation
+                    tc_delta_list: list[dict] | None = None
+                    if delta and delta.tool_calls:
+                        tc_delta_list = []
+                        for tc_d in delta.tool_calls:
+                            tc_dict: dict = {"index": tc_d.index}
+                            if tc_d.id:
+                                tc_dict["id"] = tc_d.id
+                            if tc_d.function:
+                                func: dict = {}
+                                if tc_d.function.name:
+                                    func["name"] = tc_d.function.name
+                                if tc_d.function.arguments:
+                                    func["arguments"] = tc_d.function.arguments
+                                if func:
+                                    tc_dict["function"] = func
+                            tc_delta_list.append(tc_dict)
+
+                    content = delta.content if delta else None
+                    if content or tc_delta_list:
+                        emitted = emitted or bool(content)
+                        yield StreamChunk(
+                            content_delta=content or "",
+                            reasoning_delta=None,
+                            tool_calls_delta=tc_delta_list,
+                        )
+
                 return
             except Exception as exc:
                 if emitted:

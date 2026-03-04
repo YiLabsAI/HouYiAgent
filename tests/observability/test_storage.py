@@ -109,6 +109,27 @@ class TestSQLiteSpanStorage:
             assert retrieved is not None
             assert retrieved.span_id == span.span_id
 
+    def test_save_batch_with_non_serializable_attributes(self, storage):
+        """Non-JSON-serializable attributes/events should not break persistence."""
+
+        def _callable_marker():
+            return "ok"
+
+        span = SpanSchema(
+            span_id="span_non_serializable",
+            trace_id="trace_non_serializable",
+            name="span_non_serializable",
+            span_type=SpanType.NODE,
+            start_time=1000.0,
+            attributes={"callable": _callable_marker, "path": Path("/tmp/demo")},
+        )
+
+        storage.save_batch([span])
+
+        retrieved = storage.get("span_non_serializable")
+        assert retrieved is not None
+        assert retrieved.trace_id == "trace_non_serializable"
+
     def test_query_by_trace_id(self, storage):
         """Test querying by trace_id."""
         spans = [

@@ -64,8 +64,8 @@ class TestVertexAIAdapterMock:
                 assert adapter._sa is None
 
                 chunks = []
-                async for content, _reasoning in adapter.stream_completion("Hello world"):
-                    chunks.append(content)
+                async for chunk in adapter.stream_completion("Hello world"):
+                    chunks.append(chunk.content_delta)
 
                 full = "".join(chunks)
                 assert "Mock response" in full
@@ -81,10 +81,8 @@ class TestVertexAIAdapterMock:
             with patch.dict(os.environ, env, clear=True):
                 adapter = VertexAIAdapter()
                 chunks = []
-                async for content, reasoning in adapter.stream_chat(
-                    [{"role": "user", "content": "hi"}]
-                ):
-                    chunks.append((content, reasoning))
+                async for chunk in adapter.stream_chat([{"role": "user", "content": "hi"}]):
+                    chunks.append((chunk.content_delta, chunk.reasoning_delta))
                 assert len(chunks) > 0
                 assert all(r is None for _, r in chunks)
 
@@ -231,11 +229,11 @@ class TestVertexAIAdapterMaxTokensClamp:
 
             with patch("httpx.AsyncClient", return_value=MockHttpxClient()):
                 chunks = []
-                async for c, _r in adapter.stream_chat(
+                async for chunk in adapter.stream_chat(
                     [{"role": "user", "content": "hi"}],
                     max_tokens=111111,
                 ):
-                    chunks.append(c)
+                    chunks.append(chunk.content_delta)
 
         assert MockHttpxClient.last_body["max_tokens"] == 65536
         assert chunks == ["OK"]
@@ -288,7 +286,7 @@ class TestVertexAIAdapterMaxTokensClamp:
             adapter._token_expiry = 9999999999.0
 
             with patch("httpx.AsyncClient", return_value=MockHttpxClient()):
-                async for _ in adapter.stream_chat(
+                async for _chunk in adapter.stream_chat(
                     [{"role": "user", "content": "hi"}],
                     max_tokens=4096,
                 ):
@@ -348,10 +346,10 @@ class TestVertexAIAdapterRetry:
 
             with patch("httpx.AsyncClient", return_value=MockHttpxClient()):
                 chunks = []
-                async for c, _r in adapter.stream_chat(
+                async for chunk in adapter.stream_chat(
                     [{"role": "user", "content": "hi"}],
                 ):
-                    chunks.append(c)
+                    chunks.append(chunk.content_delta)
 
         assert attempt_count == 3
         assert chunks == ["OK"]
@@ -396,7 +394,7 @@ class TestVertexAIAdapterRetry:
 
             with patch("httpx.AsyncClient", return_value=MockHttpxClient()):
                 with pytest.raises(Exception, match="400"):
-                    async for _ in adapter.stream_chat(
+                    async for _chunk in adapter.stream_chat(
                         [{"role": "user", "content": "hi"}],
                     ):
                         pass
@@ -440,7 +438,7 @@ class TestVertexAIAdapterRetry:
 
             with patch("httpx.AsyncClient", return_value=MockHttpxClient()):
                 with pytest.raises(Exception, match="401"):
-                    async for _ in adapter.stream_chat(
+                    async for _chunk in adapter.stream_chat(
                         [{"role": "user", "content": "hi"}],
                     ):
                         pass
@@ -490,7 +488,7 @@ class TestVertexAIAdapterRetry:
                 patch("httpx.AsyncClient", return_value=MockHttpxClient()),
                 pytest.raises(Exception, match="500"),
             ):
-                async for _ in adapter.stream_chat(
+                async for _chunk in adapter.stream_chat(
                     [{"role": "user", "content": "hi"}],
                 ):
                     pass
@@ -611,7 +609,7 @@ class TestVertexAIAdapterModelFormat:
             adapter._token_expiry = 9999999999.0
 
             with patch("httpx.AsyncClient", return_value=MockHttpxClient()):
-                async for _ in adapter.stream_chat(
+                async for _chunk in adapter.stream_chat(
                     [{"role": "user", "content": "hi"}],
                     model="gemini-3-pro-preview",
                 ):
@@ -671,7 +669,7 @@ class TestVertexAIAdapterReasoning:
             adapter._token_expiry = 9999999999.0
 
             with patch("httpx.AsyncClient", return_value=MockHttpxClient()):
-                async for _ in adapter.stream_chat(
+                async for _chunk in adapter.stream_chat(
                     [{"role": "user", "content": "think hard"}],
                     enable_reasoning=True,
                 ):
@@ -727,7 +725,7 @@ class TestVertexAIAdapterReasoning:
             adapter._token_expiry = 9999999999.0
 
             with patch("httpx.AsyncClient", return_value=MockHttpxClient()):
-                async for _ in adapter.stream_chat(
+                async for _chunk in adapter.stream_chat(
                     [{"role": "user", "content": "hi"}],
                 ):
                     pass
@@ -784,11 +782,11 @@ class TestVertexAIAdapterReasoning:
 
             with patch("httpx.AsyncClient", return_value=MockHttpxClient()):
                 chunks = []
-                async for content, reasoning in adapter.stream_chat(
+                async for chunk in adapter.stream_chat(
                     [{"role": "user", "content": "think"}],
                     enable_reasoning=True,
                 ):
-                    chunks.append((content, reasoning))
+                    chunks.append((chunk.content_delta, chunk.reasoning_delta))
 
         assert chunks[0] == ("", "Let me think...")
         assert chunks[1] == ("The answer is 42", None)

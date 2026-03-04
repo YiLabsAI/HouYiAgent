@@ -11,6 +11,7 @@ from typing import Any
 from uuid import uuid4
 
 from houyi.core.skill import SkillSpec
+from houyi.execution.serialization import to_wire_data
 from houyi.execution.tool_call_core import assemble_tool_call_output, build_llm_cache_key
 from houyi.protocol.ir import ExecutionIR, NodeExecutionIR
 
@@ -125,7 +126,7 @@ class ConsoleToolCallResponseAssembler(ToolCallResponseAssembler):
             )
             await self.connection_manager.send_event(context.session_id, stream_event)
 
-        context.node_exec.outputs = output_payload.model_dump(by_alias=True)
+        context.node_exec.outputs = to_wire_data(output_payload)
 
         final_event = StreamingOutputEvent(
             event_id=f"evt_{uuid4().hex[:8]}",
@@ -134,6 +135,10 @@ class ConsoleToolCallResponseAssembler(ToolCallResponseAssembler):
             node_id=context.node_id,
             chunk="",
             is_final=True,
+            metadata={
+                "trace_id": output_payload.metadata.get("trace_id"),
+                "usage": output_payload.metadata.get("usage"),
+            },
         )
         await self.connection_manager.send_event(context.session_id, final_event)
 
@@ -145,15 +150,15 @@ class ConsoleToolCallResponseAssembler(ToolCallResponseAssembler):
             response=content,
             metadata={
                 "prompt_cache_key": context.prompt_cache_key,
-                "tool_calls": [entry.model_dump(by_alias=True) for entry in normalized_tool_trace],
+                "tool_calls": to_wire_data(normalized_tool_trace),
                 "max_tool_calls": context.max_tool_calls,
                 "tool_call_rounds": tool_call_rounds,
                 "tool_finish_reason": tool_finish_reason,
                 "finish_reason": finish_reason,
                 "max_rounds_reached": max_rounds_reached,
-                "tool_errors": [entry.model_dump(by_alias=True) for entry in tool_errors],
+                "tool_errors": to_wire_data(tool_errors),
                 "tool_names": [skill.name for skill in context.skills],
-                "tool_call_output": output_payload.model_dump(by_alias=True),
+                "tool_call_output": to_wire_data(output_payload),
             },
         )
 

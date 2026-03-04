@@ -22,7 +22,7 @@ fi
 
 if [ ! -d ".venv" ]; then
     echo -e "${RED}✗ .venv not found.${NC}"
-    echo "Run: uv sync --extra dev"
+    echo "Run: uv sync --extra dev --extra model-adapters"
     exit 1
 fi
 
@@ -40,7 +40,7 @@ ensure_deps() {
 
     if [ $need_sync -eq 1 ]; then
         echo -e "${YELLOW}  Installing missing dev dependencies...${NC}"
-        uv sync --extra dev --extra websearch-ddg --extra websearch-tavily --extra websearch-readability --quiet
+        uv sync --extra dev --extra model-adapters --quiet
     fi
 
     if ! uv run python -c "import houyi_studio" 2>/dev/null; then

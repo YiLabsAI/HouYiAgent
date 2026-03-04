@@ -155,10 +155,11 @@ Please answer the question based on the context above."""
                 temperature=self._temperature,
                 max_tokens=self._max_tokens,
             ):
-                full_response += chunk
+                content = chunk.content_delta
+                full_response += content
                 yield StreamEvent(
                     event_type=StreamEventType.CHUNK,
-                    data=chunk,
+                    data=content,
                 )
 
         except Exception as e:

@@ -45,8 +45,8 @@ class TestSiliconFlowAdapterMockMode:
 
                 messages = [{"role": "user", "content": "Hello world"}]
                 chunks = []
-                async for content, reasoning in adapter.stream_chat(messages):
-                    chunks.append((content, reasoning))
+                async for chunk in adapter.stream_chat(messages):
+                    chunks.append((chunk.content_delta, chunk.reasoning_delta))
 
                 assert len(chunks) > 0
                 full_content = "".join(c for c, _ in chunks)
@@ -65,7 +65,7 @@ class TestSiliconFlowAdapterMockMode:
 
                 chunks = []
                 async for chunk in adapter.stream_completion("Test prompt"):
-                    chunks.append(chunk)
+                    chunks.append((chunk.content_delta, chunk.reasoning_delta))
 
                 assert len(chunks) > 0
                 full = "".join(c for c, _ in chunks)
@@ -86,8 +86,8 @@ class TestSiliconFlowAdapterMockMode:
                     {"role": "user", "content": "Tell me about Python"},
                 ]
                 chunks = []
-                async for content, _ in adapter.stream_chat(messages):
-                    chunks.append(content)
+                async for chunk in adapter.stream_chat(messages):
+                    chunks.append(chunk.content_delta)
 
                 full = "".join(chunks)
                 assert "Tell me about Python" in full
@@ -141,10 +141,8 @@ class TestSiliconFlowAdapterSDKPath:
 
             with patch.dict(sys.modules, {"openai": fake_openai}):
                 chunks = []
-                async for content, reasoning in adapter.stream_chat(
-                    [{"role": "user", "content": "Hi"}]
-                ):
-                    chunks.append((content, reasoning))
+                async for chunk in adapter.stream_chat([{"role": "user", "content": "Hi"}]):
+                    chunks.append((chunk.content_delta, chunk.reasoning_delta))
 
         assert len(chunks) == 3
         assert chunks[0] == ("Hello", None)
@@ -223,10 +221,8 @@ class TestSiliconFlowAdapterHttpxPath:
 
             with patch("httpx.AsyncClient", return_value=MockHttpxClient()):
                 chunks = []
-                async for content, reasoning in adapter.stream_chat(
-                    [{"role": "user", "content": "Hi"}]
-                ):
-                    chunks.append((content, reasoning))
+                async for chunk in adapter.stream_chat([{"role": "user", "content": "Hi"}]):
+                    chunks.append((chunk.content_delta, chunk.reasoning_delta))
 
         assert len(chunks) == 3
         assert chunks[0] == ("Hi", None)
@@ -279,13 +275,13 @@ class TestSiliconFlowAdapterSDKReasoning:
 
             with patch.dict(sys.modules, {"openai": fake_openai}):
                 chunks = []
-                async for c, r in adapter.stream_chat(
+                async for chunk in adapter.stream_chat(
                     [{"role": "user", "content": "Hi"}],
                     enable_reasoning=True,
                     thinking_budget=1024,
                     temperature=0.7,
                 ):
-                    chunks.append((c, r))
+                    chunks.append((chunk.content_delta, chunk.reasoning_delta))
 
         assert chunks == [("A", None)]
         call_kwargs = mock_client.chat.completions.create.call_args[1]
@@ -344,13 +340,160 @@ class TestSiliconFlowHttpxEdgeCases:
 
             with patch("httpx.AsyncClient", return_value=MockHttpxClient()):
                 chunks = []
-                async for c, r in adapter.stream_chat(
+                async for chunk in adapter.stream_chat(
                     [{"role": "user", "content": "Hi"}],
                     enable_reasoning=True,
                     thinking_budget=512,
                 ):
-                    chunks.append((c, r))
+                    chunks.append((chunk.content_delta, chunk.reasoning_delta))
 
         assert len(chunks) == 2
         assert chunks[0] == ("OK", None)
         assert chunks[1] == ("", "think")
+
+
+class TestSiliconFlowChatRequestSanitization:
+    """Test non-stream chat payload sanitation for strict OpenAI-compatible providers."""
+
+    @pytest.mark.asyncio
+    async def test_chat_sanitizes_message_content_and_tool_arguments(self):
+        captured: dict[str, object] = {}
+
+        class MockResponse:
+            status_code = 200
+
+            @staticmethod
+            def json():
+                return {
+                    "model": "test-model",
+                    "choices": [
+                        {"message": {"content": "ok", "tool_calls": []}, "finish_reason": "stop"}
+                    ],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+                }
+
+            text = ""
+
+        class MockHttpxClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                pass
+
+            async def post(self, url, json=None, headers=None):
+                captured["url"] = url
+                captured["body"] = json
+                captured["headers"] = headers
+                return MockResponse()
+
+        with patch.dict(os.environ, {"SILICONFLOW_API_KEY": "test-key"}):
+            EnvConfig._reset()
+            SiliconFlowAdapter._SDK_AVAILABLE = False
+            adapter = SiliconFlowAdapter()
+
+            messages = [
+                {"role": "user", "content": [{"type": "text", "text": "search file skill.md"}]},
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {
+                                "name": "houyi_grep",
+                                "arguments": {"query": "skill.md"},
+                            },
+                        }
+                    ],
+                },
+            ]
+
+            with patch("httpx.AsyncClient", return_value=MockHttpxClient()):
+                await adapter.chat(messages=messages, model="test-model")
+
+        body = captured["body"]
+        assert isinstance(body, dict)
+        payload_messages = body["messages"]
+        assert isinstance(payload_messages, list)
+        assert payload_messages[0]["content"] == "search file skill.md"
+        args = payload_messages[1]["tool_calls"][0]["function"]["arguments"]
+        assert isinstance(args, str)
+        assert "skill.md" in args
+        assert payload_messages[1]["reasoning_content"] == ""
+
+
+class TestSiliconFlowStreamingRequestSanitization:
+    """Test stream_chat request payload sanitation for strict providers."""
+
+    @pytest.mark.asyncio
+    async def test_stream_chat_sanitizes_message_content_and_tool_arguments(self):
+        captured_payload: dict[str, object] = {}
+
+        sse_lines = [
+            "data: " + json.dumps({"choices": [{"delta": {"content": "OK"}}]}),
+            "data: [DONE]",
+        ]
+
+        class MockResponse:
+            status_code = 200
+
+            def raise_for_status(self):
+                pass
+
+            async def aiter_lines(self):
+                for line in sse_lines:
+                    yield line
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                pass
+
+        class MockHttpxClient:
+            def stream(self, *args, **kwargs):
+                captured_payload["json"] = kwargs.get("json")
+                return MockResponse()
+
+            async def aclose(self):
+                pass
+
+        with patch.dict(os.environ, {"SILICONFLOW_API_KEY": "test-key"}):
+            EnvConfig._reset()
+            SiliconFlowAdapter._SDK_AVAILABLE = False
+            adapter = SiliconFlowAdapter()
+
+            messages = [
+                {"role": "user", "content": [{"type": "text", "text": "search file skill.md"}]},
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {
+                                "name": "houyi_grep",
+                                "arguments": {"query": "skill.md"},
+                            },
+                        }
+                    ],
+                },
+            ]
+
+            with patch("httpx.AsyncClient", return_value=MockHttpxClient()):
+                chunks = []
+                async for chunk in adapter.stream_chat(messages=messages, model="test-model"):
+                    chunks.append(chunk.content_delta)
+
+        assert "OK" in "".join(chunks)
+        payload = captured_payload["json"]
+        assert isinstance(payload, dict)
+        payload_messages = payload["messages"]
+        assert payload_messages[0]["content"] == "search file skill.md"
+        args = payload_messages[1]["tool_calls"][0]["function"]["arguments"]
+        assert isinstance(args, str)
+        assert "skill.md" in args
+        assert payload_messages[1]["reasoning_content"] == ""

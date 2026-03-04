@@ -141,6 +141,10 @@ class StreamingOutputEvent(ServerEvent):
         default=False,
         description="Whether this is the final chunk",
     )
+    metadata: dict[str, Any] | None = Field(
+        default=None,
+        description="Optional metadata payload for final chunk (usage/trace_id/etc.)",
+    )
 
 
 class CheckpointCreatedEvent(ServerEvent):

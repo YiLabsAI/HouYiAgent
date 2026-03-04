@@ -332,7 +332,17 @@ def register_console_skills() -> None:
     except ImportError as e:
         logger.debug("Planning skill not available: %s", e)
 
-    # 6. External / community SKILL.md files from skills/ directory
+    # 6. Built-in local tools
+    try:
+        from houyi.skills.builtin.local_tools import register_builtin_local_tools
+
+        for tool_name in register_builtin_local_tools(DEFAULT_SKILL_REGISTRY):
+            if tool_name not in registered_skills:
+                registered_skills.append(tool_name)
+    except ImportError as e:
+        logger.warning("Built-in local tools not available: %s", e)
+
+    # 7. External / community SKILL.md files from skills/ directory
     _load_external_skills(registered_skills)
     _hydrate_external_runtime(registered_skills)
 

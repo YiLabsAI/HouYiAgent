@@ -218,6 +218,49 @@ class TestIngestFiles:
         assert lib["status"] == "degraded"
 
     @pytest.mark.asyncio
+    async def test_local_provider_runtime_error_falls_back_to_metadata_ingest(
+        self,
+        svc: IngestService,
+        repo: LibraryRepository,
+        library_id: str,
+        tmp_path: Path,
+    ):
+        from houyi.rag.config import EmbeddingConfig
+
+        paths = _make_files(tmp_path / "local-runtime-error", ["broken.md"])
+
+        class _BrokenLocalRAG:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            async def index(self, paths):
+                _ = paths
+                raise RuntimeError("model_optimized.onnx failed: File doesn't exist")
+
+        with (
+            patch(
+                "houyi_studio.server.rag.ingest_service.resolve_embedding_config",
+                return_value=(
+                    EmbeddingConfig(
+                        provider="local", model="BAAI/bge-small-en-v1.5", dimension=384
+                    ),
+                    "local",
+                ),
+            ),
+            patch("houyi.rag.RAG", _BrokenLocalRAG),
+        ):
+            result = await svc.ingest_files(library_id, paths)
+
+        assert result["success"] is True
+        lib = repo.get_library(library_id)
+        assert lib["doc_count"] == 1
+        assert lib["chunk_count"] == 0
+        assert lib["status"] == "degraded"
+        doc = next(iter(lib["documents"].values()))
+        assert doc["status"] == "indexed"
+        assert "model_optimized.onnx" in str(doc.get("metadata", {}).get("degraded_reason", ""))
+
+    @pytest.mark.asyncio
     async def test_reingest_success_clears_stale_document_error(
         self,
         svc: IngestService,

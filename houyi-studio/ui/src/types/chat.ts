@@ -16,6 +16,9 @@ export interface ChatMessage {
   role: MessageRole;
   content: string;
   reasoning_content?: string | null;
+  tool_calls?: Array<Record<string, any>>;
+  tool_call_id?: string | null;
+  name?: string | null;
   attachments?: Attachment[];
   bookmarked?: boolean;
   metadata: Record<string, any>;
@@ -95,6 +98,51 @@ export interface SSEContextUsage {
   usage: ContextUsage;
 }
 
+export interface SSEAgentIteration {
+  message_id: string;
+  trace_id?: string;
+  round_index: number;
+}
+
+export interface SSEToolCallStart {
+  message_id: string;
+  trace_id?: string;
+  tool_call_id?: string;
+  tool_name?: string;
+  parallel_group_id?: string;
+  round_index?: number;
+  arguments?: Record<string, any>;
+}
+
+export interface SSEToolCallResult {
+  message_id: string;
+  trace_id?: string;
+  tool_call_id?: string;
+  tool_name?: string;
+  parallel_group_id?: string;
+  round_index?: number;
+  result?: any;
+}
+
+export interface SSEToolCallError {
+  message_id: string;
+  trace_id?: string;
+  tool_call_id?: string;
+  tool_name?: string;
+  parallel_group_id?: string;
+  round_index?: number;
+  error?: any;
+}
+
+export interface SSEMessageComplete {
+  message_id: string;
+  metadata?: {
+    trace_id?: string;
+    usage?: Record<string, any>;
+    [key: string]: any;
+  };
+}
+
 // API request types
 export interface CreateConversationRequest {
   title?: string;
@@ -110,7 +158,11 @@ export interface SendMessageRequest {
   temperature?: number;
   max_tokens?: number;
   enable_reasoning?: boolean;
+  enable_tool_calls?: boolean;
+  tool_call_strategy?: 'conservative' | 'balanced' | 'aggressive';
   enable_web_search?: boolean;
+  enable_skills?: string[];
+  max_tool_iterations?: number;
 }
 
 export interface UpdateConversationRequest {

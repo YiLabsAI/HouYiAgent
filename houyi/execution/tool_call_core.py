@@ -19,6 +19,7 @@ class ToolCallTrace:
     tool_name: str | None = None
     requested_tool_name: str | None = None
     tool_call_id: str | None = None
+    parallel_group_id: str | None = None
     args: dict[str, Any] = field(default_factory=dict)
     result: ToolResult = field(default_factory=lambda: ToolResult(raw={}))
     tool_override: dict[str, Any] | None = None
@@ -45,6 +46,10 @@ class ToolCallOutputPayload:
 class AssembleResult:
     content: str
     output_payload: ToolCallOutputPayload
+    messages_for_log: str | list[dict[str, Any]] = ""
+    tool_call_rounds: int = 0
+    normalized_tool_trace: list[ToolCallTrace] = field(default_factory=list)
+    tool_errors: list[ToolError] = field(default_factory=list)
 
 
 def _json_dumps_stable(payload: Any) -> str:
@@ -111,6 +116,7 @@ def _normalize_tool_trace(
             tool_name=entry.get("tool_name"),
             requested_tool_name=entry.get("requested_tool_name"),
             tool_call_id=entry.get("tool_call_id"),
+            parallel_group_id=entry.get("parallel_group_id"),
             args=entry.get("args") if isinstance(entry.get("args"), dict) else {},  # type: ignore[arg-type]
             result=ToolResult(raw=raw_dict, is_error=is_error, metadata=metadata),
             tool_override=entry.get("tool_override")
@@ -157,6 +163,8 @@ async def assemble_tool_call_output(
     """
 
     normalized_calls, normalized_errors = _normalize_tool_trace(tool_trace)
+    tool_call_rounds = len([message for message in messages if message.get("tool_calls")])
+    messages_for_log: str | list[dict[str, Any]] = messages
 
     if not normalized_calls:
         payload = ToolCallOutputPayload(
@@ -165,9 +173,19 @@ async def assemble_tool_call_output(
             tool_errors=[],
             metadata={},
         )
-        return AssembleResult(content=payload.content, output_payload=payload)
+        return AssembleResult(
+            content=payload.content,
+            output_payload=payload,
+            messages_for_log=messages_for_log,
+            tool_call_rounds=tool_call_rounds,
+            normalized_tool_trace=[],
+            tool_errors=[],
+        )
 
     metadata: dict[str, Any] = {}
+    execution_id = getattr(execution, "execution_id", None)
+    if isinstance(execution_id, str) and execution_id:
+        metadata["trace_id"] = execution_id
 
     cached_response: Any | None = None
     cache_key: str | None = None
@@ -211,10 +229,24 @@ async def assemble_tool_call_output(
                 )
 
     content = getattr(final_response, "content", "")
+    usage_payload = getattr(final_response, "usage", None)
+    if usage_payload is None:
+        response_metadata = getattr(final_response, "metadata", None)
+        if isinstance(response_metadata, dict):
+            usage_payload = response_metadata.get("usage")
+    if isinstance(usage_payload, dict):
+        metadata["usage"] = usage_payload
     payload = ToolCallOutputPayload(
         content=content,
         tool_calls=normalized_calls,
         tool_errors=normalized_errors,
         metadata=metadata,
     )
-    return AssembleResult(content=content, output_payload=payload)
+    return AssembleResult(
+        content=content,
+        output_payload=payload,
+        messages_for_log=messages_for_log,
+        tool_call_rounds=tool_call_rounds,
+        normalized_tool_trace=normalized_calls,
+        tool_errors=normalized_errors,
+    )

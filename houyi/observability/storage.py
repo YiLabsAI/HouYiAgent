@@ -247,8 +247,12 @@ class SQLiteSpanStorage(SpanStorage):
             "parent_trace_id": span.parent_trace_id,
             "restore_checkpoint_id": span.restore_checkpoint_id,
             "replay_mode": 1 if span.replay_mode else 0,
-            "attributes": json.dumps(span.attributes) if span.attributes else None,
-            "events": json.dumps([e.model_dump() for e in span.events]) if span.events else None,
+            "attributes": json.dumps(span.attributes, default=str) if span.attributes else None,
+            "events": (
+                json.dumps([e.model_dump(mode="json") for e in span.events], default=str)
+                if span.events
+                else None
+            ),
         }
 
     def _row_to_span(self, row: sqlite3.Row) -> SpanSchema:

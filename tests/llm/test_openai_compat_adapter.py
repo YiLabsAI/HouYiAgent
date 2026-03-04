@@ -102,6 +102,36 @@ async def test_openai_compat_adapter_chat(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_openai_compat_adapter_chat_strict_contract_sanitizes_messages(monkeypatch) -> None:
+    response = _FakeOpenAIResponse("ok", "test-model")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://example.test")
+    fake_openai = _build_openai_module(response)
+    monkeypatch.setitem(__import__("sys").modules, "openai", fake_openai)
+
+    adapter = OpenAICompatibleAdapter(model="test-model", strict_message_string_contract=True)
+    await adapter.chat(
+        [
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "hello"}],
+                "tool_calls": [
+                    {
+                        "id": "call-1",
+                        "type": "function",
+                        "function": {"name": "tool", "arguments": {"x": 1}},
+                    }
+                ],
+            }
+        ]
+    )
+
+    sent_messages = adapter.client.chat.completions.calls[0]["messages"]
+    assert sent_messages[0]["content"] == "hello"
+    assert isinstance(sent_messages[0]["tool_calls"][0]["function"]["arguments"], str)
+
+
+@pytest.mark.asyncio
 async def test_openai_compat_adapter_stream(monkeypatch) -> None:
     """OpenAICompatibleAdapter should stream content chunks."""
 
@@ -124,10 +154,39 @@ async def test_openai_compat_adapter_stream(monkeypatch) -> None:
 
     adapter = OpenAICompatibleAdapter(model="test-model")
     chunks = []
-    async for content, _reasoning in adapter.stream_chat([{"role": "user", "content": "hi"}]):
-        chunks.append(content)
+    async for chunk in adapter.stream_chat([{"role": "user", "content": "hi"}]):
+        chunks.append(chunk.content_delta)
 
     assert chunks == ["hello", "world"]
+
+
+@pytest.mark.asyncio
+async def test_openai_compat_adapter_stream_strict_contract_sanitizes_messages(monkeypatch) -> None:
+    class _Delta:
+        def __init__(self, content: str) -> None:
+            self.content = content
+
+    class _StreamChoice:
+        def __init__(self, content: str) -> None:
+            self.delta = _Delta(content)
+
+    class _StreamChunk:
+        def __init__(self, content: str) -> None:
+            self.choices = [_StreamChoice(content)]
+
+    stream = _FakeStream([_StreamChunk("hello")])
+    fake_openai = _build_openai_module(stream)
+    monkeypatch.setitem(__import__("sys").modules, "openai", fake_openai)
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+
+    adapter = OpenAICompatibleAdapter(model="test-model", strict_message_string_contract=True)
+    chunks = []
+    async for chunk in adapter.stream_chat([{"role": "assistant", "content": {"k": "v"}}]):
+        chunks.append(chunk.content_delta)
+
+    assert chunks == ["hello"]
+    sent_messages = adapter.client.chat.completions.calls[0]["messages"]
+    assert isinstance(sent_messages[0]["content"], str)
 
 
 def test_openai_compat_adapter_requires_key(monkeypatch) -> None:

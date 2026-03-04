@@ -43,6 +43,7 @@ interface WorkflowSummary {
 
 interface RunSettings {
   enable_tool_calls: boolean;
+  tool_call_strategy: 'conservative' | 'balanced' | 'aggressive';
   tool_names: string[];
   tool_choice: string | null;
   max_tool_calls: number;

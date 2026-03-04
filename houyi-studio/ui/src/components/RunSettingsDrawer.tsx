@@ -12,6 +12,7 @@ export const RunSettingsDrawer: React.FC = () => {
   } = useConsoleStore();
 
   const [enableToolCalls, setEnableToolCalls] = React.useState(runSettings.enable_tool_calls);
+  const [toolCallStrategyDraft, setToolCallStrategyDraft] = React.useState(runSettings.tool_call_strategy);
   const [toolNamesDraft, setToolNamesDraft] = React.useState(runSettings.tool_names.join(', '));
   const [toolChoiceDraft, setToolChoiceDraft] = React.useState(runSettings.tool_choice ?? '');
   const [maxToolCallsDraft, setMaxToolCallsDraft] = React.useState(String(runSettings.max_tool_calls));
@@ -62,6 +63,7 @@ export const RunSettingsDrawer: React.FC = () => {
   React.useEffect(() => {
     if (!isRunSettingsOpen) return;
     setEnableToolCalls(runSettings.enable_tool_calls);
+    setToolCallStrategyDraft(runSettings.tool_call_strategy);
     setToolNamesDraft(runSettings.tool_names.join(', '));
     setToolChoiceDraft(runSettings.tool_choice ?? '');
     setMaxToolCallsDraft(String(runSettings.max_tool_calls));
@@ -135,6 +137,7 @@ export const RunSettingsDrawer: React.FC = () => {
 
     updateRunSettings({
       enable_tool_calls: enableToolCalls,
+      tool_call_strategy: toolCallStrategyDraft,
       tool_names: parsedToolNames,
       tool_choice: trimmedChoice ? trimmedChoice : null,
       max_tool_calls: Number.isNaN(parsedMaxToolCalls) ? runSettings.max_tool_calls : parsedMaxToolCalls,
@@ -190,6 +193,18 @@ export const RunSettingsDrawer: React.FC = () => {
             </div>
 
             <div className="mt-3 space-y-3">
+              <div>
+                <label className="mb-1 block text-xs font-medium text-gray-400">Tool strategy</label>
+                <select
+                  className="w-full rounded border border-gray-600 bg-gray-700 px-2 py-1 text-sm text-gray-200 focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+                  value={toolCallStrategyDraft}
+                  onChange={(event) => setToolCallStrategyDraft(event.target.value as 'conservative' | 'balanced' | 'aggressive')}
+                >
+                  <option value="conservative">Conservative (latency first)</option>
+                  <option value="balanced">Balanced (default)</option>
+                  <option value="aggressive">Aggressive (recall first)</option>
+                </select>
+              </div>
               <div>
                 <label className="mb-1 block text-xs font-medium text-gray-400">Tool names</label>
                 <input

@@ -3,13 +3,16 @@
 This example shows how to use OpenAI or Anthropic LLMs with HouYi.
 
 Requirements:
-    pip install openai>=1.0.0  # For OpenAI
-    pip install anthropic>=0.18.0  # For Anthropic
+    uv sync --extra model-adapters
+    # or install directly:
+    #   pip install "openai>=1.0.0" "anthropic>=0.7.0"
 """
 
 import os
 
 from houyi import Agent, tool
+from houyi.llm.anthropic_adapter import AnthropicAdapter
+from houyi.llm.openai_adapter import OpenAIAdapter
 
 
 # Define a skill
@@ -32,7 +35,11 @@ def example_openai():
 
     print("=== Example 1: OpenAI GPT-4 ===")
 
-    agent = Agent(role="Research Assistant", skills=[search], llm="gpt-4")
+    agent = Agent(
+        role="Research Assistant",
+        skills=[search],
+        llm=OpenAIAdapter(model="gpt-4"),
+    )
 
     # This will call real GPT-4
     result = agent.run("What are the latest developments in AI?")
@@ -51,7 +58,11 @@ def example_anthropic():
 
     print("=== Example 2: Anthropic Claude 3.5 ===")
 
-    agent = Agent(role="Research Assistant", skills=[search], llm="claude-3-5-sonnet-20241022")
+    agent = Agent(
+        role="Research Assistant",
+        skills=[search],
+        llm=AnthropicAdapter(model="claude-3-5-sonnet-20241022"),
+    )
 
     # This will call real Claude
     result = agent.run("What are the latest developments in AI?")
@@ -108,7 +119,7 @@ def example_streaming():
 
         print("Streaming: ", end="", flush=True)
         async for chunk in adapter.stream_chat(messages):
-            print(chunk, end="", flush=True)
+            print(chunk.content_delta, end="", flush=True)
         print("\n")
 
     asyncio.run(run())
@@ -117,6 +128,22 @@ def example_streaming():
 if __name__ == "__main__":
     print("HouYi LLM Integration Examples\n")
     print("Note: Set OPENAI_API_KEY or ANTHROPIC_API_KEY to run examples\n")
+
+    print("Studio chat tool-calling request example:")
+    print(
+        """
+POST /api/chat/conversations/<conversation_id>/messages
+{
+  "content": "Find TODO comments in this repo and summarize them",
+  "enable_tool_calls": true,
+  "tool_call_strategy": "balanced",
+  "enable_skills": ["houyi_find_files", "houyi_grep", "houyi_read_file"],
+  "enable_web_search": false,
+  "max_tool_iterations": 6
+}
+""".strip()
+    )
+    print()
 
     # Run examples
     example_openai()

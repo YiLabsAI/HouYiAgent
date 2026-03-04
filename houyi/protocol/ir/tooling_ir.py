@@ -34,6 +34,10 @@ class ToolCallTraceIR(BaseModel):
     tool_name: str | None = Field(default=None, description="Resolved tool name")
     requested_tool_name: str | None = Field(default=None, description="LLM-requested tool name")
     tool_call_id: str | None = Field(default=None, description="Tool call identifier")
+    parallel_group_id: str | None = Field(
+        default=None,
+        description="Parallel execution group identifier for same-round tool calls",
+    )
     args: dict[str, Any] = Field(default_factory=dict, description="Parsed tool arguments")
     result: ToolResultIR = Field(default_factory=ToolResultIR, description="Tool execution result")
     tool_override: ToolOverrideIR | None = Field(

@@ -169,6 +169,13 @@ ignore = [
     "RUF012", # mutable class variable — too noisy with Pydantic models
 ]
 
+[tool.ruff.lint.mccabe]
+max-complexity = 10
+
+[tool.ruff.lint.pylint]
+max-branches = 12
+max-statements = 50
+
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*.py" = [
     "F811",   # redefinition of unused name (common in test fixtures)
@@ -216,6 +223,11 @@ disable_error_code = [
 
 [[tool.mypy.overrides]]
 module = ["houyi.core.*", "houyi.protocol.*"]
+disallow_untyped_defs = true
+warn_return_any = true
+
+[[tool.mypy.overrides]]
+module = ["houyi_studio.server.chat.chat_service"]
 disallow_untyped_defs = true
 warn_return_any = true
 

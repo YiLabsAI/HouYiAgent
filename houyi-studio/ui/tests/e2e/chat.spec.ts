@@ -636,7 +636,7 @@ test.describe('Chat mode', () => {
     await expect(page.getByTestId('message-bubble')).toHaveCount(120, { timeout: 10000 });
 
     // Expand once to render the full set (stress test for theme switching).
-    const loadOlder = page.getByRole('button', { name: 'Load older messages' });
+    const loadOlder = page.getByRole('button', { name: 'Show more' });
     await expect(loadOlder).toBeVisible({ timeout: 5000 });
     await loadOlder.click();
     await expect(page.getByTestId('message-bubble')).toHaveCount(160, { timeout: 10000 });

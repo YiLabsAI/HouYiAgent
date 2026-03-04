@@ -344,10 +344,12 @@ class LLMExecutionFlow:
                     if prompt_cache_key:
                         stream_kwargs["prompt_cache_key"] = prompt_cache_key
 
-                    async for content, reasoning in llm_adapter.stream_completion(
+                    async for chunk in llm_adapter.stream_completion(
                         prompt,
                         **stream_kwargs,
                     ):
+                        content = chunk.content_delta
+                        reasoning = chunk.reasoning_delta
                         if reasoning and enable_reasoning:
                             reasoning_count += 1
                             reasoning_output += reasoning

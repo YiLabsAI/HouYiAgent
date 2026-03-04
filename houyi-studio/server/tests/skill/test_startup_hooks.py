@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import sys
+import types
+
 import pytest
 from houyi_studio.server.skill import startup_hooks as startup_hooks_module
 from houyi_studio.server.skill.service import get_skill_service
@@ -304,3 +307,47 @@ def test_resolve_external_skill_scan_dirs_honors_configured_dir(monkeypatch, tmp
 def test_init_skill_service_initializes_global_service() -> None:
     _init_skill_service()
     assert get_skill_service() is not None
+
+
+def test_register_console_skills_registers_builtin_local_tools(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: list[str] = []
+
+    monkeypatch.setattr(startup_hooks_module, "_init_skill_service", lambda: None)
+    monkeypatch.setattr(startup_hooks_module, "_load_external_skills", lambda registered: None)
+    monkeypatch.setattr(startup_hooks_module, "_hydrate_external_runtime", lambda registered: [])
+    monkeypatch.setattr(startup_hooks_module, "_group_registered_names", lambda names: (names, []))
+
+    def _capture_core(skill, registered_skills):
+        registered_skills.append(skill.name)
+
+    monkeypatch.setattr(startup_hooks_module, "_register_builtin_core", _capture_core)
+
+    def _fake_register_builtin_local_tools(_registry):
+        tool_names = [
+            "houyi_read_file",
+            "houyi_write_file",
+            "houyi_find_files",
+            "houyi_list_dir",
+            "houyi_grep",
+            "houyi_shell_exec",
+        ]
+        captured.extend(tool_names)
+        return tool_names
+
+    fake_module = types.SimpleNamespace(
+        register_builtin_local_tools=_fake_register_builtin_local_tools
+    )
+    monkeypatch.setitem(sys.modules, "houyi.skills.builtin.local_tools", fake_module)
+
+    startup_hooks_module.register_console_skills()
+
+    assert captured == [
+        "houyi_read_file",
+        "houyi_write_file",
+        "houyi_find_files",
+        "houyi_list_dir",
+        "houyi_grep",
+        "houyi_shell_exec",
+    ]

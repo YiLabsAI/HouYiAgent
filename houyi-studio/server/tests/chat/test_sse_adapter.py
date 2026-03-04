@@ -213,3 +213,36 @@ def _parse_sse_events(raw_chunks: list[str]) -> list[dict]:
         if "event" in evt:
             events.append(evt)
     return events
+
+
+class TestStreamingOutputEventMetadata:
+    """Test StreamingOutputEvent.metadata field (SSE extension)."""
+
+    def test_metadata_field_accepted(self):
+        from houyi_studio.server.gateway.events import StreamingOutputEvent
+
+        event = StreamingOutputEvent(
+            event_id="e1",
+            session_id="s1",
+            execution_id="x1",
+            node_id="n1",
+            chunk="",
+            is_final=True,
+            metadata={"trace_id": "t1", "usage": {"total_tokens": 100}},
+        )
+        assert event.metadata is not None
+        assert event.metadata["trace_id"] == "t1"
+        assert event.metadata["usage"]["total_tokens"] == 100
+
+    def test_metadata_defaults_to_none(self):
+        from houyi_studio.server.gateway.events import StreamingOutputEvent
+
+        event = StreamingOutputEvent(
+            event_id="e1",
+            session_id="s1",
+            execution_id="x1",
+            node_id="n1",
+            chunk="hello",
+            is_final=False,
+        )
+        assert event.metadata is None

@@ -18,7 +18,7 @@ import os
 from collections.abc import AsyncIterator
 from typing import Any
 
-from houyi.llm.base import DEFAULT_TEMPERATURE, LLMAdapter, LLMMessage, LLMResponse
+from houyi.llm.base import DEFAULT_TEMPERATURE, LLMAdapter, LLMMessage, LLMResponse, StreamChunk
 from houyi.llm.retry import (
     DEFAULT_MAX_RETRIES,
     DEFAULT_RETRY_BASE_DELAY,
@@ -383,7 +383,7 @@ class VertexAIAdapter(LLMAdapter):
         temperature: float = DEFAULT_TEMPERATURE,
         max_tokens: int | None = None,
         **kwargs: Any,
-    ) -> AsyncIterator[tuple[str, str | None]]:
+    ) -> AsyncIterator[StreamChunk]:
         """Stream chat completion via Vertex AI OpenAI-compatible endpoint.
 
         Includes exponential-backoff retry for transient errors (429, 500, etc.).
@@ -392,13 +392,14 @@ class VertexAIAdapter(LLMAdapter):
         """
         model = kwargs.pop("model", None) or self.default_model
         self.last_usage = None
+        self.last_finish_reason: str | None = None
         normalized = self._normalize_messages(messages)
 
         if not self.project_id or not self._sa:
             logger.info("Using mock streaming (no project ID or service account)")
             words = f"Mock response from {model}: ...".split()
             for word in words:
-                yield (word + " ", None)
+                yield StreamChunk(content_delta=word + " ")
             return
 
         base_url = self._get_openai_base_url()
@@ -450,7 +451,7 @@ class VertexAIAdapter(LLMAdapter):
         while True:
             access_token = await self._get_access_token()
             if not access_token:
-                yield ("[Error: Failed to authenticate with Vertex AI]", None)
+                yield StreamChunk(content_delta="[Error: Failed to authenticate with Vertex AI]")
                 return
 
             logger.info(
@@ -542,8 +543,12 @@ class VertexAIAdapter(LLMAdapter):
                         reasoning = delta.get("reasoning_content", "")
                         if content or reasoning:
                             chunk_count += 1
-                            yield (content or "", reasoning if reasoning else None)
+                            yield StreamChunk(
+                                content_delta=content or "",
+                                reasoning_delta=reasoning if reasoning else None,
+                            )
 
+                    self.last_finish_reason = "stop"
                     logger.info(
                         "Vertex AI stream completed: %d chunks, usage=%s",
                         chunk_count,

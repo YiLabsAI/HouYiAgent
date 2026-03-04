@@ -8,11 +8,18 @@
  * - Context usage indicator
  */
 import React from 'react';
-import { Send, Square, Paperclip, Brain, Globe, Search } from 'lucide-react';
+import { Send, Square, Paperclip, BrainCircuit, Globe, Search } from 'lucide-react';
 import { useConsoleStore } from '@/stores/useConsoleStore';
 
 interface ComposerProps {
-  onSend: (content: string, options?: { enableReasoning?: boolean; enableWebSearch?: boolean; attachments?: File[] }) => void;
+  onSend: (content: string, options?: {
+    enableReasoning?: boolean;
+    enableToolCalls?: boolean;
+    toolCallStrategy?: 'conservative' | 'balanced' | 'aggressive';
+    enableWebSearch?: boolean;
+    enableDeepResearch?: boolean;
+    attachments?: File[];
+  }) => void;
   onStop: () => void;
   isStreaming: boolean;
   disabled?: boolean;
@@ -22,6 +29,8 @@ interface ComposerProps {
 const MAX_FILES = 5;
 const MAX_FILE_SIZE_MB = 10;
 const MAX_FILE_SIZE = MAX_FILE_SIZE_MB * 1024 * 1024;
+const MIN_COMPOSER_HEIGHT = 88;
+const DEFAULT_COMPOSER_HEIGHT = 88;
 
 // Allowed MIME type prefixes
 const ALLOWED_MIME_PREFIXES = ['image/', 'text/'];
@@ -106,25 +115,67 @@ export const Composer: React.FC<ComposerProps> = ({
   const [enableWebSearch, setEnableWebSearch] = React.useState(false);
   const [enableDeepResearch, setEnableDeepResearch] = React.useState(false);
   const showToast = useConsoleStore((s) => s.showToast);
+  const toolCallsEnabled = useConsoleStore((s) => s.runSettings.enable_tool_calls);
+  const toolCallStrategy = useConsoleStore((s) => s.runSettings.tool_call_strategy);
   const [attachments, setAttachments] = React.useState<File[]>([]);
+  const [composerHeight, setComposerHeight] = React.useState(DEFAULT_COMPOSER_HEIGHT);
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   const isComposingRef = React.useRef(false);
+  const resizeDragRef = React.useRef<{ startY: number; startHeight: number } | null>(null);
+
+  const clampComposerHeight = React.useCallback((height: number) => {
+    if (typeof window === 'undefined') return Math.max(MIN_COMPOSER_HEIGHT, Math.round(height));
+    const maxHeight = Math.max(MIN_COMPOSER_HEIGHT, Math.floor(window.innerHeight * 0.72));
+    return Math.max(MIN_COMPOSER_HEIGHT, Math.min(maxHeight, Math.round(height)));
+  }, []);
+
+  const stopResizeDrag = React.useCallback(() => {
+    resizeDragRef.current = null;
+    document.body.style.userSelect = '';
+    document.body.style.cursor = '';
+  }, []);
+
+  const handleResizeMove = React.useCallback((event: PointerEvent) => {
+    const drag = resizeDragRef.current;
+    if (!drag) return;
+    const deltaY = event.clientY - drag.startY;
+    setComposerHeight(clampComposerHeight(drag.startHeight + deltaY));
+  }, [clampComposerHeight]);
+
+  React.useEffect(() => {
+    const handlePointerUp = () => stopResizeDrag();
+    window.addEventListener('pointermove', handleResizeMove);
+    window.addEventListener('pointerup', handlePointerUp);
+    window.addEventListener('pointercancel', handlePointerUp);
+    return () => {
+      window.removeEventListener('pointermove', handleResizeMove);
+      window.removeEventListener('pointerup', handlePointerUp);
+      window.removeEventListener('pointercancel', handlePointerUp);
+      stopResizeDrag();
+    };
+  }, [handleResizeMove, stopResizeDrag]);
+
+  const startResizeDrag = (e: React.PointerEvent<HTMLButtonElement>) => {
+    e.preventDefault();
+    resizeDragRef.current = { startY: e.clientY, startHeight: composerHeight };
+    document.body.style.userSelect = 'none';
+    document.body.style.cursor = 'ns-resize';
+  };
 
   const handleSend = () => {
     const trimmed = text.trim();
     if (!trimmed || disabled || isStreaming) return;
     onSend(trimmed, {
       enableReasoning: enableReasoning || undefined,
+      enableToolCalls: toolCallsEnabled,
+      toolCallStrategy,
       enableWebSearch: enableWebSearch || undefined,
+      enableDeepResearch: enableDeepResearch || undefined,
       attachments: attachments.length > 0 ? attachments : undefined,
     });
     setText('');
     setAttachments([]);
-    // Reset textarea height
-    if (textareaRef.current) {
-      textareaRef.current.style.height = 'auto';
-    }
   };
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -151,10 +202,6 @@ export const Composer: React.FC<ComposerProps> = ({
 
   const handleInput = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setText(e.target.value);
-    // Auto-expand
-    const el = e.target;
-    el.style.height = 'auto';
-    el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
   };
 
   // Clipboard paste: support pasting images from clipboard
@@ -205,7 +252,10 @@ export const Composer: React.FC<ComposerProps> = ({
       )}
 
       <div className="flex items-end gap-2">
-        <div className="flex-1 flex flex-col bg-gray-900 border border-gray-700 rounded-lg focus-within:border-gray-500">
+        <div
+          className="relative flex-1 overflow-hidden flex flex-col bg-gray-900 border border-gray-700 rounded-lg focus-within:border-gray-500"
+          style={{ height: `${composerHeight}px` }}
+        >
           <textarea
             ref={textareaRef}
             value={text}
@@ -218,7 +268,7 @@ export const Composer: React.FC<ComposerProps> = ({
             disabled={disabled}
             rows={1}
             data-testid="chat-input"
-            className="flex-1 resize-none bg-transparent px-3 py-2 text-[13px] text-gray-100 placeholder:text-gray-500 focus:outline-none disabled:opacity-50 max-h-40"
+            className="min-h-0 flex-1 resize-none overflow-y-auto bg-transparent px-3 py-2 text-[13px] text-gray-100 placeholder:text-gray-500 focus:outline-none disabled:opacity-50"
           />
 
           {/* Toolbar */}
@@ -252,7 +302,7 @@ export const Composer: React.FC<ComposerProps> = ({
               title={enableReasoning ? 'Thinking mode ON' : 'Thinking mode OFF'}
               type="button"
             >
-              <Brain size={14} />
+              <BrainCircuit size={14} />
             </button>
 
             {/* Web search */}
@@ -284,6 +334,20 @@ export const Composer: React.FC<ComposerProps> = ({
               <Search size={14} />
             </button>
           </div>
+
+          <button
+            type="button"
+            aria-label="Resize composer"
+            data-testid="composer-resize-handle"
+            className="absolute bottom-1 right-1 h-4 w-4 cursor-nwse-resize rounded-sm text-gray-500 hover:text-gray-300"
+            onPointerDown={startResizeDrag}
+          >
+            <svg viewBox="0 0 16 16" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.4">
+              <path d="M4 12h8" />
+              <path d="M7 9h5" />
+              <path d="M10 6h2" />
+            </svg>
+          </button>
         </div>
 
         {isStreaming ? (

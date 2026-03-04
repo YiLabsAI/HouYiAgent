@@ -295,6 +295,30 @@ results = evaluate(agent, test_cases, evaluators=[CustomEvaluator()])
 
 ## Best Practices
 
+### Tool-Calling Reliability
+
+For long-running tool loops, prefer explicit controls plus bounded iterations:
+
+```json
+{
+  "content": "Analyze this codebase and propose fixes",
+  "enable_tool_calls": true,
+  "tool_call_strategy": "balanced",
+  "enable_skills": ["houyi_find_files", "houyi_grep", "houyi_read_file"],
+  "enable_web_search": false,
+  "max_tool_iterations": 6
+}
+```
+
+If your provider returns input-token-limit errors, tune these env vars:
+
+- `HOUYI_CHAT_TOOL_LOOP_MAX_MESSAGE_CHARS`
+- `HOUYI_CHAT_TOOL_LOOP_MAX_TOTAL_CHARS`
+- `HOUYI_TOOLCALL_LOOP_MAX_MESSAGE_CHARS`
+- `HOUYI_TOOLCALL_LOOP_MAX_TOTAL_CHARS`
+
+The runtime sanitizes tool-loop messages and truncates oversized content/tool arguments to keep requests under budget.
+
 ### 1. Use Type Hints
 
 Always use type hints for automatic schema inference:

@@ -14,15 +14,48 @@ import { MarkdownRenderer } from './MarkdownRenderer';
 import { MessageActionBar } from './MessageActionBar';
 import { TypingIndicator } from './TypingIndicator';
 import { ImageLightbox } from './ImageLightbox';
+import { ToolCallBubble } from './ToolCallBubble';
 import { useTypewriter } from '@/hooks/useTypewriter';
+
+const sanitizeAssistantToolMarkers = (raw: string): string => {
+  const hasToolMarker = /<\|tool_[^|]+\|>|<tool_call\b|<\/tool_call>|<arg_[^>]+>|<\/?think>/i.test(raw);
+  if (!hasToolMarker) return raw;
+
+  const stripped = raw
+    .replace(/<tool_call[^>]*>[\s\S]*?<\/tool_call>/gi, ' ')
+    .replace(/<tool_call[^>]*>/gi, ' ')
+    .replace(/<\/tool_call>/gi, ' ')
+    .replace(/<arg_[^>]+>[\s\S]*?<\/arg_[^>]+>/gi, ' ')
+    .replace(/<\/?think>/gi, ' ')
+    .replace(/<\|tool_calls_section_begin\|>/gi, ' ')
+    .replace(/<\|tool_calls_section_end\|>/gi, ' ')
+    .replace(/<\|tool_call_begin\|>/gi, ' ')
+    .replace(/<\|tool_call_end\|>/gi, ' ')
+    .replace(/<\|tool_call_argument_begin\|>/gi, ' ')
+    .replace(/<\|tool_call_argument_end\|>/gi, ' ')
+    .replace(/<\|tool_[^|]+\|>/gi, ' ')
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+
+  return stripped;
+};
 
 interface MessageBubbleProps {
   message: ChatMessage;
   isStreaming?: boolean;
   isLastMessage?: boolean;
+  toolSteps?: ChatMessage[];
+  onOpenTrace?: (traceId: string) => void;
 }
 
-export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isStreaming = false, isLastMessage = false }) => {
+export const MessageBubble: React.FC<MessageBubbleProps> = ({
+  message,
+  isStreaming = false,
+  isLastMessage = false,
+  toolSteps = [],
+  onOpenTrace,
+}) => {
   const [showReasoning, setShowReasoning] = React.useState(false);
   const [isHovered, setIsHovered] = React.useState(false);
   const [isEditing, setIsEditing] = React.useState(false);
@@ -36,12 +69,60 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isStreami
   const display = useSettingsStore((s) => s.display);
   const isUser = message.role === 'user';
   const isAssistant = message.role === 'assistant';
+  const isTool = message.role === 'tool';
+  const [showToolSteps, setShowToolSteps] = React.useState(false);
+  const prevIsStreamingRef = React.useRef(isStreaming);
+  const rawContent = typeof message.content === 'string' ? message.content : String(message.content ?? '');
+  const rawReasoning = typeof message.reasoning_content === 'string'
+    ? message.reasoning_content
+    : String(message.reasoning_content ?? '');
+  const hasAssistantToolCalls = Array.isArray(message.tool_calls) && message.tool_calls.length > 0;
+  const normalizedAssistantContent = isAssistant
+    ? sanitizeAssistantToolMarkers(rawContent)
+    : rawContent;
+  const normalizedAssistantReasoning = isAssistant
+    ? sanitizeAssistantToolMarkers(rawReasoning)
+    : rawReasoning;
+  const normalizedStreamingReasoning = isAssistant
+    ? sanitizeAssistantToolMarkers(streamingReasoning)
+    : streamingReasoning;
+  const shouldRenderAssistantContent = !isAssistant
+    || Boolean(normalizedAssistantContent.trim())
+    || (isStreaming && !normalizedStreamingReasoning);
+  const shouldAutoExpandReasoning = isStreaming && !rawContent;
+  const traceId = typeof message.metadata?.trace_id === 'string' ? message.metadata.trace_id : null;
+  const usageTotalTokens = Number(message.metadata?.usage?.total_tokens || 0);
+  const hasToolSummary = toolSteps.length > 0;
+  const shouldShowMetaPanel = isAssistant
+    && (traceId || usageTotalTokens > 0 || (hasToolSummary && !isStreaming));
+  const roundCount = toolSteps.length > 0
+    ? new Set(toolSteps.map((step) => Number(step.metadata?.round_index || 0)).filter((v) => Number.isFinite(v) && v > 0)).size
+    : 0;
+  const isEmptyAssistantPlaceholder =
+    isAssistant
+    && !isStreaming
+    && !normalizedAssistantContent.trim()
+    && !(normalizedAssistantReasoning.trim())
+    && (!message.attachments || message.attachments.length === 0)
+    && toolSteps.length === 0
+    && !hasAssistantToolCalls;
 
-  // Smooth typewriter animation for streaming content (fixes Gemini chunky output)
-  const displayContent = useTypewriter(message.content || '', isStreaming && isAssistant);
+  // Keep hook order stable across placeholder/non-placeholder transitions.
+  const displayContent = useTypewriter(normalizedAssistantContent, isStreaming && isAssistant);
+
+  React.useEffect(() => {
+    if (isAssistant && isLastMessage && prevIsStreamingRef.current && !isStreaming) {
+      setShowToolSteps(false);
+    }
+    prevIsStreamingRef.current = isStreaming;
+  }, [isAssistant, isLastMessage, isStreaming, toolSteps.length]);
+
+  if (isEmptyAssistantPlaceholder) {
+    return null;
+  }
 
   const handleStartEdit = () => {
-    setEditText(message.content);
+    setEditText(rawContent);
     setIsEditing(true);
     setTimeout(() => editRef.current?.focus(), 0);
   };
@@ -95,25 +176,25 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isStreami
         </span>
 
         {/* Reasoning (collapsible, auto-expand during streaming) */}
-        {isAssistant && (message.reasoning_content || (isStreaming && streamingReasoning)) && (
+        {isAssistant && (normalizedAssistantReasoning || (isStreaming && normalizedStreamingReasoning)) && (
           <div className="mb-1 w-full">
             <button
               onClick={() => setShowReasoning((v) => !v)}
               className="flex items-center gap-1 text-[10px] text-gray-500 hover:text-gray-300 transition-colors"
               type="button"
             >
-              {(showReasoning || isStreaming) ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
+              {(showReasoning || shouldAutoExpandReasoning) ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
               <span className="flex items-center gap-1">
                 Thinking
-                {isStreaming && streamingReasoning && !message.content && (
+                {isStreaming && normalizedStreamingReasoning && !normalizedAssistantContent && (
                   <span className="inline-block w-1 h-1 bg-blue-400 rounded-full animate-pulse" />
                 )}
               </span>
             </button>
-            {(showReasoning || isStreaming) && (
+            {(showReasoning || shouldAutoExpandReasoning) && (
               <div className="mt-1 pl-3 py-1.5 border-l-2 border-gray-500 text-[11px] text-gray-400 whitespace-pre-wrap break-words max-h-[300px] overflow-y-auto">
-                {message.reasoning_content || streamingReasoning}
-                {isStreaming && !message.content && (
+                {normalizedAssistantReasoning || normalizedStreamingReasoning}
+                {isStreaming && !normalizedAssistantContent && (
                   <span className="inline-block w-1 h-3 ml-0.5 bg-gray-400 animate-pulse rounded-sm" />
                 )}
               </div>
@@ -127,7 +208,9 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isStreami
         )}
 
         {/* Message content */}
-        {isEditing ? (
+        {isTool ? (
+          <ToolCallBubble message={message} />
+        ) : isEditing ? (
           <div className="w-full">
             <textarea
               ref={editRef}
@@ -168,7 +251,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isStreami
               </button>
             </div>
           </div>
-        ) : (
+        ) : shouldRenderAssistantContent ? (
           <div
             className={`px-3 py-2 rounded-lg text-[13px] leading-relaxed break-words ${
               isUser
@@ -177,23 +260,68 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isStreami
             }`}
           >
             {isAssistant ? (
-              message.content ? (
+              normalizedAssistantContent ? (
                 <>
                   <MarkdownRenderer content={displayContent} />
                   {isStreaming && (
                     <span className="inline-block w-1.5 h-4 ml-0.5 bg-gray-300 animate-pulse rounded-sm" />
                   )}
                 </>
-              ) : isStreaming && !streamingReasoning ? (
+              ) : isStreaming && !normalizedStreamingReasoning ? (
                 <TypingIndicator />
               ) : null
             ) : (
-              message.content
+              rawContent
+            )}
+          </div>
+        ) : null}
+
+        {/* Timestamp + edited indicator */}
+        {shouldShowMetaPanel && (
+          <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[10px] text-gray-300">
+            {hasToolSummary && (
+              <span className="rounded-md border border-cyan-500/30 bg-cyan-500/10 px-1.5 py-0.5 text-cyan-200">
+                Tool calls {toolSteps.length}
+              </span>
+            )}
+            {roundCount > 0 && (
+              <span className="rounded-md border border-gray-600 bg-gray-800/80 px-1.5 py-0.5 text-gray-300">
+                Rounds {roundCount}
+              </span>
+            )}
+            {usageTotalTokens > 0 && (
+              <span className="rounded-md border border-blue-500/30 bg-blue-500/10 px-1.5 py-0.5 text-blue-200">
+                Tokens {usageTotalTokens}
+              </span>
+            )}
+            {traceId && onOpenTrace && (
+              <button
+                type="button"
+                className="rounded-md border border-violet-500/30 bg-violet-500/10 px-1.5 py-0.5 text-violet-200 hover:bg-violet-500/20"
+                onClick={() => onOpenTrace(traceId)}
+              >
+                View trace
+              </button>
+            )}
+            {hasToolSummary && (
+              <button
+                type="button"
+                className="rounded-md border border-gray-600 bg-gray-800/80 px-1.5 py-0.5 text-gray-300 hover:bg-gray-700"
+                onClick={() => setShowToolSteps((v) => !v)}
+              >
+                {showToolSteps ? 'Hide steps' : 'Show steps'}
+              </button>
+            )}
+            {showToolSteps && toolSteps.length > 0 && (
+              <div className="mt-1.5 w-full space-y-1.5 rounded-md border border-gray-700/80 bg-gray-900/50 p-1.5">
+                {toolSteps.map((step) => (
+                  <ToolCallBubble key={step.message_id} message={step} />
+                ))}
+              </div>
             )}
           </div>
         )}
 
-        {/* Timestamp + edited indicator */}
         <div className="flex items-center gap-1">
           <span className="text-[9px] text-gray-600">
             {new Date(message.created_at * 1000).toLocaleTimeString()}
@@ -204,7 +332,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isStreami
         </div>
 
         {/* Action bar: always rendered to preserve layout; visibility toggled to avoid content shift */}
-        {!isStreaming && !isEditing && (
+        {!isTool && !isStreaming && !isEditing && (
           <div className={`mt-0.5 ${isUser ? 'self-end' : 'self-start'} transition-opacity duration-100 ${
             isLastMessage || isHovered ? 'opacity-100' : 'opacity-0 pointer-events-none'
           }`}>

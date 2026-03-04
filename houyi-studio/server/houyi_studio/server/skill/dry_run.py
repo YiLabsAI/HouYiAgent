@@ -22,6 +22,7 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from houyi.core.skill.tool_bridge import build_tool_definitions_for_skill
 from houyi.core.skill_registry import SkillRegistry
 
 from .serializer import POLICY_ALLOW, POLICY_DENY, extract_side_effects
@@ -1125,47 +1126,8 @@ def _simplify_property(prop: dict[str, Any]) -> dict[str, Any]:
 
 
 def _build_tool_definitions(skill: SkillSpec) -> list[dict[str, Any]]:
-    """Build OpenAI-format tool definitions from a SkillSpec.
-
-    Handles two layouts:
-    1. Skills with a ``tools`` list (multi-tool skills).
-    2. Skills that *are* the tool (single-tool — name + input_schema on the skill itself).
-    """
-    defs: list[dict[str, Any]] = []
-
-    if hasattr(skill, "tools") and skill.tools:
-        for tool in skill.tools:
-            schema: dict[str, Any] = {}
-            if hasattr(tool, "input_schema") and tool.input_schema:
-                with contextlib.suppress(Exception):
-                    schema = _simplify_schema(tool.input_schema.model_json_schema())
-            defs.append(
-                {
-                    "type": "function",
-                    "function": {
-                        "name": getattr(tool, "name", ""),
-                        "description": getattr(tool, "description", "") or "",
-                        "parameters": schema,
-                    },
-                }
-            )
-    else:
-        schema = {}
-        if hasattr(skill, "input_schema") and skill.input_schema:
-            with contextlib.suppress(Exception):
-                schema = _simplify_schema(skill.input_schema.model_json_schema())
-        defs.append(
-            {
-                "type": "function",
-                "function": {
-                    "name": getattr(skill, "name", "unknown"),
-                    "description": getattr(skill, "description", "") or "",
-                    "parameters": schema,
-                },
-            }
-        )
-
-    return defs
+    """Build OpenAI-format tool definitions from a SkillSpec."""
+    return build_tool_definitions_for_skill(skill)
 
 
 _DEEPSEEK_TOKEN_RE = re.compile(

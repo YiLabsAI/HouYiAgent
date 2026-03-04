@@ -45,6 +45,57 @@ class TestMessage:
         llm = msg.to_llm_message()
         assert llm == {"role": "tool", "content": "result"}
 
+    def test_to_llm_message_assistant_keeps_tool_calls(self):
+        msg = Message(
+            role=MessageRole.ASSISTANT,
+            content="",
+            tool_calls=[
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "houyi_find_files", "arguments": '{"query":"skill.md"}'},
+                }
+            ],
+        )
+        llm = msg.to_llm_message()
+        assert llm["role"] == "assistant"
+        assert llm["content"] == ""
+        assert llm["tool_calls"] == msg.tool_calls
+
+    def test_to_llm_message_assistant_includes_reasoning_content(self):
+        msg = Message(
+            role=MessageRole.ASSISTANT,
+            content="",
+            reasoning_content="thinking...",
+            tool_calls=[
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "houyi_find_files", "arguments": '{"query":"skill.md"}'},
+                }
+            ],
+        )
+
+        llm = msg.to_llm_message()
+
+        assert llm["reasoning_content"] == "thinking..."
+        assert llm["tool_calls"] == msg.tool_calls
+
+    def test_to_llm_message_tool_keeps_tool_call_id_and_name(self):
+        msg = Message(
+            role=MessageRole.TOOL,
+            content='{"result":"ok"}',
+            tool_call_id="call_1",
+            name="houyi_find_files",
+        )
+        llm = msg.to_llm_message()
+        assert llm == {
+            "role": "tool",
+            "content": '{"result":"ok"}',
+            "tool_call_id": "call_1",
+            "name": "houyi_find_files",
+        }
+
     def test_serialization_roundtrip(self):
         msg = Message(
             role=MessageRole.ASSISTANT,

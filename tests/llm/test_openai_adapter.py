@@ -42,8 +42,11 @@ def _make_stream_chunk(content: str) -> MagicMock:
     chunk = MagicMock()
     delta = MagicMock()
     delta.content = content
+    delta.tool_calls = None
     chunk.choices = [MagicMock()]
     chunk.choices[0].delta = delta
+    chunk.choices[0].finish_reason = None
+    chunk.usage = None
     return chunk
 
 
@@ -97,10 +100,8 @@ class TestOpenAIAdapterRetry:
 
         with patch("houyi.llm.openai_adapter.asyncio.sleep", new_callable=AsyncMock):
             chunks = []
-            async for content, _reasoning in adapter.stream_chat(
-                [{"role": "user", "content": "hi"}]
-            ):
-                chunks.append(content)
+            async for chunk in adapter.stream_chat([{"role": "user", "content": "hi"}]):
+                chunks.append(chunk.content_delta)
 
         assert chunks == ["ok"]
         assert create_mock.await_count == 2
@@ -116,9 +117,7 @@ class TestOpenAIAdapterRetry:
 
         with pytest.raises(_FakeAPIError):
             chunks = []
-            async for content, _reasoning in adapter.stream_chat(
-                [{"role": "user", "content": "hi"}]
-            ):
-                chunks.append(content)
+            async for chunk in adapter.stream_chat([{"role": "user", "content": "hi"}]):
+                chunks.append(chunk.content_delta)
 
         assert create_mock.await_count == 1

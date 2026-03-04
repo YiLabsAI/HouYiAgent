@@ -33,6 +33,7 @@ const DEFAULT_RUN_SETTINGS = {
   model: 'deepseek-ai/DeepSeek-V3',
   temperature: 0.7,
   enable_tool_calls: true,
+  tool_call_strategy: 'balanced',
   max_tool_calls: 10,
   web_search_provider: null as string | null,
 };

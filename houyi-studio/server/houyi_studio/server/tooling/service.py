@@ -22,12 +22,14 @@ from houyi.config.env_config import (
     ENV_SILICONFLOW_BASE_URL,
     ENV_TOOLCALL_ADAPTER,
     ENV_TOOLCALL_FAST_PATH,
+    ENV_TOOLCALL_MAX_PARALLEL_CALLS,
     ENV_TOOLCALL_MAX_RETRIES,
     ENV_TOOLCALL_MAX_TOKENS,
     ENV_TOOLCALL_MODEL,
     ENV_TOOLCALL_TIMEOUT,
 )
 from houyi.core.skill.hooks import DEFAULT_HOOKS_MANAGER
+from houyi.core.skill.tool_bridge import ToolBridge
 from houyi.core.skill_registry import DEFAULT_SKILL_REGISTRY, SkillRegistry
 from houyi.core.tool_call_adapter import normalize_adapter_error
 from houyi.core.tool_call_adapter_registry import ToolCallAdapterRegistry, ToolCallAdapterRequest
@@ -70,6 +72,7 @@ class ToolCallService:
         self.tool_call_cache = tool_call_cache
         self.llm_tool_call_cache = llm_tool_call_cache
         self.skill_registry = skill_registry or DEFAULT_SKILL_REGISTRY
+        self._tool_bridge = ToolBridge(self.skill_registry)
         self._runner: ToolCallRunner | None = None
 
     def _get_runner(self) -> ToolCallRunner:
@@ -99,12 +102,7 @@ class ToolCallService:
 
     def _select_skills(self, tool_names: list[str]) -> list[Any]:
         """Look up skills from the registry by name."""
-        selected: list[Any] = []
-        for name in tool_names:
-            skill = self.skill_registry.get(name)
-            if skill is not None:
-                selected.append(skill)
-        return selected
+        return self._tool_bridge.collect_skills(skill_filter=tool_names, include_core=False)
 
     async def execute_tool_calls(
         self,
@@ -127,12 +125,17 @@ class ToolCallService:
         from houyi.execution.skill_executor import SkillExecutor
         from houyi.llm.openai_adapter import OpenAIAdapter
 
+        effective_parallel_tool_calls = True if parallel_tool_calls is None else parallel_tool_calls
+
         skills = self._select_skills(tool_names)
         if not skills:
             logger.warning("[%s] Tool-calling enabled but no tools are registered", node_id)
             return False
 
-        tools = [skill.to_tool_schema() for skill in skills]
+        tools = self._tool_bridge.collect_tool_schemas(
+            skill_filter=tool_names,
+            include_core=False,
+        )
         api_key = os.getenv(ENV_SILICONFLOW_API_KEY) or os.getenv(ENV_OPENAI_API_KEY)
         base_url = os.getenv(ENV_SILICONFLOW_BASE_URL) or os.getenv(ENV_OPENAI_BASE_URL)
         tool_model = (
@@ -145,6 +148,25 @@ class ToolCallService:
                 max_tokens = max(1, int(toolcall_max_tokens))
             except ValueError:
                 logger.warning("Invalid HOUYI_TOOLCALL_MAX_TOKENS=%s", toolcall_max_tokens)
+        max_parallel_calls: int | None = None
+        toolcall_max_parallel_calls = os.getenv(ENV_TOOLCALL_MAX_PARALLEL_CALLS)
+        if toolcall_max_parallel_calls:
+            try:
+                parsed_max_parallel_calls = int(toolcall_max_parallel_calls)
+                if parsed_max_parallel_calls > 0:
+                    max_parallel_calls = parsed_max_parallel_calls
+                else:
+                    logger.warning(
+                        "Invalid %s=%s (must be > 0)",
+                        ENV_TOOLCALL_MAX_PARALLEL_CALLS,
+                        toolcall_max_parallel_calls,
+                    )
+            except ValueError:
+                logger.warning(
+                    "Invalid %s=%s (must be int)",
+                    ENV_TOOLCALL_MAX_PARALLEL_CALLS,
+                    toolcall_max_parallel_calls,
+                )
 
         fast_path_flag = (os.getenv(ENV_TOOLCALL_FAST_PATH) or "").strip().lower()
         fast_path_enabled = fast_path_flag in {"1", "true", "yes", "on"}
@@ -202,7 +224,7 @@ class ToolCallService:
 
         adapter_registry = ToolCallAdapterRegistry()
 
-        def _build_openai_adapter() -> Any:
+        def _build_runtime_adapter() -> Any:
             if not api_key:
                 raise ValueError("Tool-calling requires SILICONFLOW_API_KEY or OPENAI_API_KEY")
             return OpenAIAdapter(api_key=api_key, model=tool_model, base_url=base_url)
@@ -217,12 +239,12 @@ class ToolCallService:
                     tool_names=tool_names or [],
                     skills=skills,
                     tool_sequence=tool_sequence,
-                    parallel_tool_calls=parallel_tool_calls,
+                    parallel_tool_calls=effective_parallel_tool_calls,
                     now=datetime.now(UTC),
                 )
                 adapter = adapter_registry.resolve(
                     request,
-                    fallback_factory=_build_openai_adapter,
+                    fallback_factory=_build_runtime_adapter,
                 )
                 base_adapter = getattr(adapter, "inner", adapter)
             else:
@@ -232,10 +254,10 @@ class ToolCallService:
                         tool_names=tool_names or [],
                         skills=skills,
                         tool_sequence=tool_names or [skill.name for skill in skills],
-                        parallel_tool_calls=parallel_tool_calls,
+                        parallel_tool_calls=effective_parallel_tool_calls,
                         now=datetime.now(UTC),
                     ),
-                    fallback_factory=_build_openai_adapter,
+                    fallback_factory=_build_runtime_adapter,
                 )
                 base_adapter = getattr(adapter, "inner", adapter)
         except Exception as exc:
@@ -268,14 +290,15 @@ class ToolCallService:
             tool_model,
             tool_choice,
             temperature,
-            parallel_tool_calls,
+            effective_parallel_tool_calls,
             message_preview,
         )
 
         chat_kwargs = build_chat_kwargs(
             max_tokens=max_tokens,
             temperature=temperature,
-            parallel_tool_calls=parallel_tool_calls,
+            parallel_tool_calls=effective_parallel_tool_calls,
+            max_parallel_calls=max_parallel_calls,
             prompt_cache_key=prompt_cache_key,
         )
 

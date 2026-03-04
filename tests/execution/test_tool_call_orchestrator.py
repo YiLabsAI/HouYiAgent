@@ -33,6 +33,7 @@ class TestToolCallOrchestrator:
                 max_tokens=None,
                 temperature=None,
                 parallel_tool_calls=None,
+                max_parallel_calls=None,
                 prompt_cache_key=None,
             )
             == {}
@@ -43,11 +44,13 @@ class TestToolCallOrchestrator:
             max_tokens=123,
             temperature=0.4,
             parallel_tool_calls=True,
+            max_parallel_calls=3,
             prompt_cache_key="cache_key",
         ) == {
             "max_tokens": 123,
             "temperature": 0.4,
             "parallel_tool_calls": True,
+            "max_parallel_calls": 3,
             "prompt_cache_key": "cache_key",
         }
 

@@ -384,6 +384,23 @@ class IngestService:
                     doc_metadata["metadata"].pop("error", None)
 
             except Exception as e:
+                if embedding_config.provider == "local":
+                    logger.warning(
+                        "Local embedding failed for %s, fallback to metadata-only ingest: %s",
+                        file_path,
+                        e,
+                    )
+                    stats["files_processed"] += 1
+                    doc_metadata["status"] = "indexed"
+                    doc_metadata["chunk_count"] = 0
+                    doc_metadata["updated_at"] = datetime.now().isoformat()
+                    metadata = doc_metadata.get("metadata")
+                    if not isinstance(metadata, dict):
+                        metadata = {}
+                        doc_metadata["metadata"] = metadata
+                    metadata["degraded_reason"] = str(e)
+                    metadata.pop("error", None)
+                    continue
                 stats["files_failed"] += 1
                 stats["errors"].append(f"{file_path.name}: {e}")
                 logger.warning("Failed to ingest %s: %s", file_path, e)

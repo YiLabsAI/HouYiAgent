@@ -132,6 +132,7 @@ describe('KnowledgeDetailPanel', () => {
       selectedLibraryId: 'lib-001',
       knowledgeLibraries: [LIBRARY],
       isIngesting: true,
+      ingestOperation: 'import',
       ingestLibraryId: 'lib-001',
       ingestProgress: 65,
     });
@@ -145,6 +146,7 @@ describe('KnowledgeDetailPanel', () => {
       selectedLibraryId: 'lib-001',
       knowledgeLibraries: [LIBRARY],
       isIngesting: true,
+      ingestOperation: 'import',
       ingestLibraryId: 'lib-other',
       ingestProgress: 40,
     });

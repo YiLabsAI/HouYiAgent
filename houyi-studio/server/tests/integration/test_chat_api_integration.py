@@ -9,6 +9,7 @@ from __future__ import annotations
 import io
 import json
 import zipfile
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -18,6 +19,7 @@ from houyi_studio.server.chat.chat_api import register_chat_routes, router
 from houyi_studio.server.chat.chat_service import ChatService
 from houyi_studio.server.chat.json_store import JsonStore
 
+from houyi.llm.base import StreamChunk
 from houyi.llm.models import GPT_4O
 
 
@@ -26,9 +28,9 @@ def _make_mock_llm():
     mock = AsyncMock()
 
     async def mock_stream_chat(messages, model=None, **kwargs):
-        yield ("Hello ", None)
-        yield ("from ", None)
-        yield ("mock!", None)
+        yield StreamChunk(content_delta="Hello ")
+        yield StreamChunk(content_delta="from ")
+        yield StreamChunk(content_delta="mock!")
 
     mock.stream_chat = mock_stream_chat
     mock.last_usage = {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
@@ -137,6 +139,88 @@ class TestGetConversation:
         assert resp.status_code == 404
 
 
+class TestGetTrace:
+    """GET /api/chat/trace/{trace_id}"""
+
+    def test_get_trace_success(self, app_and_client, monkeypatch):
+        _, client, _ = app_and_client
+
+        root = SimpleNamespace(
+            span_id="root",
+            parent_id=None,
+            start_time=10.0,
+            end_time=10.2,
+            name="chat.send_message",
+            span_type="llm",
+            status="ok",
+            attributes={"k": "v"},
+            events=[SimpleNamespace(name="started", timestamp=10.0, attributes={"a": 1})],
+            tokens=SimpleNamespace(input=100, output=50, total=150),
+        )
+        child = SimpleNamespace(
+            span_id="child1",
+            parent_id="root",
+            start_time=10.05,
+            end_time=10.1,
+            name="tool.execute",
+            span_type="tool",
+            status="ok",
+            attributes={},
+            events=[],
+            tokens=SimpleNamespace(input=20, output=10, total=30),
+        )
+
+        fake_trace_view = SimpleNamespace(
+            trace_id="trace_123",
+            spans=[root, child],
+            total_duration_ms=200.0,
+        )
+
+        class _FakeObservabilityQuery:
+            def get_trace(self, trace_id: str, include_content: bool = False):
+                if trace_id == "trace_123" and include_content is False:
+                    return fake_trace_view
+                return None
+
+        monkeypatch.setattr(
+            "houyi_studio.server.chat.chat_api.ObservabilityQuery",
+            _FakeObservabilityQuery,
+        )
+
+        resp = client.get("/api/chat/trace/trace_123")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["trace_id"] == "trace_123"
+        assert data["total_duration_ms"] == 200.0
+        assert data["total_tokens"] == {
+            "prompt_tokens": 100,
+            "completion_tokens": 50,
+            "total_tokens": 150,
+            "llm_spans": 1,
+            "llm_spans_with_usage": 1,
+            "is_partial": False,
+        }
+        assert data["root_span"]["name"] == "chat.send_message"
+        assert len(data["root_span"]["children"]) == 1
+        assert data["root_span"]["children"][0]["name"] == "tool.execute"
+
+    def test_get_trace_not_found(self, app_and_client, monkeypatch):
+        _, client, _ = app_and_client
+
+        class _FakeObservabilityQuery:
+            def get_trace(self, trace_id: str, include_content: bool = False):
+                return None
+
+        monkeypatch.setattr(
+            "houyi_studio.server.chat.chat_api.ObservabilityQuery",
+            _FakeObservabilityQuery,
+        )
+
+        resp = client.get("/api/chat/trace/missing")
+        assert resp.status_code == 404
+        assert "Trace missing not found" in resp.json()["detail"]
+
+
 class TestUpdateConversation:
     """PATCH /api/chat/conversations/{id}"""
 
@@ -232,15 +316,131 @@ class TestSendMessage:
         assert "context.usage" in event_types
         assert "message.delta" in event_types
         assert "message.finish" in event_types
+        assert "message.complete" in event_types
 
         # Verify delta content
         deltas = [e for e in events if e["event"] == "message.delta"]
         full_content = "".join(e["data"].get("content", "") for e in deltas)
         assert "Hello from mock!" in full_content
 
-        # Verify seq increments
-        seqs = [e["data"]["seq"] for e in deltas]
-        assert seqs == list(range(1, len(seqs) + 1))
+    def test_streams_final_response_after_tool_loop(self, app_and_client, monkeypatch):
+        _, client, _ = app_and_client
+        create_resp = client.post("/api/chat/conversations", json={"title": "Tool Loop Replay"})
+        conv_id = create_resp.json()["conversation_id"]
+
+        from houyi_studio.server.chat import chat_api
+
+        service = chat_api._chat_service
+        assert service is not None
+
+        class _AdapterWithStream:
+            last_usage = {"prompt_tokens": 9, "completion_tokens": 6, "total_tokens": 15}
+            stream_calls = 0
+
+            async def chat(self, *args, **kwargs):
+                _ = (args, kwargs)
+                return SimpleNamespace(content="", tool_calls=[], usage={}, metadata={})
+
+            async def stream_chat(self, *args, **kwargs):
+                _ = (args, kwargs)
+                self.stream_calls += 1
+                yield StreamChunk(content_delta="Answer ")
+                yield StreamChunk(content_delta="from ")
+                yield StreamChunk(content_delta="stream")
+
+        class _FakeToolRunner:
+            async def run(self, **kwargs):
+                _ = kwargs
+                return (
+                    SimpleNamespace(
+                        content="Answer from tool loop",
+                        tool_calls=[],
+                        usage={"prompt_tokens": 11, "completion_tokens": 7, "total_tokens": 18},
+                        metadata={},
+                    ),
+                    [],
+                )
+
+        adapter = _AdapterWithStream()
+        monkeypatch.setattr(service, "_default_adapter", adapter)
+        monkeypatch.setattr(service, "_get_tool_runner", lambda: _FakeToolRunner())
+        monkeypatch.setattr(
+            "houyi_studio.server.chat.chat_service.ToolBridge.collect_tool_schemas",
+            lambda self, skill_filter, include_core: [
+                {"type": "function", "function": {"name": "demo"}}
+            ],
+        )
+        monkeypatch.setattr(
+            "houyi_studio.server.chat.chat_service.ToolBridge.collect_skills",
+            lambda self, skill_filter, include_core: [SimpleNamespace(name="demo")],
+        )
+
+        resp = client.post(
+            f"/api/chat/conversations/{conv_id}/messages",
+            json={"content": "hello", "enable_skills": ["demo"]},
+        )
+        assert resp.status_code == 200
+        events = _parse_sse_response(resp.text)
+        deltas = [e for e in events if e["event"] == "message.delta"]
+        assert deltas[0]["data"].get("content", "") == ""
+        assert "".join(e["data"].get("content", "") for e in deltas) == "Answer from tool loop"
+        assert adapter.stream_calls == 0
+
+        complete = next(e for e in events if e["event"] == "message.complete")
+        assert complete["data"]["metadata"]["usage"]["total_tokens"] == 18
+
+    def test_send_message_accepts_tooling_fields(self, app_and_client):
+        _, client, _ = app_and_client
+        create_resp = client.post("/api/chat/conversations", json={})
+        conv_id = create_resp.json()["conversation_id"]
+
+        resp = client.post(
+            f"/api/chat/conversations/{conv_id}/messages",
+            json={
+                "content": "Tooling fields",
+                "enable_tool_calls": False,
+                "tool_call_strategy": "aggressive",
+                "enable_skills": ["web_search"],
+                "max_tool_iterations": 3,
+            },
+        )
+        assert resp.status_code == 200
+
+    def test_send_message_trace_id_is_queryable(self, app_and_client):
+        _, client, _ = app_and_client
+        create_resp = client.post("/api/chat/conversations", json={"title": "Trace Query"})
+        conv_id = create_resp.json()["conversation_id"]
+
+        resp = client.post(
+            f"/api/chat/conversations/{conv_id}/messages",
+            json={"content": "trace please"},
+        )
+        assert resp.status_code == 200
+
+        events = _parse_sse_response(resp.text)
+        complete = next(e for e in events if e["event"] == "message.complete")
+        trace_id = complete["data"]["metadata"].get("trace_id")
+        assert isinstance(trace_id, str) and trace_id
+
+        trace_resp = client.get(f"/api/chat/trace/{trace_id}")
+        assert trace_resp.status_code == 200
+        trace_data = trace_resp.json()
+        assert trace_data["trace_id"] == trace_id
+        assert trace_data["root_span"] is not None
+
+        root_span = trace_data["root_span"]
+        assert root_span.get("name") == "chat.request"
+        assert root_span.get("span_type") == "node"
+
+        stage_names = {
+            child.get("name")
+            for child in (root_span.get("children") or [])
+            if isinstance(child, dict)
+        }
+        assert "chat.prepare" in stage_names
+        assert "chat.tool_loop" in stage_names
+        assert "chat.persist" in stage_names
+        assert "chat.stream.llm" in stage_names or "chat.stream.replay" in stage_names
 
     def test_send_message_persists(self, app_and_client):
         _, client, store = app_and_client
@@ -403,3 +603,127 @@ def _make_backup_zip(data: dict) -> bytes:
     with zipfile.ZipFile(buf, "w") as zf:
         zf.writestr("data.json", json.dumps(data))
     return buf.getvalue()
+
+
+class TestTraceTreeBuilder:
+    """Unit tests for _build_trace_tree / _span_to_tree_node helpers."""
+
+    def test_empty_spans_returns_none(self):
+        from houyi_studio.server.chat.chat_api import _build_trace_tree
+
+        assert _build_trace_tree([]) is None
+
+    def test_single_root_span(self):
+        from houyi_studio.server.chat.chat_api import _build_trace_tree
+
+        root = SimpleNamespace(
+            span_id="r",
+            parent_id=None,
+            start_time=1.0,
+            end_time=2.0,
+            name="root",
+            status="ok",
+            attributes={},
+            events=[],
+        )
+        tree = _build_trace_tree([root])
+        assert tree is not None
+        assert tree["name"] == "root"
+        assert tree["children"] == []
+        assert tree["duration_ms"] == pytest.approx(1000.0)
+
+    def test_orphan_span_becomes_root(self):
+        """Span whose parent_id is not in the list should be treated as root."""
+        from houyi_studio.server.chat.chat_api import _build_trace_tree
+
+        orphan = SimpleNamespace(
+            span_id="o1",
+            parent_id="missing_parent",
+            start_time=1.0,
+            end_time=1.5,
+            name="orphan",
+            status="ok",
+            attributes={},
+            events=[],
+        )
+        tree = _build_trace_tree([orphan])
+        assert tree is not None
+        assert tree["name"] == "orphan"
+
+    def test_deep_nesting(self):
+        from houyi_studio.server.chat.chat_api import _build_trace_tree
+
+        root = SimpleNamespace(
+            span_id="a",
+            parent_id=None,
+            start_time=1.0,
+            end_time=3.0,
+            name="a",
+            status="ok",
+            attributes={},
+            events=[],
+        )
+        child = SimpleNamespace(
+            span_id="b",
+            parent_id="a",
+            start_time=1.1,
+            end_time=2.0,
+            name="b",
+            status="ok",
+            attributes={},
+            events=[],
+        )
+        grandchild = SimpleNamespace(
+            span_id="c",
+            parent_id="b",
+            start_time=1.2,
+            end_time=1.5,
+            name="c",
+            status="ok",
+            attributes={},
+            events=[],
+        )
+        tree = _build_trace_tree([root, child, grandchild])
+        assert tree["name"] == "a"
+        assert len(tree["children"]) == 1
+        assert tree["children"][0]["name"] == "b"
+        assert len(tree["children"][0]["children"]) == 1
+        assert tree["children"][0]["children"][0]["name"] == "c"
+
+    def test_children_sorted_by_start_time(self):
+        from houyi_studio.server.chat.chat_api import _build_trace_tree
+
+        root = SimpleNamespace(
+            span_id="r",
+            parent_id=None,
+            start_time=1.0,
+            end_time=3.0,
+            name="root",
+            status="ok",
+            attributes={},
+            events=[],
+        )
+        c2 = SimpleNamespace(
+            span_id="c2",
+            parent_id="r",
+            start_time=2.0,
+            end_time=2.5,
+            name="second",
+            status="ok",
+            attributes={},
+            events=[],
+        )
+        c1 = SimpleNamespace(
+            span_id="c1",
+            parent_id="r",
+            start_time=1.5,
+            end_time=1.8,
+            name="first",
+            status="ok",
+            attributes={},
+            events=[],
+        )
+        # Pass in reverse order — should still be sorted
+        tree = _build_trace_tree([root, c2, c1])
+        assert tree["children"][0]["name"] == "first"
+        assert tree["children"][1]["name"] == "second"

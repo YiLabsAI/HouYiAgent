@@ -7,7 +7,7 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 from houyi.config.env_config import ENV_OPENAI_API_KEY, ENV_OPENAI_BASE_URL, ENV_OPENAI_ORG
-from houyi.llm.base import DEFAULT_TEMPERATURE, LLMAdapter, LLMMessage, LLMResponse
+from houyi.llm.base import DEFAULT_TEMPERATURE, LLMAdapter, LLMMessage, LLMResponse, StreamChunk
 
 
 class OpenAICompatibleAdapter(LLMAdapter):
@@ -20,12 +20,14 @@ class OpenAICompatibleAdapter(LLMAdapter):
         base_url: str | None = None,
         organization: str | None = None,
         default_headers: dict[str, str] | None = None,
+        strict_message_string_contract: bool = False,
     ) -> None:
         self.api_key = api_key or os.getenv(ENV_OPENAI_API_KEY)
         self.model = model
         self.base_url = base_url or os.getenv(ENV_OPENAI_BASE_URL)
         self.organization = organization or os.getenv(ENV_OPENAI_ORG)
         self.default_headers = default_headers or {}
+        self.strict_message_string_contract = strict_message_string_contract
 
         if not self.api_key:
             raise ValueError(
@@ -56,6 +58,8 @@ class OpenAICompatibleAdapter(LLMAdapter):
         **kwargs: Any,
     ) -> LLMResponse:
         normalized_messages = self._normalize_messages(messages)
+        if self.strict_message_string_contract:
+            normalized_messages = self._sanitize_messages(normalized_messages)
         params: dict[str, Any] = {
             "model": self.model,
             "messages": normalized_messages,
@@ -77,13 +81,15 @@ class OpenAICompatibleAdapter(LLMAdapter):
         temperature: float = DEFAULT_TEMPERATURE,
         max_tokens: int | None = None,
         **kwargs: Any,
-    ) -> AsyncIterator[tuple[str, str | None]]:
+    ) -> AsyncIterator[StreamChunk]:
         """Streaming chat completion.
 
         Yields:
-            ``(content_delta, None)`` tuples.
+            ``StreamChunk`` objects.
         """
         normalized_messages = self._normalize_messages(messages)
+        if self.strict_message_string_contract:
+            normalized_messages = self._sanitize_messages(normalized_messages)
         params: dict[str, Any] = {
             "model": self.model,
             "messages": normalized_messages,
@@ -99,4 +105,4 @@ class OpenAICompatibleAdapter(LLMAdapter):
         stream = await self.client.chat.completions.create(**params)
         async for chunk in stream:
             if chunk.choices[0].delta.content:
-                yield (chunk.choices[0].delta.content, None)
+                yield StreamChunk(content_delta=chunk.choices[0].delta.content)

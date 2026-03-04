@@ -5,6 +5,8 @@ import type { DryRunPipelineContext } from './computeStages';
 import type { ToolDryRunPreset } from './dryRunToolRules';
 import { presetToFormValues } from './dryRunInputModel';
 
+const DEFAULT_PLANNING_ACTION = 'create';
+
 interface LiveDefaults {
   provider: string;
   model: string;
@@ -31,6 +33,26 @@ export function useDryRunDialogState({
   getLiveDefaultsForTool,
   isPlanningWithFilesTool,
 }: UseDryRunDialogStateParams) {
+  const applyPlanningDefaults = useCallback((toolName: string, input: Record<string, unknown>): Record<string, unknown> => {
+    if (!isPlanningWithFilesTool(toolName)) return input;
+    const action = input.action;
+    if (typeof action === 'string' && action.trim()) return input;
+    return {
+      ...input,
+      action: DEFAULT_PLANNING_ACTION,
+    };
+  }, [isPlanningWithFilesTool]);
+
+  const applyPlanningFormDefaults = useCallback((toolName: string, values: Record<string, string>): Record<string, string> => {
+    if (!isPlanningWithFilesTool(toolName)) return values;
+    const action = values.action;
+    if (typeof action === 'string' && action.trim()) return values;
+    return {
+      ...values,
+      action: DEFAULT_PLANNING_ACTION,
+    };
+  }, [isPlanningWithFilesTool]);
+
   const wasOpenRef = useRef(false);
   const [selectedTool, setSelectedTool] = useState<string>(() => detailTools[0]?.name ?? '');
   const [inputMode, setInputMode] = useState<'form' | 'json'>('form');
@@ -73,17 +95,17 @@ export function useDryRunDialogState({
         : detailTools[0].name;
       const initialPreset = getInitialPresetForTool(nextTool);
       const liveDefaults = getLiveDefaultsForTool(nextTool);
+      const initialInput = applyPlanningDefaults(nextTool, initialPreset?.input ?? {});
+      const initialFormValues = applyPlanningFormDefaults(
+        nextTool,
+        initialPreset ? presetToFormValues({ ...initialPreset, input: initialInput }) : {},
+      );
       setSelectedTool(nextTool);
       setLiveLlmProvider(liveDefaults.provider);
       setLiveLlmModel(liveDefaults.model);
       setSelectedExampleId(initialPreset?.id ?? '');
-      if (initialPreset) {
-        setFormValues(presetToFormValues(initialPreset));
-        setJsonInput(JSON.stringify(initialPreset.input, null, 2));
-      } else {
-        setFormValues({});
-        setJsonInput('{}');
-      }
+      setFormValues(initialFormValues);
+      setJsonInput(JSON.stringify(initialInput, null, 2));
       return;
     }
 
@@ -96,37 +118,55 @@ export function useDryRunDialogState({
     onClearResult,
     getInitialPresetForTool,
     getLiveDefaultsForTool,
+    applyPlanningDefaults,
+    applyPlanningFormDefaults,
     selectedTool,
   ]);
 
   const handleToolChange = useCallback((nextTool: string) => {
     const initialPreset = getInitialPresetForTool(nextTool);
     const liveDefaults = getLiveDefaultsForTool(nextTool);
+    const initialInput = applyPlanningDefaults(nextTool, initialPreset?.input ?? {});
+    const initialFormValues = applyPlanningFormDefaults(
+      nextTool,
+      initialPreset ? presetToFormValues({ ...initialPreset, input: initialInput }) : {},
+    );
     setSelectedTool(nextTool);
     setLiveLlmProvider(liveDefaults.provider);
     setLiveLlmModel(liveDefaults.model);
     setSelectedExampleId(initialPreset?.id ?? '');
-    setFormValues(initialPreset ? presetToFormValues(initialPreset) : {});
+    setFormValues(initialFormValues);
     setFormErrors({});
-    setJsonInput(initialPreset ? JSON.stringify(initialPreset.input, null, 2) : '{}');
+    setJsonInput(JSON.stringify(initialInput, null, 2));
     setExecutedContext(null);
     setSelectedWorkflowId('');
     setInputCollapsed(false);
     onClearResult?.();
-  }, [getInitialPresetForTool, getLiveDefaultsForTool, onClearResult]);
+  }, [
+    getInitialPresetForTool,
+    getLiveDefaultsForTool,
+    onClearResult,
+    applyPlanningDefaults,
+    applyPlanningFormDefaults,
+  ]);
 
   const handleSelectPreset = useCallback((preset: ToolDryRunPreset) => {
     if (preset.id === selectedExampleId) {
       return;
     }
+    const presetInput = applyPlanningDefaults(selectedTool, preset.input);
+    const presetFormValues = applyPlanningFormDefaults(
+      selectedTool,
+      presetToFormValues({ ...preset, input: presetInput }),
+    );
     setSelectedExampleId(preset.id);
-    setFormValues(presetToFormValues(preset));
-    setJsonInput(JSON.stringify(preset.input, null, 2));
+    setFormValues(presetFormValues);
+    setJsonInput(JSON.stringify(presetInput, null, 2));
     setInputCollapsed(false);
     setExecutedContext(null);
     setSelectedWorkflowId('');
     onClearResult?.();
-  }, [onClearResult, selectedExampleId]);
+  }, [onClearResult, selectedExampleId, applyPlanningDefaults, applyPlanningFormDefaults, selectedTool]);
 
   const handleSwitchInputMode = useCallback((mode: 'form' | 'json') => {
     setInputMode(mode);

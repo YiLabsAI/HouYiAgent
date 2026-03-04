@@ -3,6 +3,7 @@ type StoreGet = () => any;
 
 type RunSettings = {
   enable_tool_calls: boolean;
+  tool_call_strategy: 'conservative' | 'balanced' | 'aggressive';
   tool_names: string[];
   tool_choice: string | null;
   max_tool_calls: number;
@@ -26,6 +27,7 @@ type RunSettingsInput = Omit<
   | 'tool_choice'
   | 'max_tool_calls'
   | 'enable_tool_calls'
+  | 'tool_call_strategy'
   | 'temperature'
   | 'parallel_tool_calls'
   | 'retry_policy'
@@ -34,6 +36,7 @@ type RunSettingsInput = Omit<
   tool_choice?: string | null | Record<string, any>;
   max_tool_calls?: number | string | null;
   enable_tool_calls?: boolean | null;
+  tool_call_strategy?: 'conservative' | 'balanced' | 'aggressive' | null;
   temperature?: number | string | null;
   parallel_tool_calls?: boolean | string | null;
   retry_policy?: Partial<RunSettings['retry_policy']> | null;
@@ -43,6 +46,7 @@ export const RUN_SETTINGS_STORAGE_KEY = 'houyi.run_settings';
 
 export const DEFAULT_RUN_SETTINGS: RunSettings = {
   enable_tool_calls: true,
+  tool_call_strategy: 'balanced',
   tool_names: [],
   tool_choice: null,
   max_tool_calls: 6,
@@ -101,9 +105,15 @@ const normalizeRunSettings = (value: RunSettingsInput): RunSettings => {
     ...DEFAULT_RUN_SETTINGS.retry_policy,
     ...rawRetryPolicy,
   };
+  const rawStrategy = merged.tool_call_strategy;
+  const toolCallStrategy =
+    rawStrategy === 'conservative' || rawStrategy === 'aggressive' || rawStrategy === 'balanced'
+      ? rawStrategy
+      : DEFAULT_RUN_SETTINGS.tool_call_strategy;
 
   return {
     enable_tool_calls: Boolean(merged.enable_tool_calls),
+    tool_call_strategy: toolCallStrategy,
     tool_names: toolNames,
     tool_choice: toolChoice === null ? null : String(toolChoice),
     max_tool_calls: maxToolCalls,

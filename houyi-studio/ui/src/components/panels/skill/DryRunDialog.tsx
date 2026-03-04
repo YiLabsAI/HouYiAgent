@@ -699,34 +699,6 @@ export const DryRunDialog: React.FC<DryRunDialogProps> = ({
     [currentTool],
   );
 
-  const planningActionDefaults = useMemo<string[]>(() => {
-    if (!selectedToolSchema) return [];
-    const properties = selectedToolSchema.properties;
-    if (!properties || typeof properties !== 'object' || Array.isArray(properties)) return [];
-    const actionSchema = (properties as Record<string, unknown>).action;
-    if (!actionSchema || typeof actionSchema !== 'object' || Array.isArray(actionSchema)) return [];
-    const enumValues = (actionSchema as Record<string, unknown>).enum;
-    if (!Array.isArray(enumValues)) return [];
-    return enumValues.filter((value): value is string => typeof value === 'string');
-  }, [selectedToolSchema]);
-
-  useEffect(() => {
-    if (!isPlanningTool(selectedTool)) return;
-    if (formValues.action) return;
-
-    const preferred = planningActionDefaults.includes('create')
-      ? 'create'
-      : (planningActionDefaults[0] ?? 'create');
-
-    setFormValues((prev) => {
-      if (prev.action) return prev;
-      return {
-        ...prev,
-        action: preferred,
-      };
-    });
-  }, [selectedTool, formValues.action, planningActionDefaults, setFormValues, isPlanningTool]);
-
   const getFieldRules = useCallback((field: DryRunSchemaField): { visible: boolean; required: boolean } => {
     return getToolFieldRules(selectedTool, field, formValues, { inputSchema: selectedToolSchema });
   }, [selectedTool, formValues, selectedToolSchema]);

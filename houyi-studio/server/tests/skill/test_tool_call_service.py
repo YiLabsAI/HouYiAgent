@@ -8,6 +8,7 @@ SkillService.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -170,3 +171,74 @@ class TestToolCallServiceSelectSkills:
         result = svc._select_skills([])
 
         assert result == []
+
+
+class TestToolCallServiceExecute:
+    def _make_service(self, registry: Any = None) -> Any:
+        from houyi_studio.server.tooling.service import ToolCallService
+
+        return ToolCallService(
+            connection_manager=MagicMock(),
+            record_llm_call=MagicMock(),
+            tool_call_cache={},
+            llm_tool_call_cache={},
+            skill_registry=registry,
+        )
+
+    @patch("houyi_studio.server.tooling.service.ConsoleToolCallResponseAssembler")
+    @patch(
+        "houyi_studio.server.tooling.service.wrap_tool_choice",
+        side_effect=lambda adapter, tool_choice: adapter,
+    )
+    @patch("houyi_studio.server.tooling.service.ToolCallAdapterRegistry.resolve")
+    @patch("houyi.llm.openai_adapter.OpenAIAdapter", side_effect=ImportError("openai missing"))
+    async def test_execute_tool_calls_returns_adapter_init_error_when_openai_missing(
+        self,
+        _mock_openai_adapter: MagicMock,
+        mock_registry_resolve: MagicMock,
+        _mock_wrap_tool_choice: MagicMock,
+        _mock_assembler_cls: MagicMock,
+        monkeypatch,
+    ) -> None:
+        svc = self._make_service(registry=MagicMock())
+
+        skill = SimpleNamespace(name="demo", preprocessors=[])
+        svc._select_skills = lambda tool_names: [skill]
+        svc._tool_bridge = SimpleNamespace(
+            collect_tool_schemas=lambda skill_filter, include_core: [
+                {"type": "function", "function": {"name": "demo"}}
+            ]
+        )
+
+        class _FakeRunner:
+            async def run(self, **kwargs):
+                _ = kwargs
+                return SimpleNamespace(content="ok", tool_calls=[], usage={}, metadata={}), []
+
+        mock_registry_resolve.side_effect = lambda request, fallback_factory: SimpleNamespace(
+            inner=fallback_factory()
+        )
+
+        monkeypatch.setenv("SILICONFLOW_API_KEY", "test-key")
+
+        execution = SimpleNamespace(metadata={})
+        node_exec = SimpleNamespace(outputs=None, error=None)
+
+        handled = await svc.execute_tool_calls(
+            session_id="s1",
+            execution=execution,
+            node_id="node_1",
+            node_exec=node_exec,
+            prompt="Say hello in one sentence",
+            system_prompt=None,
+            user_prompt="Say hello in one sentence",
+            model="deepseek-ai/DeepSeek-V3",
+            tool_names=["demo"],
+            tool_choice=None,
+            max_tool_calls=1,
+        )
+
+        assert handled is True
+        assert isinstance(node_exec.error, str)
+        assert "Tool-calling adapter init failed" in node_exec.error
+        assert "ImportError" in node_exec.error

@@ -120,6 +120,9 @@ class Message(BaseModel):
     role: MessageRole
     content: str = ""
     reasoning_content: str | None = None
+    tool_calls: list[dict[str, Any]] | None = None
+    tool_call_id: str | None = None
+    name: str | None = None
     attachments: list[Attachment] = Field(default_factory=list)
     bookmarked: bool = False
     metadata: dict[str, Any] = Field(default_factory=dict)
@@ -175,8 +178,21 @@ class Message(BaseModel):
                 ``image_url`` parts.  If False (model does not support vision),
                 images are described as text placeholders.
         """
+
+        def _attach_tool_fields(payload: dict[str, Any]) -> dict[str, Any]:
+            if self.role == MessageRole.ASSISTANT and isinstance(self.reasoning_content, str):
+                payload["reasoning_content"] = self.reasoning_content
+            if self.role == MessageRole.ASSISTANT and self.tool_calls:
+                payload["tool_calls"] = self.tool_calls
+            if self.role == MessageRole.TOOL:
+                if self.tool_call_id:
+                    payload["tool_call_id"] = self.tool_call_id
+                if self.name:
+                    payload["name"] = self.name
+            return payload
+
         if not self.attachments:
-            return {"role": self.role.value, "content": self.content}
+            return _attach_tool_fields({"role": self.role.value, "content": self.content})
 
         # Collect text snippets for non-multimodal parts and multimodal parts
         text_snippets: list[str] = []
@@ -225,13 +241,15 @@ class Message(BaseModel):
             # Vision mode with image parts — use content array
             if full_text:
                 multimodal_parts.append({"type": "text", "text": full_text})
-            return {
-                "role": self.role.value,
-                "content": multimodal_parts if multimodal_parts else full_text,
-            }
+            return _attach_tool_fields(
+                {
+                    "role": self.role.value,
+                    "content": multimodal_parts if multimodal_parts else full_text,
+                }
+            )
 
         # No multimodal parts — plain text message
-        return {"role": self.role.value, "content": full_text}
+        return _attach_tool_fields({"role": self.role.value, "content": full_text})
 
 
 class ConversationStatus(str, Enum):
@@ -321,7 +339,14 @@ class SendMessageRequest(BaseModel):
     temperature: float | None = None
     max_tokens: int | None = None
     enable_reasoning: bool | None = None
+    enable_tool_calls: bool | None = None
+    tool_call_strategy: str | None = Field(
+        default=None,
+        pattern=r"^(conservative|balanced|aggressive)$",
+    )
     enable_web_search: bool | None = None
+    enable_skills: list[str] | None = None
+    max_tool_iterations: int | None = Field(default=None, ge=1, le=50)
 
 
 class UpdateConversationRequest(BaseModel):

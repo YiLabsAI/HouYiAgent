@@ -12,16 +12,21 @@ API spec:
   PUT    /api/chat/conversations/{id}/messages/{msg_id}     — Edit message
   DELETE /api/chat/conversations/{id}/messages/{msg_id}     — Delete message
   POST   /api/chat/conversations/{id}/messages/{msg_id}/regenerate — Regenerate (SSE stream)
+  GET    /api/chat/trace/{trace_id}                         — Query observability trace detail
   GET    /api/chat/export                                   — Export all conversations
 """
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import logging
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
+
+from houyi.observability.query import ObservabilityQuery
 
 from .chat_service import ChatService
 from .import_export import ChatExporter, CherryStudioImporter
@@ -68,6 +73,56 @@ def _get_service() -> ChatService:
     if _chat_service is None:
         raise RuntimeError("ChatService not initialized. Call register_chat_routes() first.")
     return _chat_service
+
+
+def _get_settings_store() -> SettingsStore:
+    if _settings_store is None:
+        raise RuntimeError(
+            "SettingsStore not initialized. Call register_chat_routes(..., settings_store=...) first."
+        )
+    return _settings_store
+
+
+async def _iter_with_disconnect_guard(
+    *,
+    request: Request,
+    stream: Any,
+    disconnect_log: str,
+) -> Any:
+    """Yield SSE chunks while reacting quickly to client disconnects.
+
+    Some upstream stream steps (e.g. tool loops) can take a long time before the
+    next chunk is produced. This guard polls disconnect status while waiting for
+    the next item and closes the upstream iterator as soon as the client aborts.
+    """
+    iterator = stream.__aiter__()
+    while True:
+        next_task = asyncio.create_task(iterator.__anext__())
+        disconnected = False
+        try:
+            while True:
+                done, _ = await asyncio.wait({next_task}, timeout=0.25)
+                if done:
+                    break
+                if await request.is_disconnected():
+                    disconnected = True
+                    logger.info(disconnect_log)
+                    next_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError, StopAsyncIteration):
+                        await next_task
+                    aclose = getattr(iterator, "aclose", None)
+                    if callable(aclose):
+                        await aclose()
+                    return
+
+            try:
+                chunk = next_task.result()
+            except StopAsyncIteration:
+                return
+            yield chunk
+        finally:
+            if not disconnected and not next_task.done():
+                next_task.cancel()
 
 
 # --- Conversation CRUD ---
@@ -190,6 +245,109 @@ async def get_context_usage(conversation_id: str) -> dict[str, Any]:
     return {"usage": usage}
 
 
+def _span_to_tree_node(span: Any, children: list[dict[str, Any]]) -> dict[str, Any]:
+    duration_ms = 0.0
+    if span.end_time is not None:
+        duration_ms = max(0.0, (span.end_time - span.start_time) * 1000)
+    events = []
+    for event in getattr(span, "events", []) or []:
+        events.append(
+            {
+                "name": event.name,
+                "timestamp": event.timestamp,
+                "attributes": event.attributes,
+            }
+        )
+    return {
+        "name": span.name,
+        "span_type": getattr(span, "span_type", None),
+        "start_time_ms": span.start_time * 1000,
+        "duration_ms": duration_ms,
+        "status": span.status,
+        "attributes": span.attributes,
+        "events": events,
+        "children": children,
+    }
+
+
+def _build_trace_tree(spans: list[Any]) -> dict[str, Any] | None:
+    if not spans:
+        return None
+
+    span_by_id = {span.span_id: span for span in spans}
+    children_map: dict[str, list[Any]] = {span.span_id: [] for span in spans}
+    roots: list[Any] = []
+
+    for span in spans:
+        if span.parent_id and span.parent_id in span_by_id:
+            children_map[span.parent_id].append(span)
+        else:
+            roots.append(span)
+
+    for child_list in children_map.values():
+        child_list.sort(key=lambda x: x.start_time)
+    roots.sort(key=lambda x: x.start_time)
+
+    def _to_node(span: Any) -> dict[str, Any]:
+        children = [_to_node(child) for child in children_map.get(span.span_id, [])]
+        return _span_to_tree_node(span, children)
+
+    return _to_node(roots[0]) if roots else None
+
+
+@router.get("/trace/{trace_id}")
+async def get_trace(trace_id: str) -> dict[str, Any]:
+    """Get observability trace detail for Chat tool-calling timeline.
+
+    Returns a tree-shaped span payload for UI sidebar rendering.
+    """
+    query = ObservabilityQuery()
+    trace_view = query.get_trace(trace_id, include_content=False)
+    if trace_view is None:
+        logger.warning("Chat trace not found: trace_id=%s", trace_id)
+        raise HTTPException(status_code=404, detail=f"Trace {trace_id} not found")
+
+    root_span = _build_trace_tree(trace_view.spans)
+
+    prompt_tokens = 0
+    completion_tokens = 0
+    total_tokens = 0
+    llm_span_count = 0
+    llm_spans_with_usage = 0
+    for span in trace_view.spans:
+        if getattr(span, "span_type", None) != "llm":
+            continue
+        llm_span_count += 1
+        if span.tokens is None:
+            continue
+        llm_spans_with_usage += 1
+        prompt_tokens += span.tokens.input
+        completion_tokens += span.tokens.output
+        total_tokens += span.tokens.total
+
+    logger.info(
+        "Chat trace fetched: trace_id=%s spans=%d root=%s duration_ms=%.2f",
+        trace_view.trace_id,
+        len(trace_view.spans),
+        bool(root_span),
+        trace_view.total_duration_ms or 0.0,
+    )
+
+    return {
+        "trace_id": trace_view.trace_id,
+        "root_span": root_span,
+        "total_duration_ms": trace_view.total_duration_ms or 0.0,
+        "total_tokens": {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": total_tokens,
+            "llm_spans": llm_span_count,
+            "llm_spans_with_usage": llm_spans_with_usage,
+            "is_partial": llm_span_count > llm_spans_with_usage,
+        },
+    }
+
+
 @router.delete("/conversations/{conversation_id}")
 async def delete_conversation(conversation_id: str) -> dict[str, str]:
     """Delete a conversation."""
@@ -225,11 +383,11 @@ async def send_message(
 
     async def event_generator():
         try:
-            async for chunk in service.send_message(conversation_id, req):
-                # Check if client disconnected
-                if await request.is_disconnected():
-                    logger.info("Client disconnected during streaming for %s", conversation_id)
-                    return
+            async for chunk in _iter_with_disconnect_guard(
+                request=request,
+                stream=service.send_message(conversation_id, req),
+                disconnect_log=f"Client disconnected during streaming for {conversation_id}",
+            ):
                 yield chunk
         except FileNotFoundError as e:
             raise HTTPException(status_code=404, detail=str(e)) from e
@@ -327,9 +485,11 @@ async def regenerate_message(
 
     async def event_generator():
         try:
-            async for chunk in service.regenerate_message(conversation_id, message_id):
-                if await request.is_disconnected():
-                    return
+            async for chunk in _iter_with_disconnect_guard(
+                request=request,
+                stream=service.regenerate_message(conversation_id, message_id),
+                disconnect_log=f"Client disconnected during regenerate for {conversation_id}/{message_id}",
+            ):
                 yield chunk
         except FileNotFoundError as e:
             raise HTTPException(status_code=404, detail=str(e)) from e

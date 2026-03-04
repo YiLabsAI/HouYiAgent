@@ -10,12 +10,9 @@ from unittest.mock import MagicMock, patch
 import pytest
 from houyi_studio.server.chat.chat_service import ChatService
 from houyi_studio.server.chat.json_store import JsonStore
-from houyi_studio.server.chat.types import (
-    Conversation,
-    EditMessageRequest,
-    Message,
-    MessageRole,
-)
+from houyi_studio.server.chat.types import Conversation, EditMessageRequest, Message, MessageRole
+
+from houyi.llm.base import StreamChunk
 
 
 @pytest.fixture
@@ -101,6 +98,66 @@ class TestDeleteMessage:
         assert len(reloaded.messages) == 3
 
     @pytest.mark.asyncio
+    async def test_delete_assistant_message_cascades_preceding_tool_steps(
+        self,
+        service: ChatService,
+        store: JsonStore,
+    ):
+        conv = Conversation(title="Tool Delete Cascade")
+        conv.messages = [
+            Message(message_id="u1", role=MessageRole.USER, content="find file"),
+            Message(message_id="t1", role=MessageRole.TOOL, content="{}", name="houyi_find_files"),
+            Message(message_id="t2", role=MessageRole.TOOL, content="{}", name="houyi_list_dir"),
+            Message(message_id="a1", role=MessageRole.ASSISTANT, content="done"),
+        ]
+        created = store.create(conv)
+
+        await service.delete_message(created.conversation_id, "a1")
+
+        reloaded = store.get(created.conversation_id)
+        assert reloaded is not None
+        remaining_ids = [m.message_id for m in reloaded.messages]
+        assert remaining_ids == ["u1"]
+
+    @pytest.mark.asyncio
+    async def test_delete_assistant_message_removes_tool_call_carrier(
+        self,
+        service: ChatService,
+        store: JsonStore,
+    ):
+        conv = Conversation(title="Tool Carrier Delete Cascade")
+        conv.messages = [
+            Message(message_id="u1", role=MessageRole.USER, content="find file"),
+            Message(
+                message_id="a-carrier",
+                role=MessageRole.ASSISTANT,
+                content="",
+                tool_calls=[
+                    {
+                        "id": "call-1",
+                        "function": {"name": "houyi_find_files", "arguments": "{}"},
+                    }
+                ],
+            ),
+            Message(
+                message_id="t1",
+                role=MessageRole.TOOL,
+                content="{}",
+                name="houyi_find_files",
+                tool_call_id="call-1",
+            ),
+            Message(message_id="a-final", role=MessageRole.ASSISTANT, content="done"),
+        ]
+        created = store.create(conv)
+
+        await service.delete_message(created.conversation_id, "a-final")
+
+        reloaded = store.get(created.conversation_id)
+        assert reloaded is not None
+        remaining_ids = [m.message_id for m in reloaded.messages]
+        assert remaining_ids == ["u1"]
+
+    @pytest.mark.asyncio
     async def test_delete_nonexistent_message(self, service: ChatService, store: JsonStore):
         conv = _make_conversation(store)
         with pytest.raises(ValueError, match="not found"):
@@ -139,7 +196,7 @@ class TestRegenerateMessage:
         mock_adapter = MagicMock()
 
         async def fake_stream(*args, **kwargs):
-            yield ("New response", None)
+            yield StreamChunk(content_delta="New response")
 
         mock_adapter.stream_chat = MagicMock(side_effect=fake_stream)
         mock_adapter.last_usage = {"prompt_tokens": 10, "completion_tokens": 5}

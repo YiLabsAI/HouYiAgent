@@ -13,6 +13,7 @@ from houyi.llm.base import (
     LLMMessage,
     LLMResponse,
     MessageRole,
+    StreamChunk,
 )
 
 
@@ -143,6 +144,68 @@ def test_llm_response_with_tool_calls():
     assert response.finish_reason == "tool_calls"
 
 
+def test_from_raw_dict_preserves_tool_call_extra_fields():
+    """Provider-specific tool call fields (e.g. thought_signature) must survive parsing."""
+    raw = {
+        "model": "gemini-2.5-pro",
+        "choices": [
+            {
+                "finish_reason": "tool_calls",
+                "message": {
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {
+                                "name": "houyi_grep",
+                                "arguments": '{"query":"foo"}',
+                                "thought_signature": "sig-123",
+                            },
+                        }
+                    ],
+                },
+            }
+        ],
+    }
+
+    parsed = LLMResponse.from_raw_dict(raw)
+
+    assert len(parsed.tool_calls) == 1
+    assert parsed.tool_calls[0]["function"]["name"] == "houyi_grep"
+    assert parsed.tool_calls[0]["function"]["arguments"] == {"query": "foo"}
+    assert parsed.tool_calls[0]["function"].get("thought_signature") == "sig-123"
+
+
+def test_from_raw_dict_extracts_reasoning_content_into_metadata():
+    raw = {
+        "model": "deepseek-chat",
+        "choices": [
+            {
+                "finish_reason": "tool_calls",
+                "message": {
+                    "content": "",
+                    "reasoning_content": "I should inspect files first",
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {
+                                "name": "houyi_grep",
+                                "arguments": '{"query":"tool loop"}',
+                            },
+                        }
+                    ],
+                },
+            }
+        ],
+    }
+
+    parsed = LLMResponse.from_raw_dict(raw)
+
+    assert parsed.metadata.get("reasoning_content") == "I should inspect files first"
+
+
 # ---------------------------------------------------------------------------
 # Tests for the abstract LLMAdapter base class behaviour (stream_completion)
 # ---------------------------------------------------------------------------
@@ -173,7 +236,7 @@ class StubAdapter(LLMAdapter):
         temperature: float = DEFAULT_TEMPERATURE,
         max_tokens: int | None = None,
         **kwargs: Any,
-    ) -> AsyncIterator[tuple[str, str | None]]:
+    ) -> AsyncIterator[StreamChunk]:
         normalized = self._normalize_messages(messages)
         self.received_messages.append(normalized)
         last_user = ""
@@ -182,7 +245,7 @@ class StubAdapter(LLMAdapter):
                 last_user = msg.get("content", "")
                 break
         for word in last_user.split():
-            yield (word, None)
+            yield StreamChunk(content_delta=word)
 
 
 class TestLLMAdapterBaseStreamCompletion:
@@ -193,8 +256,8 @@ class TestLLMAdapterBaseStreamCompletion:
         """stream_completion wraps prompt as user message and calls stream_chat."""
         adapter = StubAdapter()
         chunks = []
-        async for content, reasoning in adapter.stream_completion("Hello world"):
-            chunks.append((content, reasoning))
+        async for chunk in adapter.stream_completion("Hello world"):
+            chunks.append((chunk.content_delta, chunk.reasoning_delta))
 
         assert len(chunks) == 2
         assert chunks[0] == ("Hello", None)
@@ -206,8 +269,8 @@ class TestLLMAdapterBaseStreamCompletion:
     async def test_stream_completion_empty_prompt(self):
         adapter = StubAdapter()
         chunks = []
-        async for content, _reasoning in adapter.stream_completion(""):
-            chunks.append(content)
+        async for chunk in adapter.stream_completion(""):
+            chunks.append(chunk.content_delta)
         assert chunks == []
 
     @pytest.mark.asyncio
@@ -220,6 +283,6 @@ class TestLLMAdapterBaseStreamCompletion:
             {"role": "assistant", "content": "hi"},
         ]
         chunks = []
-        async for content, _reasoning in adapter.stream_chat(messages):
-            chunks.append(content)
+        async for chunk in adapter.stream_chat(messages):
+            chunks.append(chunk.content_delta)
         assert len(chunks) > 0

@@ -10,13 +10,12 @@ and token usage tracking.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import json
 import logging
 from collections.abc import AsyncIterator
 from typing import Any
 
-from houyi.llm.base import DEFAULT_TEMPERATURE, LLMAdapter, LLMMessage, LLMResponse
+from houyi.llm.base import DEFAULT_TEMPERATURE, LLMAdapter, LLMMessage, LLMResponse, StreamChunk
 from houyi.llm.retry import (
     DEFAULT_MAX_RETRIES,
     DEFAULT_RETRY_BASE_DELAY,
@@ -48,6 +47,7 @@ class SiliconFlowAdapter(LLMAdapter):
         api_key: str | None = None,
         base_url: str | None = None,
         default_model: str | None = None,
+        strict_message_string_contract: bool = True,
     ):
         from houyi.config.env_config import EnvConfig
 
@@ -56,9 +56,9 @@ class SiliconFlowAdapter(LLMAdapter):
         self.api_key = api_key or _env.siliconflow_api_key
         self.base_url = base_url or _env.siliconflow_base_url
         self.default_model = default_model or _env.deepseek_model
+        self.strict_message_string_contract = strict_message_string_contract
         self.model = self.default_model  # uniform interface for callers
         self.last_usage: dict[str, int] | None = None
-        self.last_tool_calls: list[dict] = []
         self.last_finish_reason: str | None = None
         self._sdk_client: object | None = None
 
@@ -80,6 +80,25 @@ class SiliconFlowAdapter(LLMAdapter):
 
     # ── chat() — non-streaming ────────────────────────────────────
 
+    @classmethod
+    def _sanitize_chat_messages(cls, messages: list[dict]) -> list[dict]:
+        """Ensure OpenAI-compatible request fields are string-typed.
+
+        SiliconFlow rejects non-string `messages[*].content` and may also reject
+        non-string `assistant.tool_calls[*].function.arguments`.
+        """
+        sanitized = cls._sanitize_messages(messages)
+        for message in sanitized:
+            if (
+                message.get("role") == "assistant"
+                and isinstance(message.get("tool_calls"), list)
+                and "reasoning_content" not in message
+            ):
+                # SiliconFlow thinking mode may require this field to be present
+                # on assistant tool-call messages even when empty.
+                message["reasoning_content"] = ""
+        return sanitized
+
     async def chat(
         self,
         messages: list[LLMMessage | dict],
@@ -91,6 +110,8 @@ class SiliconFlowAdapter(LLMAdapter):
         """Non-streaming chat completion with tool calling support."""
         model = kwargs.pop("model", None) or self.default_model
         normalized = self._normalize_messages(messages)
+        if self.strict_message_string_contract:
+            normalized = self._sanitize_chat_messages(normalized)
 
         if not self.api_key:
             return LLMResponse(
@@ -128,7 +149,7 @@ class SiliconFlowAdapter(LLMAdapter):
             max_retries=2,
         )
 
-        params: dict[str, object] = {
+        params: dict[str, Any] = {
             "model": model,
             "messages": messages,
             "temperature": temperature,
@@ -263,16 +284,17 @@ class SiliconFlowAdapter(LLMAdapter):
         temperature: float = DEFAULT_TEMPERATURE,
         max_tokens: int | None = None,
         **kwargs: Any,
-    ) -> AsyncIterator[tuple[str, str | None]]:
+    ) -> AsyncIterator[StreamChunk]:
         """Stream chat completion with full message list.
 
-        Yields ``(content_delta, reasoning_delta)`` tuples.
-        ``reasoning_delta`` is populated for DeepSeek models that support reasoning.
+        Yields ``StreamChunk`` objects.
         """
         model = kwargs.pop("model", None) or self.default_model
         enable_reasoning = kwargs.pop("enable_reasoning", False)
         thinking_budget = kwargs.pop("thinking_budget", None)
         normalized = self._normalize_messages(messages)
+        if self.strict_message_string_contract:
+            normalized = self._sanitize_chat_messages(normalized)
 
         if not self.api_key:
             logger.info("Using mock streaming (no API key)")
@@ -283,7 +305,7 @@ class SiliconFlowAdapter(LLMAdapter):
                     break
             words = f"Mock response from {model}: {last_content[:50]}...".split()
             for word in words:
-                yield (word + " ", None)
+                yield StreamChunk(content_delta=word + " ")
             return
 
         if SiliconFlowAdapter._SDK_AVAILABLE:
@@ -304,11 +326,10 @@ class SiliconFlowAdapter(LLMAdapter):
         enable_reasoning: bool = False,
         thinking_budget: int | None = None,
         **kwargs: Any,
-    ) -> AsyncIterator[tuple[str, str | None]]:
+    ) -> AsyncIterator[StreamChunk]:
         """Stream via openai SDK (preferred path).
 
-        Accumulates tool_calls from delta chunks (OpenAI streaming protocol).
-        After iteration, ``self.last_tool_calls`` contains accumulated tool calls.
+        Yields raw tool_calls delta for StreamResponse base-layer accumulation.
         """
         from openai import AsyncOpenAI
 
@@ -325,7 +346,7 @@ class SiliconFlowAdapter(LLMAdapter):
             logger.info("Reasoning enabled with thinking_budget=%d", thinking_budget)
 
         tools = kwargs.pop("tools", None)
-        sdk_kwargs: dict[str, object] = {
+        sdk_kwargs: dict[str, Any] = {
             "model": model,
             "messages": messages,
             "stream": True,
@@ -346,11 +367,7 @@ class SiliconFlowAdapter(LLMAdapter):
         chunk_count = 0
         reasoning_count = 0
         self.last_usage = None
-        self.last_tool_calls: list[dict] = []  # type: ignore[no-redef]
         self.last_finish_reason: str | None = None  # type: ignore[no-redef]
-
-        # Accumulator for streaming tool_calls (OpenAI delta protocol)
-        tool_call_accum: dict[int, dict] = {}
 
         try:
             stream = await client.chat.completions.create(**sdk_kwargs)
@@ -370,24 +387,23 @@ class SiliconFlowAdapter(LLMAdapter):
                 if choice.finish_reason:
                     self.last_finish_reason = choice.finish_reason
 
-                # Accumulate tool_calls from delta (OpenAI streaming protocol)
+                # Extract raw tool_calls delta for StreamResponse accumulation
+                tc_delta_list: list[dict] | None = None
                 if delta and delta.tool_calls:
-                    for tc_delta in delta.tool_calls:
-                        idx = tc_delta.index
-                        if idx not in tool_call_accum:
-                            tool_call_accum[idx] = {
-                                "id": tc_delta.id or "",
-                                "type": "function",
-                                "function": {"name": "", "arguments": ""},
-                            }
-                        entry = tool_call_accum[idx]
-                        if tc_delta.id:
-                            entry["id"] = tc_delta.id
-                        if tc_delta.function:
-                            if tc_delta.function.name:
-                                entry["function"]["name"] += tc_delta.function.name
-                            if tc_delta.function.arguments:
-                                entry["function"]["arguments"] += tc_delta.function.arguments
+                    tc_delta_list = []
+                    for tc_d in delta.tool_calls:
+                        tc_dict: dict = {"index": tc_d.index}
+                        if tc_d.id:
+                            tc_dict["id"] = tc_d.id
+                        if tc_d.function:
+                            func: dict = {}
+                            if tc_d.function.name:
+                                func["name"] = tc_d.function.name
+                            if tc_d.function.arguments:
+                                func["arguments"] = tc_d.function.arguments
+                            if func:
+                                tc_dict["function"] = func
+                        tc_delta_list.append(tc_dict)
 
                 content = delta.content if delta else None
                 reasoning = getattr(delta, "reasoning_content", None)
@@ -397,26 +413,21 @@ class SiliconFlowAdapter(LLMAdapter):
                 if isinstance(reasoning, str) and reasoning:
                     reasoning_count += 1
 
-                if (isinstance(content, str) and content) or (
-                    isinstance(reasoning, str) and reasoning
+                if (
+                    (isinstance(content, str) and content)
+                    or (isinstance(reasoning, str) and reasoning)
+                    or tc_delta_list
                 ):
-                    yield (content or "", reasoning if isinstance(reasoning, str) else None)
-
-            # Finalize accumulated tool calls
-            if tool_call_accum:
-                for idx in sorted(tool_call_accum):
-                    tc = tool_call_accum[idx]
-                    args_str = tc["function"]["arguments"]
-                    with contextlib.suppress(json.JSONDecodeError, TypeError):
-                        tc["function"]["arguments"] = json.loads(args_str)
-                    self.last_tool_calls.append(tc)
+                    yield StreamChunk(
+                        content_delta=content or "",
+                        reasoning_delta=reasoning if isinstance(reasoning, str) else None,
+                        tool_calls_delta=tc_delta_list,
+                    )
 
             logger.info(
-                "SDK stream completed: %d content, %d reasoning chunks, "
-                "%d tool_calls, finish=%s, usage=%s",
+                "SDK stream completed: %d content, %d reasoning chunks, finish=%s, usage=%s",
                 chunk_count,
                 reasoning_count,
-                len(self.last_tool_calls),
                 self.last_finish_reason,
                 self.last_usage,
             )
@@ -430,7 +441,7 @@ class SiliconFlowAdapter(LLMAdapter):
         enable_reasoning: bool = False,
         thinking_budget: int | None = None,
         **kwargs: Any,
-    ) -> AsyncIterator[tuple[str, str | None]]:
+    ) -> AsyncIterator[StreamChunk]:
         """Fallback: stream via httpx raw SSE when openai SDK is not installed."""
         import httpx
 
@@ -560,7 +571,10 @@ class SiliconFlowAdapter(LLMAdapter):
                         if (isinstance(content, str) and content) or (
                             isinstance(reasoning, str) and reasoning
                         ):
-                            yield (content or "", reasoning if isinstance(reasoning, str) else None)
+                            yield StreamChunk(
+                                content_delta=content or "",
+                                reasoning_delta=reasoning if isinstance(reasoning, str) else None,
+                            )
 
                 logger.info(
                     "httpx stream completed: %d content, %d reasoning chunks, usage=%s",

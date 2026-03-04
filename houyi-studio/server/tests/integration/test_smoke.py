@@ -17,6 +17,8 @@ from houyi_studio.server.chat.chat_api import register_chat_routes, router
 from houyi_studio.server.chat.chat_service import ChatService
 from houyi_studio.server.chat.json_store import JsonStore
 
+from houyi.llm.base import StreamChunk
+
 
 def _make_mock_llm(content_chunks=None, reasoning_chunks=None):
     """Create a mock LLM adapter with configurable output."""
@@ -27,7 +29,7 @@ def _make_mock_llm(content_chunks=None, reasoning_chunks=None):
     async def mock_stream_chat(messages, model=None, **kwargs):
         for i, chunk in enumerate(content_chunks):
             reasoning = reasoning_chunks[i] if i < len(reasoning_chunks) else None
-            yield (chunk, reasoning)
+            yield StreamChunk(content_delta=chunk, reasoning_delta=reasoning)
 
     mock.stream_chat = mock_stream_chat
     mock.last_usage = {"prompt_tokens": 20, "completion_tokens": 10, "total_tokens": 30}
@@ -109,6 +111,7 @@ class TestSmokeFullLifecycle:
         assert "context.usage" in event_types, "Missing context.usage event"
         assert "message.delta" in event_types, "Missing message.delta events"
         assert "message.finish" in event_types, "Missing message.finish event"
+        assert "message.complete" in event_types, "Missing message.complete event"
         assert "message.error" not in event_types, "Unexpected error event"
         assert "message.aborted" not in event_types, "Unexpected abort event"
 
@@ -117,9 +120,10 @@ class TestSmokeFullLifecycle:
         first_delta_idx = event_types.index("message.delta")
         assert usage_idx < first_delta_idx, "context.usage should precede deltas"
 
-        # message.finish should be last
+        # message.finish should precede message.complete
         finish_idx = event_types.index("message.finish")
-        assert finish_idx == len(event_types) - 1, "message.finish should be last"
+        complete_idx = event_types.index("message.complete")
+        assert finish_idx < complete_idx, "message.finish should precede message.complete"
 
         # 5. Verify delta content
         deltas = [e for e in events if e["event"] == "message.delta"]

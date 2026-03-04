@@ -7,7 +7,7 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 from houyi.config.env_config import ENV_ANTHROPIC_API_KEY
-from houyi.llm.base import DEFAULT_TEMPERATURE, LLMAdapter, LLMMessage, LLMResponse
+from houyi.llm.base import DEFAULT_TEMPERATURE, LLMAdapter, LLMMessage, LLMResponse, StreamChunk
 
 
 class AnthropicAdapter(LLMAdapter):
@@ -79,7 +79,7 @@ class AnthropicAdapter(LLMAdapter):
                 filtered_messages.append(msg)
 
         # Build request parameters
-        params = {
+        params: dict[str, Any] = {
             "model": self.model,
             "messages": filtered_messages,
             "temperature": temperature,
@@ -108,18 +108,13 @@ class AnthropicAdapter(LLMAdapter):
         temperature: float = DEFAULT_TEMPERATURE,
         max_tokens: int | None = None,
         **kwargs: Any,
-    ) -> AsyncIterator[tuple[str, str | None]]:
+    ) -> AsyncIterator[StreamChunk]:
         """Streaming chat completion with Anthropic.
 
-        Args:
-            messages: Conversation messages
-            tools: Available tools
-            temperature: Sampling temperature
-            max_tokens: Maximum tokens to generate
-            **kwargs: Additional Anthropic parameters
-
         Yields:
-            ``(content_delta, None)`` tuples (Anthropic reasoning not exposed via stream).
+            ``StreamChunk`` objects.
+            Anthropic tool_use arrives as complete blocks (not deltas),
+            so ``tool_calls_delta`` is always ``None``.
         """
         normalized_messages = self._normalize_messages(messages)
 
@@ -131,12 +126,11 @@ class AnthropicAdapter(LLMAdapter):
             else:
                 filtered_messages.append(msg)
 
-        params = {
+        params: dict[str, Any] = {
             "model": self.model,
             "messages": filtered_messages,
             "temperature": temperature,
             "max_tokens": max_tokens or 4096,
-            "stream": True,
         }
 
         if system_message:
@@ -147,9 +141,26 @@ class AnthropicAdapter(LLMAdapter):
 
         params.update(kwargs)
 
+        self.last_usage: dict[str, int] = {}
+        self.last_finish_reason: str | None = None
+
         async with self.client.messages.stream(**params) as stream:
             async for text in stream.text_stream:
-                yield (text, None)
+                yield StreamChunk(content_delta=text)
+
+            final_message = await stream.get_final_message()
+
+            if final_message.stop_reason:
+                self.last_finish_reason = final_message.stop_reason
+
+            if final_message.usage:
+                self.last_usage = {
+                    "prompt_tokens": final_message.usage.input_tokens,
+                    "completion_tokens": final_message.usage.output_tokens,
+                    "total_tokens": (
+                        final_message.usage.input_tokens + final_message.usage.output_tokens
+                    ),
+                }
 
     def _convert_tools_to_anthropic(self, tools: list[dict]) -> list[dict]:
         """Convert OpenAI tool format to Anthropic format.

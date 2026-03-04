@@ -23,6 +23,12 @@ uv python install 3.11
 
 # Create/sync the virtualenv in .venv and install dev dependencies
 uv sync --extra dev
+
+# If you plan to run real OpenAI/Anthropic adapters
+uv sync --extra dev --extra model-adapters
+
+# If you plan to run Studio server chat + tool loop examples
+uv sync --extra dev --extra model-adapters --extra websearch-ddg --extra websearch-readability
 ```
 
 ## Quick Start
@@ -146,6 +152,37 @@ results = evaluate(
 
 print(results.summary())
 ```
+
+### 5. Studio Chat Tool Calling (API)
+
+When using Studio server chat endpoints, enable tools per request:
+
+```bash
+curl -N -X POST "http://127.0.0.1:8000/api/chat/conversations/<conversation_id>/messages" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "Find TODO comments in this repo and summarize them",
+    "enable_tool_calls": true,
+    "tool_call_strategy": "balanced",
+    "enable_skills": ["houyi_find_files", "houyi_grep", "houyi_read_file"],
+    "enable_web_search": false,
+    "max_tool_iterations": 6
+  }'
+```
+
+`tool_call_strategy` behavior:
+
+- `conservative`: requires explicit `enable_skills` or `enable_web_search`.
+- `balanced` (default): explicit requests run, otherwise heuristics decide.
+- `aggressive`: default-on unless `enable_tool_calls=false`.
+
+If you hit OpenAI-compatible provider context-limit errors during tool loops,
+adjust these env vars:
+
+- `HOUYI_CHAT_TOOL_LOOP_MAX_MESSAGE_CHARS`
+- `HOUYI_CHAT_TOOL_LOOP_MAX_TOTAL_CHARS`
+- `HOUYI_TOOLCALL_LOOP_MAX_MESSAGE_CHARS`
+- `HOUYI_TOOLCALL_LOOP_MAX_TOTAL_CHARS`
 
 ## Core Concepts
 

@@ -384,3 +384,34 @@ class TestIRConverter:
         exec_plan = IRConverter.plan_ir_to_execution_plan(plan_ir)
         assert len(exec_plan.nodes) == 1
         assert exec_plan.get_node("node2") is None
+
+
+class TestToolCallTraceIR:
+    """Test ToolCallTraceIR tooling IR fields."""
+
+    def test_parallel_group_id_field(self) -> None:
+        from houyi.protocol.ir.tooling_ir import ToolCallTraceIR
+
+        ir = ToolCallTraceIR(
+            tool_name="search",
+            tool_call_id="c1",
+            parallel_group_id="round_1",
+            args={"q": "test"},
+        )
+        assert ir.parallel_group_id == "round_1"
+
+    def test_parallel_group_id_default_none(self) -> None:
+        from houyi.protocol.ir.tooling_ir import ToolCallTraceIR
+
+        ir = ToolCallTraceIR(tool_name="search")
+        assert ir.parallel_group_id is None
+
+    def test_serialization_includes_parallel_group_id(self) -> None:
+        from houyi.protocol.ir.tooling_ir import ToolCallTraceIR
+
+        ir = ToolCallTraceIR(
+            tool_name="search",
+            parallel_group_id="round_3",
+        )
+        data = ir.model_dump()
+        assert data["parallel_group_id"] == "round_3"

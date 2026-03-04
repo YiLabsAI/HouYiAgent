@@ -12,12 +12,9 @@ from unittest.mock import MagicMock, patch
 import pytest
 from houyi_studio.server.chat.chat_service import ChatService
 from houyi_studio.server.chat.json_store import JsonStore
-from houyi_studio.server.chat.types import (
-    Conversation,
-    Message,
-    MessageRole,
-    SendMessageRequest,
-)
+from houyi_studio.server.chat.types import Conversation, Message, MessageRole, SendMessageRequest
+
+from houyi.llm.base import StreamChunk
 
 
 @pytest.fixture
@@ -50,7 +47,7 @@ def _mock_llm_adapter():
     adapter = MagicMock()
 
     async def fake_stream(*args, **kwargs):
-        yield ("OK", None)
+        yield StreamChunk(content_delta="OK")
 
     adapter.stream_chat = MagicMock(side_effect=fake_stream)
     return adapter

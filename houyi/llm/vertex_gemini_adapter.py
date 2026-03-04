@@ -29,7 +29,7 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 from houyi.config.env_config import _DEFAULT_GOOGLE_LOCATION
-from houyi.llm.base import DEFAULT_TEMPERATURE, LLMAdapter, LLMMessage, LLMResponse
+from houyi.llm.base import DEFAULT_TEMPERATURE, LLMAdapter, LLMMessage, LLMResponse, StreamChunk
 from houyi.net.proxy import detect_proxy
 
 logger = logging.getLogger(__name__)
@@ -69,7 +69,7 @@ class GoogleVertexGeminiAdapter(LLMAdapter):
        AI Studio).  Routes to ``generativelanguage.googleapis.com``.
 
     Compatible with both execution engine (``stream_completion``) and
-    chat service (``stream_chat`` yielding tuples).
+    chat service (``stream_chat`` yielding ``StreamChunk`` objects).
     """
 
     def __init__(
@@ -225,21 +225,6 @@ class GoogleVertexGeminiAdapter(LLMAdapter):
 
     # ── Streaming (execution engine + chat) ───────────────────────
 
-    async def stream_completion(
-        self,
-        prompt: str,
-        model: str | None = None,
-        **kwargs: Any,
-    ) -> AsyncIterator[tuple[str, str | None]]:
-        """Stream completion — delegates to ``stream_chat``.
-
-        Yields ``(content_delta, reasoning_delta)`` tuples, compatible with
-        the execution engine's ``async for content, reasoning in ...`` pattern.
-        """
-        messages = [{"role": "user", "content": prompt}]
-        async for chunk in self.stream_chat(messages, model=model, **kwargs):  # type: ignore[arg-type]
-            yield chunk
-
     async def stream_chat(
         self,
         messages: list[LLMMessage | dict],
@@ -247,11 +232,13 @@ class GoogleVertexGeminiAdapter(LLMAdapter):
         temperature: float = DEFAULT_TEMPERATURE,
         max_tokens: int | None = None,
         **kwargs: Any,
-    ) -> AsyncIterator[tuple[str, str | None]]:
+    ) -> AsyncIterator[StreamChunk]:
         """Stream chat completion.
 
-        Yields ``(content_delta, None)`` tuples (Gemini does not expose
-        reasoning tokens in the streaming API).
+        Yields:
+            ``StreamChunk`` objects.
+            Gemini function_calls are complete objects (not deltas),
+            so ``tool_calls_delta`` is always ``None``.
         """
         try:
             from google.genai import types
@@ -281,8 +268,16 @@ class GoogleVertexGeminiAdapter(LLMAdapter):
             config_kwargs["max_output_tokens"] = max_tokens
         if system_instruction:
             config_kwargs["system_instruction"] = system_instruction
+        if tools:
+            config_kwargs["tools"] = self._convert_tools(tools)
+        tool_choice = kwargs.pop("tool_choice", None)
+        if tool_choice:
+            config_kwargs["tool_config"] = self._convert_tool_choice(tool_choice)
 
         config = types.GenerateContentConfig(**config_kwargs)
+
+        self.last_usage = {}
+        self.last_finish_reason: str | None = None
 
         try:
             stream = await self._client.aio.models.generate_content_stream(
@@ -291,8 +286,17 @@ class GoogleVertexGeminiAdapter(LLMAdapter):
                 config=config,
             )
             async for chunk in stream:
+                if chunk.usage_metadata:
+                    self.last_usage = {
+                        "prompt_tokens": chunk.usage_metadata.prompt_token_count or 0,
+                        "completion_tokens": chunk.usage_metadata.candidates_token_count or 0,
+                        "total_tokens": chunk.usage_metadata.total_token_count or 0,
+                    }
+
                 if chunk.text:
-                    yield (chunk.text, None)
+                    yield StreamChunk(content_delta=chunk.text)
+
+            self.last_finish_reason = "stop"
         except Exception as exc:
             raise self._wrap_sdk_error(exc) from exc
 
