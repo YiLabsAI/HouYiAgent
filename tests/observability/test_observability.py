@@ -1,6 +1,8 @@
 """Tests for observability components (TraceManager, Span, Exporters)."""
 
 import time
+import urllib.error
+from unittest.mock import Mock
 
 import pytest
 
@@ -9,6 +11,7 @@ from houyi.infrastructure.observability.exporters import (
     DatadogExporter,
     JaegerExporter,
     JSONExporter,
+    StorageExporter,
     create_exporter,
 )
 from houyi.infrastructure.observability.trace_manager import Span, TraceManager
@@ -330,6 +333,37 @@ class TestExporters:
         # Batch should have 2 spans
         assert len(exporter.span_batch) == 2
 
+    def test_jaeger_convert_to_otlp_includes_core_fields(self):
+        """Test OTLP conversion preserves identifiers and attributes."""
+        exporter = JaegerExporter(endpoint="http://localhost:4318", service_name="test_service")
+        span = Span(name="child")
+        span.set_attribute("mode", "test")
+        span.end()
+
+        otlp = exporter._convert_to_otlp(span.to_dict())
+
+        assert otlp["traceId"] == span.trace_id
+        assert otlp["spanId"] == span.span_id
+        assert otlp["name"] == "child"
+        assert otlp["status"]["code"] == 1
+        assert {item["key"] for item in otlp["attributes"]} == {"mode"}
+
+    def test_jaeger_flush_clears_batch_on_url_error(self, monkeypatch):
+        """Test Jaeger flush clears the batch even when upload fails."""
+        exporter = JaegerExporter(endpoint="http://localhost:4318", service_name="test_service")
+        span = Span(name="child")
+        span.end()
+        exporter.export(span.to_dict())
+
+        def raise_url_error(*_args, **_kwargs):
+            raise urllib.error.URLError("offline")
+
+        monkeypatch.setattr("urllib.request.urlopen", raise_url_error)
+
+        exporter.flush()
+
+        assert exporter.span_batch == []
+
     def test_datadog_exporter_initialization(self):
         """Test DatadogExporter initialization."""
         exporter = DatadogExporter(agent_url="http://localhost:8126", service_name="test_service")
@@ -346,6 +380,60 @@ class TestExporters:
 
         assert exporter.env == "staging"
         assert exporter.service_name == "test_service"
+
+    def test_datadog_convert_to_datadog_flattens_children(self):
+        """Test Datadog conversion flattens child spans into a single trace list."""
+        parent = Span(name="parent")
+        child = Span(name="child", parent=parent)
+        child.set_attribute("cache_hit", True)
+        child.end()
+        parent.end()
+
+        exporter = DatadogExporter(agent_url="http://localhost:8126", service_name="test_service")
+        trace = exporter._convert_to_datadog(parent.to_dict())
+
+        assert len(trace) == 2
+        assert trace[0]["name"] == "parent"
+        assert trace[0]["service"] == "test_service"
+        assert trace[1]["name"] == "child"
+        assert trace[1]["meta"]["cache_hit"] == "True"
+
+    def test_datadog_flush_clears_batch_on_generic_error(self, monkeypatch):
+        """Test Datadog flush clears batched traces after request failure."""
+        exporter = DatadogExporter(agent_url="http://localhost:8126", service_name="test_service")
+        span = Span(name="child")
+        span.end()
+        exporter.export(span.to_dict())
+
+        def raise_runtime_error(*_args, **_kwargs):
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr("urllib.request.urlopen", raise_runtime_error)
+
+        exporter.flush()
+
+        assert exporter.trace_batch == []
+
+    def test_storage_exporter_persists_span_schema(self):
+        """Test StorageExporter serializes and saves spans to storage."""
+        storage = Mock()
+        exporter = StorageExporter(storage=storage)
+        span = Span(name="stored")
+        span.end()
+
+        exporter.export(span.to_dict())
+
+        storage.save.assert_called_once()
+        saved_span = storage.save.call_args.args[0]
+        assert saved_span.name == "stored"
+        assert saved_span.trace_id == span.trace_id
+
+    def test_storage_exporter_lazy_loads_storage(self):
+        """Test StorageExporter uses provided storage property lazily."""
+        storage = Mock()
+        exporter = StorageExporter(storage=storage)
+
+        assert exporter.storage is storage
 
     def test_create_exporter_console(self):
         """Test creating console exporter."""
@@ -368,6 +456,11 @@ class TestExporters:
             {"type": "datadog", "agent_url": "http://localhost:8126", "service_name": "test"}
         )
         assert isinstance(exporter, DatadogExporter)
+
+    def test_create_exporter_storage(self):
+        """Test creating storage exporter."""
+        exporter = create_exporter({"type": "storage", "storage": Mock()})
+        assert isinstance(exporter, StorageExporter)
 
     def test_create_exporter_invalid(self):
         """Test creating invalid exporter."""

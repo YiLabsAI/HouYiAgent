@@ -389,6 +389,223 @@ class TestSendMessage:
         complete = next(e for e in events if e["event"] == "message.complete")
         assert complete["data"]["metadata"]["usage"]["total_tokens"] == 18
 
+    def test_emits_tool_lifecycle_events_with_trace_metadata(self, app_and_client, monkeypatch):
+        _, client, _ = app_and_client
+        create_resp = client.post("/api/chat/conversations", json={"title": "Tool Lifecycle"})
+        conv_id = create_resp.json()["conversation_id"]
+
+        from houyi_studio.server.chat import chat_api
+
+        service = chat_api._chat_service
+        assert service is not None
+
+        class _AdapterWithStream:
+            last_usage = {"prompt_tokens": 8, "completion_tokens": 4, "total_tokens": 12}
+
+            async def chat(self, *args, **kwargs):
+                _ = (args, kwargs)
+                return SimpleNamespace(content="", tool_calls=[], usage={}, metadata={})
+
+            async def stream_chat(self, *args, **kwargs):
+                _ = (args, kwargs)
+                yield StreamChunk(content_delta="done")
+
+        class _FakeToolRunner:
+            async def run(self, **kwargs):
+                _ = kwargs
+                return (
+                    SimpleNamespace(
+                        content="Done after tools",
+                        tool_calls=[],
+                        usage={"prompt_tokens": 13, "completion_tokens": 9, "total_tokens": 22},
+                        metadata={},
+                    ),
+                    [
+                        {
+                            "tool_call_id": "call_ok",
+                            "tool_name": "demo_ok",
+                            "parallel_group_id": "round_1",
+                            "round_index": 1,
+                            "args": {"q": "alpha"},
+                            "result": {"raw": {"success": True, "value": "ok"}},
+                        },
+                        {
+                            "tool_call_id": "call_err",
+                            "tool_name": "demo_err",
+                            "parallel_group_id": "round_1",
+                            "round_index": 1,
+                            "args": {"q": "beta"},
+                            "result": {"raw": {"error": "boom", "code": "tool_failed"}},
+                        },
+                    ],
+                )
+
+        adapter = _AdapterWithStream()
+        monkeypatch.setattr(service, "_default_adapter", adapter)
+        monkeypatch.setattr(service, "_get_tool_runner", lambda: _FakeToolRunner())
+        monkeypatch.setattr(
+            "houyi_studio.server.chat.chat_service.ToolBridge.collect_tool_schemas",
+            lambda self, skill_filter, include_core: [
+                {"type": "function", "function": {"name": "demo_ok"}},
+                {"type": "function", "function": {"name": "demo_err"}},
+            ],
+        )
+        monkeypatch.setattr(
+            "houyi_studio.server.chat.chat_service.ToolBridge.collect_skills",
+            lambda self, skill_filter, include_core: [
+                SimpleNamespace(name="demo_ok"),
+                SimpleNamespace(name="demo_err"),
+            ],
+        )
+
+        resp = client.post(
+            f"/api/chat/conversations/{conv_id}/messages",
+            json={"content": "run tools", "enable_skills": ["demo_ok", "demo_err"]},
+        )
+        assert resp.status_code == 200
+
+        events = _parse_sse_response(resp.text)
+        event_types = [e["event"] for e in events]
+        assert "agent.iteration" in event_types
+        assert event_types.count("tool_call.start") == 2
+        assert event_types.count("tool_call.result") == 1
+        assert event_types.count("tool_call.error") == 1
+
+        iteration = next(e for e in events if e["event"] == "agent.iteration")
+        trace_id = iteration["data"]["trace_id"]
+        assert trace_id
+        assert iteration["data"]["round_index"] == 1
+
+        starts = [e for e in events if e["event"] == "tool_call.start"]
+        assert starts[0]["data"]["parallel_group_id"] == "round_1"
+        assert starts[0]["data"]["tool_call_id"] == "call_ok"
+        assert starts[1]["data"]["tool_call_id"] == "call_err"
+
+        result_evt = next(e for e in events if e["event"] == "tool_call.result")
+        error_evt = next(e for e in events if e["event"] == "tool_call.error")
+        assert result_evt["data"]["trace_id"] == trace_id
+        assert result_evt["data"]["result"]["success"] is True
+        assert error_evt["data"]["trace_id"] == trace_id
+        assert error_evt["data"]["error"]["error"] == "boom"
+
+        complete = next(e for e in events if e["event"] == "message.complete")
+        assert complete["data"]["metadata"]["trace_id"] == trace_id
+        assert complete["data"]["metadata"]["usage"]["total_tokens"] == 22
+
+    def test_persists_tool_call_carrier_and_tool_results(self, app_and_client, monkeypatch):
+        _, client, store = app_and_client
+        create_resp = client.post("/api/chat/conversations", json={"title": "Persist Tool Steps"})
+        conv_id = create_resp.json()["conversation_id"]
+
+        from houyi_studio.server.chat import chat_api
+
+        service = chat_api._chat_service
+        assert service is not None
+
+        class _AdapterWithStream:
+            last_usage = {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8}
+
+            async def chat(self, *args, **kwargs):
+                _ = (args, kwargs)
+                return SimpleNamespace(content="", tool_calls=[], usage={}, metadata={})
+
+            async def stream_chat(self, *args, **kwargs):
+                _ = (args, kwargs)
+                yield StreamChunk(content_delta="final")
+
+        class _FakeToolRunner:
+            async def run(self, **kwargs):
+                messages = kwargs["messages"]
+                messages.extend(
+                    [
+                        {
+                            "role": "assistant",
+                            "content": "",
+                            "tool_calls": [
+                                {
+                                    "id": "call_1",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "demo",
+                                        "arguments": '{"path":"README.md"}',
+                                    },
+                                }
+                            ],
+                        },
+                        {
+                            "role": "tool",
+                            "content": '{"matches":["README.md"]}',
+                            "tool_call_id": "call_1",
+                            "name": "demo",
+                        },
+                    ]
+                )
+                return (
+                    SimpleNamespace(
+                        content="Final answer",
+                        tool_calls=[],
+                        usage={"prompt_tokens": 7, "completion_tokens": 6, "total_tokens": 13},
+                        metadata={},
+                    ),
+                    [
+                        {
+                            "tool_call_id": "call_1",
+                            "tool_name": "demo",
+                            "parallel_group_id": "round_1",
+                            "round_index": 1,
+                            "args": {"path": "README.md"},
+                            "result": {"raw": {"matches": ["README.md"]}},
+                        }
+                    ],
+                )
+
+        adapter = _AdapterWithStream()
+        monkeypatch.setattr(service, "_default_adapter", adapter)
+        monkeypatch.setattr(service, "_get_tool_runner", lambda: _FakeToolRunner())
+        monkeypatch.setattr(
+            "houyi_studio.server.chat.chat_service.ToolBridge.collect_tool_schemas",
+            lambda self, skill_filter, include_core: [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "demo",
+                        "description": "Demo",
+                        "parameters": {},
+                    },
+                }
+            ],
+        )
+        monkeypatch.setattr(
+            "houyi_studio.server.chat.chat_service.ToolBridge.collect_skills",
+            lambda self, skill_filter, include_core: [SimpleNamespace(name="demo")],
+        )
+
+        resp = client.post(
+            f"/api/chat/conversations/{conv_id}/messages",
+            json={"content": "find file", "enable_skills": ["demo"]},
+        )
+        assert resp.status_code == 200
+
+        conv = store.get(conv_id)
+        assert conv is not None
+        assert len(conv.messages) == 4
+
+        user_msg, assistant_carrier, tool_msg, final_assistant = conv.messages
+        assert user_msg.role.value == "user"
+        assert assistant_carrier.role.value == "assistant"
+        assert assistant_carrier.tool_calls is not None
+        assert assistant_carrier.tool_calls[0]["id"] == "call_1"
+        assert assistant_carrier.tool_calls[0]["function"]["name"] == "demo"
+
+        assert tool_msg.role.value == "tool"
+        assert tool_msg.tool_call_id == "call_1"
+        assert tool_msg.name == "demo"
+        assert "README.md" in tool_msg.content
+
+        assert final_assistant.role.value == "assistant"
+        assert final_assistant.content == "Final answer"
+        assert final_assistant.metadata.get("usage", {}).get("total_tokens") == 13
+
     def test_send_message_accepts_tooling_fields(self, app_and_client):
         _, client, _ = app_and_client
         create_resp = client.post("/api/chat/conversations", json={})
