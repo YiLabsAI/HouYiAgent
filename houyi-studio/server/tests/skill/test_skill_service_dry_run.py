@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from _fakes import (
@@ -172,7 +172,11 @@ class TestDryRun:
         registry.register(skill, overwrite=True)
         svc = SkillService(registry=registry)
 
-        result = await svc.dry_run("web_search", "search", {"query": "test"}, live=True)
+        with patch(
+            "houyi_studio.server.skill.dry_run._live_verify",
+            new=AsyncMock(return_value={"success": True, "message": "ok"}),
+        ):
+            result = await svc.dry_run("web_search", "search", {"query": "test"}, live=True)
         assert "llm_verification" in result
         llm_v = result["llm_verification"]
         assert isinstance(llm_v, dict)

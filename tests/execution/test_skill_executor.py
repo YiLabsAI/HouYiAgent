@@ -2,6 +2,7 @@
 
 import asyncio
 from typing import Any
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from pydantic import BaseModel, ValidationError
@@ -200,10 +201,10 @@ class TestSkillExecutor:
         )
 
         # Set very short timeout
-        executor = SkillExecutor(timeout=0.1)
+        executor = SkillExecutor(timeout=0.01)
 
         with pytest.raises((SkillExecutionError, asyncio.TimeoutError)):
-            await executor.execute(skill, {"duration": 1.0})
+            await executor.execute(skill, {"duration": 0.05})
 
     @pytest.mark.asyncio
     async def test_retry_on_failure(self) -> None:
@@ -233,8 +234,8 @@ class TestSkillExecutor:
 
         executor = SkillExecutor(max_retries=3)
 
-        # Should succeed on 3rd attempt
-        result = await executor.execute(skill, {"fail_count": 2})
+        with patch("houyi.application.workflow.skill_executor.asyncio.sleep", new=AsyncMock()):
+            result = await executor.execute(skill, {"fail_count": 2})
         assert result["attempts"] == 3
 
     @pytest.mark.asyncio
@@ -260,7 +261,10 @@ class TestSkillExecutor:
 
         executor = SkillExecutor(max_retries=2)
 
-        with pytest.raises(SkillExecutionError):
+        with (
+            patch("houyi.application.workflow.skill_executor.asyncio.sleep", new=AsyncMock()),
+            pytest.raises(SkillExecutionError),
+        ):
             await executor.execute(skill, {"value": 1})
 
     @pytest.mark.asyncio
@@ -332,7 +336,8 @@ class TestSkillExecutorRetrySpans:
         executor._on_retry_span = collected_spans.append  # type: ignore[attr-defined]
 
         try:
-            result = await executor.execute(skill, {"fail_count": 2})
+            with patch("houyi.application.workflow.skill_executor.asyncio.sleep", new=AsyncMock()):
+                result = await executor.execute(skill, {"fail_count": 2})
         finally:
             TraceContext.pop(token)
 
@@ -411,7 +416,8 @@ class TestSkillExecutorRetrySpans:
         executor = SkillExecutor(max_retries=3)
         executor._on_retry_span = collected.append  # type: ignore[attr-defined]
 
-        result = await executor.execute(skill, {"fail_count": 1})
+        with patch("houyi.application.workflow.skill_executor.asyncio.sleep", new=AsyncMock()):
+            result = await executor.execute(skill, {"fail_count": 1})
         assert result["attempts"] == 2
         # No trace context → no retry spans created
         assert len(collected) == 0

@@ -1,10 +1,3 @@
-"""Tests for RAG service - tests real backend logic, not mocks.
-
-IMPORTANT: Every test receives an isolated ``tmp_path`` directory via the
-``knowledge_service`` fixture.  No test ever touches the real
-``.houyi/knowledge`` production directory.
-"""
-
 import asyncio
 import os
 import tempfile
@@ -181,110 +174,6 @@ class TestDeleteLibrarySafety:
 class TestFileIngest:
     """Tests for file ingestion."""
 
-    @pytest.mark.asyncio
-    async def test_uploaded_files_are_not_skipped(self, knowledge_service):
-        from houyi_studio.server.rag import get_library_upload_dir
-
-        created = knowledge_service.create_library(
-            name="UploadFilter",
-            description="",
-            mode="indexed",
-        )
-        lib_id = created["library_id"]
-
-        upload_dir = get_library_upload_dir(lib_id)
-        upload_dir.mkdir(parents=True, exist_ok=True)
-        test_file = upload_dir / "test.md"
-        test_file.write_text("# Test\n\nThis is test content.")
-
-        assert "/uploads/" in str(test_file) or "\\uploads\\" in str(test_file)
-
-        result = await knowledge_service.ingest_files(
-            library_id=lib_id,
-            paths=[str(test_file)],
-        )
-
-        stats = result.get("stats", {})
-        assert stats.get("files_skipped", 0) == 0
-        files_seen = stats.get("files_processed", 0) + stats.get("files_failed", 0)
-        assert files_seen > 0
-
-    def test_ingest_single_file(self, knowledge_service):
-        """Test ingesting a single markdown file."""
-        created = knowledge_service.create_library(name="IngestTest", description="", mode="auto")
-        lib_id = created["library_id"]
-
-        # Create a temp file
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
-            f.write("# Test\n\nThis is test content.")
-            temp_path = f.name
-
-        try:
-            result = asyncio.run(knowledge_service.ingest_files(lib_id, [temp_path]))
-
-            # Should succeed (even in fallback mode)
-            assert (
-                result["success"] is True
-                or result["stats"]["files_processed"] > 0
-                or result["stats"]["files_failed"] > 0
-            )
-
-            # Document should be recorded
-            docs = knowledge_service.list_documents(lib_id)
-            assert len(docs) >= 1
-
-            # Find the document we just ingested
-            doc = next((d for d in docs if d["file_name"] == os.path.basename(temp_path)), None)
-            assert doc is not None
-
-        finally:
-            os.unlink(temp_path)
-
-    def test_ingest_duplicate_file_no_duplication(self, knowledge_service):
-        """Test that importing the same file twice doesn't create duplicates."""
-        created = knowledge_service.create_library(name="DedupTest", description="", mode="auto")
-        lib_id = created["library_id"]
-
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
-            f.write("# Duplicate Test\n\nContent.")
-            temp_path = f.name
-
-        try:
-            # Import first time
-            asyncio.run(knowledge_service.ingest_files(lib_id, [temp_path]))
-            docs_after_first = knowledge_service.list_documents(lib_id)
-
-            # Import second time
-            asyncio.run(knowledge_service.ingest_files(lib_id, [temp_path]))
-            docs_after_second = knowledge_service.list_documents(lib_id)
-
-            # Should still have same number of documents (no duplicates)
-            assert len(docs_after_second) == len(docs_after_first)
-
-        finally:
-            os.unlink(temp_path)
-
-    def test_ingest_multiple_files(self, knowledge_service):
-        """Test ingesting multiple files at once."""
-        created = knowledge_service.create_library(name="MultiTest", description="", mode="auto")
-        lib_id = created["library_id"]
-
-        temp_files = []
-        try:
-            for i in range(3):
-                with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
-                    f.write(f"# Doc {i}\n\nContent {i}.")
-                    temp_files.append(f.name)
-
-            asyncio.run(knowledge_service.ingest_files(lib_id, temp_files))
-
-            docs = knowledge_service.list_documents(lib_id)
-            assert len(docs) == 3
-
-        finally:
-            for f in temp_files:
-                os.unlink(f)
-
     def test_ingest_unsupported_file_type(self, knowledge_service):
         """Test that unsupported file types are handled gracefully."""
         created = knowledge_service.create_library(
@@ -301,31 +190,6 @@ class TestFileIngest:
 
             # Should not crash, may return error or empty
             assert "success" in result
-
-        finally:
-            os.unlink(temp_path)
-
-    def test_library_status_after_ingest(self, knowledge_service):
-        """Test that library status is correctly updated after ingest."""
-        created = knowledge_service.create_library(name="StatusTest", description="", mode="auto")
-        lib_id = created["library_id"]
-
-        # Initially empty
-        lib = knowledge_service.get_library(lib_id)
-        assert lib["status"] == "empty"
-
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
-            f.write("# Test\n\nContent.")
-            temp_path = f.name
-
-        try:
-            asyncio.run(knowledge_service.ingest_files(lib_id, [temp_path]))
-
-            lib = knowledge_service.get_library(lib_id)
-            # Status should be ready, degraded, error, or partial - not empty
-            # 'degraded' means files counted but no embedding provider (chunks=0)
-            assert lib["status"] in ["ready", "degraded", "error", "partial"]
-            assert lib["doc_count"] >= 1
 
         finally:
             os.unlink(temp_path)
@@ -500,27 +364,3 @@ class TestDocumentManagement:
 
         docs = knowledge_service.list_documents(lib_id)
         assert docs == []
-
-    def test_list_documents_with_files(self, knowledge_service):
-        """Test listing documents after import."""
-        created = knowledge_service.create_library(name="DocsTest", description="", mode="auto")
-        lib_id = created["library_id"]
-
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
-            f.write("# Test\n\nContent.")
-            temp_path = f.name
-
-        try:
-            asyncio.run(knowledge_service.ingest_files(lib_id, [temp_path]))
-
-            docs = knowledge_service.list_documents(lib_id)
-            assert len(docs) >= 1
-
-            doc = docs[0]
-            assert "doc_id" in doc
-            assert "file_name" in doc
-            assert "file_path" in doc
-            assert "status" in doc
-
-        finally:
-            os.unlink(temp_path)

@@ -60,7 +60,7 @@ run_check() {
 ensure_integration_deps
 
 run_check "Integration Tests" \
-    uv run python -m pytest tests/integration/ -v -s
+    uv run python -m pytest tests/integration/ houyi-studio/server/tests/integration/ -v -s
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo -e "${GREEN}✓ Local integration gate passed.${NC}"

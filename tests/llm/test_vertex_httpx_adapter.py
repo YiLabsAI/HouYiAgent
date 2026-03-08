@@ -344,7 +344,10 @@ class TestVertexAIAdapterRetry:
             adapter._access_token = "fake-token"
             adapter._token_expiry = 9999999999.0
 
-            with patch("httpx.AsyncClient", return_value=MockHttpxClient()):
+            with (
+                patch("httpx.AsyncClient", return_value=MockHttpxClient()),
+                patch("houyi.adapters.llm.vertex_httpx_adapter.asyncio.sleep", new=AsyncMock()),
+            ):
                 chunks = []
                 async for chunk in adapter.stream_chat(
                     [{"role": "user", "content": "hi"}],
@@ -486,6 +489,7 @@ class TestVertexAIAdapterRetry:
 
             with (
                 patch("httpx.AsyncClient", return_value=MockHttpxClient()),
+                patch("houyi.adapters.llm.vertex_httpx_adapter.asyncio.sleep", new=AsyncMock()),
                 pytest.raises(Exception, match="500"),
             ):
                 async for _chunk in adapter.stream_chat(

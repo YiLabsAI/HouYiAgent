@@ -143,7 +143,8 @@ run_check "SDK Tests + Coverage" uv run pytest tests/ --ignore=tests/integration
     --cov=houyi --cov-report=term-missing --cov-fail-under=85
 
 # ── 5. Server tests ─────────────────────────────────────────────────
-run_check "Server Tests" uv run pytest houyi-studio/server/tests/ -x
+run_check "Server Tests" uv run pytest houyi-studio/server/tests/ \
+    --ignore=houyi-studio/server/tests/integration -x
 
 # ── Done ─────────────────────────────────────────────────────────────
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

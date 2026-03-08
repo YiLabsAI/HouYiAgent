@@ -95,7 +95,7 @@ class TestGeminiEmbedderAuth:
             project="test-project",
             location="us-central1",
             batch_size=2,
-            delay_seconds=0,
+            delay_seconds=0.0001,
         )
 
         mock_embedding = MagicMock()
@@ -132,7 +132,7 @@ class TestGeminiEmbedderAuth:
             dimension=768,
             project="test-project",
             batch_size=2,
-            delay_seconds=0,
+            delay_seconds=0.0001,
         )
 
         async def mock_embed_batch_single(batch):
@@ -177,7 +177,8 @@ class TestGeminiEmbedderAuth:
         embedder._client = MagicMock()
 
         texts = ["text1", "text2", "text3", "text4"]
-        result = await embedder.embed_batch(texts)
+        with patch("houyi.rag.indexed.embedding.gemini.asyncio.sleep", new=AsyncMock()):
+            result = await embedder.embed_batch(texts)
 
         assert len(result) == 4
         assert call_count == 2
