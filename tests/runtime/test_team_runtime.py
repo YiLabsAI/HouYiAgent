@@ -2,9 +2,9 @@
 
 from pydantic import BaseModel
 
-from houyi.core.skill import SkillSpec
-from houyi.runtime.agent import Agent
-from houyi.runtime.team import Team
+from houyi.application.runtime.agent import Agent
+from houyi.application.runtime.team import Team
+from houyi.domain.skill.spec import SkillSpec
 
 
 class TestTeam:
@@ -12,7 +12,7 @@ class TestTeam:
 
     def test_team_initialization(self):
         """Test basic team initialization."""
-        from houyi.runtime.task import Task
+        from houyi.application.runtime.task import Task
 
         agent1 = Agent(role="Agent 1")
         agent2 = Agent(role="Agent 2")
@@ -29,7 +29,7 @@ class TestTeam:
 
     def test_team_single_agent(self):
         """Test team with single agent."""
-        from houyi.runtime.task import Task
+        from houyi.application.runtime.task import Task
 
         agent = Agent(role="Solo Agent")
         task = Task(description="Solo Task", agent=agent)
@@ -41,7 +41,7 @@ class TestTeam:
 
     def test_team_with_skills(self):
         """Test team agents with skills."""
-        from houyi.runtime.task import Task
+        from houyi.application.runtime.task import Task
 
         class Input(BaseModel):
             x: int
@@ -91,7 +91,7 @@ class TestTeam:
 
     def test_team_multiple_agents(self):
         """Test team with multiple agents."""
-        from houyi.runtime.task import Task
+        from houyi.application.runtime.task import Task
 
         agents = [Agent(role=f"Agent {i}") for i in range(5)]
         tasks = [Task(description=f"Task {i}", agent=agents[i]) for i in range(5)]
@@ -104,7 +104,7 @@ class TestTeam:
 
     def test_team_agent_access(self):
         """Test accessing individual agents from team."""
-        from houyi.runtime.task import Task
+        from houyi.application.runtime.task import Task
 
         agent1 = Agent(role="Leader")
         agent2 = Agent(role="Worker")
@@ -126,7 +126,7 @@ class TestTeam:
 
     def test_team_with_different_llms(self):
         """Test team with agents using different LLMs."""
-        from houyi.runtime.task import Task
+        from houyi.application.runtime.task import Task
 
         agent1 = Agent(role="GPT4 Agent", llm="gpt-4")
         agent2 = Agent(role="GPT3 Agent", llm="gpt-3.5-turbo")
@@ -141,7 +141,7 @@ class TestTeam:
 
     def test_team_agents_with_memory(self):
         """Test team with agents having memory enabled."""
-        from houyi.runtime.task import Task
+        from houyi.application.runtime.task import Task
 
         agent1 = Agent(role="Memory Agent", memory=True)
         agent2 = Agent(role="Stateless Agent", memory=False)

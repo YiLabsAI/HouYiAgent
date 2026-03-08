@@ -1,8 +1,12 @@
 """Example demonstrating Jaeger and Datadog exporters."""
 
 from houyi import Agent, tool
-from houyi.observability import ObservabilityConfig
-from houyi.observability.exporters import ConsoleExporter, DatadogExporter, JaegerExporter
+from houyi.infrastructure.observability import ObservabilityConfig
+from houyi.infrastructure.observability.exporters import (
+    ConsoleExporter,
+    DatadogExporter,
+    JaegerExporter,
+)
 
 print("=" * 70)
 print("Phase 3.4: Jaeger & Datadog Exporters Example")
@@ -107,7 +111,7 @@ print()
 print("Example 4: Multiple Exporters (Console + JSON)")
 print("-" * 70)
 
-from houyi.observability.exporters import JSONExporter
+from houyi.infrastructure.observability.exporters import JSONExporter
 
 agent4 = Agent(
     role="Calculator",

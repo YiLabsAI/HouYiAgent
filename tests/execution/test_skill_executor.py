@@ -6,11 +6,11 @@ from typing import Any
 import pytest
 from pydantic import BaseModel, ValidationError
 
-from houyi.core.skill import SkillSpec
-from houyi.execution.skill_executor import SkillExecutionError, SkillExecutor
-from houyi.observability.context import TraceContext
-from houyi.observability.trace_manager import Span
-from houyi.observability.types import SpanType
+from houyi.application.workflow.skill_executor import SkillExecutionError, SkillExecutor
+from houyi.domain.skill.spec import SkillSpec
+from houyi.infrastructure.observability.context import TraceContext
+from houyi.infrastructure.observability.trace_manager import Span
+from houyi.infrastructure.observability.types import SpanType
 
 
 class TestSkillExecutor:

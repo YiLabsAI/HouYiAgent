@@ -5,13 +5,13 @@ from unittest.mock import MagicMock
 import pytest
 from pydantic import BaseModel
 
-from houyi.core.skill.hooks import HookEvent, SkillHook, SkillHooksManager
-from houyi.core.skill.spec import SkillSpec
-from houyi.core.skill_registry import (
+from houyi.domain.skill.hooks import HookEvent, SkillHook, SkillHooksManager
+from houyi.domain.skill.registry import (
     DEFAULT_SKILL_REGISTRY,
     SkillRegistry,
     create_default_registry,
 )
+from houyi.domain.skill.spec import SkillSpec
 
 
 class InputModel(BaseModel):

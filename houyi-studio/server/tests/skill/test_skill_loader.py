@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+from houyi_studio.server.skill import loader as skill_loader_module
 from houyi_studio.server.skill.dry_run import DryRunValidator
 from houyi_studio.server.skill.loader import (
     ENV_MANAGED_SKILLS_DIR,
@@ -22,8 +23,8 @@ from houyi_studio.server.skill.loader import (
 )
 from pydantic import BaseModel
 
-from houyi.core.skill.spec import SkillSpec
-from houyi.core.skill_registry import SkillRegistry
+from houyi.domain.skill.registry import SkillRegistry
+from houyi.domain.skill.spec import SkillSpec
 
 
 class _In(BaseModel):
@@ -589,7 +590,7 @@ print(json.dumps({"ok": True}))
         assert loaded is not None
         assert callable(loaded.executor)
 
-        with patch("houyi_studio.server.skill.loader.shutil.which", return_value=None):
+        with patch.object(skill_loader_module.shutil, "which", return_value=None):
             result = await loaded.executor()
 
         assert result.get("ok") is False
@@ -653,7 +654,7 @@ print(json.dumps({"ok": True, "mode": "unpack"}))
                 return None
             return "/usr/bin/" + binary
 
-        with patch("houyi_studio.server.skill.loader.shutil.which", side_effect=_which):
+        with patch.object(skill_loader_module.shutil, "which", side_effect=_which):
             result = await loaded.executor(convert_to="docx")
 
         assert result.get("ok") is True

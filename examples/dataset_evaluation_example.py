@@ -1,7 +1,7 @@
 """Example demonstrating Dataset and Report generation."""
 
 from houyi import Agent, tool
-from houyi.evaluation import Dataset, ReportGenerator, evaluate
+from houyi.assurance.evaluation import Dataset, ReportGenerator, evaluate
 
 print("=" * 70)
 print("Phase 3.3: Dataset & Report Generation Example")
@@ -94,7 +94,7 @@ print()
 print("Example 7: Create and save custom dataset")
 print("-" * 70)
 
-from houyi.evaluation.dataset import TestCase
+from houyi.assurance.evaluation.dataset import TestCase
 
 custom_dataset = Dataset(
     name="Custom Test Dataset",

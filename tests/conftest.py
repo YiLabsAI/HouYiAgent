@@ -4,14 +4,14 @@ import pytest
 import pytest_asyncio
 from pydantic import BaseModel
 
-from houyi.core.skill import SkillSpec
+from houyi.domain.skill.spec import SkillSpec
 
 
 @pytest.fixture(autouse=True)
 def _reset_global_singletons():
     """Reset global singletons for test isolation (required for pytest-xdist)."""
     yield
-    from houyi.config.env_config import EnvConfig
+    from houyi.infrastructure.config.env_config import EnvConfig
 
     EnvConfig._reset()
 

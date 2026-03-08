@@ -6,7 +6,7 @@ Tests cover:
 - Phase 3: 9 advanced evaluators (Bias, Safety, Factuality, Groundedness, Coherence, ContextPrecision, ContextRecall, Faithfulness, CustomEvaluator)
 """
 
-from houyi.evaluation.evaluators import (
+from houyi.assurance.evaluation.evaluators import (
     # Phase 1
     AccuracyEvaluator,
     # Phase 3

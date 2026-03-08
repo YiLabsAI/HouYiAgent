@@ -1,4 +1,4 @@
-"""Unit tests for LibraryRepository — library CRUD, persistence, migration, and safety."""
+"""Tests for LibraryRepository — library CRUD, persistence, migration, and safety."""
 
 from __future__ import annotations
 

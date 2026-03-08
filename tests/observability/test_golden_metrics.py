@@ -11,9 +11,9 @@ from __future__ import annotations
 
 import time
 
-from houyi.observability.context import TraceContext
-from houyi.observability.trace_manager import Span
-from houyi.observability.types import SpanType
+from houyi.infrastructure.observability.context import TraceContext
+from houyi.infrastructure.observability.trace_manager import Span
+from houyi.infrastructure.observability.types import SpanType
 
 # ---------------------------------------------------------------------------
 # 1. Collection overhead benchmark

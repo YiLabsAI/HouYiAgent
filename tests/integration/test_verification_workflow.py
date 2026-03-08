@@ -1,20 +1,20 @@
-"""End-to-end integration tests for neuro-symbolic verification."""
+"""Tests for neuro-symbolic verification."""
 
 import pytest
 
-from houyi.verification.config import VerificationConfig, VerificationMode
-from houyi.verification.feedback import FeedbackProtocol
-from houyi.verification.neuro_symbolic_engine import NeuroSymbolicEngine
-from houyi.verification.python_verifier import PythonVerifier
-from houyi.verification.sql_verifier import SQLVerifier
-from houyi.verification.verifier import VerificationRule
+from houyi.assurance.verification.config import VerificationConfig, VerificationMode
+from houyi.assurance.verification.feedback import FeedbackProtocol
+from houyi.assurance.verification.neuro_symbolic_engine import NeuroSymbolicEngine
+from houyi.assurance.verification.python_verifier import PythonVerifier
+from houyi.assurance.verification.sql_verifier import SQLVerifier
+from houyi.assurance.verification.verifier import VerificationRule
 
 
-class TestE2EVerification:
-    """End-to-end tests for complete verification workflow."""
+class TestVerification:
+    """Tests for complete verification workflow."""
 
     @pytest.mark.asyncio
-    async def test_e2e_sql_verification_with_feedback(self):
+    async def test_sql_verification_with_feedback(self):
         """Test complete SQL verification with feedback loop."""
         engine = NeuroSymbolicEngine(
             config=VerificationConfig(
@@ -69,7 +69,7 @@ class TestE2EVerification:
             assert "semicolon" in feedback.fix_suggestion.lower()
 
     @pytest.mark.asyncio
-    async def test_e2e_python_verification_with_feedback(self):
+    async def test_python_verification_with_feedback(self):
         """Test complete Python verification with feedback loop."""
         engine = NeuroSymbolicEngine(
             config=VerificationConfig(
@@ -123,7 +123,7 @@ class TestE2EVerification:
         assert feedback_context[1].error_type == "python_syntax"
 
     @pytest.mark.asyncio
-    async def test_e2e_verification_max_retries_exceeded(self):
+    async def test_verification_max_retries_exceeded(self):
         """Test that verification fails after max retries."""
         engine = NeuroSymbolicEngine(
             config=VerificationConfig(
@@ -163,7 +163,7 @@ class TestE2EVerification:
         assert len(feedback_context) == 3
 
     @pytest.mark.asyncio
-    async def test_e2e_verification_with_constraints(self):
+    async def test_verification_with_constraints(self):
         """Test verification with constraint solving."""
         engine = NeuroSymbolicEngine(
             config=VerificationConfig(
@@ -203,7 +203,7 @@ class TestE2EVerification:
         assert success is True
 
     @pytest.mark.asyncio
-    async def test_e2e_feedback_prompt_generation(self):
+    async def test_feedback_prompt_generation(self):
         """Test that feedback can be formatted for LLM consumption."""
         engine = NeuroSymbolicEngine(
             config=VerificationConfig(
@@ -240,7 +240,7 @@ class TestE2EVerification:
         assert success is True
 
     @pytest.mark.asyncio
-    async def test_e2e_verification_disabled(self):
+    async def test_verification_disabled(self):
         """Test that verification can be disabled."""
         engine = NeuroSymbolicEngine(
             config=VerificationConfig(
@@ -268,7 +268,7 @@ class TestE2EVerification:
         assert output == "INVALID SQL"
 
     @pytest.mark.asyncio
-    async def test_e2e_strict_mode_fails_immediately(self):
+    async def test_strict_mode_fails_immediately(self):
         """Test that strict mode fails immediately without retries."""
         engine = NeuroSymbolicEngine(
             config=VerificationConfig(

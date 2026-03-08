@@ -1,6 +1,6 @@
 """Tests for core/task.py."""
 
-from houyi.core.task import TaskSpec
+from houyi.domain.task import TaskSpec
 
 
 class TestTaskSpec:

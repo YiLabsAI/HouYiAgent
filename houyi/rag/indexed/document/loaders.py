@@ -1,4 +1,4 @@
-"""Document loaders for various file formats."""
+"""Indexed ingest document loaders for supported source formats."""
 
 from __future__ import annotations
 
@@ -75,31 +75,35 @@ async def _load_single_file(path: Path) -> Document | None:
         return None
 
     suffix = path.suffix.lower()
+    loader = _resolve_loader(suffix)
+    if loader is None:
+        return None
 
     try:
-        if suffix in {".txt", ".md", ".rst"}:
-            return _load_text_file(path)
-        elif suffix == ".pdf":
-            return _load_pdf_file(path)
-        elif suffix in {".html", ".htm"}:
-            return _load_html_file(path)
-        elif suffix in {".json", ".yaml", ".yml"}:
-            return _load_text_file(path)
-        elif suffix == ".csv":
-            return _load_csv_file(path)
-        elif suffix in {".xlsx", ".xlsm", ".xls"}:
-            return _load_excel_file(path)
-        elif suffix == ".doc":
-            return _load_doc_file(path)
-        elif suffix == ".docx":
-            return _load_docx_file(path)
-        elif suffix == ".pptx":
-            return _load_pptx_file(path)
-        elif suffix == ".epub":
-            return _load_epub_file(path)
+        return loader(path)
     except Exception:
         return None
 
+
+def _resolve_loader(path_suffix: str):
+    if path_suffix in {".txt", ".md", ".rst", ".json", ".yaml", ".yml"}:
+        return _load_text_file
+    if path_suffix == ".pdf":
+        return _load_pdf_file
+    if path_suffix in {".html", ".htm"}:
+        return _load_html_file
+    if path_suffix == ".csv":
+        return _load_csv_file
+    if path_suffix in {".xlsx", ".xlsm", ".xls"}:
+        return _load_excel_file
+    if path_suffix == ".doc":
+        return _load_doc_file
+    if path_suffix == ".docx":
+        return _load_docx_file
+    if path_suffix == ".pptx":
+        return _load_pptx_file
+    if path_suffix == ".epub":
+        return _load_epub_file
     return None
 
 

@@ -1,13 +1,13 @@
-"""Unit tests for houyi.context.context_planner.ContextPlanner."""
+"""Unit tests for houyi.application.context.context_planner.ContextPlanner."""
 
 from __future__ import annotations
 
 import pytest
 
-from houyi.context.context_planner import ContextPlanner
-from houyi.context.token_estimator import TokenEstimator
-from houyi.context.types import ContextBlockType
-from houyi.llm.models import DEFAULT_MODEL
+from houyi.adapters.llm.models import DEFAULT_MODEL
+from houyi.application.context.context_planner import ContextPlanner
+from houyi.application.context.token_estimator import TokenEstimator
+from houyi.application.context.types import ContextBlockType
 
 
 @pytest.fixture

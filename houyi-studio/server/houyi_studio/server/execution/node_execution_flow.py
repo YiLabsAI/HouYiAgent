@@ -10,14 +10,14 @@ from datetime import datetime
 from typing import Any
 from uuid import uuid4
 
-from houyi.execution.node_execution_utils import (
+from houyi.application.workflow.node_execution_utils import (
     extract_output_payload,
     resolve_inputs,
     resolve_value,
 )
-from houyi.observability import Span, SpanType, TraceContext
-from houyi.protocol.ir import ExecutionIR, NodeExecutionIR, NodeStatus, PlanIR
-from houyi.protocol.ir.plan_ir import NodeType
+from houyi.infrastructure.observability import Span, SpanType, TraceContext
+from houyi.interface.protocol.ir import ExecutionIR, NodeExecutionIR, NodeStatus, PlanIR
+from houyi.interface.protocol.ir.plan_ir import NodeType
 
 from ..gateway.events import NodeStatusEvent, SpanUpdateEvent
 from .context import ExecutionContext

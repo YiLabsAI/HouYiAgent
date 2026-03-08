@@ -3,9 +3,9 @@
 from pydantic import BaseModel
 
 from houyi import AgentSpec, SkillSpec
-from houyi.orchestration.plan import ExecutionPlan, IRNode, NodeType
-from houyi.orchestration.planner import DAGPlanner
-from houyi.orchestration.state import SessionState, TaskState, TaskStatus
+from houyi.application.workflow.orchestration.plan import ExecutionPlan, IRNode, NodeType
+from houyi.application.workflow.orchestration.planner import DAGPlanner
+from houyi.application.workflow.orchestration.state import SessionState, TaskState, TaskStatus
 
 
 class TestExecutionPlan:

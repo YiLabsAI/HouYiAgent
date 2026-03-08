@@ -1,6 +1,6 @@
 """Tests for constraint solver."""
 
-from houyi.verification.constraint_solver import (
+from houyi.assurance.verification.constraint_solver import (
     Constraint,
     ConstraintSolver,
     PythonConstraintSolver,

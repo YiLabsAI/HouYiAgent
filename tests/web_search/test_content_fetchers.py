@@ -7,8 +7,8 @@ import urllib.error
 
 import pytest
 
-from houyi.web_search.content_fetchers import JinaContentFetcher, ReadabilityContentFetcher
-from houyi.web_search.errors import ContentFetchError, DependencyMissingError
+from houyi.skills.web_search.content_fetchers import JinaContentFetcher, ReadabilityContentFetcher
+from houyi.skills.web_search.errors import ContentFetchError, DependencyMissingError
 
 
 def test_readability_fetcher_missing_dependency(monkeypatch) -> None:

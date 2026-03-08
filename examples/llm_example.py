@@ -11,8 +11,8 @@ Requirements:
 import os
 
 from houyi import Agent, tool
-from houyi.llm.anthropic_adapter import AnthropicAdapter
-from houyi.llm.openai_adapter import OpenAIAdapter
+from houyi.adapters.llm.anthropic_adapter import AnthropicAdapter
+from houyi.adapters.llm.openai_adapter import OpenAIAdapter
 
 
 # Define a skill
@@ -74,8 +74,8 @@ def example_direct_adapter():
     """Example using LLM adapter directly."""
     import asyncio
 
-    from houyi.llm.base import LLMMessage, MessageRole
-    from houyi.llm.openai_adapter import OpenAIAdapter
+    from houyi.adapters.llm.base import LLMMessage, MessageRole
+    from houyi.adapters.llm.openai_adapter import OpenAIAdapter
 
     if not os.getenv("OPENAI_API_KEY"):
         print("⚠️  OPENAI_API_KEY not set, skipping direct adapter example")
@@ -103,8 +103,8 @@ def example_streaming():
     """Example using streaming LLM response."""
     import asyncio
 
-    from houyi.llm.base import LLMMessage, MessageRole
-    from houyi.llm.openai_adapter import OpenAIAdapter
+    from houyi.adapters.llm.base import LLMMessage, MessageRole
+    from houyi.adapters.llm.openai_adapter import OpenAIAdapter
 
     if not os.getenv("OPENAI_API_KEY"):
         print("⚠️  OPENAI_API_KEY not set, skipping streaming example")

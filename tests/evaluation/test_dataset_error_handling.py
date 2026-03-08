@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from houyi.evaluation.dataset import Dataset
+from houyi.assurance.evaluation.dataset import Dataset
 
 
 class TestDatasetErrorHandling:

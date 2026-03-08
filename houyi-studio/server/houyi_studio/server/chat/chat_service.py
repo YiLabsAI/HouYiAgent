@@ -18,25 +18,35 @@ from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import Any, cast
 
-from houyi.config.env_config import (
+from houyi.adapters.llm import (
+    DEFAULT_MODEL,
+    LLMAdapter,
+    LLMAdapterFactory,
+    LLMMessage,
+    SiliconFlowAdapter,
+    create_vertex_adapter,
+)
+from houyi.adapters.memory import MemoryStore
+from houyi.application.context.context_planner import ContextPlanner
+from houyi.application.context.context_renderer import ContextRenderer
+from houyi.application.context.token_estimator import TokenEstimator
+from houyi.application.tool_calling.runner import ToolCallRunner
+from houyi.application.tool_calling.runtime_options import build_chat_kwargs
+from houyi.application.tool_calling.tool_bridge import ToolBridge
+from houyi.application.workflow.skill_executor import SkillExecutor
+from houyi.domain.skill.registry import DEFAULT_SKILL_REGISTRY
+from houyi.infrastructure.config import (
     ENV_CHAT_TOOL_LOOP_MAX_MESSAGE_CHARS,
     ENV_CHAT_TOOL_LOOP_MAX_TOTAL_CHARS,
 )
-from houyi.context import ContextPlanner, ContextRenderer, TokenEstimator
-from houyi.core.skill.tool_bridge import ToolBridge
-from houyi.core.skill_registry import DEFAULT_SKILL_REGISTRY
-from houyi.execution.skill_executor import SkillExecutor
-from houyi.execution.tool_call_orchestrator import build_chat_kwargs
-from houyi.execution.tool_call_runner import ToolCallRunner
-from houyi.llm.base import LLMAdapter, LLMMessage
-from houyi.llm.factory import LLMAdapterFactory, _create_vertex_adapter
-from houyi.llm.models import DEFAULT_MODEL
-from houyi.llm.siliconflow_adapter import SiliconFlowAdapter
-from houyi.memory import MemoryStore
-from houyi.observability.context import TraceContext
-from houyi.observability.storage import get_storage
-from houyi.observability.trace_manager import Span
-from houyi.observability.types import SpanSchema, SpanStatus, SpanType
+from houyi.infrastructure.observability import (
+    Span,
+    SpanSchema,
+    SpanStatus,
+    SpanType,
+    TraceContext,
+    get_storage,
+)
 
 from ..skill.service import get_skill_service
 from .json_store import JsonStore
@@ -517,7 +527,7 @@ class ChatService:
                     or provider.id.startswith("vertex")
                 )
                 if is_vertex:
-                    adapter = _create_vertex_adapter()
+                    adapter = create_vertex_adapter()
                     logger.info(
                         "Model '%s' routed to Gemini adapter (provider='%s')", model, provider.name
                     )
@@ -582,7 +592,7 @@ class ChatService:
 
         memory_text = ""
         if self.memory_store:
-            from houyi.memory.types import MemoryScope
+            from houyi.adapters.memory.types import MemoryScope
 
             memory_text = self.memory_store.as_context_text(MemoryScope.SESSION)
 
@@ -892,7 +902,7 @@ class ChatService:
 
         memory_text = ""
         if self.memory_store:
-            from houyi.memory.types import MemoryScope
+            from houyi.adapters.memory.types import MemoryScope
 
             memory_text = self.memory_store.as_context_text(MemoryScope.SESSION)
 

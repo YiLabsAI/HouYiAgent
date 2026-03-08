@@ -7,7 +7,8 @@ import json
 from pathlib import Path
 from typing import Any
 
-from houyi.rag.types import Chunk, SearchResult, Source
+from houyi.rag.indexed.index.results import build_chunk_search_result
+from houyi.rag.types import Chunk, SearchResult
 
 
 class VectorIndex:
@@ -195,23 +196,8 @@ class VectorIndex:
         for label, distance in zip(labels[0], distances[0], strict=True):
             chunk = self._id_to_chunk.get(label)
             if chunk:
-                # Convert cosine distance to similarity score
                 score = 1.0 - distance
-
-                results.append(
-                    SearchResult(
-                        chunk_id=chunk.chunk_id,
-                        content=chunk.content,
-                        score=score,
-                        source=Source(
-                            file_path=chunk.metadata.get("source", ""),
-                            location=f"chunk {chunk.metadata.get('chunk_index', 0)}",
-                            snippet=chunk.content[:200],
-                            score=score,
-                        ),
-                        metadata=chunk.metadata,
-                    )
-                )
+                results.append(build_chunk_search_result(chunk=chunk, score=score))
 
         return results
 

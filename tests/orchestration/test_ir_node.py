@@ -1,6 +1,6 @@
 """Tests for IRNode class."""
 
-from houyi.orchestration.plan import IRNode, NodeType
+from houyi.application.workflow.orchestration.plan import IRNode, NodeType
 
 
 class TestIRNodeCreation:

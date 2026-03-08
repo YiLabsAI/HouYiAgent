@@ -10,8 +10,8 @@ import logging
 import os
 from pathlib import Path
 
-from houyi.config import env
-from houyi.core.skill_registry import DEFAULT_SKILL_REGISTRY, CoreToolProtectionError
+from houyi.domain.skill.registry import DEFAULT_SKILL_REGISTRY, CoreToolProtectionError
+from houyi.infrastructure.config import env
 
 from .paths import resolve_managed_skills_dir
 from .service import SkillService, set_skill_service
@@ -70,7 +70,7 @@ def _iter_external_skill_files(skills_dir: Path) -> list[Path]:
 
 def _read_declared_skill_name(skill_path: Path) -> str | None:
     """Extract declared skill name from a skill file."""
-    from houyi.core.skill.spec import SkillSpec
+    from houyi.domain.skill.spec import SkillSpec
 
     try:
         spec = SkillSpec.from_file(str(skill_path))
@@ -187,7 +187,7 @@ def _hydrate_external_runtime(
 
     # Phase 1: resolve runtime contracts via adapter import
     try:
-        from houyi.core.skill.runtime_resolver import RuntimeResolver
+        from houyi.domain.skill.runtime_resolver import RuntimeResolver
 
         resolver = RuntimeResolver()
         for name in registered_skills:
@@ -215,7 +215,7 @@ def _hydrate_external_runtime(
         if external is None:
             continue
 
-        from houyi.core.skill.runtime_contract import CapabilityTier
+        from houyi.domain.skill.runtime_contract import CapabilityTier
 
         if getattr(external, "capability_tier", None) == CapabilityTier.EXECUTABLE and callable(
             getattr(external, "executor", None)
@@ -271,7 +271,7 @@ def register_console_skills() -> None:
 
     # 1. Web search skill
     try:
-        from houyi.web_search.skill import build_web_search_skill
+        from houyi.skills.web_search.skill import build_web_search_skill
 
         _register_builtin_core(build_web_search_skill(), registered_skills)
     except ImportError as e:
@@ -408,7 +408,7 @@ def _load_external_skills(registered_skills: list[str]) -> None:
 
 def _discover_external_skill_names(skills_dir) -> set[str]:
     """Discover declared skill names from SKILL.md files under *skills_dir*."""
-    from houyi.core.skill.spec import SkillSpec
+    from houyi.domain.skill.spec import SkillSpec
 
     discovered: set[str] = set()
     for skill_path in _iter_external_skill_files(skills_dir):
@@ -472,7 +472,7 @@ def _init_skill_service() -> None:
     - ConsentManager: For user consent flow (if UI consent is enabled)
     """
     try:
-        from houyi.core.skill.metrics import InMemoryMetricsStore
+        from houyi.domain.skill.metrics import InMemoryMetricsStore
 
         metrics_store = InMemoryMetricsStore()
         logger.debug("Initialized MetricsStore for skill metrics collection")
@@ -493,7 +493,7 @@ def _init_skill_service() -> None:
 
     if enable_governance:
         try:
-            from houyi.core.skill.policy import PolicyEnforcer
+            from houyi.domain.skill.policy import PolicyEnforcer
 
             policy_enforcer = PolicyEnforcer()
             logger.debug("Initialized PolicyEnforcer for skill governance")
@@ -501,7 +501,7 @@ def _init_skill_service() -> None:
             logger.debug("PolicyEnforcer not available")
 
         try:
-            from houyi.core.skill.consent import (
+            from houyi.domain.skill.consent import (
                 ConsentManager,
                 InMemoryConsentStore,
                 PolicyBasedConsentHandler,

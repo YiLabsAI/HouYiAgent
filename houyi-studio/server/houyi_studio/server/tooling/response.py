@@ -10,10 +10,13 @@ from datetime import datetime
 from typing import Any
 from uuid import uuid4
 
-from houyi.core.skill import SkillSpec
-from houyi.execution.serialization import to_wire_data
-from houyi.execution.tool_call_core import assemble_tool_call_output, build_llm_cache_key
-from houyi.protocol.ir import ExecutionIR, NodeExecutionIR
+from houyi.application.tool_calling.tool_call_output import (
+    assemble_tool_call_output,
+    build_llm_cache_key,
+)
+from houyi.application.workflow.serialization import to_wire_data
+from houyi.domain.skill.spec import SkillSpec
+from houyi.interface.protocol.ir import ExecutionIR, NodeExecutionIR
 
 from ..gateway.events import StreamingOutputEvent
 

@@ -1,4 +1,4 @@
-"""Unit tests for houyi.config.env_config — EnvConfig singleton.
+"""Unit tests for houyi.infrastructure.config.env_config — EnvConfig singleton.
 
 Tests cover:
 - Singleton behavior
@@ -14,7 +14,7 @@ from __future__ import annotations
 import os
 from unittest.mock import patch
 
-from houyi.config.env_config import EnvConfig
+from houyi.infrastructure.config.env_config import EnvConfig
 
 
 class TestEnvConfigSingleton:

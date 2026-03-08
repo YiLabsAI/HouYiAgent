@@ -15,19 +15,16 @@ from pathlib import Path
 import pytest
 from pydantic import BaseModel
 
-from houyi.core.skill import (
-    HookEvent,
-    HookType,
+from houyi.domain.skill.hooks import HookEvent, HookType, SkillHook, SkillHooksManager
+from houyi.domain.skill.policy import (
     InvocationPolicy,
     ModelAutoInvoke,
     Permissions,
     PolicyEnforcer,
     SideEffect,
-    SkillHook,
-    SkillHooksManager,
-    SkillSpec,
 )
-from houyi.core.skill_registry import SkillRegistry
+from houyi.domain.skill.registry import SkillRegistry
+from houyi.domain.skill.spec import SkillSpec
 
 
 class EmptyInput(BaseModel):
@@ -256,7 +253,7 @@ class TestInvocationPolicyEdgeCases:
         assert "not user-invocable" in (decision_user.reason or "")
 
     def test_permissions_require_consent_for_sensitive_ops(self) -> None:
-        from houyi.core.skill import ExecPerm, FilesystemPerm, NetworkPerm
+        from houyi.domain.skill.policy import ExecPerm, FilesystemPerm, NetworkPerm
 
         assert Permissions(filesystem=FilesystemPerm(read=True)).requires_consent() is False
         assert Permissions(filesystem=FilesystemPerm(write=True)).requires_consent() is True
@@ -266,7 +263,7 @@ class TestInvocationPolicyEdgeCases:
         assert Permissions(secrets=["API_KEY"]).requires_consent() is True
 
     def test_permissions_description_generation(self) -> None:
-        from houyi.core.skill import ExecPerm, FilesystemPerm, NetworkPerm
+        from houyi.domain.skill.policy import ExecPerm, FilesystemPerm, NetworkPerm
 
         perms = Permissions(
             filesystem=FilesystemPerm(read=True, write=True, paths=["./data/*"]),

@@ -6,9 +6,9 @@ from types import SimpleNamespace
 
 from pydantic import BaseModel
 
-from houyi.core.skill.spec import SkillSpec
-from houyi.core.skill.tool_bridge import ToolBridge, build_tool_definitions_for_skill
-from houyi.core.skill_registry import SkillRegistry
+from houyi.application.tool_calling.tool_bridge import ToolBridge, build_tool_definitions_for_skill
+from houyi.domain.skill.registry import SkillRegistry
+from houyi.domain.skill.spec import SkillSpec
 
 
 class _InputA(BaseModel):

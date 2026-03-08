@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
+from houyi_studio.server.gateway import app as gateway_app_module
 from houyi_studio.server.gateway.app import app
 
 
@@ -35,7 +36,7 @@ class TestKnowledgeUpload:
 
     def test_upload_returns_404_for_nonexistent_library(self, client):
         """Should return 404 when library doesn't exist."""
-        with patch("houyi_studio.server.gateway.app.get_knowledge_service") as mock_service:
+        with patch.object(gateway_app_module, "get_knowledge_service") as mock_service:
             mock_service.return_value.get_library.return_value = None
 
             response = client.post(
@@ -49,7 +50,7 @@ class TestKnowledgeUpload:
     def test_upload_saves_file_to_knowledge_dir(self, client, mock_library, tmp_path):
         """Should save uploaded file to library's upload directory."""
         upload_dir = tmp_path / "uploads"
-        with patch("houyi_studio.server.gateway.app.get_knowledge_service") as mock_service:
+        with patch.object(gateway_app_module, "get_knowledge_service") as mock_service:
             svc = mock_service.return_value
             svc.get_library.return_value = mock_library
             svc.library_upload_dir.return_value = upload_dir
@@ -75,7 +76,7 @@ class TestKnowledgeUpload:
         upload_dir = tmp_path / "uploads"
         assert not upload_dir.exists()
 
-        with patch("houyi_studio.server.gateway.app.get_knowledge_service") as mock_service:
+        with patch.object(gateway_app_module, "get_knowledge_service") as mock_service:
             svc = mock_service.return_value
             svc.get_library.return_value = mock_library
             svc.library_upload_dir.return_value = upload_dir
@@ -91,7 +92,7 @@ class TestKnowledgeUpload:
     def test_upload_multiple_files(self, client, mock_library, tmp_path):
         """Should handle multiple file uploads."""
         upload_dir = tmp_path / "uploads"
-        with patch("houyi_studio.server.gateway.app.get_knowledge_service") as mock_service:
+        with patch.object(gateway_app_module, "get_knowledge_service") as mock_service:
             svc = mock_service.return_value
             svc.get_library.return_value = mock_library
             svc.library_upload_dir.return_value = upload_dir
@@ -112,7 +113,7 @@ class TestKnowledgeUpload:
     def test_upload_sanitizes_filename(self, client, mock_library, tmp_path):
         """Should sanitize filename to prevent path traversal."""
         upload_dir = tmp_path / "uploads"
-        with patch("houyi_studio.server.gateway.app.get_knowledge_service") as mock_service:
+        with patch.object(gateway_app_module, "get_knowledge_service") as mock_service:
             svc = mock_service.return_value
             svc.get_library.return_value = mock_library
             svc.library_upload_dir.return_value = upload_dir

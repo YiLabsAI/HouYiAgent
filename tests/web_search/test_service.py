@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from houyi.config.env_config import (
+from houyi.assurance.verification.cache import LRUCache
+from houyi.infrastructure.config.env_config import (
     ENV_BOCHA_API_KEY,
     ENV_PROXY_URL,
     ENV_SEARXNG_BASE_URL,
@@ -15,8 +16,7 @@ from houyi.config.env_config import (
     ENV_WEB_SEARCH_PROVIDER,
     ENV_WEB_SEARCH_PROXY_ENABLED,
 )
-from houyi.verification.cache import LRUCache
-from houyi.web_search.errors import (
+from houyi.skills.web_search.errors import (
     ContentFetchError,
     DependencyMissingError,
     ProviderInvalidResponse,
@@ -24,12 +24,12 @@ from houyi.web_search.errors import (
     ProviderTimeoutError,
     WebSearchError,
 )
-from houyi.web_search.service import (
+from houyi.skills.web_search.service import (
     WebSearchRetryPolicy,
     WebSearchService,
     _reset_global_cache_for_tests,
 )
-from houyi.web_search.types import WebSearchResult
+from houyi.skills.web_search.types import WebSearchResult
 
 
 class _Provider:
@@ -166,9 +166,9 @@ async def test_web_search_service_include_content(monkeypatch) -> None:
         async def fetch(self, urls):
             return {}
 
-    monkeypatch.setattr("houyi.web_search.service.JinaContentFetcher.fetch", _fetch)
+    monkeypatch.setattr("houyi.skills.web_search.service.JinaContentFetcher.fetch", _fetch)
     monkeypatch.setattr(
-        "houyi.web_search.service.ReadabilityContentFetcher", lambda: _Readability()
+        "houyi.skills.web_search.service.ReadabilityContentFetcher", lambda: _Readability()
     )
     service = WebSearchService(provider=provider)
     response = await service.search("q", max_results=1, include_content=True)
@@ -189,9 +189,9 @@ async def test_web_search_service_include_content_error(monkeypatch) -> None:
         async def fetch(self, urls):
             raise ContentFetchError("fetch-failed")
 
-    monkeypatch.setattr("houyi.web_search.service.JinaContentFetcher.fetch", _fetch)
+    monkeypatch.setattr("houyi.skills.web_search.service.JinaContentFetcher.fetch", _fetch)
     monkeypatch.setattr(
-        "houyi.web_search.service.ReadabilityContentFetcher", lambda: _Readability()
+        "houyi.skills.web_search.service.ReadabilityContentFetcher", lambda: _Readability()
     )
     service = WebSearchService(provider=provider)
     response = await service.search("q", max_results=1, include_content=True)
@@ -213,8 +213,10 @@ async def test_web_search_service_include_content_dependency_missing(monkeypatch
             "Missing optional dependency 'readability-lxml' or 'beautifulsoup4'. Install: pip install 'houyi[websearch-readability]'"
         )
 
-    monkeypatch.setattr("houyi.web_search.service.JinaContentFetcher.fetch", _fetch)
-    monkeypatch.setattr("houyi.web_search.service.ReadabilityContentFetcher", _missing_readability)
+    monkeypatch.setattr("houyi.skills.web_search.service.JinaContentFetcher.fetch", _fetch)
+    monkeypatch.setattr(
+        "houyi.skills.web_search.service.ReadabilityContentFetcher", _missing_readability
+    )
     service = WebSearchService(provider=provider)
     response = await service.search("q", max_results=1, include_content=True)
 
@@ -292,9 +294,9 @@ async def test_web_search_service_cache_hit_preserves_extraction_metadata(monkey
         async def fetch(self, urls):
             return {}
 
-    monkeypatch.setattr("houyi.web_search.service.JinaContentFetcher.fetch", _fetch)
+    monkeypatch.setattr("houyi.skills.web_search.service.JinaContentFetcher.fetch", _fetch)
     monkeypatch.setattr(
-        "houyi.web_search.service.ReadabilityContentFetcher", lambda: _Readability()
+        "houyi.skills.web_search.service.ReadabilityContentFetcher", lambda: _Readability()
     )
 
     cache = LRUCache(max_size=10, default_ttl=60)
@@ -382,7 +384,7 @@ async def test_web_search_service_retry_exhausted() -> None:
 @pytest.mark.asyncio
 async def test_query_provider_creates_internal_spans_when_trace_active() -> None:
     """_query_provider should create INTERNAL sub-spans when TraceContext has a parent."""
-    from houyi.observability import Span, SpanType, TraceContext
+    from houyi.infrastructure.observability import Span, SpanType, TraceContext
 
     parent = Span(name="tool.web_search", span_type=SpanType.TOOL)
     token = TraceContext.push(parent)
@@ -406,7 +408,7 @@ async def test_query_provider_creates_internal_spans_when_trace_active() -> None
 @pytest.mark.asyncio
 async def test_query_provider_no_spans_without_trace_context() -> None:
     """No spans should be created when TraceContext has no active parent."""
-    from houyi.observability import TraceContext
+    from houyi.infrastructure.observability import TraceContext
 
     # Ensure no active context
     assert TraceContext.current() is None
@@ -421,7 +423,7 @@ async def test_query_provider_no_spans_without_trace_context() -> None:
 @pytest.mark.asyncio
 async def test_query_provider_error_span_on_failure() -> None:
     """Provider failure should create an error span."""
-    from houyi.observability import Span, SpanType, TraceContext
+    from houyi.infrastructure.observability import Span, SpanType, TraceContext
 
     parent = Span(name="tool.web_search", span_type=SpanType.TOOL)
     token = TraceContext.push(parent)
@@ -443,7 +445,7 @@ async def test_query_provider_error_span_on_failure() -> None:
 @pytest.mark.asyncio
 async def test_content_fetch_creates_sub_spans(monkeypatch) -> None:
     """include_content should create content.fetch and fetch.jina sub-spans."""
-    from houyi.observability import Span, SpanType, TraceContext
+    from houyi.infrastructure.observability import Span, SpanType, TraceContext
 
     parent = Span(name="tool.web_search", span_type=SpanType.TOOL)
     token = TraceContext.push(parent)
@@ -453,7 +455,7 @@ async def test_content_fetch_creates_sub_spans(monkeypatch) -> None:
     async def _fetch(self, urls):
         return {"u": "content text"}
 
-    monkeypatch.setattr("houyi.web_search.service.JinaContentFetcher.fetch", _fetch)
+    monkeypatch.setattr("houyi.skills.web_search.service.JinaContentFetcher.fetch", _fetch)
 
     try:
         service = WebSearchService(provider=provider)

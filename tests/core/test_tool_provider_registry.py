@@ -6,8 +6,8 @@ from dataclasses import dataclass
 
 from pydantic import BaseModel
 
-from houyi.core.skill import ExecutionMode, SkillSpec
-from houyi.core.tool_provider_registry import ToolProviderRegistry
+from houyi.domain.skill.spec import ExecutionMode, SkillSpec
+from houyi.domain.skill.tool_provider_registry import ToolProviderRegistry
 
 
 @dataclass

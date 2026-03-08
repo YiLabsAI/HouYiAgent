@@ -3,10 +3,10 @@
 from pydantic import BaseModel
 
 from houyi import AgentSpec, SkillSpec
-from houyi.evaluation.dataset import Dataset
-from houyi.evaluation.dataset import TestCase as EvalTestCase
-from houyi.evaluation.evaluators import AccuracyEvaluator, LatencyEvaluator
-from houyi.evaluation.runner import evaluate
+from houyi.assurance.evaluation.dataset import Dataset
+from houyi.assurance.evaluation.dataset import TestCase as EvalTestCase
+from houyi.assurance.evaluation.evaluators import AccuracyEvaluator, LatencyEvaluator
+from houyi.assurance.evaluation.runner import evaluate
 
 
 class TestEvaluate:

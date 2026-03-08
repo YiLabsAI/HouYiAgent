@@ -7,7 +7,7 @@ import json
 import tempfile
 from pathlib import Path
 
-from houyi.core.skill.metrics import (
+from houyi.domain.skill.metrics import (
     CostMetrics,
     LatencyMetrics,
     MetricsCollector,

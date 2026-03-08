@@ -18,7 +18,7 @@ def _default_knowledge_dir() -> str:
     Reads RAG_KNOWLEDGE_DIR env var; falls back to ``"knowledge/"``.
     Logs a warning if the env var is not explicitly set.
     """
-    from houyi.config import env
+    from houyi.infrastructure.config import env
 
     return env.rag_knowledge_dir
 

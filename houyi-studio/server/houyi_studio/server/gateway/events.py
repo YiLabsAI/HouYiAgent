@@ -9,12 +9,12 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
-from houyi.protocol.ir.checkpoint_ir import LLMCallLog
-from houyi.protocol.ir.execution_ir import ExecutionStatus, NodeStatus
-from houyi.protocol.ir.plan_ir import PlanIR
+from houyi.interface.protocol.ir.checkpoint_ir import LLMCallLog
+from houyi.interface.protocol.ir.execution_ir import ExecutionStatus, NodeStatus
+from houyi.interface.protocol.ir.plan_ir import PlanIR
 
 if TYPE_CHECKING:
-    from houyi.observability import Span
+    from houyi.infrastructure.observability import Span
 
 
 class EventType(str, Enum):

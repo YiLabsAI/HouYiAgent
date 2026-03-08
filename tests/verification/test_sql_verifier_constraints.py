@@ -2,8 +2,8 @@
 
 import pytest
 
-from houyi.verification.sql_verifier import SQLVerifier
-from houyi.verification.verifier import VerificationRule
+from houyi.assurance.verification.sql_verifier import SQLVerifier
+from houyi.assurance.verification.verifier import VerificationRule
 
 
 class TestSQLVerifierConstraints:

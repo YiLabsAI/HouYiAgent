@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-from houyi.core.skill_registry import SkillRegistry
+from houyi.domain.skill.registry import SkillRegistry
 
 
 class TestLoadSkill:

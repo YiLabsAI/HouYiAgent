@@ -17,7 +17,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from houyi.core.skill_registry import CoreToolProtectionError, SkillRegistry
+from houyi.domain.skill.registry import CoreToolProtectionError, SkillRegistry
 
 from .paths import (
     ENV_MANAGED_SKILLS_DIR as PATHS_ENV_MANAGED_SKILLS_DIR,
@@ -390,14 +390,14 @@ class SkillLoader:
             )
 
         try:
-            from houyi.core.skill.schema import parse_skill_md
+            from houyi.domain.skill.schema import parse_skill_md
 
             parse_skill_md(content)
         except Exception as e:
             return False, ERR_PARSE_FAILED, (f"Failed to parse {SKILL_MD_UPPER} content: {e}")
 
         try:
-            from houyi.core.skill.spec import SkillSpec
+            from houyi.domain.skill.spec import SkillSpec
 
             cache_path = _cache_url_content(raw_url, content)
             skill = SkillSpec.from_file(cache_path)
@@ -520,7 +520,7 @@ class SkillLoader:
     def _extract_alias_from_skill_file(skill_file: Path) -> str | None:
         """Extract alias candidate from SKILL.md frontmatter name."""
         try:
-            from houyi.core.skill.schema import parse_skill_md
+            from houyi.domain.skill.schema import parse_skill_md
 
             parsed = parse_skill_md(skill_file.read_text(encoding="utf-8"))
         except Exception:
@@ -796,7 +796,7 @@ class SkillLoader:
            matching core skill (ext__X -> X).
         """
         self._resolve_runtime_contracts(loaded_names)
-        from houyi.core.skill.runtime_contract import CapabilityTier
+        from houyi.domain.skill.runtime_contract import CapabilityTier
 
         for name in loaded_names:
             if not name:
@@ -1225,7 +1225,7 @@ class SkillLoader:
     def _resolve_runtime_contracts(self, loaded_names: list[str]) -> None:
         """Phase 1: resolve runtime contracts via adapter import."""
         try:
-            from houyi.core.skill.runtime_resolver import RuntimeResolver
+            from houyi.domain.skill.runtime_resolver import RuntimeResolver
         except ImportError:
             return
 

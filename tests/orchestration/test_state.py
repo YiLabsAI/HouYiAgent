@@ -1,6 +1,11 @@
 """Tests for orchestration/state.py."""
 
-from houyi.orchestration.state import SessionState, TaskState, TaskStatus, VerificationResult
+from houyi.application.workflow.orchestration.state import (
+    SessionState,
+    TaskState,
+    TaskStatus,
+    VerificationResult,
+)
 
 
 class TestSessionState:

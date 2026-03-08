@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 import pytest
 
-from houyi.core.skill.consent import (
+from houyi.domain.skill.consent import (
     CLIConsentHandler,
     ConsentManager,
     ConsentRequest,
@@ -22,7 +22,7 @@ from houyi.core.skill.consent import (
     InMemoryConsentStore,
     PolicyBasedConsentHandler,
 )
-from houyi.core.skill.policy import (
+from houyi.domain.skill.policy import (
     InvocationPolicy,
     Permissions,
     SideEffect,

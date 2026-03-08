@@ -14,7 +14,7 @@ import urllib.request
 from typing import Any
 
 from houyi import tool
-from houyi.core.skill.policy import InvocationPolicy, NetworkPerm, Permissions, SideEffect
+from houyi.domain.skill.policy import InvocationPolicy, NetworkPerm, Permissions, SideEffect
 
 logger = logging.getLogger(__name__)
 
@@ -207,7 +207,7 @@ get_location.permissions = Permissions(network=NetworkPerm(enabled=True))
 
 # ── Default lifecycle hooks ──────────────────────────────────────────
 
-from houyi.core.skill.hooks import HookEvent, HookType, SkillHook
+from houyi.domain.skill.hooks import HookEvent, HookType, SkillHook
 
 
 def _location_pre_tool_use(context: Any) -> dict[str, Any]:

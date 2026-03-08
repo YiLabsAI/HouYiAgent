@@ -4,6 +4,8 @@ This directory contains scripts to help maintain code quality.
 
 It also includes convenience scripts for starting the HouYi Studio backend and UI during development.
 
+The canonical developer entrypoints are the `make` targets in the repo root. The scripts in this directory are the concrete wrappers those targets call.
+
 ## Script Conventions
 
 - Shell scripts use `#!/usr/bin/env bash`.
@@ -20,9 +22,13 @@ This is the current repo convention for portability across environments where th
 # Full checks before committing
 ./scripts/check_code.sh
 
+# Local integration gate for env-backed tests
+./scripts/check_integration.sh
+
 # Or use Makefile (easier)
 make quick-check
 make check
+make check-integration
 ```
 
 ## Pre-Commit Verification
@@ -37,6 +43,12 @@ For a more comprehensive local check, run:
 
 ```bash
 make check
+```
+
+For env-backed integration coverage after the main gate is green, run:
+
+```bash
+make check-integration
 ```
 
 These commands are the canonical entrypoints. The shell scripts below are convenience wrappers.
@@ -122,13 +134,60 @@ Restarts only the UI (useful when iterating on frontend code).
 **What it does**:
 - ✅ Ruff formatting and linting (source code)
 - ✅ Ruff basic checks (tests)
+- ✅ Mypy type checking
+- ✅ Changed-file complexity and class-size gates
 - ✅ SDK unit tests
 - ✅ Studio server tests
-- ✅ SDK coverage check (must be ≥80%)
+- ✅ SDK coverage check (must be ≥85%)
 
 **When to use**: Before committing code, before opening PR
 
-**Time**: ~20-30 seconds
+**Time**: ~1-3 minutes (depends on test runtime)
+
+### `check_integration.sh`
+
+**Purpose**: Local-only integration gate for env-backed tests
+
+**What it does**:
+- ✅ Verifies local integration dependencies
+- ✅ Runs `tests/integration/`
+- ✅ Exercises real env / `.env` backed integrations, including provider-backed paths when configured
+
+**When to use**: After `make check` is green and you need to validate integration paths that depend on local credentials, provider SDKs, or other env-backed setup
+
+**Time**: Variable; depends on enabled integrations and network/provider latency
+
+### `check_class_size.py`
+
+**Purpose**: Report or gate oversized SDK classes
+
+**What it does**:
+- ✅ Evaluates SDK class size against warning/error thresholds
+- ✅ Supports changed-file-only gating from `check_code.sh`
+
+**When to use**: Usually indirectly via `make check`; run directly only when investigating class-size warnings or tuning thresholds
+
+### `dev.sh`
+
+**Purpose**: Start backend and frontend together in tmux
+
+### `restart-backend.sh`
+
+**Purpose**: Restart only the backend during Python iteration
+
+### `restart-frontend.sh`
+
+**Purpose**: Restart only the frontend during UI iteration
+
+### `warmup_embeddings.py`
+
+**Purpose**: Warm embedding runtime and cache before backend startup or provider troubleshooting
+
+## README Maintenance Rule
+
+- Add or update this README whenever a script becomes a recommended developer entrypoint, a quality gate wrapper, or a common troubleshooting command.
+- Internal helper scripts that are only called by another script do not need full end-user documentation here.
+- If a script changes the canonical local workflow, update both this README and any corresponding Makefile help text in the same change.
 
 ## Exit Codes
 
@@ -151,6 +210,7 @@ Run before committing:
 
 ```bash
 make check
+make check-integration  # when env-backed integrations are part of your change
 git add .
 git commit -m "your message"
 ```
@@ -194,6 +254,7 @@ make install-dev
 2. Fix the issues
 3. Run `make quick-check` to verify
 4. Run `make check` before committing
+5. If your change touches env-backed or provider-backed paths, run `make check-integration`
 
 ## CI/CD
 

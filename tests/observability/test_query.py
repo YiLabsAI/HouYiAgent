@@ -8,23 +8,23 @@ from pathlib import Path
 
 import pytest
 
-from houyi.observability.content_store import (
+from houyi.infrastructure.observability.content_store import (
     ContentStoreConfig,
     ContentType,
     FileContentStore,
 )
-from houyi.observability.query import (
+from houyi.infrastructure.observability.query import (
     ObservabilityQuery,
     QueryResult,
     TraceView,
     get_query,
     reset_query,
 )
-from houyi.observability.storage import (
+from houyi.infrastructure.observability.storage import (
     SpanStorageConfig,
     SQLiteSpanStorage,
 )
-from houyi.observability.types import (
+from houyi.infrastructure.observability.types import (
     CostInfo,
     SpanSchema,
     SpanType,

@@ -9,8 +9,9 @@
 ## Testing
 
 - [ ] `make check`
+- [ ] `make check-integration` (if env-backed / provider-backed paths changed)
 - [ ] Unit tests added/updated
-- [ ] Coverage ≥80%
+- [ ] Coverage ≥85%
 
 ## E2E (Console UI)
 

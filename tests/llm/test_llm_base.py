@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from houyi.llm.base import (
+from houyi.adapters.llm.base import (
     DEFAULT_TEMPERATURE,
     LLMAdapter,
     LLMMessage,

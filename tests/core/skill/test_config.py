@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from unittest.mock import patch
 
-from houyi.core.skill.config import (
+from houyi.domain.skill.config import (
     DEFAULT_SKILL_CONFIG,
     ConsentConfig,
     HookConfig,

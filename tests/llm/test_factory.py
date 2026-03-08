@@ -1,4 +1,4 @@
-"""Unit tests for houyi.llm.factory — LLMAdapterFactory."""
+"""Unit tests for houyi.adapters.llm.factory — LLMAdapterFactory."""
 
 from __future__ import annotations
 
@@ -9,20 +9,20 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from houyi.config.env_config import (
-    ENV_DEEPSEEK_API_KEY,
-    ENV_DEFAULT_LLM_PROVIDER,
-    ENV_OPENAI_API_KEY,
-    EnvConfig,
-)
-from houyi.llm.factory import LLMAdapterFactory
-from houyi.llm.models import (
+from houyi.adapters.llm.factory import LLMAdapterFactory
+from houyi.adapters.llm.models import (
     PROVIDER_DEEPSEEK,
     PROVIDER_OPENAI_COMPAT,
     PROVIDER_SILICONFLOW,
     PROVIDER_VERTEX,
 )
-from houyi.llm.siliconflow_adapter import SiliconFlowAdapter
+from houyi.adapters.llm.siliconflow_adapter import SiliconFlowAdapter
+from houyi.infrastructure.config.env_config import (
+    ENV_DEEPSEEK_API_KEY,
+    ENV_DEFAULT_LLM_PROVIDER,
+    ENV_OPENAI_API_KEY,
+    EnvConfig,
+)
 
 
 @pytest.fixture(autouse=True)

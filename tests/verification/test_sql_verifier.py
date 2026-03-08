@@ -2,8 +2,8 @@
 
 import pytest
 
-from houyi.verification.sql_verifier import SQLVerifier
-from houyi.verification.verifier import VerificationRule
+from houyi.assurance.verification.sql_verifier import SQLVerifier
+from houyi.assurance.verification.verifier import VerificationRule
 
 
 @pytest.fixture
@@ -59,7 +59,7 @@ async def test_auto_fix_semicolon(sql_verifier):
         error_type="missing_semicolon",
     )
 
-    from houyi.verification.verifier import VerificationResult
+    from houyi.assurance.verification.verifier import VerificationResult
 
     error = VerificationResult(
         rule_id="test",
@@ -119,7 +119,7 @@ async def test_empty_query(sql_verifier, basic_rule):
 @pytest.mark.asyncio
 async def test_sql_format_auto_fix(sql_verifier):
     """Test SQL formatting auto-fix."""
-    from houyi.verification.verifier import VerificationResult
+    from houyi.assurance.verification.verifier import VerificationResult
 
     sql = "select*from users where id=1"
     error = VerificationResult(
@@ -137,7 +137,7 @@ async def test_sql_format_auto_fix(sql_verifier):
 @pytest.mark.asyncio
 async def test_auto_fix_non_string(sql_verifier):
     """Test auto-fix handles non-string input gracefully."""
-    from houyi.verification.verifier import VerificationResult
+    from houyi.assurance.verification.verifier import VerificationResult
 
     error = VerificationResult(
         rule_id="test",
@@ -153,7 +153,7 @@ async def test_auto_fix_non_string(sql_verifier):
 @pytest.mark.asyncio
 async def test_auto_fix_unsupported_error(sql_verifier):
     """Test auto-fix returns False for unsupported errors."""
-    from houyi.verification.verifier import VerificationResult
+    from houyi.assurance.verification.verifier import VerificationResult
 
     sql = "SELECT * FROM users"
     error = VerificationResult(

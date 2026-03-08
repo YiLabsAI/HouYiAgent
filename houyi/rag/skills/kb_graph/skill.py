@@ -6,8 +6,11 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
-from houyi.core.skill import ExecutionMode, SkillSpec
-from houyi.core.skill.hooks import HookEvent, HookType, SkillHook
+from houyi.domain.skill.hooks import HookEvent, HookType, SkillHook
+from houyi.domain.skill.policy import ExecutionMode
+from houyi.domain.skill.spec import SkillSpec
+from houyi.rag.config import _default_knowledge_dir
+from houyi.rag.skills._rag_runtime import build_skill_rag
 
 
 class Entity(BaseModel):
@@ -31,6 +34,10 @@ class KBGraphInput(BaseModel):
     """Input schema for knowledge graph query."""
 
     query: str = Field(..., description="Query for graph traversal")
+    knowledge_dir: str = Field(
+        default_factory=_default_knowledge_dir,
+        description="Knowledge base root directory (reads RAG_KNOWLEDGE_DIR env var)",
+    )
     start_entities: list[str] = Field(
         default_factory=list,
         description="Starting entity IDs",
@@ -73,17 +80,21 @@ class KBGraphOutput(BaseModel):
 async def execute_kb_graph(input_data: KBGraphInput) -> KBGraphOutput:
     """Execute knowledge graph query.
 
+    This skill uses the same runtime RAG builder contract as the other runtime
+    RAG skills so knowledge storage selection stays consistent across search,
+    ingest, and graph-oriented executors.
+
     Args:
         input_data: Graph query input parameters
 
     Returns:
         Graph query output with entities and relations
     """
-    from houyi.rag import RAG
-
     try:
-        # Create RAG service in indexed mode
-        rag = RAG(mode="indexed")
+        rag = build_skill_rag(
+            mode="indexed",
+            knowledge_dir=input_data.knowledge_dir,
+        )
 
         # Execute graph query
         result = await rag.graph_query(

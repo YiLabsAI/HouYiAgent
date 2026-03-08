@@ -110,3 +110,57 @@ def test_weather_pre_tool_use_accepts_city_mode() -> None:
     result = weather_skill._weather_pre_tool_use(_Ctx({"city": "Hangzhou", "provider": "auto"}))
     assert result["success"] is True
     assert "mode=city" in result["output"]
+
+
+def test_validate_coordinates_rejects_out_of_range() -> None:
+    ok, msg = weather_skill._validate_coordinates(100.0, 10.0)
+    assert ok is False
+    assert "out of range" in msg
+
+
+def test_normalize_date_input_supports_relative() -> None:
+    assert weather_skill._normalize_date_input("today") == weather_skill.get_date._original_func()
+    assert weather_skill._normalize_date_input(
+        " tomorrow "
+    ) == weather_skill.get_date._original_func(1)
+
+
+def test_safe_float_handles_invalid_values() -> None:
+    assert weather_skill._safe_float("12.3") == 12.3
+    assert weather_skill._safe_float(None) is None
+
+
+def test_weather_code_to_description_fallback() -> None:
+    assert weather_skill._weather_code_to_description(None) == "Unknown"
+    assert weather_skill._weather_code_to_description(999) == "Weather code 999"
+
+
+def test_weather_post_tool_use_truncates_output() -> None:
+    class _Ctx2:
+        tool_result: str = "x" * 500
+
+    result = weather_skill._weather_post_tool_use(_Ctx2())
+    assert result["success"] is True
+    assert "[PostToolUse]" in str(result["output"])
+
+
+def test_get_weather_auto_returns_unavailable_when_both_backends_fail(monkeypatch) -> None:
+    monkeypatch.setattr(
+        weather_skill,
+        "_resolve_coordinates_from_city",
+        lambda city, country=None: {
+            "found": True,
+            "city": city,
+            "country": country,
+            "lat": 31.2,
+            "lon": 121.5,
+        },
+    )
+
+    def _raise(*args: Any, **kwargs: Any) -> str:
+        raise OSError("fail")
+
+    monkeypatch.setattr(weather_skill, "_build_open_meteo_result", _raise)
+    monkeypatch.setattr(weather_skill, "_build_wttr_result", _raise)
+    out = _call_get_weather(city="Shanghai", provider="auto")
+    assert "Weather unavailable" in out

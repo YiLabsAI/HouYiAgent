@@ -15,6 +15,7 @@ import sqlite3
 from pathlib import Path
 
 from houyi.rag.config import GraphConfig
+from houyi.rag.indexed.graph.ppr import PPRCalculator
 from houyi.rag.types import Entity, Relation, SearchResult, Source
 
 
@@ -40,7 +41,7 @@ class GraphStore:
             config: Graph configuration
         """
         if knowledge_dir is None:
-            from houyi.config import env
+            from houyi.infrastructure.config import env
 
             knowledge_dir = env.rag_knowledge_dir
         self.knowledge_dir = Path(knowledge_dir)
@@ -211,11 +212,17 @@ class GraphStore:
         if not seed_entities:
             return []
 
-        # Run PPR from seeds
-        ppr_scores = await self._ppr(
-            seeds=seed_entities,
-            alpha=self.config.ppr_alpha,
-            max_iter=100,
+        ppr_scores = (
+            PPRCalculator(
+                alpha=self.config.ppr_alpha,
+                max_iter=100,
+            )
+            .compute(
+                adjacency=self._weighted_adjacency(),
+                seeds=seed_entities,
+                entity_ids=list(self._entities.keys()),
+            )
+            .scores
         )
 
         # Sort by score and return top-k
@@ -260,75 +267,13 @@ class GraphStore:
 
         return matches[:10]  # Limit seeds
 
-    async def _ppr(
-        self,
-        seeds: list[str],
-        alpha: float = 0.85,
-        max_iter: int = 100,
-        epsilon: float = 1e-6,
-    ) -> dict[str, float]:
-        """Personalized PageRank algorithm.
+    def _weighted_adjacency(self) -> dict[str, list[tuple[str, float]]]:
+        """Project store adjacency into the weight-only shape consumed by graph algorithms."""
 
-        Algorithm adapted from HippoRAG (NeurIPS 2024).
-        Reference: https://github.com/OSU-NLP-Group/HippoRAG
-
-        Args:
-            seeds: Seed entity IDs
-            alpha: Teleport probability (damping factor)
-            max_iter: Maximum iterations
-            epsilon: Convergence threshold
-
-        Returns:
-            Dict of entity_id -> PPR score
-        """
-        if not seeds or not self._entities:
-            return {}
-
-        # Initialize scores
-        n = len(self._entities)
-        entity_ids = list(self._entities.keys())
-        id_to_idx = {eid: i for i, eid in enumerate(entity_ids)}
-
-        # Personalization vector (uniform over seeds)
-        p = [0.0] * n
-        for seed in seeds:
-            if seed in id_to_idx:
-                p[id_to_idx[seed]] = 1.0 / len(seeds)
-
-        # Initialize scores
-        scores = list(p)
-
-        # Power iteration
-        for _ in range(max_iter):
-            new_scores = [0.0] * n
-
-            # Random walk contribution
-            for src_id, neighbors in self._adjacency.items():
-                if src_id not in id_to_idx:
-                    continue
-                src_idx = id_to_idx[src_id]
-                src_score = scores[src_idx]
-
-                if neighbors:
-                    total_weight = sum(w for _, _, w in neighbors)
-                    for dst_id, _, weight in neighbors:
-                        if dst_id in id_to_idx:
-                            dst_idx = id_to_idx[dst_id]
-                            new_scores[dst_idx] += (1 - alpha) * src_score * weight / total_weight
-
-            # Teleport contribution
-            for i in range(n):
-                new_scores[i] += alpha * p[i]
-
-            # Check convergence
-            diff = sum(abs(new_scores[i] - scores[i]) for i in range(n))
-            scores = new_scores
-
-            if diff < epsilon:
-                break
-
-        # Convert to dict
-        return {entity_ids[i]: scores[i] for i in range(n) if scores[i] > 0}
+        return {
+            source_id: [(target_id, weight) for target_id, _, weight in neighbors]
+            for source_id, neighbors in self._adjacency.items()
+        }
 
     async def bfs_traverse(
         self,

@@ -398,7 +398,7 @@ class TestPreWriteHook:
 
     @pytest.mark.asyncio
     async def test_no_plan_file(self):
-        from houyi.core.skill.hooks import HookContext
+        from houyi.domain.skill.hooks import HookContext
         from houyi.skills.planning.hooks import pre_write_hook
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -410,7 +410,7 @@ class TestPreWriteHook:
 
     @pytest.mark.asyncio
     async def test_with_plan_file(self):
-        from houyi.core.skill.hooks import HookContext
+        from houyi.domain.skill.hooks import HookContext
         from houyi.skills.planning.hooks import pre_write_hook
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -436,7 +436,7 @@ class TestPreWriteHook:
 
     @pytest.mark.asyncio
     async def test_with_many_remaining_tasks(self):
-        from houyi.core.skill.hooks import HookContext
+        from houyi.domain.skill.hooks import HookContext
         from houyi.skills.planning.hooks import pre_write_hook
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -462,7 +462,7 @@ class TestPreWriteHook:
 
     @pytest.mark.asyncio
     async def test_handles_exception(self):
-        from houyi.core.skill.hooks import HookContext
+        from houyi.domain.skill.hooks import HookContext
         from houyi.skills.planning.hooks import pre_write_hook
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -482,7 +482,7 @@ class TestPostToolHook:
 
     @pytest.mark.asyncio
     async def test_no_plan_file(self):
-        from houyi.core.skill.hooks import HookContext
+        from houyi.domain.skill.hooks import HookContext
         from houyi.skills.planning.hooks import post_tool_hook
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -493,7 +493,7 @@ class TestPostToolHook:
 
     @pytest.mark.asyncio
     async def test_with_plan_file(self):
-        from houyi.core.skill.hooks import HookContext
+        from houyi.domain.skill.hooks import HookContext
         from houyi.skills.planning.hooks import post_tool_hook
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -518,7 +518,7 @@ class TestPostToolHook:
     async def test_handles_exception(self):
         from unittest.mock import patch
 
-        from houyi.core.skill.hooks import HookContext
+        from houyi.domain.skill.hooks import HookContext
         from houyi.skills.planning.hooks import post_tool_hook
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -541,7 +541,7 @@ class TestStopHook:
 
     @pytest.mark.asyncio
     async def test_no_plan_file(self):
-        from houyi.core.skill.hooks import HookContext
+        from houyi.domain.skill.hooks import HookContext
         from houyi.skills.planning.hooks import stop_hook
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -552,7 +552,7 @@ class TestStopHook:
 
     @pytest.mark.asyncio
     async def test_complete_plan(self):
-        from houyi.core.skill.hooks import HookContext
+        from houyi.domain.skill.hooks import HookContext
         from houyi.skills.planning.hooks import stop_hook
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -575,7 +575,7 @@ class TestStopHook:
 
     @pytest.mark.asyncio
     async def test_incomplete_plan(self):
-        from houyi.core.skill.hooks import HookContext
+        from houyi.domain.skill.hooks import HookContext
         from houyi.skills.planning.hooks import stop_hook
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -600,7 +600,7 @@ class TestStopHook:
 
     @pytest.mark.asyncio
     async def test_many_incomplete_tasks(self):
-        from houyi.core.skill.hooks import HookContext
+        from houyi.domain.skill.hooks import HookContext
         from houyi.skills.planning.hooks import stop_hook
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -629,7 +629,7 @@ class TestStopHook:
     async def test_handles_exception(self):
         from unittest.mock import patch
 
-        from houyi.core.skill.hooks import HookContext
+        from houyi.domain.skill.hooks import HookContext
         from houyi.skills.planning.hooks import stop_hook
 
         with tempfile.TemporaryDirectory() as tmpdir:

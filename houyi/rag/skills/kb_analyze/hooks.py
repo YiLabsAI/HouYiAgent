@@ -6,7 +6,7 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from houyi.core.skill.hooks import HookContext, HookResult
+    from houyi.domain.skill.hooks import HookContext, HookResult
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +37,7 @@ def get_analyze_state() -> dict[str, Any]:
 
 async def pre_analyze_hook(context: HookContext) -> HookResult:
     """Hook called before Read/Glob during analysis."""
-    from houyi.core.skill.hooks import HookResult
+    from houyi.domain.skill.hooks import HookResult
 
     tool_name = context.tool_name or ""
 
@@ -52,7 +52,7 @@ async def pre_analyze_hook(context: HookContext) -> HookResult:
 
 async def post_analyze_hook(context: HookContext) -> HookResult:
     """Hook called after tool use during analysis."""
-    from houyi.core.skill.hooks import HookResult
+    from houyi.domain.skill.hooks import HookResult
 
     tool_name = context.tool_name or ""
     tool_result = context.tool_result
@@ -77,7 +77,7 @@ async def post_analyze_hook(context: HookContext) -> HookResult:
 
 async def stop_hook(context: HookContext) -> HookResult:
     """Hook called before stopping."""
-    from houyi.core.skill.hooks import HookResult
+    from houyi.domain.skill.hooks import HookResult
 
     files = _analyze_state["files_scanned"]
     indexes = _analyze_state["indexes_checked"]

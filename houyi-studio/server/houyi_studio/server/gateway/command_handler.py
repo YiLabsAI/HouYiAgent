@@ -43,7 +43,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 from uuid import uuid4
 
-from houyi.protocol.ir import PlanIR
+from houyi.interface.protocol.ir import PlanIR
 
 from ..logging_config import get_log_level, set_log_level
 from .events import LogLevelEvent

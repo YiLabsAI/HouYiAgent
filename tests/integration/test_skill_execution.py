@@ -3,7 +3,7 @@
 Tests in this file exercise the full path: SDK core (skill spec, policy,
 consent, hooks, metrics) → ToolCallRunner → SkillExecutor.
 
-Use ``pytest -m smoke`` to run only the critical-path smoke tests.
+Use ``pytest -m smoke`` to run the critical-path execution scenarios.
 """
 
 from __future__ import annotations
@@ -17,24 +17,28 @@ from unittest.mock import MagicMock
 import pytest
 from pydantic import BaseModel
 
-from houyi.core.skill import (
+from houyi.application.tool_calling.runner import ToolCallRunner
+from houyi.domain.skill.consent import (
     ConsentManager,
+    InMemoryConsentStore,
+    PolicyBasedConsentHandler,
+)
+from houyi.domain.skill.hooks import (
     HookEvent,
     HookType,
-    InMemoryConsentStore,
-    InvocationPolicy,
-    MetricsStore,
-    ModelAutoInvoke,
-    Permissions,
-    PolicyBasedConsentHandler,
-    PolicyEnforcer,
-    SideEffect,
     SkillHook,
     SkillHooksManager,
-    SkillSpec,
 )
-from houyi.core.skill_registry import SkillRegistry
-from houyi.execution.tool_call_runner import ToolCallRunner
+from houyi.domain.skill.metrics import MetricsStore
+from houyi.domain.skill.policy import (
+    InvocationPolicy,
+    ModelAutoInvoke,
+    Permissions,
+    PolicyEnforcer,
+    SideEffect,
+)
+from houyi.domain.skill.registry import SkillRegistry
+from houyi.domain.skill.spec import SkillSpec
 
 # =========================================================================
 # Shared test fixtures
@@ -370,7 +374,7 @@ This skill tests registry integration.
     @pytest.mark.asyncio
     async def test_config_driven_execution(self) -> None:
         """Test that configuration affects execution behavior."""
-        from houyi.core.skill.config import HookConfig, SkillConfig
+        from houyi.domain.skill.config import HookConfig, SkillConfig
 
         config = SkillConfig(
             hooks=HookConfig(timeout_seconds=5.0, fail_on_error=True),
@@ -530,7 +534,7 @@ class TestPreprocessorIntegration:
     @pytest.mark.asyncio
     async def test_preprocessor_injects_system_message(self) -> None:
         """Preprocessor output appears in messages sent to the LLM."""
-        from houyi.core.skill.preprocessor import PreprocessorSpec, PreprocessorType
+        from houyi.domain.skill.preprocessor import PreprocessorSpec, PreprocessorType
 
         captured_messages: list[list[Any]] = []
 
@@ -576,7 +580,7 @@ class TestPreprocessorIntegration:
     @pytest.mark.asyncio
     async def test_preprocessor_failure_is_non_fatal(self) -> None:
         """A failing preprocessor does not abort the run."""
-        from houyi.core.skill.preprocessor import PreprocessorSpec, PreprocessorType
+        from houyi.domain.skill.preprocessor import PreprocessorSpec, PreprocessorType
 
         pp = PreprocessorSpec(
             type=PreprocessorType.COMMAND,
@@ -607,7 +611,7 @@ class TestPreprocessorIntegration:
     @pytest.mark.asyncio
     async def test_multiple_preprocessors_inject_in_order(self) -> None:
         """Multiple preprocessors inject in declaration order."""
-        from houyi.core.skill.preprocessor import PreprocessorSpec, PreprocessorType
+        from houyi.domain.skill.preprocessor import PreprocessorSpec, PreprocessorType
 
         captured: list[list[Any]] = []
 
@@ -1039,7 +1043,7 @@ class TestCombinedPipeline:
     @pytest.mark.asyncio
     async def test_full_pipeline(self) -> None:
         """All subsystems work together in a single ToolCallRunner.run()."""
-        from houyi.core.skill.preprocessor import PreprocessorSpec, PreprocessorType
+        from houyi.domain.skill.preprocessor import PreprocessorSpec, PreprocessorType
 
         events: list[str] = []
         captured_messages: list[list[Any]] = []
@@ -1470,7 +1474,7 @@ class TestPreprocessorsOnSkillSpec:
 
     def test_skill_spec_with_preprocessors(self) -> None:
         """SkillSpec can hold preprocessor specs."""
-        from houyi.core.skill.preprocessor import PreprocessorSpec, PreprocessorType
+        from houyi.domain.skill.preprocessor import PreprocessorSpec, PreprocessorType
 
         pp = PreprocessorSpec(
             type=PreprocessorType.COMMAND,
@@ -1491,7 +1495,7 @@ class TestPreprocessorsOnSkillSpec:
     @pytest.mark.asyncio
     async def test_runner_with_skill_preprocessors(self) -> None:
         """ToolCallRunner uses preprocessors from SkillSpec."""
-        from houyi.core.skill.preprocessor import PreprocessorSpec, PreprocessorType
+        from houyi.domain.skill.preprocessor import PreprocessorSpec, PreprocessorType
 
         captured: list[list[Any]] = []
 

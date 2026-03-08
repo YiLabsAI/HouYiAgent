@@ -50,7 +50,7 @@ from collections.abc import Awaitable, Callable
 from datetime import datetime
 from uuid import uuid4
 
-from houyi.protocol.ir import ExecutionStatus
+from houyi.interface.protocol.ir import ExecutionStatus
 
 from ..gateway.commands import (
     AbortCommand,
@@ -150,8 +150,8 @@ class ExecutionCommandHandler:
     async def _handle_start_execution(
         self, command: StartExecutionCommand, session_id: str
     ) -> None:
-        from houyi.orchestration.plan import NodeType
-        from houyi.protocol.ir.plan_ir import EdgeIR, NodeIR, PlanIR
+        from houyi.application.workflow.orchestration.plan import NodeType
+        from houyi.interface.protocol.ir.plan_ir import EdgeIR, NodeIR, PlanIR
 
         engine = self._get_execution_engine()
 
@@ -249,7 +249,7 @@ class ExecutionCommandHandler:
     # PatchPlan
     # ------------------------------------------------------------------
     async def _handle_patch_plan(self, command: PatchPlanCommand, session_id: str) -> None:
-        from houyi.protocol.ir.plan_ir import PlanIR
+        from houyi.interface.protocol.ir.plan_ir import PlanIR
 
         engine = self._get_execution_engine()
         self._logger.info(

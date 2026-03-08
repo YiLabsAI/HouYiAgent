@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 
 @pytest.mark.integration
 def test_start_execution_emits_span_update_event(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Regression: starting an execution must emit SpanUpdateEvent over WebSocket.
+    """Starting an execution must emit SpanUpdateEvent over WebSocket.
 
     This is the backend contract required by the Timeline waterfall UI.
     """

@@ -9,7 +9,7 @@ This example demonstrates:
 
 import asyncio
 
-from houyi.verification import (
+from houyi.assurance.verification import (
     NeuroSymbolicEngine,
     PythonVerifier,
     SQLVerifier,
@@ -41,10 +41,11 @@ async def example_sql_verification():
     # SQL with missing semicolon (auto-fixable)
     sql2 = "SELECT * FROM users"
     result2 = await verifier.verify(sql2, rule)
-    print(f"✗ Missing semicolon: {result2.passed} - {result2.error_message}")
-
+    print(f"  Query: {sql2}")
+    print(f"  Passed: {result2.passed}")
+    print(f"  Error: {result2.error_message}")
     if result2.auto_fixable:
-        fixed, success = await verifier.auto_fix(sql2, result2)
+        fixed, _success = await verifier.auto_fix(sql2, result2)
         print(f"  → Auto-fixed: {fixed}")
 
     # SQL injection attempt

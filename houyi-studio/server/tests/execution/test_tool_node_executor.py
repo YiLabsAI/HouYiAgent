@@ -8,9 +8,9 @@ from pathlib import Path
 import pytest
 from pydantic import BaseModel
 
-from houyi.core.skill import SkillSpec
-from houyi.core.skill_registry import DEFAULT_SKILL_REGISTRY
-from houyi.protocol.ir import ExecutionIR, NodeExecutionIR, NodeIR, NodeType, PlanIR
+from houyi.domain.skill.registry import DEFAULT_SKILL_REGISTRY
+from houyi.domain.skill.spec import SkillSpec
+from houyi.interface.protocol.ir import ExecutionIR, NodeExecutionIR, NodeIR, NodeType, PlanIR
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _STUDIO_SERVER_ROOT = _REPO_ROOT / "houyi-studio" / "server"
@@ -300,7 +300,7 @@ async def test_tool_node_executor_emits_span_update_events() -> None:
 
     from houyi_studio.server.gateway.events import SpanUpdateEvent
 
-    from houyi.observability import Span, SpanType, TraceContext
+    from houyi.infrastructure.observability import Span, SpanType, TraceContext
 
     class InputSchema(BaseModel):
         query: str
@@ -530,7 +530,7 @@ async def test_emit_child_spans_emits_internal_sub_spans() -> None:
     """_emit_child_spans should recursively emit all child spans to observation service."""
     from unittest.mock import AsyncMock
 
-    from houyi.observability import Span, SpanType
+    from houyi.infrastructure.observability import Span, SpanType
 
     # Build a tool span with nested children
     tool_span = Span(name="tool.web_search", span_type=SpanType.TOOL)
@@ -566,7 +566,7 @@ async def test_emit_child_spans_noop_without_children() -> None:
     """_emit_child_spans should be a no-op when span has no children."""
     from unittest.mock import AsyncMock
 
-    from houyi.observability import Span, SpanType
+    from houyi.infrastructure.observability import Span, SpanType
 
     tool_span = Span(name="tool.web_search", span_type=SpanType.TOOL)
     mock_obs = AsyncMock()

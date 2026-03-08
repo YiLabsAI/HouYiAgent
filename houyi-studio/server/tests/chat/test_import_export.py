@@ -12,7 +12,7 @@ from houyi_studio.server.chat.import_export import CherryStudioImporter, ImportR
 from houyi_studio.server.chat.json_store import JsonStore
 from houyi_studio.server.chat.types import MessageRole
 
-from houyi.llm.models import GPT_4O
+from houyi.adapters.llm.models import GPT_4O
 
 
 @pytest.fixture

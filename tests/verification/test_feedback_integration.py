@@ -2,11 +2,11 @@
 
 import pytest
 
-from houyi.verification.config import VerificationConfig, VerificationMode
-from houyi.verification.feedback import FeedbackProtocol
-from houyi.verification.neuro_symbolic_engine import NeuroSymbolicEngine
-from houyi.verification.sql_verifier import SQLVerifier
-from houyi.verification.verifier import VerificationRule
+from houyi.assurance.verification.config import VerificationConfig, VerificationMode
+from houyi.assurance.verification.feedback import FeedbackProtocol
+from houyi.assurance.verification.neuro_symbolic_engine import NeuroSymbolicEngine
+from houyi.assurance.verification.sql_verifier import SQLVerifier
+from houyi.assurance.verification.verifier import VerificationRule
 
 
 class TestFeedbackIntegration:

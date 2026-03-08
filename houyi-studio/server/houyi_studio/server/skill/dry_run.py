@@ -22,14 +22,14 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from houyi.core.skill.tool_bridge import build_tool_definitions_for_skill
-from houyi.core.skill_registry import SkillRegistry
+from houyi.application.tool_calling.tool_bridge import build_tool_definitions_for_skill
+from houyi.domain.skill.registry import SkillRegistry
 
 from .serializer import POLICY_ALLOW, POLICY_DENY, extract_side_effects
 
 if TYPE_CHECKING:
-    from houyi.core.skill.policy import PolicyEnforcer
-    from houyi.core.skill.spec import SkillSpec
+    from houyi.domain.skill.policy import PolicyEnforcer
+    from houyi.domain.skill.spec import SkillSpec
 
 logger = logging.getLogger(__name__)
 
@@ -301,7 +301,7 @@ async def _live_verify(
     requested_input: dict[str, Any] = dict(input_data)
 
     try:
-        from houyi.llm.factory import LLMAdapterFactory
+        from houyi.adapters.llm import LLMAdapterFactory
     except ImportError:
         return {
             "success": False,

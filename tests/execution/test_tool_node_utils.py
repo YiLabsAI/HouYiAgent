@@ -1,8 +1,8 @@
-"""Unit tests for execution/tool_node_utils.py."""
+"""TOOL input normalization and schema extraction scenarios."""
 
 from pydantic import BaseModel
 
-from houyi.execution.tool_node_utils import (
+from houyi.application.workflow.tool_node_utils import (
     build_inputs_from_context_values,
     extract_schema_fields,
     normalize_tool_name,

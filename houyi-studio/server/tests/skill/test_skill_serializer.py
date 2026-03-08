@@ -273,7 +273,7 @@ class TestCapabilityTierAndRuntimeStatus:
     def test_summary_includes_capability_tier_and_runtime_status(self):
         from pydantic import BaseModel
 
-        from houyi.core.skill.spec import SkillSpec
+        from houyi.domain.skill.spec import SkillSpec
 
         class _In(BaseModel):
             q: str
@@ -297,7 +297,7 @@ class TestCapabilityTierAndRuntimeStatus:
     def test_detail_includes_capability_tier_and_runtime_status(self):
         from pydantic import BaseModel
 
-        from houyi.core.skill.spec import SkillSpec
+        from houyi.domain.skill.spec import SkillSpec
 
         class _In(BaseModel):
             q: str
@@ -318,7 +318,7 @@ class TestCapabilityTierAndRuntimeStatus:
     def test_metadata_only_skill(self):
         from pydantic import BaseModel
 
-        from houyi.core.skill.spec import SkillSpec
+        from houyi.domain.skill.spec import SkillSpec
 
         class _Empty(BaseModel):
             pass

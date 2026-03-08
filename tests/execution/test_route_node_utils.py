@@ -1,6 +1,6 @@
-"""Unit tests for execution/route_node_utils.py."""
+"""ROUTE rule matching and legacy fallback scenarios."""
 
-from houyi.execution.route_node_utils import evaluate_route
+from houyi.application.workflow.route_node_utils import evaluate_route
 
 
 class TestEvaluateRouteRules:

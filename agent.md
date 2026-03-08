@@ -404,28 +404,70 @@ ruff check houyi/ --fix
 
 ### Test Categories
 
-| Category | Description |
-|----------|-------------|
-| **Unit** | Fast, deterministic, no network |
-| **Integration** | May include network/external services |
-| **E2E (Playwright)** | Full UI workflow testing |
+| Category | Description | Recommended Frameworks / Tools |
+|----------|-------------|-------------------------------|
+| **Unit** | Fast, deterministic tests for a single module or class. External calls such as database, network, filesystem side effects, and upper-layer to lower-layer dependencies SHOULD be mocked or stubbed at the boundary. | `pytest`, `pytest-mock`, `unittest.mock`, `pytest-asyncio` |
+| **Integration** | Tests for real collaboration across modules, adapters, persistence, or external boundaries. Use real components selectively where interaction fidelity matters. | `pytest`, `pytest-asyncio`, fixture factories, test containers or local test services when needed |
+| **E2E (Playwright)** | Full user workflow validation through the actual UI and backend stack. | `Playwright`, `pnpm`, backend startup scripts |
 
-### Test Location
+### Test Layout Policy
 
 - **All tests in `tests/` directory** (never in project root)
-- Mirror source layout: `houyi/core/agent.py` → `tests/core/test_agent.py`
+
+> **Principles**
+>
+> - Test directories MUST stay aligned with the source module/package structure.
+> - Test files MUST stay aligned with the module file they validate.
+> - Test classes are for grouping inside a file only; they MUST NOT determine directory layout.
+>
+> **Unified Standard**
+>
+> - **[Default]** Mirror the source ownership directory under `tests/`.
+> - **[Default]** `foo.py` → `test_foo.py`.
+> - **[Prohibited]** Deep source tests flattened into a shallow root test directory.
+> - **[Allowed exceptions]** Only `integration`, `e2e`, and `export-surface` tests may intentionally break source mirroring.
+>
+> **Detailed Rules**
+>
+> 1. **Single-module unit test rule**
+>    - **[Rule]** One source module SHOULD map to one peer test file.
+>    - **[Naming]** `foo.py` → `test_foo.py`.
+>    - **[Path]** The test path SHOULD mirror the source ownership path under `tests/`.
+>    - **[Example]** `houyi/rag/indexed/retrieval_execution.py` → `tests/rag/indexed/test_retrieval_execution.py`
+>
+> 2. **Class tests are not a directory layout unit**
+>    - **[Rule]** Organize test directories by module/package, not by class name.
+>    - `TestXxx` classes are only for in-file grouping and readability.
+>    - **[Example]** Do not create a directory such as `tests/rag/indexed_mode/` just because the main class is `IndexedMode`. Keep the test file under the module ownership path, for example `houyi/rag/indexed/mode.py` → `tests/rag/indexed/test_mode.py`.
+>
+> 3. **No “deep source + shallow test” layout**
+>    - **[Rule]** If source code lives two or more levels deep, the test MUST descend with it.
+>    - Do not flatten these tests into directories such as `tests/rag/` or `tests/core/` just for convenience.
+>    - **[Example]** `houyi/rag/indexed/search_backend.py` → `tests/rag/indexed/test_search_backend.py`, not `tests/rag/test_search_backend.py`.
+>
+> 4. **Separate facade tests from collaborator tests**
+>    - **[Rule]** Collaborator unit tests belong in the mirrored directory of the collaborator module.
+>    - **[Rule]** Facade behavior tests remain in the facade test file.
+>    - **[Example]** `houyi/rag/indexed/result_processing.py` → `tests/rag/indexed/test_result_processing.py`, while `houyi/rag/indexed/mode.py` keeps facade behavior coverage in `tests/rag/indexed/test_mode.py`.
+>
+> 5. **Exceptions must be explicit**
+>    - **[Rule]** Only `integration`, `e2e`, and `export-surface` tests may intentionally avoid source mirroring.
+>    - All other tests default to mirrored placement.
+>    - **[Example]** `tests/integration/...` may validate cross-module workflows without mapping to a single source file.
 
 ### Naming Convention
 
-✅ **Correct**: `test_<class_or_module>.py`
-- `tests/evaluation/test_evaluators.py`
-- `tests/execution/test_skill_executor.py`
-- `tests/observability/test_observability.py`
+✅ **Correct**: `test_<module>.py`
+- `tests/application/tool_calling/test_tool_call_runner.py`
+- `tests/adapters/rag/test_rag_exports.py`
+- `tests/rag/indexed/test_retrieval_execution.py`
 
 ❌ **Incorrect**:
 - `test_phase3_evaluators.py` (phase-based)
 - `test_advanced_features.py` (vague)
 - `test_v0_2_0.py` (version-based)
+- `test_smoke_login.py` (execution scope in filename)
+- `class TestSmokeWorkflow:` (execution scope in class name)
 
 ### Test Structure
 
@@ -438,27 +480,77 @@ class TestAccuracyEvaluator:
         ...
 ```
 
-- Use fixtures/mocks for external dependencies
-- Use `pytest.mark` for categorization
-- Group tests by class
+- Group tests by module behavior or subject class
+- Use fixtures and factories to keep setup reusable and readable
+- Use `pytest.mark` for categorization and runtime selection
+- Mock external calls at architectural boundaries for unit tests
+- In layered architecture, upper-layer tests SHOULD mock lower-layer collaborators unless the purpose is explicit integration coverage
+
+### High-Quality Test Design
+
+Use the following checklist when designing or generating tests, especially with AI assistance:
+
+| Dimension | What to Cover | Typical Questions |
+|----------|---------------|-------------------|
+| **Happy path** | Expected valid behavior | Does the primary use case succeed with representative inputs? |
+| **Boundary conditions** | Min/max/empty/one-off thresholds | What happens at `0`, `1`, empty string, empty list, max size, timeout edge, exact threshold? |
+| **Equivalence classes** | Representative valid/invalid input groups | Which inputs are logically the same, so one case can stand for many? |
+| **Error paths** | Exceptions, validation failures, partial failure | Does the code fail with actionable errors and preserve invariants? |
+| **State transitions** | Before/after mutation or persistence | Does state move correctly across create/update/delete/retry flows? |
+| **Interaction contracts** | Calls to collaborators, adapters, or gateways | Are downstream dependencies called with the right arguments, order, and retry behavior? |
+| **Idempotency / replay** | Repeated execution safety | Does running the same operation twice remain safe where required? |
+| **Fallback / degradation** | Timeout, unavailable dependency, optional component off | Does the system degrade predictably and surface metadata or warnings correctly? |
+| **Distributed workflow invariants** | Cross-step consistency in async or distributed flows | Are ordering, deduplication, state convergence, compensation, and observability invariants preserved across retries, partial failures, and concurrent execution? |
+
+**Policy**:
+- Boundary-condition tests SHOULD exist for code with thresholds, slicing, pagination, retries, scoring, timeout, and size-based branching.
+- Each non-trivial module SHOULD cover at least: one happy path, one boundary case, one invalid/error path, and one dependency-interaction assertion where applicable.
+- Do not enforce a single minimum test-count rule across the codebase. For distributed systems, test adequacy SHOULD be driven by risk, failure modes, and contract surface rather than a fixed number of cases.
+- Higher-risk paths SHOULD add targeted coverage for timeout, retry, partial failure, fallback, ordering, idempotency, concurrency, and observability metadata where applicable.
+- Distributed workflows SHOULD verify invariants explicitly, such as exactly-once vs at-least-once behavior, ordering guarantees, deduplication, compensation behavior, eventual consistency, and trace or event correlation integrity where applicable.
+- AI-generated tests MUST be reviewed for missing edge cases, over-mocking, and assertions that only restate implementation details.
+- Prefer assertions on observable behavior, returned data, emitted metadata, and state transitions over assertions on private implementation structure.
 
 ### Coverage Requirements
 
 | Scope | Target |
 |-------|--------|
-| Overall project | ≥ 80% |
-| Core business logic | ≥ 85% |
+| Overall project | ≥ 85% |
+| Business-critical modules | ≥ 85% |
 
-Core modules: `core/`, `evaluation/`, `execution/`, `orchestration/`, `observability/`
+Business-critical modules are the actively owned product and platform layers under `houyi/`, especially `domain/`, `application/`, `adapters/`, `rag/`, `infrastructure/`, and `interface/`. Coverage review SHOULD prioritize modules on critical request, execution, persistence, and retrieval paths rather than relying on a legacy static directory list.
+
+### Integration Test Execution Strategy
+
+**Policy**:
+- Integration suites MUST be stratified by runtime cost and change frequency so the default developer and PR path remains fast.
+- Scope selection belongs to `pytest` markers, CI workflow configuration, or dedicated Make targets — not file names or test class names.
+- File and test names describe the feature or contract under test, not execution tier.
+
+**Recommended tiers**:
+- **[Default PR integration suite]** Fast, high-signal integration coverage for critical contracts and common workflows.
+- **[Extended integration suite]** Broader cross-module and adapter coverage triggered by CI policy, nightly runs, or manual dispatch.
+
+**Examples**:
+- `tests/integration/test_skill_loading.py` remains feature-named whether it runs in the default or extended integration tier.
+- Use markers such as `@pytest.mark.integration` plus an additional tier marker selected by CI, instead of names like `test_smoke_*` or `test_full_*`.
 
 ### E2E Testing (Playwright)
 
 **Policy**:
-- Tests categorized as `smoke` or `full`
-- PRs run `smoke` by default
-- `full` triggered by: PR label `e2e-full`, nightly schedule, or manual dispatch
+- E2E scope selection belongs to test metadata, CI workflow configuration, or runtime tags — not file names or test class names.
+- Do not encode execution scope into names such as `test_smoke_*`, `test_full_*`, `TestSmoke*`, or `TestFull*`.
+- The default PR E2E suite SHOULD stay small and high-signal to control feedback time.
+- The extended E2E suite is triggered by CI policy such as PR label, nightly schedule, or manual dispatch.
 
-**Smoke scope**: UI startup, home page render, `position_test` workflow
+**Recommended default PR E2E scope**: UI startup, home page render, and one critical end-user workflow.
+
+**Recommended extended E2E scope**: broader multi-workflow journeys, failure recovery, and lower-frequency scenarios that are too expensive for every PR run.
+
+**Recommended naming**:
+- File names describe the feature or workflow: `test_home_page.py`, `test_position_workflow.py`
+- Test names describe the user-visible behavior: `test_home_page_renders()`, `test_position_workflow_completes_successfully()`
+- Use markers, tags, or CI selection rules to distinguish default PR vs extended suites
 
 ---
 

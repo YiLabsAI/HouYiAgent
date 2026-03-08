@@ -24,7 +24,7 @@ from datetime import date, timedelta
 from typing import Any
 
 from houyi import tool
-from houyi.core.skill.policy import InvocationPolicy, NetworkPerm, Permissions, SideEffect
+from houyi.domain.skill.policy import InvocationPolicy, NetworkPerm, Permissions, SideEffect
 
 logger = logging.getLogger(__name__)
 
@@ -221,6 +221,122 @@ def _weather_code_to_description(code: int | None) -> str:
     return weather_codes.get(code, f"Weather code {code}")
 
 
+def _normalize_provider(provider: str) -> tuple[str, str | None]:
+    normalized_provider = (provider or "auto").strip().lower()
+    if normalized_provider not in {"auto", "openmeteo", "wttr"}:
+        return "", "Error: provider must be one of auto/openmeteo/wttr"
+    return normalized_provider, None
+
+
+def _resolve_weather_request(
+    *,
+    lat: float | None,
+    lon: float | None,
+    date_input: str | None,
+    city: str | None,
+    country: str | None,
+    provider: str,
+) -> tuple[dict[str, Any], str | None]:
+    has_coords = lat is not None and lon is not None
+    resolved_lat: float | None = None
+    resolved_lon: float | None = None
+    if has_coords:
+        if lat is None or lon is None:
+            return {}, "Error: lat/lon must be provided together"
+        resolved_lat = _safe_float(lat)
+        resolved_lon = _safe_float(lon)
+        if resolved_lat is None or resolved_lon is None:
+            return {}, "Error: lat/lon must be numeric"
+        is_valid, error = _validate_coordinates(resolved_lat, resolved_lon)
+        if not is_valid:
+            return {}, f"Error: {error}"
+
+    city_value = (city or "").strip()
+    country_value = (country or "").strip()
+    location_label = ", ".join(v for v in [city_value, country_value] if v)
+
+    if not has_coords and not city_value:
+        return {}, "Error: provide either both lat/lon or city"
+
+    resolved_date = _normalize_date_input(date_input)
+    if (resolved_lat is None or resolved_lon is None) and city_value:
+        location_result = _resolve_coordinates_from_city(city_value, country_value)
+        if location_result.get("found"):
+            maybe_lat = _safe_float(location_result.get("lat"))
+            maybe_lon = _safe_float(location_result.get("lon"))
+            if maybe_lat is None or maybe_lon is None:
+                return {}, "Weather unavailable: city lookup returned invalid coordinates"
+            resolved_lat = maybe_lat
+            resolved_lon = maybe_lon
+            resolved_city = str(location_result.get("city") or city_value)
+            resolved_country = str(location_result.get("country") or country_value).strip()
+            location_label = ", ".join(v for v in [resolved_city, resolved_country] if v)
+        elif provider == "openmeteo":
+            return {}, f"Weather unavailable: {location_result.get('error', 'city lookup failed')}"
+
+    return {
+        "resolved_lat": resolved_lat,
+        "resolved_lon": resolved_lon,
+        "resolved_date": resolved_date,
+        "location_label": location_label,
+    }, None
+
+
+def _try_openmeteo(*, provider: str, request: dict[str, Any]) -> str | None:
+    resolved_lat = request["resolved_lat"]
+    resolved_lon = request["resolved_lon"]
+    resolved_date = request["resolved_date"]
+    if resolved_lat is None or resolved_lon is None:
+        return None
+
+    try:
+        return _build_open_meteo_result(resolved_lat, resolved_lon, resolved_date)
+    except urllib.error.URLError:
+        if provider == "openmeteo":
+            return (
+                f"Weather unavailable for ({resolved_lat:.4f}, {resolved_lon:.4f}) "
+                f"on {resolved_date}: Network error"
+            )
+    except Exception as e:
+        logger.error("Unexpected Open-Meteo error: %s", e, exc_info=True)
+        if provider == "openmeteo":
+            return (
+                f"Weather unavailable for ({resolved_lat:.4f}, {resolved_lon:.4f}) "
+                f"on {resolved_date}: {type(e).__name__}"
+            )
+    return None
+
+
+def _try_wttr(*, request: dict[str, Any]) -> str | None:
+    location_label = request["location_label"]
+    resolved_lat = request["resolved_lat"]
+    resolved_lon = request["resolved_lon"]
+    if not location_label and (resolved_lat is None or resolved_lon is None):
+        return None
+
+    try:
+        wttr_query = location_label or f"{resolved_lat},{resolved_lon}"
+        return _build_wttr_result(wttr_query)
+    except urllib.error.URLError:
+        return "Weather unavailable: wttr.in network error"
+    except Exception as e:
+        logger.error("Unexpected wttr.in error: %s", e, exc_info=True)
+        return f"Weather unavailable: wttr.in {type(e).__name__}"
+
+
+def _provider_unavailable_message(*, provider: str, request: dict[str, Any]) -> str:
+    resolved_lat = request["resolved_lat"]
+    resolved_lon = request["resolved_lon"]
+    location_label = request["location_label"]
+    if provider == "openmeteo":
+        return "Weather unavailable: Open-Meteo requires lat/lon or resolvable city"
+    if provider == "wttr":
+        if location_label or (resolved_lat is not None and resolved_lon is not None):
+            return "Weather unavailable: wttr.in network error"
+        return "Weather unavailable: wttr.in requires city/country or coordinates"
+    return "Weather unavailable: no compatible weather provider path was available"
+
+
 @tool
 def get_date(offset_days: int | str = 0) -> str:
     """Get ISO date with optional day offset or relative string.
@@ -301,86 +417,32 @@ def get_weather(
     Returns:
         Human-readable weather summary.
     """
-    normalized_provider = (provider or "auto").strip().lower()
-    if normalized_provider not in {"auto", "openmeteo", "wttr"}:
-        return "Error: provider must be one of auto/openmeteo/wttr"
+    normalized_provider, provider_error = _normalize_provider(provider)
+    if provider_error:
+        return provider_error
 
-    has_coords = lat is not None and lon is not None
-    resolved_lat: float | None = None
-    resolved_lon: float | None = None
-    if has_coords:
-        if lat is None or lon is None:
-            return "Error: lat/lon must be provided together"
+    request, request_error = _resolve_weather_request(
+        lat=lat,
+        lon=lon,
+        date_input=date,
+        city=city,
+        country=country,
+        provider=normalized_provider,
+    )
+    if request_error:
+        return request_error
 
-        resolved_lat = _safe_float(lat)
-        resolved_lon = _safe_float(lon)
-        if resolved_lat is None or resolved_lon is None:
-            return "Error: lat/lon must be numeric"
-        is_valid, error = _validate_coordinates(resolved_lat, resolved_lon)
-        if not is_valid:
-            return f"Error: {error}"
+    if normalized_provider in {"openmeteo", "auto"}:
+        result = _try_openmeteo(provider=normalized_provider, request=request)
+        if result is not None:
+            return result
 
-    city_value = (city or "").strip()
-    country_value = (country or "").strip()
-    location_label = ", ".join(v for v in [city_value, country_value] if v)
+    if normalized_provider in {"wttr", "auto"}:
+        result = _try_wttr(request=request)
+        if result is not None:
+            return result
 
-    if not has_coords and not city_value:
-        return "Error: provide either both lat/lon or city"
-
-    resolved_date = _normalize_date_input(date)
-
-    if (resolved_lat is None or resolved_lon is None) and city_value:
-        location_result = _resolve_coordinates_from_city(city_value, country_value)
-        if location_result.get("found"):
-            maybe_lat = _safe_float(location_result.get("lat"))
-            maybe_lon = _safe_float(location_result.get("lon"))
-            if maybe_lat is None or maybe_lon is None:
-                return "Weather unavailable: city lookup returned invalid coordinates"
-            resolved_lat = maybe_lat
-            resolved_lon = maybe_lon
-            resolved_city = str(location_result.get("city") or city_value)
-            resolved_country = str(location_result.get("country") or country_value).strip()
-            location_label = ", ".join(v for v in [resolved_city, resolved_country] if v)
-        elif normalized_provider == "openmeteo":
-            return f"Weather unavailable: {location_result.get('error', 'city lookup failed')}"
-
-    can_use_openmeteo = resolved_lat is not None and resolved_lon is not None
-    can_use_wttr = bool(location_label) or can_use_openmeteo
-
-    if normalized_provider in {"openmeteo", "auto"} and can_use_openmeteo:
-        try:
-            if resolved_lat is None or resolved_lon is None:
-                return "Weather unavailable: Open-Meteo requires lat/lon"
-            return _build_open_meteo_result(resolved_lat, resolved_lon, resolved_date)
-        except urllib.error.URLError:
-            if normalized_provider == "openmeteo":
-                return (
-                    f"Weather unavailable for ({resolved_lat:.4f}, {resolved_lon:.4f}) "
-                    f"on {resolved_date}: Network error"
-                )
-        except Exception as e:
-            logger.error("Unexpected Open-Meteo error: %s", e, exc_info=True)
-            if normalized_provider == "openmeteo":
-                return (
-                    f"Weather unavailable for ({resolved_lat:.4f}, {resolved_lon:.4f}) "
-                    f"on {resolved_date}: {type(e).__name__}"
-                )
-
-    if normalized_provider in {"wttr", "auto"} and can_use_wttr:
-        try:
-            wttr_query = location_label or f"{resolved_lat},{resolved_lon}"
-            return _build_wttr_result(wttr_query)
-        except urllib.error.URLError:
-            return "Weather unavailable: wttr.in network error"
-        except Exception as e:
-            logger.error("Unexpected wttr.in error: %s", e, exc_info=True)
-            return f"Weather unavailable: wttr.in {type(e).__name__}"
-
-    if normalized_provider == "openmeteo":
-        return "Weather unavailable: Open-Meteo requires lat/lon or resolvable city"
-    if normalized_provider == "wttr":
-        return "Weather unavailable: wttr.in requires city/country or coordinates"
-    return "Weather unavailable: no compatible weather provider path was available"
+    return _provider_unavailable_message(provider=normalized_provider, request=request)
 
 
 get_weather.invocation_policy = InvocationPolicy.default_for_side_effect(SideEffect.NETWORK)
@@ -389,7 +451,7 @@ get_weather.permissions = Permissions(network=NetworkPerm(enabled=True))
 
 # ── Default lifecycle hooks ──────────────────────────────────────────
 
-from houyi.core.skill.hooks import HookEvent, HookType, SkillHook
+from houyi.domain.skill.hooks import HookEvent, HookType, SkillHook
 
 
 def _weather_pre_tool_use(context: Any) -> dict[str, Any]:

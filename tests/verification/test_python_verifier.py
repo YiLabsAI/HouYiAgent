@@ -2,8 +2,8 @@
 
 import pytest
 
-from houyi.verification.python_verifier import PythonVerifier
-from houyi.verification.verifier import VerificationRule
+from houyi.assurance.verification.python_verifier import PythonVerifier
+from houyi.assurance.verification.verifier import VerificationRule
 
 
 @pytest.fixture
@@ -98,7 +98,7 @@ async def test_supports_auto_fix(python_verifier):
 @pytest.mark.asyncio
 async def test_auto_fix_unsupported(python_verifier):
     """Test auto-fix returns False for unsupported errors."""
-    from houyi.verification.verifier import VerificationResult
+    from houyi.assurance.verification.verifier import VerificationResult
 
     code = "import os"
     error = VerificationResult(

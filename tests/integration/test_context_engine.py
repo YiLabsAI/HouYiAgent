@@ -1,4 +1,4 @@
-"""Integration test: Context Engine end-to-end.
+"""Integration tests for Context Engine.
 
 Tests the full chain: TokenEstimator → ContextPlanner → ContextRenderer → LLM messages.
 Verifies format correctness, token counting consistency, truncation behavior,
@@ -9,12 +9,12 @@ from __future__ import annotations
 
 import pytest
 
-from houyi.context.context_planner import ContextPlanner
-from houyi.context.context_renderer import ContextRenderer
-from houyi.context.token_estimator import TokenEstimator
-from houyi.context.types import ContextBlockType
-from houyi.memory.memory_store import MemoryStore
-from houyi.memory.types import MemoryScope
+from houyi.adapters.memory.store import MemoryStore
+from houyi.adapters.memory.types import MemoryScope
+from houyi.application.context.context_planner import ContextPlanner
+from houyi.application.context.context_renderer import ContextRenderer
+from houyi.application.context.token_estimator import TokenEstimator
+from houyi.application.context.types import ContextBlockType
 
 
 @pytest.fixture

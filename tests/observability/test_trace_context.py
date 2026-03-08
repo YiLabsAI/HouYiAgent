@@ -1,6 +1,6 @@
 """Tests for TraceContext and instrumentation."""
 
-from houyi.observability import (
+from houyi.infrastructure.observability import (
     Span,
     SpanType,
     TraceContext,

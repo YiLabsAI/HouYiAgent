@@ -9,14 +9,14 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from houyi.web_search.errors import (
+from houyi.skills.web_search.errors import (
     DependencyMissingError,
     ProviderAuthError,
     ProviderInvalidResponse,
     ProviderRateLimitError,
     ProviderTimeoutError,
 )
-from houyi.web_search.providers import (
+from houyi.skills.web_search.providers import (
     BochaWebSearchProvider,
     DuckDuckGoWebSearchProvider,
     SearxNGWebSearchProvider,
@@ -45,7 +45,7 @@ class TestHttpJsonRequest:
                 return json.dumps({"ok": True}).encode()
 
         monkeypatch.setattr(
-            "houyi.web_search.providers.request.urlopen",
+            "houyi.skills.web_search.providers.request.urlopen",
             lambda *a, **k: _Resp(),
         )
         result = _http_json_request("https://example.com", label="test")
@@ -57,7 +57,7 @@ class TestHttpJsonRequest:
         def _urlopen(*a, **k):
             raise HTTPError("", 429, "Rate Limited", {}, None)
 
-        monkeypatch.setattr("houyi.web_search.providers.request.urlopen", _urlopen)
+        monkeypatch.setattr("houyi.skills.web_search.providers.request.urlopen", _urlopen)
         with pytest.raises(ProviderRateLimitError):
             _http_json_request("https://example.com", label="test")
 
@@ -67,7 +67,7 @@ class TestHttpJsonRequest:
         def _urlopen(*a, **k):
             raise HTTPError("", 403, "Forbidden", {}, None)
 
-        monkeypatch.setattr("houyi.web_search.providers.request.urlopen", _urlopen)
+        monkeypatch.setattr("houyi.skills.web_search.providers.request.urlopen", _urlopen)
         with pytest.raises(ProviderAuthError):
             _http_json_request("https://example.com", label="test")
 
@@ -77,7 +77,7 @@ class TestHttpJsonRequest:
         def _urlopen(*a, **k):
             raise HTTPError("", 400, "Bad Request", {}, None)
 
-        monkeypatch.setattr("houyi.web_search.providers.request.urlopen", _urlopen)
+        monkeypatch.setattr("houyi.skills.web_search.providers.request.urlopen", _urlopen)
         with pytest.raises(ProviderInvalidResponse):
             _http_json_request("https://example.com", label="test")
 
@@ -85,7 +85,7 @@ class TestHttpJsonRequest:
         def _urlopen(*a, **k):
             raise TimeoutError("timed out")
 
-        monkeypatch.setattr("houyi.web_search.providers.request.urlopen", _urlopen)
+        monkeypatch.setattr("houyi.skills.web_search.providers.request.urlopen", _urlopen)
         with pytest.raises(ProviderTimeoutError):
             _http_json_request("https://example.com", label="test")
 
@@ -109,7 +109,7 @@ class TestHttpJsonRequest:
                 return _Resp()
 
         monkeypatch.setattr(
-            "houyi.web_search.providers.request.build_opener",
+            "houyi.skills.web_search.providers.request.build_opener",
             lambda *a: _FakeOpener(),
         )
         result = _http_json_request(
@@ -212,7 +212,7 @@ async def test_serper_provider_search_normalizes(monkeypatch) -> None:
             ).encode("utf-8")
 
     monkeypatch.setattr(
-        "houyi.web_search.providers.request.urlopen", lambda *_args, **_kwargs: _Response()
+        "houyi.skills.web_search.providers.request.urlopen", lambda *_args, **_kwargs: _Response()
     )
 
     provider = SerperWebSearchProvider(api_key="test")
@@ -235,7 +235,7 @@ async def test_serper_provider_invalid_response(monkeypatch) -> None:
             return json.dumps({"unexpected": []}).encode("utf-8")
 
     monkeypatch.setattr(
-        "houyi.web_search.providers.request.urlopen", lambda *_args, **_kwargs: _Response()
+        "houyi.skills.web_search.providers.request.urlopen", lambda *_args, **_kwargs: _Response()
     )
 
     provider = SerperWebSearchProvider(api_key="test")
@@ -277,7 +277,7 @@ async def test_searxng_provider_search_normalizes(monkeypatch) -> None:
             ).encode("utf-8")
 
     monkeypatch.setattr(
-        "houyi.web_search.providers.request.urlopen", lambda *_args, **_kwargs: _Response()
+        "houyi.skills.web_search.providers.request.urlopen", lambda *_args, **_kwargs: _Response()
     )
 
     provider = SearxNGWebSearchProvider(base_url="https://searx.local")
@@ -301,7 +301,7 @@ async def test_searxng_provider_invalid_response(monkeypatch) -> None:
             return json.dumps({"unexpected": []}).encode("utf-8")
 
     monkeypatch.setattr(
-        "houyi.web_search.providers.request.urlopen", lambda *_args, **_kwargs: _Response()
+        "houyi.skills.web_search.providers.request.urlopen", lambda *_args, **_kwargs: _Response()
     )
 
     provider = SearxNGWebSearchProvider(base_url="https://searx.local")
@@ -462,7 +462,9 @@ async def test_bocha_provider_search_normalizes(monkeypatch) -> None:
         def read(self):
             return json.dumps(response_data).encode("utf-8")
 
-    monkeypatch.setattr("houyi.web_search.providers.request.urlopen", lambda *a, **k: _Response())
+    monkeypatch.setattr(
+        "houyi.skills.web_search.providers.request.urlopen", lambda *a, **k: _Response()
+    )
 
     provider = BochaWebSearchProvider(api_key="test-key")
     results = await provider.search("测试查询", max_results=5)
@@ -488,7 +490,9 @@ async def test_bocha_provider_invalid_response(monkeypatch) -> None:
         def read(self):
             return json.dumps({"code": 200, "data": {"unexpected": True}}).encode("utf-8")
 
-    monkeypatch.setattr("houyi.web_search.providers.request.urlopen", lambda *a, **k: _Response())
+    monkeypatch.setattr(
+        "houyi.skills.web_search.providers.request.urlopen", lambda *a, **k: _Response()
+    )
 
     provider = BochaWebSearchProvider(api_key="test-key")
     results = await provider.search("q", max_results=1)
@@ -522,7 +526,7 @@ async def test_bocha_provider_proxy_passed_to_http(monkeypatch) -> None:
             return _Resp()
 
     monkeypatch.setattr(
-        "houyi.web_search.providers.request.build_opener",
+        "houyi.skills.web_search.providers.request.build_opener",
         lambda *a: _FakeOpener(),
     )
 

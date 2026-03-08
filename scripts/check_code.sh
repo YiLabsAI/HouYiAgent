@@ -54,6 +54,10 @@ ensure_deps() {
 
 ensure_deps
 
+COMPLEXITY_RULES="C901,PLR0912,PLR0915"
+CLASS_WARN_LINES="${HOUYI_CLASS_WARN_LINES:-500}"
+CLASS_ERROR_LINES="${HOUYI_CLASS_ERROR_LINES:-800}"
+
 # ── Fail-fast runner ─────────────────────────────────────────────────
 # Runs the command; on failure prints a clear banner and exits immediately.
 run_check() {
@@ -73,14 +77,16 @@ run_check() {
     fi
 }
 
-# ── 1-2. Ruff lint + format (changed files only) ────────────────────
+# ── 1. Ruff lint + format (changed files only) ────────────────────
 CHANGED_PY_FILES=$(
     {
         git diff --name-only --cached
         git diff --name-only
         git ls-files --others --exclude-standard
     } 2>/dev/null | awk '($0 ~ /\.pyi?$/) && ($0 !~ /^skills\//) { print }' | sort -u | while read -r f; do
-        [ -f "$f" ] && echo "$f"
+        if [ -f "$f" ]; then
+            echo "$f"
+        fi
     done
 )
 
@@ -93,12 +99,48 @@ else
     echo ""
 fi
 
+# ── 2. SDK complexity housekeeping (report + changed-file gate) ─────
+echo -e "${YELLOW}▶ Running SDK Complexity Report (full houyi/, non-blocking)...${NC}"
+COMPLEXITY_REPORT=$(uv run ruff check houyi --select "$COMPLEXITY_RULES" --output-format concise 2>/dev/null || true)
+if [ -n "$COMPLEXITY_REPORT" ]; then
+    COMPLEXITY_COUNT=$(echo "$COMPLEXITY_REPORT" | wc -l | tr -d ' ')
+    echo -e "${YELLOW}  Found ${COMPLEXITY_COUNT} complexity findings in houyi/ (report-only).${NC}"
+    echo "$COMPLEXITY_REPORT" | head -n 20
+    if [ "$COMPLEXITY_COUNT" -gt 20 ]; then
+        echo "  ... (${COMPLEXITY_COUNT} total findings)"
+    fi
+else
+    echo -e "${GREEN}  No complexity findings in houyi/.${NC}"
+fi
+echo ""
+
+CHANGED_SDK_FILES=$(echo "$CHANGED_PY_FILES" | awk '/^houyi\// { print }')
+if [ -n "$CHANGED_SDK_FILES" ]; then
+    CHANGED_SDK_FILES_ONELINE=$(echo "$CHANGED_SDK_FILES" | tr '\n' ' ')
+    run_check "SDK Complexity Gate (changed files)" \
+        uv run ruff check --select "$COMPLEXITY_RULES" $CHANGED_SDK_FILES_ONELINE
+else
+    echo -e "${YELLOW}▶ SDK Complexity Gate skipped (no changed files under houyi/)${NC}"
+    echo ""
+fi
+
+if [ -n "$CHANGED_SDK_FILES" ]; then
+    run_check "Class Size Gate (changed SDK files)" \
+        uv run python scripts/check_class_size.py \
+            --warn-lines "$CLASS_WARN_LINES" \
+            --error-lines "$CLASS_ERROR_LINES" \
+            $CHANGED_SDK_FILES_ONELINE
+else
+    echo -e "${YELLOW}▶ Class Size Gate skipped (no changed files under houyi/)${NC}"
+    echo ""
+fi
+
 # ── 3. Type check ───────────────────────────────────────────────────
 run_check "Type Check (mypy)" uv run mypy houyi/
 
 # ── 4. SDK unit tests (with coverage, single pass) ──────────────────
 run_check "SDK Tests + Coverage" uv run pytest tests/ -x -n auto \
-    --cov=houyi --cov-report=term-missing --cov-fail-under=80
+    --cov=houyi --cov-report=term-missing --cov-fail-under=85
 
 # ── 5. Server tests ─────────────────────────────────────────────────
 run_check "Server Tests" uv run pytest houyi-studio/server/tests/ -x

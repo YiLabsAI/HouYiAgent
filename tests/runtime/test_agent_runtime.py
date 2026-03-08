@@ -2,8 +2,8 @@
 
 from pydantic import BaseModel
 
-from houyi.core.skill import SkillSpec
-from houyi.runtime.agent import Agent
+from houyi.application.runtime.agent import Agent
+from houyi.domain.skill.spec import SkillSpec
 
 
 class TestAgent:
@@ -161,3 +161,30 @@ class TestAgent:
         agent = Agent(role="Stateless Agent", memory=False)
 
         assert agent.spec.policies["memory"] is False
+
+    def test_agent_run_uses_canonical_workflow_executor(self):
+        """Test Agent.run remains wired to the canonical workflow executor path."""
+
+        class Input(BaseModel):
+            task: str
+
+        class Output(BaseModel):
+            result: str
+
+        def search(task: str) -> dict[str, str]:
+            return {"result": f"handled:{task}"}
+
+        skill = SkillSpec(
+            name="search",
+            description="Search",
+            input_schema=Input,
+            output_schema=Output,
+            executor=search,
+        )
+
+        agent = Agent(role="Search Agent", skills=[skill], llm=None)
+
+        result = agent.run("find houyi")
+
+        assert result is not None
+        assert "handled:find houyi" in str(result)

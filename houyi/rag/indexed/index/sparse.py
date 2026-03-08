@@ -6,7 +6,8 @@ import json
 from pathlib import Path
 from typing import Any
 
-from houyi.rag.types import Chunk, SearchResult, Source
+from houyi.rag.indexed.index.results import build_chunk_search_result
+from houyi.rag.types import Chunk, SearchResult
 
 
 class SparseIndex:
@@ -157,20 +158,7 @@ class SparseIndex:
         for idx, score in zip(results[0], scores[0], strict=False):
             if idx < len(self._chunks):
                 chunk = self._chunks[idx]
-                search_results.append(
-                    SearchResult(
-                        chunk_id=chunk.chunk_id,
-                        content=chunk.content,
-                        score=float(score),
-                        source=Source(
-                            file_path=chunk.metadata.get("source", ""),
-                            location=f"chunk {chunk.metadata.get('chunk_index', 0)}",
-                            snippet=chunk.content[:200],
-                            score=float(score),
-                        ),
-                        metadata=chunk.metadata,
-                    )
-                )
+                search_results.append(build_chunk_search_result(chunk=chunk, score=float(score)))
 
         return search_results
 

@@ -2,10 +2,13 @@
 
 import pytest
 
-from houyi.verification.config import VerificationConfig
-from houyi.verification.neuro_symbolic_engine import NeuroSymbolicEngine, VerificationMetrics
-from houyi.verification.sql_verifier import SQLVerifier
-from houyi.verification.verifier import VerificationRule
+from houyi.assurance.verification.config import VerificationConfig
+from houyi.assurance.verification.neuro_symbolic_engine import (
+    NeuroSymbolicEngine,
+    VerificationMetrics,
+)
+from houyi.assurance.verification.sql_verifier import SQLVerifier
+from houyi.assurance.verification.verifier import VerificationRule
 
 
 @pytest.fixture
@@ -130,7 +133,7 @@ async def test_escalation_with_approval(sql_verifier, sql_rule):
     """Test escalation with human approval."""
     import asyncio
 
-    from houyi.verification.review_queue import ReviewQueue
+    from houyi.assurance.verification.review_queue import ReviewQueue
 
     config = VerificationConfig.lenient()
     review_queue = ReviewQueue()
@@ -168,7 +171,7 @@ async def test_metrics_integration(sql_verifier, sql_rule):
     """Test metrics are properly recorded during verification."""
     import asyncio
 
-    from houyi.verification.review_queue import ReviewQueue
+    from houyi.assurance.verification.review_queue import ReviewQueue
 
     config = VerificationConfig.lenient()
     review_queue = ReviewQueue()

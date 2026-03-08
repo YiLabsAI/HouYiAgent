@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from houyi.protocol.ir import PlanIR
+from houyi.interface.protocol.ir import PlanIR
 
 from .stores import PlanStore
 

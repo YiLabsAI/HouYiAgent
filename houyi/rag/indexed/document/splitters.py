@@ -1,4 +1,4 @@
-"""Document splitters for chunking."""
+"""Indexed ingest chunk splitting helpers."""
 
 from __future__ import annotations
 
@@ -53,70 +53,79 @@ def _recursive_split(
     separators = ["\n\n", "\n", ". ", " ", ""]
 
     def _split(text: str, sep_idx: int = 0) -> list[str]:
-        # Hard limit: if text exceeds MAX_CHUNK_CHARS, force split
         if len(text) > MAX_CHUNK_CHARS:
-            # Force split into smaller pieces
-            result = []
-            for i in range(0, len(text), MAX_CHUNK_CHARS - chunk_overlap):
-                piece = text[i : i + MAX_CHUNK_CHARS]
-                if piece:
-                    result.append(piece)
-            return result
+            return _force_split(text, chunk_overlap)
 
         if sep_idx >= len(separators) or len(text) <= chunk_size:
             return [text] if text else []
 
         sep = separators[sep_idx]
         if not sep:
-            # Final fallback: split by char count
-            return [
-                text[i : i + chunk_size] for i in range(0, len(text), chunk_size - chunk_overlap)
-            ]
+            return _fallback_split(text, chunk_size, chunk_overlap)
 
         parts = text.split(sep)
-        result = []
-        current = ""
-
-        for part in parts:
-            if len(current) + len(part) + len(sep) <= chunk_size:
-                current = current + sep + part if current else part
-            else:
-                if current:
-                    result.append(current)
-                if len(part) > chunk_size:
-                    # Recursively split with next separator
-                    result.extend(_split(part, sep_idx + 1))
-                else:
-                    current = part
-
-        if current:
-            result.append(current)
-
-        return result
+        return _merge_split_parts(parts, sep, chunk_size, sep_idx, _split)
 
     text_chunks = _split(doc.content)
+    return _build_chunks(doc, text_chunks, chunk_overlap)
 
-    chunks = []
+
+def _force_split(text: str, chunk_overlap: int) -> list[str]:
+    result = []
+    for i in range(0, len(text), MAX_CHUNK_CHARS - chunk_overlap):
+        piece = text[i : i + MAX_CHUNK_CHARS]
+        if piece:
+            result.append(piece)
+    return result
+
+
+def _fallback_split(text: str, chunk_size: int, chunk_overlap: int) -> list[str]:
+    return [text[i : i + chunk_size] for i in range(0, len(text), chunk_size - chunk_overlap)]
+
+
+def _merge_split_parts(
+    parts: list[str],
+    sep: str,
+    chunk_size: int,
+    sep_idx: int,
+    split_fn,
+) -> list[str]:
+    result: list[str] = []
+    current = ""
+    for part in parts:
+        if len(current) + len(part) + len(sep) <= chunk_size:
+            current = current + sep + part if current else part
+            continue
+        if current:
+            result.append(current)
+        if len(part) > chunk_size:
+            result.extend(split_fn(part, sep_idx + 1))
+            current = ""
+            continue
+        current = part
+    if current:
+        result.append(current)
+    return result
+
+
+def _build_chunks(doc: Document, text_chunks: list[str], chunk_overlap: int) -> list[Chunk]:
+    chunks: list[Chunk] = []
     pos = 0
     for i, text in enumerate(text_chunks):
-        # Ensure no chunk exceeds MAX_CHUNK_CHARS
-        if len(text) > MAX_CHUNK_CHARS:
-            text = text[:MAX_CHUNK_CHARS]
-
+        normalized_text = text[:MAX_CHUNK_CHARS] if len(text) > MAX_CHUNK_CHARS else text
         chunk = Chunk(
             chunk_id=f"{doc.doc_id}_{i}",
             doc_id=doc.doc_id,
-            content=text.strip(),
+            content=normalized_text.strip(),
             start_idx=pos,
-            end_idx=pos + len(text),
+            end_idx=pos + len(normalized_text),
             metadata={
                 "chunk_index": i,
                 "source": doc.source,
             },
         )
         chunks.append(chunk)
-        pos += len(text) - chunk_overlap
-
+        pos += len(normalized_text) - chunk_overlap
     return chunks
 
 

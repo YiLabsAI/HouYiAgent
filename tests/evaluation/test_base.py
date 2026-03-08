@@ -2,7 +2,7 @@
 
 import pytest
 
-from houyi.evaluation.base import EvaluationResult, EvaluationSummary, Evaluator
+from houyi.assurance.evaluation.base import EvaluationResult, EvaluationSummary, Evaluator
 
 
 class MockEvaluator(Evaluator):

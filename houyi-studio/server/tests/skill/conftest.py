@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from houyi.core.skill_registry import SkillRegistry
+from houyi.domain.skill.registry import SkillRegistry
 
 # Make sibling modules (_fakes) importable by test files.
 _THIS_DIR = os.path.dirname(__file__)

@@ -31,7 +31,7 @@ make setup-hooks
 ## Quality Gates (Required)
 
 Follow the exact requirements in [agent.md](agent.md). In particular:
-- Coverage gate is ≥80%.
+- Coverage gate is ≥85%.
 - Ruff must pass with zero violations.
 
 ## Useful Makefile Commands

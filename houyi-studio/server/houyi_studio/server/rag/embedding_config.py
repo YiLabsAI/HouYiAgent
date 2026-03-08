@@ -6,7 +6,7 @@ Responsibilities:
       explicit override → environment variables → auto-detection.
 
 Dependencies:
-    - ``houyi.config.env_config`` for environment variable names.
+    - ``houyi.infrastructure.config.env_config`` for environment variable names.
     - ``houyi.rag.config.EmbeddingConfig`` (lazy import inside helpers).
 
 Thread Safety:
@@ -21,7 +21,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from houyi.config.env_config import (
+from houyi.infrastructure.config import (
     ENV_EMBEDDING_MODEL,
     ENV_EMBEDDING_PROVIDER,
     ENV_GOOGLE_API_KEY,

@@ -1,11 +1,11 @@
-"""Unit tests for houyi.context.context_renderer.ContextRenderer."""
+"""Unit tests for houyi.application.context.context_renderer.ContextRenderer."""
 
 from __future__ import annotations
 
 import pytest
 
-from houyi.context.context_renderer import ContextRenderer
-from houyi.context.types import ContextBlock, ContextBlockType, ContextPlan
+from houyi.application.context.context_renderer import ContextRenderer
+from houyi.application.context.types import ContextBlock, ContextBlockType, ContextPlan
 
 
 @pytest.fixture

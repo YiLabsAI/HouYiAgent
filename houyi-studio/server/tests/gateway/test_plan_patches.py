@@ -5,7 +5,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from houyi.protocol.ir import NodeIR, NodeType, PlanIR
+from houyi.interface.protocol.ir import NodeIR, NodeType, PlanIR
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _STUDIO_SERVER_ROOT = _REPO_ROOT / "houyi-studio" / "server"

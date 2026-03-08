@@ -2,7 +2,7 @@
 
 import time
 
-from houyi.verification.cache import (
+from houyi.assurance.verification.cache import (
     CacheEntry,
     CacheStats,
     ConstraintSolverCache,

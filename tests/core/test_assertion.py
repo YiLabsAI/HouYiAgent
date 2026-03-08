@@ -1,6 +1,6 @@
 """Tests for AssertionSpec."""
 
-from houyi.core.assertion import AssertionSpec
+from houyi.assurance.verification.assertion import AssertionSpec
 
 
 class TestAssertionEvaluate:

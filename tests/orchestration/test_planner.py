@@ -2,11 +2,11 @@
 
 from pydantic import BaseModel
 
-from houyi.core.agent import AgentSpec
-from houyi.core.skill import SkillSpec
-from houyi.orchestration.plan import NodeType
-from houyi.orchestration.planner import DAGPlanner
-from houyi.orchestration.state import SessionState
+from houyi.application.workflow.orchestration.plan import NodeType
+from houyi.application.workflow.orchestration.planner import DAGPlanner
+from houyi.application.workflow.orchestration.state import SessionState
+from houyi.domain.agent import AgentSpec
+from houyi.domain.skill.spec import SkillSpec
 
 
 class TestDAGPlanner:

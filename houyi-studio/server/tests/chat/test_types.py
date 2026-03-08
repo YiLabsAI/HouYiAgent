@@ -15,7 +15,7 @@ from houyi_studio.server.chat.types import (
     UpdateConversationRequest,
 )
 
-from houyi.llm.models import GPT_4O
+from houyi.adapters.llm.models import GPT_4O
 
 
 class TestMessage:

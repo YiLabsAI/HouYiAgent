@@ -4,9 +4,9 @@ import pytest
 from pydantic import BaseModel
 
 from houyi import SkillSpec
-from houyi.runtime.agent import Agent
-from houyi.runtime.task import Task
-from houyi.runtime.team import Team
+from houyi.application.runtime.agent import Agent
+from houyi.application.runtime.task import Task
+from houyi.application.runtime.team import Team
 
 
 class TestTeamExecution:

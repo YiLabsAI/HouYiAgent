@@ -32,7 +32,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from houyi.config.env_config import ENV_EMBEDDING_PROVIDER
+from houyi.infrastructure.config import ENV_EMBEDDING_PROVIDER
 from houyi.rag.indexed.document.loaders import SUPPORTED_DOCUMENT_SUFFIXES
 
 from .embedding_config import is_index_path, resolve_embedding_config

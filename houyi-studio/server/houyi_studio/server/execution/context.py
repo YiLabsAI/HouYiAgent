@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from houyi.protocol.ir import ExecutionIR, PlanIR
+from houyi.interface.protocol.ir import ExecutionIR, PlanIR
 
 from ..rag import KnowledgeService
 from .agent_comm_service import AgentCommService
@@ -15,7 +15,7 @@ from .mcp_gateway import MCPGateway
 from .memory_service import MemoryService
 
 if TYPE_CHECKING:
-    from houyi.observability import Span
+    from houyi.infrastructure.observability import Span
 
     from .observation_service import ObservationService
 

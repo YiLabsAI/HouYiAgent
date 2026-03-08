@@ -5,7 +5,7 @@ from typing import Any
 
 import pytest
 
-from houyi.protocol.ir.tooling_ir import LLMToolCallOutputIR
+from houyi.interface.protocol.ir.tooling_ir import LLMToolCallOutputIR
 
 
 class _DummyStore:

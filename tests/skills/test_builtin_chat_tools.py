@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from houyi.core.skill.policy import ModelAutoInvoke
-from houyi.core.skill_registry import SkillRegistry
+from houyi.domain.skill.policy import ModelAutoInvoke
+from houyi.domain.skill.registry import SkillRegistry
 from houyi.skills.builtin import local_tools
 
 

@@ -6,7 +6,7 @@ import pytest
 from fastapi import APIRouter, FastAPI
 from fastapi.testclient import TestClient
 
-from houyi.config.env_config import (
+from houyi.infrastructure.config.env_config import (
     ENV_CHAT_DATA_DIR,
     ENV_CHAT_SETTINGS_PATH,
     ENV_CHAT_SYSTEM_PROMPT,

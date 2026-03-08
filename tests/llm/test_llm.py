@@ -4,11 +4,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from houyi.llm.base import LLMMessage, LLMResponse, MessageRole
+from houyi.adapters.llm.base import LLMMessage, LLMResponse, MessageRole
 
 # Try to import adapters, skip tests if dependencies not available
 try:
-    from houyi.llm.openai_adapter import OpenAIAdapter
+    from houyi.adapters.llm.openai_adapter import OpenAIAdapter
 
     OPENAI_AVAILABLE = True
 except (ImportError, ValueError):
@@ -16,7 +16,7 @@ except (ImportError, ValueError):
     OPENAI_AVAILABLE = False
 
 try:
-    from houyi.llm.anthropic_adapter import AnthropicAdapter
+    from houyi.adapters.llm.anthropic_adapter import AnthropicAdapter
 
     ANTHROPIC_AVAILABLE = True
 except (ImportError, ValueError):

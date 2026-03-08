@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from pydantic import BaseModel, ValidationError
 
-from houyi.core.skill import SkillSpec
+from houyi.domain.skill.spec import SkillSpec
 
 
 class TestSkillFromFile:

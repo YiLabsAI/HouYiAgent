@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 
-from houyi.execution.config_service import ConfigService
-from houyi.protocol.ir.plan_ir import NodeType
+from houyi.application.workflow.config_service import ConfigService
+from houyi.interface.protocol.ir.plan_ir import NodeType
 
 from .node_executor_registry import NodeExecutorRegistry
 from .node_executors import (

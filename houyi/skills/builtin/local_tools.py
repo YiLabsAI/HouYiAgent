@@ -22,8 +22,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from houyi.core.skill import SkillSpec
-from houyi.core.skill.policy import (
+from houyi.domain.skill.policy import (
     ExecPerm,
     FilesystemPerm,
     InvocationPolicy,
@@ -31,7 +30,8 @@ from houyi.core.skill.policy import (
     Permissions,
     SideEffect,
 )
-from houyi.core.skill_registry import SkillRegistry
+from houyi.domain.skill.registry import SkillRegistry
+from houyi.domain.skill.spec import SkillSpec
 
 DEFAULT_ENCODING = "utf-8"
 DEFAULT_MAX_READ_CHARS = 200_000
@@ -212,6 +212,30 @@ async def _write_file_executor(
     ).model_dump()
 
 
+def _resolve_search_mode(*, pattern: str, search_mode: str) -> str:
+    has_glob_meta = any(ch in pattern for ch in "*?[")
+    return "glob" if (search_mode == "contains" and has_glob_meta) else search_mode
+
+
+def _collect_search_matches(
+    *,
+    iterator: Any,
+    matcher: Any,
+    root: Path,
+    max_results: int,
+) -> tuple[list[str], set[str]]:
+    matches: list[str] = []
+    searched_dirs: set[str] = {str(root)}
+    for candidate in iterator:
+        if candidate.is_dir():
+            searched_dirs.add(str(candidate))
+        if matcher(candidate.name):
+            matches.append(str(candidate))
+            if len(matches) >= max_results:
+                break
+    return matches, searched_dirs
+
+
 async def _find_files_executor(
     *,
     root_path: str = ".",
@@ -221,8 +245,7 @@ async def _find_files_executor(
     max_depth: int = 16,
     max_results: int = DEFAULT_MAX_RESULTS,
 ) -> dict[str, Any]:
-    has_glob_meta = any(ch in pattern for ch in "*?[")
-    effective_mode = "glob" if (search_mode == "contains" and has_glob_meta) else search_mode
+    effective_mode = _resolve_search_mode(pattern=pattern, search_mode=search_mode)
 
     def _matches(candidate_name: str) -> bool:
         if effective_mode == "exact":
@@ -246,15 +269,12 @@ async def _find_files_executor(
     if not root.exists() or not root.is_dir():
         return ToolResponse(success=False, message=f"Directory not found: {root}").model_dump()
 
-    matches: list[str] = []
-    searched_dirs: set[str] = {str(root)}
-    for candidate in _iter_candidates():
-        if candidate.is_dir():
-            searched_dirs.add(str(candidate))
-        if _matches(candidate.name):
-            matches.append(str(candidate))
-            if len(matches) >= max_results:
-                break
+    matches, searched_dirs = _collect_search_matches(
+        iterator=_iter_candidates(),
+        matcher=_matches,
+        root=root,
+        max_results=max_results,
+    )
 
     return ToolResponse(
         success=True,

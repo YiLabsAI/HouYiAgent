@@ -2,8 +2,8 @@
 
 import json
 
-from houyi.evaluation.base import EvaluationResult, EvaluationSummary
-from houyi.evaluation.report import ReportGenerator
+from houyi.assurance.evaluation.base import EvaluationResult, EvaluationSummary
+from houyi.assurance.evaluation.report import ReportGenerator
 
 
 class TestReportGenerator:

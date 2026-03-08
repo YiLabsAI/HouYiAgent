@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import urllib.error
 from typing import Any
 
 from houyi.skills.location import skill as location_skill
@@ -90,3 +91,44 @@ def test_get_location_not_found_after_fallback(monkeypatch) -> None:
     out = _call_get_location(city="beijing, CN")
     assert out["found"] is False
     assert out["error"] == "City not found: beijing, CN"
+
+
+def test_sanitize_city_name_handles_invalid_inputs() -> None:
+    assert location_skill._sanitize_city_name(None) == "Hangzhou"
+    assert location_skill._sanitize_city_name("   ") == "Hangzhou"
+    assert location_skill._sanitize_city_name(123) == "Hangzhou"  # type: ignore[arg-type]
+
+
+def test_get_location_handles_network_error(monkeypatch) -> None:
+    def _raise(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        raise urllib.error.URLError("down")
+
+    monkeypatch.setattr(location_skill, "_fetch_with_retry", _raise)
+    out = _call_get_location(city="Beijing")
+    assert out["found"] is False
+    assert out["error"] == "Network error"
+
+
+def test_get_location_handles_coordinates_not_available(monkeypatch) -> None:
+    monkeypatch.setattr(
+        location_skill, "_fetch_with_retry", lambda *a, **k: {"results": [{"name": "X"}]}
+    )
+    out = _call_get_location(city="Beijing")
+    assert out["found"] is False
+    assert out["error"] == "Coordinates not available"
+
+
+def test_location_post_tool_use_formats_success_summary() -> None:
+    class _Ctx:
+        tool_result: dict[str, Any] = {
+            "found": True,
+            "city": "Beijing",
+            "lat": 39.9,
+            "lon": 116.4,
+            "country": "China",
+        }
+
+    result = location_skill._location_post_tool_use(_Ctx())
+    assert result["success"] is True
+    assert "Found: Beijing" in str(result["output"])
+    assert result.get("inject_to_prompt") is True

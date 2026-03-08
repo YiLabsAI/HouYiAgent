@@ -2,8 +2,8 @@
 
 import pytest
 
-from houyi.verification.python_verifier import PythonVerifier
-from houyi.verification.verifier import VerificationRule
+from houyi.assurance.verification.python_verifier import PythonVerifier
+from houyi.assurance.verification.verifier import VerificationRule
 
 
 class TestPythonVerifierConstraints:

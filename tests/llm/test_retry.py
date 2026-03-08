@@ -1,4 +1,4 @@
-"""Unit tests for houyi.llm.retry — shared retry / backoff helpers."""
+"""Unit tests for houyi.adapters.llm.retry — shared retry / backoff helpers."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from houyi.llm.retry import (
+from houyi.adapters.llm.retry import (
     RETRY_BUCKET_CONNECT,
     RETRY_BUCKET_READ,
     RETRY_BUCKET_STATUS,

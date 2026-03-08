@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from houyi.core.skill.hooks import HookContext, HookResult
+    from houyi.domain.skill.hooks import HookContext, HookResult
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +38,7 @@ def get_ingest_state() -> dict[str, Any]:
 
 async def pre_ingest_hook(context: HookContext) -> HookResult:
     """Hook called before Write operations during ingest."""
-    from houyi.core.skill.hooks import HookResult
+    from houyi.domain.skill.hooks import HookResult
 
     tool_args = context.tool_args or {}
     file_path = tool_args.get("file_path", "")
@@ -54,7 +54,7 @@ async def pre_ingest_hook(context: HookContext) -> HookResult:
 
 async def post_ingest_hook(context: HookContext) -> HookResult:
     """Hook called after tool use during ingest."""
-    from houyi.core.skill.hooks import HookResult
+    from houyi.domain.skill.hooks import HookResult
 
     tool_name = context.tool_name or ""
     tool_result = context.tool_result
@@ -76,7 +76,7 @@ async def post_ingest_hook(context: HookContext) -> HookResult:
 
 async def stop_hook(context: HookContext) -> HookResult:
     """Hook called before stopping."""
-    from houyi.core.skill.hooks import HookResult
+    from houyi.domain.skill.hooks import HookResult
 
     files = _ingest_state["files_processed"]
     chunks = _ingest_state["chunks_created"]

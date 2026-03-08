@@ -6,16 +6,19 @@ from datetime import UTC, datetime
 
 import pytest
 
-from houyi.core.tool_call_adapter import (
+from houyi.adapters.llm.base import LLMResponse
+from houyi.application.tool_calling.tool_call_adapter import (
     normalize_adapter_error,
     normalize_adapter_response,
 )
-from houyi.core.tool_call_adapter_hooks import _ADAPTER_HOOKS, ToolCallAdapterContext
-from houyi.core.tool_call_adapter_registry import (
+from houyi.application.tool_calling.tool_call_adapter_hooks import (
+    _ADAPTER_HOOKS,
+    ToolCallAdapterContext,
+)
+from houyi.application.tool_calling.tool_call_adapter_registry import (
     ToolCallAdapterRegistry,
     ToolCallAdapterRequest,
 )
-from houyi.llm.base import LLMResponse
 
 
 class DummyAdapter:

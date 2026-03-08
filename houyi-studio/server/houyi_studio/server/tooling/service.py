@@ -12,7 +12,27 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 
-from houyi.config.env_config import (
+from houyi.adapters.llm import DEFAULT_MODEL
+from houyi.application.tool_calling.runner import ToolCallRunner
+from houyi.application.tool_calling.runtime_options import (
+    build_chat_kwargs,
+    choose_tool_cache,
+    wrap_tool_choice,
+)
+from houyi.application.tool_calling.tool_bridge import ToolBridge
+from houyi.application.tool_calling.tool_call_adapter import normalize_adapter_error
+from houyi.application.tool_calling.tool_call_adapter_registry import (
+    ToolCallAdapterRegistry,
+    ToolCallAdapterRequest,
+)
+from houyi.application.tool_calling.tool_call_messages import (
+    build_fast_path_prompt,
+    build_tool_call_messages,
+)
+from houyi.application.tool_calling.tool_hooks.web_search import build_web_search_tool_hooks
+from houyi.domain.skill.hooks import DEFAULT_HOOKS_MANAGER
+from houyi.domain.skill.registry import DEFAULT_SKILL_REGISTRY, SkillRegistry
+from houyi.infrastructure.config import (
     ENV_DEEPSEEK_MODEL,
     ENV_FRESH_REPLAY_USE_TOOL_CACHE,
     ENV_FRESH_REPLAY_USE_WEB_SEARCH_CACHE,
@@ -28,22 +48,8 @@ from houyi.config.env_config import (
     ENV_TOOLCALL_MODEL,
     ENV_TOOLCALL_TIMEOUT,
 )
-from houyi.core.skill.hooks import DEFAULT_HOOKS_MANAGER
-from houyi.core.skill.tool_bridge import ToolBridge
-from houyi.core.skill_registry import DEFAULT_SKILL_REGISTRY, SkillRegistry
-from houyi.core.tool_call_adapter import normalize_adapter_error
-from houyi.core.tool_call_adapter_registry import ToolCallAdapterRegistry, ToolCallAdapterRequest
-from houyi.execution.tool_call_messages import build_fast_path_prompt, build_tool_call_messages
-from houyi.execution.tool_call_orchestrator import (
-    build_chat_kwargs,
-    choose_tool_cache,
-    wrap_tool_choice,
-)
-from houyi.execution.tool_call_runner import ToolCallRunner
-from houyi.execution.tool_call_web_search_hooks import build_web_search_tool_hooks
-from houyi.llm.models import DEFAULT_MODEL
-from houyi.protocol.ir import ExecutionIR, NodeExecutionIR
-from houyi.protocol.ir.tooling_ir import LLMToolCallOutputIR
+from houyi.interface.protocol.ir import ExecutionIR, NodeExecutionIR
+from houyi.interface.protocol.ir.tooling_ir import LLMToolCallOutputIR
 
 from ..skill.service import get_skill_service
 from .response import ConsoleToolCallResponseAssembler, ToolCallContext
@@ -122,8 +128,8 @@ class ToolCallService:
         parallel_tool_calls: bool | None = None,
         prompt_cache_key: str | None = None,
     ) -> bool:
-        from houyi.execution.skill_executor import SkillExecutor
-        from houyi.llm.openai_adapter import OpenAIAdapter
+        from houyi.adapters.llm import OpenAIAdapter
+        from houyi.application.workflow.skill_executor import SkillExecutor
 
         effective_parallel_tool_calls = True if parallel_tool_calls is None else parallel_tool_calls
 

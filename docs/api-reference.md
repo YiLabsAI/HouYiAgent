@@ -74,6 +74,10 @@ skill = SkillSpec(
 
 Decorator for creating skills from functions:
 
+- Public entrypoint: `from houyi import tool`
+- Implementation location: `houyi/decorators.py`
+- Responsibility: convert a typed Python function into a `SkillSpec` by deriving input/output schemas from type hints and binding the original function as the executor
+
 ```python
 from houyi import tool
 

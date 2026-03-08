@@ -1,4 +1,4 @@
-"""Unit tests for houyi.llm.models — model registry and provider identifiers.
+"""Unit tests for houyi.adapters.llm.models — model registry and provider identifiers.
 
 Tests cover:
 - All provider identifiers are unique and lowercase
@@ -11,7 +11,7 @@ Tests cover:
 
 from __future__ import annotations
 
-from houyi.llm.models import (
+from houyi.adapters.llm.models import (
     # Token estimation
     CHARS_PER_TOKEN_BLENDED,
     CHARS_PER_TOKEN_CJK,

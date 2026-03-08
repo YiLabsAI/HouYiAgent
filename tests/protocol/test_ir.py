@@ -4,10 +4,16 @@ from __future__ import annotations
 
 from datetime import UTC
 
-from houyi.orchestration.plan import ExecutionPlan, IRNode, NodeType
-from houyi.protocol.ir import CheckpointIR, CheckpointTrigger, ExecutionIR, LLMCallLog, NodeStatus
-from houyi.protocol.ir.converter import IRConverter
-from houyi.protocol.ir.plan_ir import EdgeIR, NodeIR, PlanIR
+from houyi.application.workflow.orchestration.plan import ExecutionPlan, IRNode, NodeType
+from houyi.interface.protocol.ir import (
+    CheckpointIR,
+    CheckpointTrigger,
+    ExecutionIR,
+    LLMCallLog,
+    NodeStatus,
+)
+from houyi.interface.protocol.ir.converter import IRConverter
+from houyi.interface.protocol.ir.plan_ir import EdgeIR, NodeIR, PlanIR
 
 
 class TestPlanIR:
@@ -390,7 +396,7 @@ class TestToolCallTraceIR:
     """Test ToolCallTraceIR tooling IR fields."""
 
     def test_parallel_group_id_field(self) -> None:
-        from houyi.protocol.ir.tooling_ir import ToolCallTraceIR
+        from houyi.interface.protocol.ir.tooling_ir import ToolCallTraceIR
 
         ir = ToolCallTraceIR(
             tool_name="search",
@@ -401,13 +407,13 @@ class TestToolCallTraceIR:
         assert ir.parallel_group_id == "round_1"
 
     def test_parallel_group_id_default_none(self) -> None:
-        from houyi.protocol.ir.tooling_ir import ToolCallTraceIR
+        from houyi.interface.protocol.ir.tooling_ir import ToolCallTraceIR
 
         ir = ToolCallTraceIR(tool_name="search")
         assert ir.parallel_group_id is None
 
     def test_serialization_includes_parallel_group_id(self) -> None:
-        from houyi.protocol.ir.tooling_ir import ToolCallTraceIR
+        from houyi.interface.protocol.ir.tooling_ir import ToolCallTraceIR
 
         ir = ToolCallTraceIR(
             tool_name="search",

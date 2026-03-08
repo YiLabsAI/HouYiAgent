@@ -7,7 +7,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from houyi.protocol.ir.checkpoint_ir import ReplayMode
+from houyi.interface.protocol.ir.checkpoint_ir import ReplayMode
 
 
 class CommandType(str, Enum):

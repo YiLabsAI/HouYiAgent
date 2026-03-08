@@ -1,9 +1,9 @@
-"""Unit tests for houyi.context.token_estimator.TokenEstimator."""
+"""Unit tests for houyi.application.context.token_estimator.TokenEstimator."""
 
 from __future__ import annotations
 
-from houyi.context.token_estimator import MODEL_CONTEXT_WINDOWS, TokenEstimator
-from houyi.llm.models import DEFAULT_MODEL
+from houyi.adapters.llm.models import DEFAULT_MODEL
+from houyi.application.context.token_estimator import MODEL_CONTEXT_WINDOWS, TokenEstimator
 
 
 class TestTokenEstimatorInit:

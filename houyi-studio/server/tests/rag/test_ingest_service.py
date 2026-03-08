@@ -1,4 +1,4 @@
-"""Unit tests for IngestService — file discovery, cancellation, and incremental filtering."""
+"""Tests for IngestService — file discovery, cancellation, and incremental filtering."""
 
 from __future__ import annotations
 
@@ -8,9 +8,11 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+from houyi_studio.server.rag import ingest_service as ingest_service_module
 from houyi_studio.server.rag.ingest_service import IngestService
 from houyi_studio.server.rag.library_repository import LibraryRepository
 
+import houyi.rag as rag_module
 from houyi.rag.indexed.document.loaders import SUPPORTED_DOCUMENT_SUFFIXES
 
 
@@ -78,8 +80,9 @@ class TestIngestFiles:
                 return {"chunks": 1}
 
         with (
-            patch(
-                "houyi_studio.server.rag.ingest_service.resolve_embedding_config",
+            patch.object(
+                ingest_service_module,
+                "resolve_embedding_config",
                 return_value=(
                     EmbeddingConfig(
                         provider="openai",
@@ -89,7 +92,7 @@ class TestIngestFiles:
                     "openai",
                 ),
             ),
-            patch("houyi.rag.RAG", _SuccessRAG),
+            patch.object(rag_module, "RAG", _SuccessRAG),
         ):
             result = await svc.ingest_files(library_id, paths)
 
@@ -160,8 +163,9 @@ class TestIngestFiles:
                 raise RuntimeError(f"index failed for {paths[0]}")
 
         with (
-            patch(
-                "houyi_studio.server.rag.ingest_service.resolve_embedding_config",
+            patch.object(
+                ingest_service_module,
+                "resolve_embedding_config",
                 return_value=(
                     EmbeddingConfig(
                         provider="openai", model="text-embedding-3-small", dimension=1536
@@ -169,7 +173,7 @@ class TestIngestFiles:
                     "openai",
                 ),
             ),
-            patch("houyi.rag.RAG", _BrokenRAG),
+            patch.object(rag_module, "RAG", _BrokenRAG),
         ):
             result = await svc.ingest_files(library_id, paths)
 
@@ -198,8 +202,9 @@ class TestIngestFiles:
 
         original_import = builtins.__import__
         with (
-            patch(
-                "houyi_studio.server.rag.ingest_service.resolve_embedding_config",
+            patch.object(
+                ingest_service_module,
+                "resolve_embedding_config",
                 return_value=(
                     EmbeddingConfig(
                         provider="local", model="BAAI/bge-small-en-v1.5", dimension=384
@@ -238,8 +243,9 @@ class TestIngestFiles:
                 raise RuntimeError("model_optimized.onnx failed: File doesn't exist")
 
         with (
-            patch(
-                "houyi_studio.server.rag.ingest_service.resolve_embedding_config",
+            patch.object(
+                ingest_service_module,
+                "resolve_embedding_config",
                 return_value=(
                     EmbeddingConfig(
                         provider="local", model="BAAI/bge-small-en-v1.5", dimension=384
@@ -247,7 +253,7 @@ class TestIngestFiles:
                     "local",
                 ),
             ),
-            patch("houyi.rag.RAG", _BrokenLocalRAG),
+            patch.object(rag_module, "RAG", _BrokenLocalRAG),
         ):
             result = await svc.ingest_files(library_id, paths)
 
@@ -288,8 +294,9 @@ class TestIngestFiles:
                 return {"chunks": 3}
 
         with (
-            patch(
-                "houyi_studio.server.rag.ingest_service.resolve_embedding_config",
+            patch.object(
+                ingest_service_module,
+                "resolve_embedding_config",
                 return_value=(
                     EmbeddingConfig(
                         provider="openai",
@@ -299,14 +306,15 @@ class TestIngestFiles:
                     "openai",
                 ),
             ),
-            patch("houyi.rag.RAG", _FailRAG),
+            patch.object(rag_module, "RAG", _FailRAG),
         ):
             first = await svc.ingest_files(library_id, paths)
         assert first["success"] is False
 
         with (
-            patch(
-                "houyi_studio.server.rag.ingest_service.resolve_embedding_config",
+            patch.object(
+                ingest_service_module,
+                "resolve_embedding_config",
                 return_value=(
                     EmbeddingConfig(
                         provider="openai",
@@ -316,7 +324,7 @@ class TestIngestFiles:
                     "openai",
                 ),
             ),
-            patch("houyi.rag.RAG", _SuccessRAG),
+            patch.object(rag_module, "RAG", _SuccessRAG),
         ):
             second = await svc.ingest_files(library_id, paths)
         assert second["success"] is True
@@ -438,8 +446,9 @@ class TestIncrementalConfigHash:
 
         with (
             patch.object(svc, "_ingest_with_rag", side_effect=ImportError),
-            patch(
-                "houyi_studio.server.rag.ingest_service.resolve_embedding_config",
+            patch.object(
+                ingest_service_module,
+                "resolve_embedding_config",
                 return_value=(None, "no_provider"),
             ),
         ):

@@ -10,7 +10,7 @@ from houyi_studio.server.chat.settings_store import (
     SettingsStore,
 )
 
-from houyi.llm.models import (
+from houyi.adapters.llm.models import (
     DEEPSEEK_R1,
     DEEPSEEK_V3,
     GPT_4O,

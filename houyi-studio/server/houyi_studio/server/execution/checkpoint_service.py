@@ -6,9 +6,9 @@ import asyncio
 import logging
 from typing import Any
 
-from houyi.checkpoint import CheckpointManager
-from houyi.execution.execution_order_service import ExecutionOrderService
-from houyi.protocol.ir import (
+from houyi.application.workflow.execution_order_service import ExecutionOrderService
+from houyi.infrastructure.checkpoint import CheckpointManager
+from houyi.interface.protocol.ir import (
     CheckpointTrigger,
     ExecutionIR,
 )

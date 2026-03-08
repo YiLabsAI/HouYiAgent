@@ -1,8 +1,8 @@
 """Tests for runtime/task.py."""
 
-from houyi.core.task import TaskSpec
-from houyi.orchestration.state import TaskStatus
-from houyi.runtime.task import Task
+from houyi.application.runtime.task import Task
+from houyi.application.workflow.orchestration.state import TaskStatus
+from houyi.domain.task import TaskSpec
 
 
 class TestTask:
@@ -25,7 +25,7 @@ class TestTask:
 
     def test_task_with_agent(self):
         """Test Task with assigned agent."""
-        from houyi.core.agent import AgentSpec
+        from houyi.domain.agent import AgentSpec
 
         agent = AgentSpec(role="test_agent")
 

@@ -3,11 +3,10 @@
 import pytest
 from pydantic import BaseModel
 
-from houyi.core.agent import AgentSpec
-from houyi.core.skill import SkillSpec
-from houyi.orchestration.plan import ExecutionPlan, IRNode, NodeType
-from houyi.orchestration.state import SessionState
-from houyi.runtime.executor import LocalExecutor
+from houyi.application.workflow.executor import LocalExecutor
+from houyi.application.workflow.orchestration.plan import ExecutionPlan, IRNode, NodeType
+from houyi.application.workflow.orchestration.state import SessionState, TaskStatus
+from houyi.domain.skill.spec import SkillSpec
 
 
 class TestToolNodeExecution:
@@ -19,14 +18,14 @@ class TestToolNodeExecution:
 
         # Define skill input/output schemas
         class CalculatorInput(BaseModel):
-            expression: str
+            task: str
 
         class CalculatorOutput(BaseModel):
             result: float
 
         # Create a real skill with executor
-        def calculator_executor(expression: str) -> CalculatorOutput:
-            result = eval(expression)  # Simple calculator
+        def calculator_executor(task: str) -> CalculatorOutput:
+            result = eval(task)  # Simple calculator
             return CalculatorOutput(result=result)
 
         skill = SkillSpec(
@@ -37,9 +36,6 @@ class TestToolNodeExecution:
             executor=calculator_executor,
         )
 
-        # Create agent with skill
-        agent = AgentSpec(role="Calculator Agent", skills=[skill])
-
         # Create execution plan with tool node
         plan = ExecutionPlan(
             plan_id="test_plan",
@@ -49,8 +45,9 @@ class TestToolNodeExecution:
                     node_id="calc_node",
                     node_type=NodeType.TOOL,
                     skill_ref=skill,
-                    inputs={"expression": "2 + 2 * 3"},
-                    metadata={"skill": skill},
+                    inputs={"task": "2 + 2 * 3"},
+                    outputs={"result": "$answer"},
+                    metadata={"skill": skill, "direct_execution": True},
                 )
             ],
         )
@@ -62,23 +59,22 @@ class TestToolNodeExecution:
         result = await executor.execute(plan, initial_state)
 
         # Verify tool execution
-        assert result.status.value == "succeeded"
-        assert "calc_node" in result.output
-        assert result.output["calc_node"]["type"] == "tool_result"
-        assert result.output["calc_node"]["output"].result == 8.0
+        assert result.status == TaskStatus.SUCCEEDED
+        assert result.success is True
+        assert result.output["result"] == 8.0
 
     @pytest.mark.asyncio
     async def test_tool_node_with_input_from_previous_node(self) -> None:
         """Test tool node receiving input from previous node."""
 
         class Input(BaseModel):
-            value: int
+            task: str
 
         class Output(BaseModel):
-            doubled: int
+            result: int
 
-        def doubler(value: int) -> Output:
-            return Output(doubled=value * 2)
+        def doubler(task: str) -> Output:
+            return Output(result=int(task) * 2)
 
         skill = SkillSpec(
             name="doubler",
@@ -103,9 +99,10 @@ class TestToolNodeExecution:
                     node_id="tool_node",
                     node_type=NodeType.TOOL,
                     skill_ref=skill,
-                    inputs={"value": 5},  # Literal value for testing
+                    inputs={"task": "5"},
+                    outputs={"result": "$answer"},
                     dependencies=["llm_node"],
-                    metadata={"skill": skill},
+                    metadata={"skill": skill, "direct_execution": True},
                 ),
             ],
         )
@@ -115,24 +112,28 @@ class TestToolNodeExecution:
 
         result = await executor.execute(plan, initial_state)
 
-        assert result.status.value == "succeeded"
-        assert result.output["tool_node"]["output"].doubled == 10
+        assert result.status == TaskStatus.SUCCEEDED
+        assert result.success is True
+        assert result.output["result"] == 10
 
     @pytest.mark.asyncio
     async def test_tool_node_execution_failure(self) -> None:
         """Test tool node handling execution errors."""
 
         class Input(BaseModel):
-            value: str
+            task: str
 
-        def failing_skill(value: str):
-            raise ValueError(f"Intentional error: {value}")
+        class Output(BaseModel):
+            result: str
+
+        def failing_skill(task: str):
+            raise ValueError(f"Intentional error: {task}")
 
         skill = SkillSpec(
             name="failing_skill",
             description="A skill that fails",
             input_schema=Input,
-            output_schema=Input,
+            output_schema=Output,
             executor=failing_skill,
         )
 
@@ -144,8 +145,9 @@ class TestToolNodeExecution:
                     node_id="fail_node",
                     node_type=NodeType.TOOL,
                     skill_ref=skill,
-                    inputs={"value": "test"},
-                    metadata={"skill": skill},
+                    inputs={"task": "test"},
+                    outputs={"result": "$answer"},
+                    metadata={"skill": skill, "direct_execution": True},
                 )
             ],
         )
@@ -156,6 +158,7 @@ class TestToolNodeExecution:
         result = await executor.execute(plan, initial_state)
 
         # Should capture error
-        assert result.status.value == "failed"
+        assert result.status == TaskStatus.FAILED
+        assert result.success is False
         assert result.error is not None
         assert "Intentional error" in result.error

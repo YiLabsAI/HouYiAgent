@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from houyi.observability.storage import (
+from houyi.infrastructure.observability.storage import (
     SpanFilter,
     SpanStorageConfig,
     SQLiteSpanStorage,
@@ -15,7 +15,7 @@ from houyi.observability.storage import (
     reset_storage,
     set_storage,
 )
-from houyi.observability.types import (
+from houyi.infrastructure.observability.types import (
     CostInfo,
     SpanSchema,
     SpanType,

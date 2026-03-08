@@ -10,17 +10,60 @@ Reference:
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from houyi.llm.base import BaseLLMAdapter
+    from houyi.adapters.llm.base import BaseLLMAdapter
 
 from houyi.rag.types import SearchResult
 
 logger = logging.getLogger(__name__)
+
+
+def _build_validation_prompt(query: str, results: list[SearchResult]) -> str:
+    passages = []
+    for i, result in enumerate(results[:10]):
+        content = result.content[:500] if result.content else ""
+        passages.append(f"[{i}] {result.file_path}: {content}")
+
+    return f"""Query: {query}
+
+Retrieved passages:
+{chr(10).join(passages)}
+
+Assess the relevance of these passages to the query."""
+
+
+def _parse_validation_response(response_content: str, results: list[SearchResult]) -> CRAGResult:
+    data = json.loads(response_content)
+
+    quality = RetrievalQuality(data.get("quality", "ambiguous"))
+    confidence = float(data.get("confidence", 0.5))
+    relevant_indices = data.get("relevant_indices", [])
+    reasoning = data.get("reasoning", "")
+    suggested_queries = data.get("suggested_queries", [])
+    relevant_results = [results[i] for i in relevant_indices if i < len(results)]
+
+    return CRAGResult(
+        quality=quality,
+        confidence=confidence,
+        relevant_results=relevant_results,
+        needs_refinement=quality != RetrievalQuality.CORRECT,
+        suggested_queries=suggested_queries,
+        reasoning=reasoning,
+    )
+
+
+def _build_refinement_fallback_queries(original_query: str) -> list[str]:
+    return [
+        original_query,
+        f"what is {original_query}",
+        f"{original_query} explained",
+    ]
 
 
 class RetrievalQuality(str, Enum):
@@ -122,18 +165,7 @@ Respond in JSON format:
         Returns:
             CRAGResult from LLM assessment
         """
-        # Build prompt
-        passages = []
-        for i, result in enumerate(results[:10]):  # Limit to top 10
-            content = result.content[:500] if result.content else ""
-            passages.append(f"[{i}] {result.file_path}: {content}")
-
-        user_prompt = f"""Query: {query}
-
-Retrieved passages:
-{chr(10).join(passages)}
-
-Assess the relevance of these passages to the query."""
+        user_prompt = _build_validation_prompt(query, results)
 
         try:
             response = await self._adapter.chat(
@@ -143,29 +175,7 @@ Assess the relevance of these passages to the query."""
                 ],
                 response_format={"type": "json_object"},
             )
-
-            # Parse response
-            import json
-
-            data = json.loads(response.content)
-
-            quality = RetrievalQuality(data.get("quality", "ambiguous"))
-            confidence = float(data.get("confidence", 0.5))
-            relevant_indices = data.get("relevant_indices", [])
-            reasoning = data.get("reasoning", "")
-            suggested_queries = data.get("suggested_queries", [])
-
-            # Filter relevant results
-            relevant_results = [results[i] for i in relevant_indices if i < len(results)]
-
-            return CRAGResult(
-                quality=quality,
-                confidence=confidence,
-                relevant_results=relevant_results,
-                needs_refinement=quality != RetrievalQuality.CORRECT,
-                suggested_queries=suggested_queries,
-                reasoning=reasoning,
-            )
+            return _parse_validation_response(response.content, results)
 
         except Exception as e:
             logger.warning("LLM validation failed: %s, using heuristic", e)
@@ -268,9 +278,4 @@ Assess the relevance of these passages to the query."""
             except Exception as e:
                 logger.warning("Query refinement failed: %s", e)
 
-        # Fallback: simple variations
-        return [
-            original_query,
-            f"what is {original_query}",
-            f"{original_query} explained",
-        ]
+        return _build_refinement_fallback_queries(original_query)

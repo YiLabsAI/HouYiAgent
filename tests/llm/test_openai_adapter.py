@@ -1,4 +1,4 @@
-"""Unit tests for houyi.llm.openai_adapter retry behavior."""
+"""Unit tests for houyi.adapters.llm.openai_adapter retry behavior."""
 
 from __future__ import annotations
 
@@ -7,7 +7,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from houyi.llm.openai_adapter import OpenAIAdapter
+from houyi.adapters.llm import openai_adapter as openai_adapter_module
+from houyi.adapters.llm.openai_adapter import OpenAIAdapter
 
 
 class _FakeResponse:
@@ -74,7 +75,7 @@ class TestOpenAIAdapterRetry:
         )
         adapter = _build_adapter_with_client(create_mock)
 
-        with patch("houyi.llm.openai_adapter.asyncio.sleep", new_callable=AsyncMock):
+        with patch.object(openai_adapter_module.asyncio, "sleep", new_callable=AsyncMock):
             response = await adapter.chat([{"role": "user", "content": "hi"}])
 
         assert response.content == "done"
@@ -98,7 +99,7 @@ class TestOpenAIAdapterRetry:
         create_mock = AsyncMock(side_effect=[_FakeAPIError("connect fail"), good_stream()])
         adapter = _build_adapter_with_client(create_mock)
 
-        with patch("houyi.llm.openai_adapter.asyncio.sleep", new_callable=AsyncMock):
+        with patch.object(openai_adapter_module.asyncio, "sleep", new_callable=AsyncMock):
             chunks = []
             async for chunk in adapter.stream_chat([{"role": "user", "content": "hi"}]):
                 chunks.append(chunk.content_delta)

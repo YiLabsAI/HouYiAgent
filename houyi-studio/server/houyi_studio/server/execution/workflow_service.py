@@ -7,12 +7,12 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from houyi.orchestration.workflow_utils import (
+from houyi.application.workflow.workflow_utils import (
     plan_to_workflow_dict,
     sanitize_workflow_name,
     workflow_dict_to_plan,
 )
-from houyi.protocol.ir import PlanIR
+from houyi.interface.protocol.ir import PlanIR
 
 logger = logging.getLogger(__name__)
 

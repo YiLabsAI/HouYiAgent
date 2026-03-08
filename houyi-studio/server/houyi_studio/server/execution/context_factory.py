@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from houyi.protocol.ir import ExecutionIR, PlanIR
+from houyi.interface.protocol.ir import ExecutionIR, PlanIR
 
 from ..rag import KnowledgeService
 from .agent_comm_service import AgentCommService

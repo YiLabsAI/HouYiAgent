@@ -1,4 +1,4 @@
-"""Skill service facade (SOLID refactored).
+"""Skill service facade.
 
 ``SkillService`` is a **thin facade** that delegates to three single-
 responsibility collaborators:
@@ -11,7 +11,6 @@ The class itself only adds *metrics*, *consent management*, and
 *configure_skill* — concerns that genuinely cut across the above
 three but are small enough to keep inline.
 
-Dependency-Inversion: all collaborators are injected via the constructor.
 """
 
 from __future__ import annotations
@@ -23,16 +22,16 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
-from houyi.core.skill_registry import DEFAULT_SKILL_REGISTRY, SkillRegistry
+from houyi.domain.skill.registry import DEFAULT_SKILL_REGISTRY, SkillRegistry
 
 from .dry_run import DryRunValidator
 from .loader import SkillLoader
 from .serializer import VALID_POLICY_ACTIONS, SkillSerializer
 
 if TYPE_CHECKING:
-    from houyi.core.skill.consent import ConsentManager
-    from houyi.core.skill.metrics import MetricsStore
-    from houyi.core.skill.policy import PolicyEnforcer
+    from houyi.domain.skill.consent import ConsentManager
+    from houyi.domain.skill.metrics import MetricsStore
+    from houyi.domain.skill.policy import PolicyEnforcer
 
 logger = logging.getLogger(__name__)
 
@@ -179,7 +178,7 @@ class SkillService:
 
         changes: list[str] = []
 
-        from houyi.core.skill.policy import InvocationPolicy, ModelAutoInvoke
+        from houyi.domain.skill.policy import InvocationPolicy, ModelAutoInvoke
 
         ip = getattr(skill, "invocation_policy", None)
         if ip is None or isinstance(ip, dict):

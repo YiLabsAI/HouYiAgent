@@ -15,7 +15,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from houyi.core.skill import SkillSpec
+from houyi.domain.skill.spec import SkillSpec
 from houyi.skills.planning.hooks import (
     PLAN_FILENAME,
     create_plan,
@@ -74,57 +74,62 @@ class PlanningSkill:
         Returns:
             Result dictionary
         """
-        if action == "create":
-            task = kwargs.get("task")
-            if not isinstance(task, str) or not task.strip():
-                return {
-                    "success": False,
-                    "message": "Missing required field for create: task",
-                }
-            subtasks = kwargs.get("subtasks")
-            return await self._create_plan(task=task.strip(), subtasks=subtasks)
-        elif action == "update":
-            if "subtask_index" not in kwargs:
-                return {
-                    "success": False,
-                    "message": "Missing required field for update: subtask_index",
-                }
-
-            raw_index = kwargs.get("subtask_index")
-            if raw_index is None:
-                return {
-                    "success": False,
-                    "message": "Missing required field for update: subtask_index",
-                }
-            try:
-                subtask_index = int(raw_index)
-            except (TypeError, ValueError):
-                return {
-                    "success": False,
-                    "message": "Invalid subtask_index: must be an integer",
-                }
-            if subtask_index < 0:
-                return {
-                    "success": False,
-                    "message": "Invalid subtask_index: must be >= 0",
-                }
-
-            completed = kwargs.get("completed", True)
-            if isinstance(completed, str):
-                completed = completed.strip().lower() == "true"
-            return await self._update_subtask(
-                subtask_index=subtask_index,
-                completed=bool(completed),
-            )
-        elif action == "complete":
-            return await self._complete_plan(**kwargs)
-        elif action == "status":
-            return await self._get_status(**kwargs)
-        else:
+        action_handlers = {
+            "create": self._handle_create_action,
+            "update": self._handle_update_action,
+            "complete": self._complete_plan,
+            "status": self._get_status,
+        }
+        handler = action_handlers.get(action)
+        if handler is None:
             return {
                 "success": False,
                 "message": f"Unknown action: {action}",
             }
+        return await handler(**kwargs)
+
+    async def _handle_create_action(self, **kwargs: Any) -> dict[str, Any]:
+        task = kwargs.get("task")
+        if not isinstance(task, str) or not task.strip():
+            return {
+                "success": False,
+                "message": "Missing required field for create: task",
+            }
+        subtasks = kwargs.get("subtasks")
+        return await self._create_plan(task=task.strip(), subtasks=subtasks)
+
+    async def _handle_update_action(self, **kwargs: Any) -> dict[str, Any]:
+        subtask_index = self._parse_subtask_index(kwargs.get("subtask_index"))
+        if isinstance(subtask_index, dict):
+            return subtask_index
+
+        completed = kwargs.get("completed", True)
+        if isinstance(completed, str):
+            completed = completed.strip().lower() == "true"
+        return await self._update_subtask(
+            subtask_index=subtask_index,
+            completed=bool(completed),
+        )
+
+    def _parse_subtask_index(self, raw_index: Any) -> int | dict[str, Any]:
+        if raw_index is None:
+            return {
+                "success": False,
+                "message": "Missing required field for update: subtask_index",
+            }
+        try:
+            subtask_index = int(raw_index)
+        except (TypeError, ValueError):
+            return {
+                "success": False,
+                "message": "Invalid subtask_index: must be an integer",
+            }
+        if subtask_index < 0:
+            return {
+                "success": False,
+                "message": "Invalid subtask_index: must be >= 0",
+            }
+        return subtask_index
 
     async def _create_plan(
         self,

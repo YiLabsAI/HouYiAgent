@@ -6,9 +6,11 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
-from houyi.core.skill import ExecutionMode, SkillSpec
-from houyi.core.skill.hooks import HookEvent, HookType, SkillHook
+from houyi.domain.skill.hooks import HookEvent, HookType, SkillHook
+from houyi.domain.skill.policy import ExecutionMode
+from houyi.domain.skill.spec import SkillSpec
 from houyi.rag.config import _default_knowledge_dir
+from houyi.rag.skills._rag_runtime import build_skill_rag
 
 
 class KBIngestInput(BaseModel):
@@ -68,11 +70,8 @@ async def execute_kb_ingest(input_data: KBIngestInput) -> KBIngestOutput:
     Returns:
         Ingest output with statistics
     """
-    from houyi.rag import RAG
-
     try:
-        # Create RAG
-        rag = RAG(
+        rag = build_skill_rag(
             mode="indexed",
             knowledge_dir=input_data.knowledge_dir,
         )

@@ -6,10 +6,10 @@ Tests the full workflow: Agent -> DAGPlanner -> LocalExecutor -> Verification
 import pytest
 
 from houyi import Agent, tool
-from houyi.execution.local_executor import LocalExecutor
-from houyi.orchestration.planner import DAGPlanner
-from houyi.orchestration.state import SessionState
-from houyi.verification import VerificationConfig
+from houyi.application.workflow.executor import LocalExecutor
+from houyi.application.workflow.orchestration.planner import DAGPlanner
+from houyi.application.workflow.orchestration.state import SessionState
+from houyi.assurance.verification import VerificationConfig
 
 
 @tool
@@ -50,7 +50,7 @@ async def test_agent_with_verification_enabled():
     """Test agent with verification enabled."""
     from pydantic import BaseModel, Field
 
-    from houyi.core.skill import SkillSpec
+    from houyi.domain.skill.spec import SkillSpec
 
     config = VerificationConfig.lenient()
 
@@ -94,7 +94,7 @@ async def test_agent_with_verification_enabled():
 @pytest.mark.asyncio
 async def test_skill_level_verification_override():
     """Test skill-level verification config overrides agent-level."""
-    from houyi.verification import VerificationConfig
+    from houyi.assurance.verification import VerificationConfig
 
     # Agent has verification enabled
     agent_config = VerificationConfig.lenient()

@@ -13,8 +13,8 @@ import os
 
 import pytest
 
-from houyi.core.skill import SkillSpec
-from houyi.core.skill_registry import SkillRegistry
+from houyi.domain.skill.registry import SkillRegistry
+from houyi.domain.skill.spec import SkillSpec
 
 DEFAULT_MANAGED_SKILLS_DIR = os.path.expanduser("~/.houyi/skills")
 SKILLS_DIR = os.getenv("HOUYI_TEST_SKILLS_DIR", DEFAULT_MANAGED_SKILLS_DIR)
@@ -76,14 +76,14 @@ class TestLocationRegistration:
 
 class TestWebSearchRegistration:
     def test_register(self, registry: SkillRegistry):
-        from houyi.web_search.skill import build_web_search_skill
+        from houyi.skills.web_search.skill import build_web_search_skill
 
         skill = build_web_search_skill()
         registry.register(skill, overwrite=True)
         assert skill.name in [s.name for s in registry.list()]
 
     def test_spec_completeness(self):
-        from houyi.web_search.skill import build_web_search_skill
+        from houyi.skills.web_search.skill import build_web_search_skill
 
         skill = build_web_search_skill()
         assert skill.description
@@ -201,7 +201,7 @@ class TestFullSkillInventory:
         from houyi.skills.location import get_location
         from houyi.skills.planning import PlanningSkill
         from houyi.skills.weather import get_date, get_weather
-        from houyi.web_search.skill import build_web_search_skill
+        from houyi.skills.web_search.skill import build_web_search_skill
 
         # @tool built-in (4)
         for s in [get_weather, get_date, get_location, build_web_search_skill()]:

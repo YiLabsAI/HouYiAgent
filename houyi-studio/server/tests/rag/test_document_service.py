@@ -1,4 +1,4 @@
-"""Unit tests for DocumentService — document CRUD, status transitions, and chunk preview."""
+"""Tests for DocumentService — document CRUD, status transitions, and chunk preview."""
 
 from __future__ import annotations
 

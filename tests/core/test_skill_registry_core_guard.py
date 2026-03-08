@@ -1,4 +1,4 @@
-"""Tests for SkillRegistry core tool protection (Layer 2).
+"""Tests for SkillRegistry core tool protection.
 
 Covers:
 - Registration lock: core tools cannot be overwritten
@@ -12,8 +12,8 @@ from __future__ import annotations
 import pytest
 from pydantic import BaseModel
 
-from houyi.core.skill.spec import SkillSpec
-from houyi.core.skill_registry import CoreToolProtectionError, SkillRegistry
+from houyi.domain.skill.registry import CoreToolProtectionError, SkillRegistry
+from houyi.domain.skill.spec import SkillSpec
 
 
 class _In(BaseModel):

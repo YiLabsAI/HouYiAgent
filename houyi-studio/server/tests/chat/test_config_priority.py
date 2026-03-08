@@ -14,7 +14,7 @@ from houyi_studio.server.chat.chat_service import ChatService
 from houyi_studio.server.chat.json_store import JsonStore
 from houyi_studio.server.chat.types import Conversation, Message, MessageRole, SendMessageRequest
 
-from houyi.llm.base import StreamChunk
+from houyi.adapters.llm.base import StreamChunk
 
 
 @pytest.fixture

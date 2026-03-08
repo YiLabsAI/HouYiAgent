@@ -11,11 +11,11 @@ from pathlib import Path
 import pytest
 from dotenv import load_dotenv
 
-from houyi.core.skill_registry import DEFAULT_SKILL_REGISTRY
-from houyi.execution.skill_executor import SkillExecutor
-from houyi.execution.tool_call_runner import ToolCallRunner
-from houyi.llm.base import LLMResponse
-from houyi.web_search.skill import build_web_search_skill
+from houyi.adapters.llm.base import LLMResponse
+from houyi.application.tool_calling.runner import ToolCallRunner
+from houyi.application.workflow.skill_executor import SkillExecutor
+from houyi.domain.skill.registry import DEFAULT_SKILL_REGISTRY
+from houyi.skills.web_search.skill import build_web_search_skill
 
 
 def _load_console_tools() -> None:

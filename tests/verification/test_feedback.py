@@ -1,6 +1,6 @@
 """Tests for feedback protocol and builder."""
 
-from houyi.verification.feedback import FeedbackBuilder, FeedbackProtocol
+from houyi.assurance.verification.feedback import FeedbackBuilder, FeedbackProtocol
 
 
 class TestFeedbackProtocol:

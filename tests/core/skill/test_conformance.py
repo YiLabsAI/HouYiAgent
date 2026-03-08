@@ -1,4 +1,4 @@
-"""FIX-05: Conformance tests for SimpleSkill specification §3-§8.
+"""Conformance tests for SimpleSkill specification §3-§8.
 
 Validates that the HouYi SDK implementation conforms to the core normative
 clauses of the SimpleSkill specification.  Each test class maps to a section
@@ -21,24 +21,23 @@ from typing import Any
 import pytest
 from pydantic import BaseModel, ValidationError
 
-from houyi.core.skill import (
+from houyi.domain.skill.capability import CapabilityNegotiator, HostCapabilities
+from houyi.domain.skill.config import SkillConfig
+from houyi.domain.skill.consent import (
     ConsentManager,
-    HookEvent,
-    HookType,
     InMemoryConsentStore,
+    PolicyBasedConsentHandler,
+)
+from houyi.domain.skill.hooks import HookEvent, HookType, SkillHook, SkillHooksManager
+from houyi.domain.skill.metrics import MetricsStore
+from houyi.domain.skill.policy import (
     InvocationPolicy,
-    MetricsStore,
     ModelAutoInvoke,
     Permissions,
-    PolicyBasedConsentHandler,
     PolicyEnforcer,
     SideEffect,
-    SkillHook,
-    SkillHooksManager,
-    SkillSpec,
 )
-from houyi.core.skill.capability import CapabilityNegotiator, HostCapabilities
-from houyi.core.skill.config import SkillConfig
+from houyi.domain.skill.spec import SkillSpec
 
 
 class EmptyInput(BaseModel):
@@ -218,7 +217,7 @@ class TestCapabilityNegotiation:
         assert caps.execution_forms is not None
 
     def test_negotiator_full_compatible(self) -> None:
-        from houyi.core.skill.capability import ExtensionRequirements
+        from houyi.domain.skill.capability import ExtensionRequirements
 
         host = HostCapabilities()
         negotiator = CapabilityNegotiator(host)
@@ -226,7 +225,7 @@ class TestCapabilityNegotiation:
         assert result.compatible is True
 
     def test_negotiator_incompatible_execution_form(self) -> None:
-        from houyi.core.skill.capability import ExecutionForm, ExtensionRequirements
+        from houyi.domain.skill.capability import ExecutionForm, ExtensionRequirements
 
         host = HostCapabilities(execution_forms=[ExecutionForm.IN_PROCESS])
         negotiator = CapabilityNegotiator(host)
@@ -304,7 +303,7 @@ class TestConsent:
     @pytest.mark.asyncio
     async def test_consent_manager_remembered(self) -> None:
         """Consent can be remembered and reused."""
-        from houyi.core.skill.consent import (
+        from houyi.domain.skill.consent import (
             ConsentRequest,
             ConsentResult,
             ConsentType,
@@ -332,7 +331,7 @@ class TestConsent:
     @pytest.mark.asyncio
     async def test_consent_non_interactive(self) -> None:
         """Non-interactive mode returns NOT_INTERACTIVE."""
-        from houyi.core.skill.consent import ConsentRequest, ConsentResult, ConsentType
+        from houyi.domain.skill.consent import ConsentRequest, ConsentResult, ConsentType
 
         manager = ConsentManager(interactive=False)
         request = ConsentRequest(
@@ -352,7 +351,7 @@ class TestConsent:
     @pytest.mark.asyncio
     async def test_consent_revoke(self) -> None:
         """Consent can be revoked."""
-        from houyi.core.skill.consent import ConsentRequest, ConsentType
+        from houyi.domain.skill.consent import ConsentRequest, ConsentType
 
         store = InMemoryConsentStore()
         handler = PolicyBasedConsentHandler(auto_grant_skills={"test"})
@@ -375,7 +374,7 @@ class TestObservability:
 
     def test_metrics_store_records(self) -> None:
         """MetricsStore records invocation metrics via MetricsCollector."""
-        from houyi.core.skill.metrics import MetricsCollector
+        from houyi.domain.skill.metrics import MetricsCollector
 
         store = MetricsStore()
 
@@ -402,7 +401,7 @@ class TestObservability:
         assert metrics.latency.samples == 3
 
     def test_metrics_list_skills(self) -> None:
-        from houyi.core.skill.metrics import MetricsCollector
+        from houyi.domain.skill.metrics import MetricsCollector
 
         store = MetricsStore()
 
@@ -489,7 +488,7 @@ class TestMetricsSchema:
 
     def test_metrics_has_quality_fields(self) -> None:
         """Aggregated metrics include reliability and latency."""
-        from houyi.core.skill.metrics import MetricsCollector
+        from houyi.domain.skill.metrics import MetricsCollector
 
         store = MetricsStore()
         c = MetricsCollector("s")

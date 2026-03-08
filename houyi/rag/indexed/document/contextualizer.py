@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from houyi.llm.base import BaseLLMAdapter
+    from houyi.adapters.llm.base import BaseLLMAdapter
 
 from houyi.rag.types import Chunk, Document
 
@@ -76,13 +76,11 @@ Return only the context text, nothing else."""
         Returns:
             ContextualizedChunk with added context
         """
-        # Use LLM if available
         if self._adapter:
             context = await self._generate_context_llm(chunk, document)
         else:
             context = self._generate_context_heuristic(chunk, document)
 
-        # Combine context with content
         contextualized_content = f"{context}\n\n{chunk.content}"
 
         return ContextualizedChunk(
@@ -109,10 +107,15 @@ Return only the context text, nothing else."""
         Returns:
             List of contextualized chunks
         """
+        if batch_size <= 0:
+            raise ValueError("batch_size must be positive")
+
         results = []
-        for chunk in chunks:
-            result = await self.contextualize_chunk(chunk, document, **kwargs)
-            results.append(result)
+        for start in range(0, len(chunks), batch_size):
+            batch = chunks[start : start + batch_size]
+            for chunk in batch:
+                result = await self.contextualize_chunk(chunk, document, **kwargs)
+                results.append(result)
         return results
 
     async def _generate_context_llm(
@@ -129,7 +132,6 @@ Return only the context text, nothing else."""
         Returns:
             Generated context string
         """
-        # Build prompt
         doc_info = ""
         if document:
             doc_info = f"\nSource document: {document.metadata.get('title', document.source)}"
@@ -153,7 +155,6 @@ Generate a brief context (1-2 sentences) for this chunk:"""
             )
 
             context = response.content.strip()
-            # Truncate if too long
             if len(context) > self.max_context_length:
                 context = context[: self.max_context_length - 3] + "..."
             return context
@@ -178,27 +179,22 @@ Generate a brief context (1-2 sentences) for this chunk:"""
         """
         parts = []
 
-        # Add source info from metadata
         file_path = chunk.metadata.get("file_path", "")
         if file_path:
             parts.append(f"From: {file_path}")
 
-        # Add position info
         if chunk.metadata:
             if "section" in chunk.metadata:
                 parts.append(f"Section: {chunk.metadata['section']}")
             if "page" in chunk.metadata:
                 parts.append(f"Page: {chunk.metadata['page']}")
 
-        # Add document title if available
         if document and document.metadata.get("title"):
             parts.insert(0, f"Document: {document.metadata['title']}")
 
-        # Build context
         if parts:
             context = ". ".join(parts) + "."
         else:
-            # Extract first line as context
             first_line = chunk.content.split("\n")[0].strip()
             if len(first_line) > 100:
                 first_line = first_line[:100] + "..."

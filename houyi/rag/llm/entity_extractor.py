@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import uuid
 from typing import TYPE_CHECKING
 
+from houyi.rag.llm.json_utils import parse_embedded_json
 from houyi.rag.types import Chunk, Entity, Relation
 
 if TYPE_CHECKING:
-    from houyi.llm.base import LLMAdapter
+    from houyi.adapters.llm.base import LLMAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +75,7 @@ Guidelines:
         Returns:
             Tuple of (entities, relations)
         """
-        from houyi.llm.base import LLMMessage, MessageRole
+        from houyi.adapters.llm.base import LLMMessage, MessageRole
 
         messages = [
             LLMMessage(role=MessageRole.SYSTEM, content=self.SYSTEM_PROMPT),
@@ -90,8 +90,9 @@ Guidelines:
                 messages=messages,
                 temperature=self._temperature,
                 max_tokens=1000,
+                response_mime_type="application/json",
             )
-            return self._parse_response(response.content, chunk.chunk_id)
+            return self._parse_response(response.content, chunk.chunk_id, chunk)
         except Exception as e:
             logger.warning("Entity extraction failed: %s, using simple extraction", e)
             return self._simple_extract(chunk)
@@ -144,16 +145,13 @@ Guidelines:
         self,
         content: str,
         chunk_id: str,
+        fallback_chunk: Chunk | None = None,
     ) -> tuple[list[Entity], list[Relation]]:
         """Parse LLM response to extract entities and relations."""
         try:
-            # Clean up response
-            content = content.strip()
-            if content.startswith("```"):
-                lines = content.split("\n")
-                content = "\n".join(line for line in lines if not line.startswith("```"))
-
-            data = json.loads(content)
+            data = parse_embedded_json(content)
+            if not isinstance(data, dict):
+                raise ValueError("entity extractor response must be a JSON object")
 
             # Parse entities
             entities: list[Entity] = []
@@ -208,8 +206,10 @@ Guidelines:
 
             return entities, relations
 
-        except json.JSONDecodeError:
+        except (TypeError, ValueError):
             logger.warning("Failed to parse entity extraction response")
+            if fallback_chunk is not None:
+                return self._simple_extract(fallback_chunk)
             return [], []
 
     def _simple_extract(

@@ -14,13 +14,13 @@ from __future__ import annotations
 import textwrap
 from pathlib import Path
 
-from houyi.core.skill.runtime_contract import (
+from houyi.domain.skill.runtime_contract import (
     CapabilityTier,
     RuntimeContract,
     RuntimeMode,
     RuntimeStatus,
 )
-from houyi.core.skill.spec import SkillSpec
+from houyi.domain.skill.spec import SkillSpec
 
 # ── RuntimeContract model tests ──────────────────────────────────────
 

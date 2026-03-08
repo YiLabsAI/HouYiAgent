@@ -1,7 +1,4 @@
-"""Tests for SimpleSkill manifest parsing.
-
-Reference: SimpleSkill Specification v0.1 Section 3 (Layer A: Manifest)
-"""
+"""Tests for SimpleSkill manifest parsing."""
 
 import json
 import tempfile
@@ -10,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from houyi.core.skill.manifest import (
+from houyi.domain.skill.manifest import (
     ActivationEvent,
     ActivationEventType,
     Contributions,
@@ -20,8 +17,8 @@ from houyi.core.skill.manifest import (
     SkillManifest,
     ToolContribution,
 )
-from houyi.core.skill.policy import ModelAutoInvoke, SideEffect
-from houyi.core.skill_registry import SkillRegistry
+from houyi.domain.skill.policy import ModelAutoInvoke, SideEffect
+from houyi.domain.skill.registry import SkillRegistry
 
 
 class TestActivationEvent:

@@ -10,7 +10,7 @@ Verifies that the CapabilityNegotiator correctly handles:
 
 import pytest
 
-from houyi.core.skill.capability import (
+from houyi.domain.skill.capability import (
     CapabilityMatchResult,
     CapabilityNegotiator,
     ConsentModel,

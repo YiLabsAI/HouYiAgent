@@ -6,9 +6,11 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
-from houyi.core.skill import ExecutionMode, SkillSpec
-from houyi.core.skill.hooks import HookEvent, HookType, SkillHook
+from houyi.domain.skill.hooks import HookEvent, HookType, SkillHook
+from houyi.domain.skill.policy import ExecutionMode
+from houyi.domain.skill.spec import SkillSpec
 from houyi.rag.config import _default_knowledge_dir
+from houyi.rag.skills._rag_runtime import build_skill_rag
 
 
 class KBSearchInput(BaseModel):
@@ -70,10 +72,7 @@ async def execute_kb_search(input_data: KBSearchInput) -> KBSearchOutput:
     Returns:
         Search output with answer and sources
     """
-    from houyi.rag import RAG
-
-    # Create RAG service
-    rag = RAG(
+    rag = build_skill_rag(
         mode=input_data.mode,
         knowledge_dir=input_data.knowledge_dir,
         llm_provider=input_data.llm_provider or None,

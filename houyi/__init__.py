@@ -1,50 +1,38 @@
 """HouYi - Next-generation lightweight multi-agent framework with industry-leading capabilities."""
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
-# Core specifications
-from houyi.core.agent import AgentSpec
-from houyi.core.assertion import AssertionSpec
-from houyi.core.skill import SkillSpec
-from houyi.core.task import TaskSpec
-
-# Decorators and utilities
-from houyi.decorators import tool
-
-# Evaluation
-from houyi.evaluation import (
+from houyi.application.runtime.agent import Agent
+from houyi.application.runtime.task import Task
+from houyi.application.runtime.team import Team, Workflow
+from houyi.assurance.evaluation import (
     EvaluationResult,
     EvaluationSummary,
     Evaluator,
     evaluate,
 )
+from houyi.assurance.verification.assertion import AssertionSpec
+from houyi.decorators import tool
+from houyi.domain.agent import AgentSpec
+from houyi.domain.skill.spec import SkillSpec
+from houyi.domain.task import TaskSpec
 
-# Runtime classes
-from houyi.runtime.agent import Agent
-from houyi.runtime.task import Task
-from houyi.runtime.team import Team, Workflow
-
-# Alias for Skill (AgentSkills.io compatibility)
 Skill = SkillSpec
 
 __all__ = [
-    # Runtime
     "Agent",
-    # Specifications
     "AgentSpec",
     "AssertionSpec",
     "EvaluationResult",
     "EvaluationSummary",
-    # Evaluation
     "Evaluator",
-    # Aliases
     "Skill",
     "SkillSpec",
     "Task",
     "TaskSpec",
     "Team",
     "Workflow",
+    "__version__",
     "evaluate",
-    # Decorators
     "tool",
 ]

@@ -1,1 +1,1 @@
-"""Graph retrieval module."""
+"""Indexed graph retrieval storage and graph-analysis collaborators."""

@@ -5,7 +5,7 @@ from datetime import datetime
 
 import pytest
 
-from houyi.verification.review_queue import ReviewQueue, ReviewRequest
+from houyi.assurance.verification.review_queue import ReviewQueue, ReviewRequest
 
 
 @pytest.fixture

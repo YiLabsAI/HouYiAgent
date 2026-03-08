@@ -1,9 +1,4 @@
-"""Tests for SkillSpec.is_core field and CoreToolProtectionError.
-
-Covers:
-- Layer 1: is_core field default, internal assignment, source sanitization
-- Layer 3: to_tool_schema() rendering annotations
-"""
+"""Tests for SkillSpec.is_core field and CoreToolProtectionError."""
 
 from __future__ import annotations
 
@@ -11,8 +6,8 @@ from pathlib import Path
 
 from pydantic import BaseModel
 
-from houyi.core.skill.spec import SkillSpec
-from houyi.core.skill_registry import SkillRegistry
+from houyi.domain.skill.registry import SkillRegistry
+from houyi.domain.skill.spec import SkillSpec
 
 
 class _In(BaseModel):

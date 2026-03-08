@@ -10,12 +10,12 @@ Covers:
 
 from unittest.mock import MagicMock
 
-from houyi.core.skill.policy import (
+from houyi.domain.skill.policy import (
     InvocationPolicy,
     ModelAutoInvoke,
     PolicyEnforcer,
 )
-from houyi.core.skill.tool_router import ToolRouter
+from houyi.domain.skill.tool_router import ToolRouter
 
 
 def _make_skill(name: str, allowed_tools: list[str] | None = None):

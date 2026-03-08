@@ -4,7 +4,7 @@ import pytest
 from pydantic import BaseModel
 
 from houyi import AgentSpec, SkillSpec
-from houyi.evaluation.runner import evaluate
+from houyi.assurance.evaluation.runner import evaluate
 
 
 class TestRunnerErrorHandling:

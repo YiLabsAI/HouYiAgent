@@ -16,6 +16,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+from houyi_studio.server.chat import provider_service as provider_service_module
 from houyi_studio.server.chat.provider_service import (
     _VERTEX_KNOWN_MODELS,
     OpenAICompatProbe,
@@ -168,7 +169,7 @@ class TestVertexAIProbe:
 
         with (
             patch.object(probe, "_get_adapter", return_value=mock_adapter),
-            patch("houyi_studio.server.chat.provider_service.httpx.AsyncClient") as mock_client_cls,
+            patch.object(provider_service_module.httpx, "AsyncClient") as mock_client_cls,
         ):
             mock_client = AsyncMock()
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -197,7 +198,7 @@ class TestVertexAIProbe:
 
         with (
             patch.object(probe, "_get_adapter", return_value=mock_adapter),
-            patch("houyi_studio.server.chat.provider_service.httpx.AsyncClient") as mock_client_cls,
+            patch.object(provider_service_module.httpx, "AsyncClient") as mock_client_cls,
         ):
             mock_client = AsyncMock()
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -264,7 +265,7 @@ class TestOpenAICompatProbe:
         mock_response = MagicMock()
         mock_response.status_code = 200
 
-        with patch("houyi_studio.server.chat.provider_service.httpx.AsyncClient") as mock_cls:
+        with patch.object(provider_service_module.httpx, "AsyncClient") as mock_cls:
             mock_client = AsyncMock()
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
             mock_client.__aexit__ = AsyncMock(return_value=False)
@@ -282,7 +283,7 @@ class TestOpenAICompatProbe:
         mock_response.status_code = 403
         mock_response.text = "Forbidden"
 
-        with patch("houyi_studio.server.chat.provider_service.httpx.AsyncClient") as mock_cls:
+        with patch.object(provider_service_module.httpx, "AsyncClient") as mock_cls:
             mock_client = AsyncMock()
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
             mock_client.__aexit__ = AsyncMock(return_value=False)
@@ -296,7 +297,7 @@ class TestOpenAICompatProbe:
 
     @pytest.mark.asyncio
     async def test_test_connection_network_error(self, probe):
-        with patch("houyi_studio.server.chat.provider_service.httpx.AsyncClient") as mock_cls:
+        with patch.object(provider_service_module.httpx, "AsyncClient") as mock_cls:
             mock_client = AsyncMock()
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
             mock_client.__aexit__ = AsyncMock(return_value=False)
@@ -325,7 +326,7 @@ class TestOpenAICompatProbe:
             ]
         }
 
-        with patch("houyi_studio.server.chat.provider_service.httpx.AsyncClient") as mock_cls:
+        with patch.object(provider_service_module.httpx, "AsyncClient") as mock_cls:
             mock_client = AsyncMock()
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
             mock_client.__aexit__ = AsyncMock(return_value=False)
@@ -348,7 +349,7 @@ class TestOpenAICompatProbe:
         mock_response.status_code = 500
         mock_response.text = "Internal Server Error"
 
-        with patch("houyi_studio.server.chat.provider_service.httpx.AsyncClient") as mock_cls:
+        with patch.object(provider_service_module.httpx, "AsyncClient") as mock_cls:
             mock_client = AsyncMock()
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
             mock_client.__aexit__ = AsyncMock(return_value=False)
@@ -374,7 +375,7 @@ class TestOpenAICompatProbe:
             ]
         }
 
-        with patch("houyi_studio.server.chat.provider_service.httpx.AsyncClient") as mock_cls:
+        with patch.object(provider_service_module.httpx, "AsyncClient") as mock_cls:
             mock_client = AsyncMock()
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
             mock_client.__aexit__ = AsyncMock(return_value=False)

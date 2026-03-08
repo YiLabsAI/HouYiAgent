@@ -2,8 +2,8 @@
 
 import pytest
 
-from houyi.verification.constraint_checker import ConstraintChecker
-from houyi.verification.verifier import VerificationRule
+from houyi.assurance.verification.constraint_checker import ConstraintChecker
+from houyi.assurance.verification.verifier import VerificationRule
 
 
 @pytest.fixture

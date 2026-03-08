@@ -15,19 +15,19 @@ from typing import Any
 
 import pytest
 
-from houyi.verification import (
+from houyi.assurance.verification import (
     NeuroSymbolicEngine,
     PythonVerifier,
     SQLVerifier,
     VerificationConfig,
     VerificationRule,
 )
-from houyi.verification.cache import (
+from houyi.assurance.verification.cache import (
     clear_all_caches,
     get_constraint_cache,
     get_verification_cache,
 )
-from houyi.verification.constraint_solver import Constraint, ConstraintSolver
+from houyi.assurance.verification.constraint_solver import Constraint, ConstraintSolver
 
 
 class PerformanceMetrics:

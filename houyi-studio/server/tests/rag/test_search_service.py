@@ -1,4 +1,4 @@
-"""Unit tests for SearchService — query dispatch and fallback keyword search."""
+"""Tests for SearchService — query dispatch and fallback keyword search."""
 
 from __future__ import annotations
 

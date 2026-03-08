@@ -36,6 +36,41 @@ class CitedAnswer:
         return f"{self.text}\n\n---\n\n{self.references}"
 
 
+def _build_relevance_by_file_path(results: list[SearchResult] | None) -> dict[str, float]:
+    relevance_by_file_path: dict[str, float] = {}
+    if not results:
+        return relevance_by_file_path
+
+    for result in results:
+        file_path = result.file_path
+        if file_path and file_path not in relevance_by_file_path:
+            relevance_by_file_path[file_path] = result.score
+
+    return relevance_by_file_path
+
+
+def _truncate_snippet(snippet: str | None) -> str:
+    if not snippet:
+        return ""
+    return snippet[:200]
+
+
+def _matching_citation_ids(paragraph: str, citations: list[Citation]) -> list[int]:
+    paragraph_words = set(paragraph.lower().split())
+    matching_ids: list[int] = []
+
+    for citation in citations:
+        if not citation.snippet:
+            continue
+
+        snippet_words = set(citation.snippet.lower().split()[:10])
+        overlap = len(snippet_words & paragraph_words)
+        if overlap >= 3:
+            matching_ids.append(citation.id)
+
+    return matching_ids
+
+
 class CitationGenerator:
     """Generates citations for RAG answers.
 
@@ -69,22 +104,15 @@ class CitationGenerator:
         if not sources:
             return CitedAnswer(text=answer)
 
-        # Build citation list
+        relevance_by_file_path = _build_relevance_by_file_path(results)
         citations: list[Citation] = []
         for i, source in enumerate(sources[: self.max_citations], 1):
-            relevance = 0.0
-            if results:
-                for r in results:
-                    if r.file_path == source.file_path:
-                        relevance = r.score
-                        break
-
             citations.append(
                 Citation(
                     id=i,
                     source=source,
-                    snippet=source.snippet[:200] if source.snippet else "",
-                    relevance=relevance,
+                    snippet=_truncate_snippet(source.snippet),
+                    relevance=relevance_by_file_path.get(source.file_path, 0.0),
                 )
             )
 
@@ -127,20 +155,7 @@ class CitationGenerator:
                 cited_paragraphs.append(para)
                 continue
 
-            # Find matching citations for this paragraph
-            matching_ids = []
-            para_lower = para.lower()
-
-            for citation in citations:
-                # Match by snippet content
-                if citation.snippet:
-                    snippet_words = set(citation.snippet.lower().split()[:10])
-                    para_words = set(para_lower.split())
-                    overlap = len(snippet_words & para_words)
-                    if overlap >= 3:
-                        matching_ids.append(citation.id)
-
-            # Add citation markers
+            matching_ids = _matching_citation_ids(para, citations)
             if matching_ids:
                 markers = "".join(f"[{id}]" for id in matching_ids[:3])
                 para = f"{para.rstrip()} {markers}"

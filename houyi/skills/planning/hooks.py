@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from houyi.core.skill.hooks import HookContext, HookResult
+    from houyi.domain.skill.hooks import HookContext, HookResult
 
 logger = logging.getLogger(__name__)
 
@@ -153,7 +153,7 @@ async def pre_write_hook(context: HookContext) -> HookResult:
     Returns:
         HookResult with optional output message
     """
-    from houyi.core.skill.hooks import HookResult
+    from houyi.domain.skill.hooks import HookResult
 
     cwd = context.cwd or Path.cwd()
     plan_path = find_plan_file(cwd)
@@ -202,7 +202,7 @@ async def post_tool_hook(context: HookContext) -> HookResult:
     Returns:
         HookResult with optional output message
     """
-    from houyi.core.skill.hooks import HookResult
+    from houyi.domain.skill.hooks import HookResult
 
     cwd = context.cwd or Path.cwd()
     plan_path = find_plan_file(cwd)
@@ -243,7 +243,7 @@ async def stop_hook(context: HookContext) -> HookResult:
     Returns:
         HookResult with success=False if incomplete tasks remain
     """
-    from houyi.core.skill.hooks import HookResult
+    from houyi.domain.skill.hooks import HookResult
 
     cwd = context.cwd or Path.cwd()
     plan_path = find_plan_file(cwd)

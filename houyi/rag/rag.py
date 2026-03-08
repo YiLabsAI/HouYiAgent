@@ -33,8 +33,8 @@ from houyi.rag.config import RAGConfig
 from houyi.rag.types import RAGMode, RetrievalResult, RetrievalStrategy
 
 if TYPE_CHECKING:
-    from houyi.llm.base import LLMAdapter
-    from houyi.runtime.agent import Agent
+    from houyi.adapters.llm.base import LLMAdapter
+    from houyi.application.runtime.agent import Agent
 
 logger = logging.getLogger(__name__)
 
@@ -42,11 +42,15 @@ logger = logging.getLogger(__name__)
 class RAG:
     """Houyi RAG - Unified API for Agentic and Indexed retrieval.
 
-    This class provides a single entry point for all RAG operations:
+    This facade provides the stable public entry point for all RAG operations:
     - `index()`: Build indexes for Indexed mode
     - `query()`: Execute retrieval queries
     - `add()`: Add documents to existing index
     - `refresh()`: Rebuild indexes
+
+    The facade owns config normalization, mode selection, and lazy runtime
+    creation for Agentic and Indexed modes. Concrete retrieval / ingest logic
+    stays in the respective subdomains once a mode instance is constructed.
 
     Example:
         # Simple usage (Agentic mode, no indexing needed)
@@ -94,66 +98,128 @@ class RAG:
             contextual_retrieval: Enable Contextual Retrieval for indexing
             **kwargs: Additional config options
         """
-        # Backward compatibility: if knowledge_dir is actually a RAGConfig, use it
-        if isinstance(knowledge_dir, RAGConfig):
-            config = knowledge_dir
-            knowledge_dir = config.knowledge_dir
-
-        # Handle backward compatibility for llm_adapter/llm_provider/llm_model
-        _llm_adapter: LLMAdapter | None = llm_adapter
-        _llm_provider: str | None = llm_provider
-        _llm_model: str | None = llm_model
-
-        # Parse llm parameter (takes precedence)
-        if llm is not None:
-            if isinstance(llm, str):
-                # Parse "provider:model" format
-                if ":" in llm:
-                    _llm_provider, _llm_model = llm.split(":", 1)
-                else:
-                    _llm_provider = llm
-            else:
-                _llm_adapter = llm
-
-        # Build config - only add llm_model if it's not None
-        config_kwargs = {**kwargs}
-        if _llm_model:
-            config_kwargs["llm_model"] = _llm_model
-        if contextual_retrieval:
-            config_kwargs["contextual_retrieval"] = contextual_retrieval
-
-        if config is not None:
-            self._config = config
-        else:
-            # Build config from params
-            if isinstance(mode, str):
-                mode = RAGMode(mode)
-
-            strategy_list = None
-            if strategies:
-                strategy_list = [RetrievalStrategy(s) for s in strategies]
-
-            if mode == RAGMode.AGENTIC:
-                self._config = RAGConfig.for_agentic(knowledge_dir=knowledge_dir, **config_kwargs)
-            elif mode == RAGMode.INDEXED:
-                self._config = RAGConfig.for_indexed(
-                    knowledge_dir=knowledge_dir, strategies=strategy_list, **config_kwargs
-                )
-            else:
-                kw: dict[str, Any] = {"mode": mode, **config_kwargs}
-                if knowledge_dir is not None:
-                    kw["knowledge_dir"] = knowledge_dir
-                self._config = RAGConfig(**kw)
+        config, knowledge_dir = self._normalize_config_input(
+            config=config, knowledge_dir=knowledge_dir
+        )
+        resolved_llm_adapter, resolved_llm_provider, resolved_llm_model = self._resolve_llm_inputs(
+            llm=llm,
+            llm_adapter=llm_adapter,
+            llm_provider=llm_provider,
+            llm_model=llm_model,
+        )
+        self._config = self._build_config(
+            config=config,
+            knowledge_dir=knowledge_dir,
+            mode=mode,
+            strategies=strategies,
+            contextual_retrieval=contextual_retrieval,
+            llm_model=resolved_llm_model,
+            extra_kwargs=kwargs,
+        )
 
         self._agent = agent
-        self._llm_adapter = _llm_adapter
+        self._llm_adapter = resolved_llm_adapter
         self._hooks = hooks
         self._agentic_mode: Any = None
         self._indexed_mode: Any = None
 
         # Auto-create LLM adapter if provider specified
-        if _llm_adapter is None and _llm_provider:
-            self._llm_adapter = self._create_llm_adapter(_llm_provider, _llm_model)
+        if resolved_llm_adapter is None and resolved_llm_provider:
+            self._llm_adapter = self._create_llm_adapter(resolved_llm_provider, resolved_llm_model)
+
+    @staticmethod
+    def _normalize_config_input(
+        *,
+        config: RAGConfig | None,
+        knowledge_dir: str | RAGConfig | None,
+    ) -> tuple[RAGConfig | None, str | None]:
+        if isinstance(knowledge_dir, RAGConfig):
+            config = knowledge_dir
+            return config, config.knowledge_dir
+        return config, knowledge_dir
+
+    @staticmethod
+    def _resolve_llm_inputs(
+        *,
+        llm: LLMAdapter | str | None,
+        llm_adapter: LLMAdapter | None,
+        llm_provider: str | None,
+        llm_model: str | None,
+    ) -> tuple[LLMAdapter | None, str | None, str | None]:
+        resolved_adapter = llm_adapter
+        resolved_provider = llm_provider
+        resolved_model = llm_model
+
+        if llm is None:
+            return resolved_adapter, resolved_provider, resolved_model
+        if isinstance(llm, str):
+            if ":" in llm:
+                resolved_provider, resolved_model = llm.split(":", 1)
+            else:
+                resolved_provider = llm
+            return resolved_adapter, resolved_provider, resolved_model
+        return llm, resolved_provider, resolved_model
+
+    @staticmethod
+    def _build_config_kwargs(
+        *,
+        llm_model: str | None,
+        contextual_retrieval: bool,
+        extra_kwargs: dict[str, Any],
+    ) -> dict[str, Any]:
+        config_kwargs = {**extra_kwargs}
+        if llm_model:
+            config_kwargs["llm_model"] = llm_model
+        if contextual_retrieval:
+            config_kwargs["contextual_retrieval"] = contextual_retrieval
+        return config_kwargs
+
+    @staticmethod
+    def _normalize_mode(mode: str | RAGMode) -> RAGMode:
+        return RAGMode(mode) if isinstance(mode, str) else mode
+
+    @staticmethod
+    def _normalize_strategies(strategies: list[str] | None) -> list[RetrievalStrategy] | None:
+        if not strategies:
+            return None
+        return [RetrievalStrategy(strategy) for strategy in strategies]
+
+    @classmethod
+    def _build_config(
+        cls,
+        *,
+        config: RAGConfig | None,
+        knowledge_dir: str | None,
+        mode: str | RAGMode,
+        strategies: list[str] | None,
+        contextual_retrieval: bool,
+        llm_model: str | None,
+        extra_kwargs: dict[str, Any],
+    ) -> RAGConfig:
+        if config is not None:
+            return config
+
+        resolved_mode = cls._normalize_mode(mode)
+        strategy_list = cls._normalize_strategies(strategies)
+        config_kwargs = cls._build_config_kwargs(
+            llm_model=llm_model,
+            contextual_retrieval=contextual_retrieval,
+            extra_kwargs=extra_kwargs,
+        )
+
+        if resolved_mode == RAGMode.AGENTIC:
+            return RAGConfig.for_agentic(knowledge_dir=knowledge_dir, **config_kwargs)
+        if resolved_mode == RAGMode.INDEXED:
+            return RAGConfig.for_indexed(
+                knowledge_dir=knowledge_dir,
+                strategies=strategy_list,
+                **config_kwargs,
+            )
+
+        config_values: dict[str, Any] = {"mode": resolved_mode, **config_kwargs}
+        if knowledge_dir is not None:
+            config_values["knowledge_dir"] = knowledge_dir
+        return RAGConfig(**config_values)
 
     def _create_llm_adapter(self, provider: str, model: str | None) -> LLMAdapter | None:
         """Create LLM adapter from provider name.
@@ -165,7 +231,7 @@ class RAG:
         Returns:
             LLMAdapter instance or None if creation fails
         """
-        from houyi.llm.models import (
+        from houyi.adapters.llm.models import (
             CLAUDE_35_HAIKU,
             GPT_4O_MINI,
             PROVIDER_ANTHROPIC,
@@ -175,15 +241,15 @@ class RAG:
 
         try:
             if provider == PROVIDER_OPENAI:
-                from houyi.llm.openai_adapter import OpenAIAdapter
+                from houyi.adapters.llm.openai_adapter import OpenAIAdapter
 
                 return OpenAIAdapter(model=model or GPT_4O_MINI)
             elif provider == PROVIDER_ANTHROPIC:
-                from houyi.llm.anthropic_adapter import AnthropicAdapter
+                from houyi.adapters.llm.anthropic_adapter import AnthropicAdapter
 
                 return AnthropicAdapter(model=model or CLAUDE_35_HAIKU)
             elif provider == PROVIDER_VERTEX:
-                from houyi.llm.vertex_gemini_adapter import GoogleVertexGeminiAdapter
+                from houyi.adapters.llm.vertex_gemini_adapter import GoogleVertexGeminiAdapter
 
                 return GoogleVertexGeminiAdapter.from_env()
             else:
@@ -284,7 +350,7 @@ class RAG:
         Yields:
             StreamEvent objects for SSE streaming
         """
-        from houyi.rag.generation.streaming import StreamEvent, StreamEventType
+        from houyi.rag.generation.streaming import build_non_streaming_events
 
         selected_mode = mode or self._select_mode(query)
 
@@ -292,18 +358,8 @@ class RAG:
         if selected_mode == RAGMode.AGENTIC:
             # Fallback to non-streaming for Agentic mode
             result = await self._query_agentic(query, top_k=top_k, **kwargs)
-            yield StreamEvent(
-                event_type=StreamEventType.START,
-                data={"sources": [s.file_path for s in result.sources]},
-            )
-            yield StreamEvent(
-                event_type=StreamEventType.CHUNK,
-                data=result.answer,
-            )
-            yield StreamEvent(
-                event_type=StreamEventType.END,
-                data={"confidence": result.confidence},
-            )
+            for event in build_non_streaming_events(result):
+                yield event
             return
 
         # Stream from Indexed mode
@@ -324,20 +380,10 @@ class RAG:
 
         # If no LLM adapter, yield non-streaming result
         if not self._llm_adapter:
-            from houyi.rag.generation.streaming import StreamEvent, StreamEventType
+            from houyi.rag.generation.streaming import build_non_streaming_events
 
-            yield StreamEvent(
-                event_type=StreamEventType.START,
-                data={"sources": [s.file_path for s in result.sources]},
-            )
-            yield StreamEvent(
-                event_type=StreamEventType.CHUNK,
-                data=result.answer,
-            )
-            yield StreamEvent(
-                event_type=StreamEventType.END,
-                data={"confidence": result.confidence},
-            )
+            for event in build_non_streaming_events(result):
+                yield event
             return
 
         # Use streaming generator
@@ -433,16 +479,7 @@ class RAG:
 
     async def _query_agentic(self, query: str, **kwargs: Any) -> RetrievalResult:
         """Execute query in Agentic mode."""
-        if self._agentic_mode is None:
-            from houyi.rag.agentic import AgenticMode
-
-            self._agentic_mode = AgenticMode(
-                config=self._config.agentic,
-                knowledge_dir=self._config.knowledge_dir,
-                agent=self._agent,
-                llm_adapter=self._llm_adapter,
-            )
-
+        await self._ensure_agentic_mode()
         return await self._agentic_mode.search(query, **kwargs)
 
     async def _query_indexed(self, query: str, **kwargs: Any) -> RetrievalResult:
@@ -450,19 +487,39 @@ class RAG:
         await self._ensure_indexed_mode()
         return await self._indexed_mode.search(query, **kwargs)
 
-    async def _ensure_indexed_mode(self) -> None:
-        """Ensure IndexedMode is initialized."""
-        if self._indexed_mode is None:
-            from houyi.rag.indexed import IndexedMode
+    def _create_agentic_mode(self) -> Any:
+        """Construct the Agentic runtime from facade-owned config and collaborators."""
+        from houyi.rag.agentic import AgenticMode
 
-            self._indexed_mode = IndexedMode(
-                config=self._config.indexed,
-                knowledge_dir=self._config.knowledge_dir,
-                index_dir=self._config.get_index_dir(),
-                embedding_config=self._config.embedding,
-                graph_config=self._config.graph,
-                llm_adapter=self._llm_adapter,
-            )
+        return AgenticMode(
+            config=self._config.agentic,
+            knowledge_dir=self._config.knowledge_dir,
+            agent=self._agent,
+            llm_adapter=self._llm_adapter,
+        )
+
+    def _create_indexed_mode(self) -> Any:
+        """Construct the Indexed runtime using the facade's storage and LLM wiring."""
+        from houyi.rag.indexed import IndexedMode
+
+        return IndexedMode(
+            config=self._config.indexed,
+            knowledge_dir=self._config.knowledge_dir,
+            index_dir=self._config.get_index_dir(),
+            embedding_config=self._config.embedding,
+            graph_config=self._config.graph,
+            llm_adapter=self._llm_adapter,
+        )
+
+    async def _ensure_agentic_mode(self) -> None:
+        """Ensure the cached Agentic runtime exists before query execution."""
+        if self._agentic_mode is None:
+            self._agentic_mode = self._create_agentic_mode()
+
+    async def _ensure_indexed_mode(self) -> None:
+        """Ensure the cached Indexed runtime exists before retrieval or ingest."""
+        if self._indexed_mode is None:
+            self._indexed_mode = self._create_indexed_mode()
 
 
 def _iter_files(directory: str) -> Iterator[str]:

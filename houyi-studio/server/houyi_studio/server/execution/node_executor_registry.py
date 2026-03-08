@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from houyi.protocol.ir.execution_ir import NodeExecutionIR
-from houyi.protocol.ir.plan_ir import NodeIR, NodeType
+from houyi.interface.protocol.ir.execution_ir import NodeExecutionIR
+from houyi.interface.protocol.ir.plan_ir import NodeIR, NodeType
 
 from .context import ExecutionContext
 

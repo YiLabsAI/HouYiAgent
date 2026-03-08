@@ -4,14 +4,14 @@ import time
 
 import pytest
 
-from houyi.observability.exporters import (
+from houyi.infrastructure.observability.exporters import (
     ConsoleExporter,
     DatadogExporter,
     JaegerExporter,
     JSONExporter,
     create_exporter,
 )
-from houyi.observability.trace_manager import Span, TraceManager
+from houyi.infrastructure.observability.trace_manager import Span, TraceManager
 
 
 class TestSpan:

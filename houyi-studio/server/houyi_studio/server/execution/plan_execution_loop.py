@@ -8,8 +8,10 @@ from collections.abc import Awaitable, Callable
 from datetime import datetime
 from uuid import uuid4
 
-from houyi.execution.plan_execution_loop import PlanExecutionLoop as _SdkPlanExecutionLoop
-from houyi.protocol.ir import ExecutionIR, ExecutionStatus, PlanIR
+from houyi.application.workflow.plan_execution_loop import (
+    PlanExecutionLoop as _SdkPlanExecutionLoop,
+)
+from houyi.interface.protocol.ir import ExecutionIR, ExecutionStatus, PlanIR
 
 from ..gateway.events import ExecutionStatusEvent
 from .context import ExecutionContext

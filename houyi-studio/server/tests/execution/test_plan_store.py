@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 from houyi_studio.server.execution.stores import PlanStore
 
-from houyi.protocol.ir import PlanIR
+from houyi.interface.protocol.ir import PlanIR
 
 
 @pytest.fixture

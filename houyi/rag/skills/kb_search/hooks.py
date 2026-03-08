@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from houyi.core.skill.hooks import HookContext, HookResult
+    from houyi.domain.skill.hooks import HookContext, HookResult
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +49,52 @@ def get_search_state() -> dict[str, Any]:
     return _search_state.copy()
 
 
+def _resolve_knowledge_dir(metadata: dict[str, Any] | None) -> str:
+    knowledge_dir = os.environ.get("KNOWLEDGE_DIR", "")
+    if not knowledge_dir and metadata:
+        knowledge_dir = str(metadata.get("knowledge_dir", ""))
+    if knowledge_dir:
+        return knowledge_dir
+
+    from houyi.infrastructure.config import env
+
+    return env.rag_knowledge_dir
+
+
+def _handle_grep(tool_args: dict[str, Any], knowledge_dir: str) -> list[str]:
+    pattern = tool_args.get("pattern", "")
+    if not pattern:
+        return []
+    _search_state["query"] = pattern
+    return [
+        f"[kb-search] Searching knowledge base: {knowledge_dir}",
+        f"[kb-search] Pattern: {pattern}",
+    ]
+
+
+def _handle_read(tool_args: dict[str, Any], knowledge_dir: str) -> list[str]:
+    file_path = tool_args.get("file_path", "")
+    if not file_path:
+        return []
+
+    _search_state["files_searched"] += 1
+    try:
+        kb_path = Path(knowledge_dir).resolve()
+        file_p = Path(file_path).resolve()
+        if kb_path in file_p.parents or file_p == kb_path:
+            return [f"[kb-search] Reading knowledge file: {file_path}"]
+    except (ValueError, OSError):
+        return []
+    return []
+
+
+def _handle_glob(tool_args: dict[str, Any]) -> list[str]:
+    pattern = tool_args.get("pattern", "")
+    if not pattern:
+        return []
+    return [f"[kb-search] Exploring: {pattern}"]
+
+
 async def pre_search_hook(context: HookContext) -> HookResult:
     """Hook called before Read/Glob/Grep operations.
 
@@ -60,53 +106,20 @@ async def pre_search_hook(context: HookContext) -> HookResult:
     Returns:
         HookResult with optional context injection
     """
-    from houyi.core.skill.hooks import HookResult
+    from houyi.domain.skill.hooks import HookResult
 
     tool_name = context.tool_name or ""
     tool_args = context.tool_args or {}
 
-    # Get knowledge directory from environment or context
-    knowledge_dir = os.environ.get("KNOWLEDGE_DIR", "")
-    if not knowledge_dir and context.metadata:
-        knowledge_dir = context.metadata.get("knowledge_dir", "")
-    if not knowledge_dir:
-        from houyi.config import env
-
-        knowledge_dir = env.rag_knowledge_dir
-
-    # Track search state
+    knowledge_dir = _resolve_knowledge_dir(context.metadata)
     _search_state["knowledge_dir"] = knowledge_dir
 
-    # Build context injection
-    output_parts = []
-
-    # For Grep operations, provide search guidance
-    if tool_name.lower() == "grep":
-        pattern = tool_args.get("pattern", "")
-        if pattern:
-            _search_state["query"] = pattern
-            output_parts.append(f"[kb-search] Searching knowledge base: {knowledge_dir}")
-            output_parts.append(f"[kb-search] Pattern: {pattern}")
-
-    # For Read operations, track files accessed
-    elif tool_name.lower() == "read":
-        file_path = tool_args.get("file_path", "")
-        if file_path:
-            _search_state["files_searched"] += 1
-            # Check if this is within knowledge directory
-            try:
-                kb_path = Path(knowledge_dir).resolve()
-                file_p = Path(file_path).resolve()
-                if kb_path in file_p.parents or file_p == kb_path:
-                    output_parts.append(f"[kb-search] Reading knowledge file: {file_path}")
-            except (ValueError, OSError):
-                pass
-
-    # For Glob operations, track directory exploration
-    elif tool_name.lower() == "glob":
-        pattern = tool_args.get("pattern", "")
-        if pattern:
-            output_parts.append(f"[kb-search] Exploring: {pattern}")
+    tool_handlers: dict[str, Any] = {
+        "grep": lambda: _handle_grep(tool_args, knowledge_dir),
+        "read": lambda: _handle_read(tool_args, knowledge_dir),
+        "glob": lambda: _handle_glob(tool_args),
+    }
+    output_parts = tool_handlers.get(tool_name.lower(), lambda: [])()
 
     if output_parts:
         return HookResult(
@@ -129,7 +142,7 @@ async def post_search_hook(context: HookContext) -> HookResult:
     Returns:
         HookResult with search progress
     """
-    from houyi.core.skill.hooks import HookResult
+    from houyi.domain.skill.hooks import HookResult
 
     tool_name = context.tool_name or ""
     tool_result = context.tool_result
@@ -187,7 +200,7 @@ async def stop_hook(context: HookContext) -> HookResult:
     Returns:
         HookResult with search summary
     """
-    from houyi.core.skill.hooks import HookResult
+    from houyi.domain.skill.hooks import HookResult
 
     files = _search_state["files_searched"]
     matches = _search_state["matches_found"]

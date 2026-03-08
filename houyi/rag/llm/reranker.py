@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
-import json
 import logging
+import re
 from typing import TYPE_CHECKING
 
+from houyi.rag.llm.json_utils import parse_embedded_json
 from houyi.rag.types import SearchResult
 
 if TYPE_CHECKING:
-    from houyi.llm.base import LLMAdapter
+    from houyi.adapters.llm.base import LLMAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -122,7 +123,7 @@ Consider:
         batch: list[SearchResult],
     ) -> list[float]:
         """Score a batch of passages using LLM."""
-        from houyi.llm.base import LLMMessage, MessageRole
+        from houyi.adapters.llm.base import LLMMessage, MessageRole
 
         # Format passages for LLM
         passages_text = self._format_passages(batch)
@@ -144,9 +145,10 @@ Return JSON: {{"scores": [score1, score2, ...]}}"""
             messages=messages,
             temperature=self._temperature,
             max_tokens=200,
+            response_mime_type="application/json",
         )
 
-        scores = self._parse_scores(response.content, len(batch))
+        scores = self._parse_scores(response.content, query, batch)
         return scores
 
     def _format_passages(self, results: list[SearchResult]) -> str:
@@ -161,16 +163,18 @@ Return JSON: {{"scores": [score1, score2, ...]}}"""
 
         return "\n\n".join(parts)
 
-    def _parse_scores(self, content: str, expected_count: int) -> list[float]:
+    def _parse_scores(
+        self,
+        content: str,
+        query: str,
+        batch: list[SearchResult],
+    ) -> list[float]:
         """Parse scores from LLM response."""
+        expected_count = len(batch)
         try:
-            # Clean up response
-            content = content.strip()
-            if content.startswith("```"):
-                lines = content.split("\n")
-                content = "\n".join(line for line in lines if not line.startswith("```"))
-
-            data = json.loads(content)
+            data = parse_embedded_json(content)
+            if not isinstance(data, dict):
+                raise ValueError("reranker response must be a JSON object")
             scores = data.get("scores", [])
 
             # Validate and normalize scores
@@ -188,6 +192,27 @@ Return JSON: {{"scores": [score1, score2, ...]}}"""
 
             return validated
 
-        except json.JSONDecodeError:
-            logger.warning("Failed to parse reranker scores, using defaults")
-            return [5.0] * expected_count
+        except (TypeError, ValueError):
+            logger.warning("Failed to parse reranker scores, using heuristic fallback")
+            return self._fallback_scores(query, batch)
+
+    def _fallback_scores(self, query: str, batch: list[SearchResult]) -> list[float]:
+        query_terms = self._tokenize(query)
+        if not query_terms:
+            return [max(0.0, min(10.0, result.score * 10.0)) for result in batch]
+
+        scores: list[float] = []
+        for result in batch:
+            passage_terms = self._tokenize(result.content)
+            overlap = len(query_terms & passage_terms)
+            coverage = overlap / max(len(query_terms), 1)
+            score = min(10.0, max(result.score * 10.0, 2.0 + coverage * 8.0))
+            scores.append(score)
+        return scores
+
+    def _tokenize(self, text: str) -> set[str]:
+        return {
+            token
+            for token in re.findall(r"[A-Za-z][A-Za-z0-9_+-]*", text.lower())
+            if len(token) > 2
+        }

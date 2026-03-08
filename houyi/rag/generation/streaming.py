@@ -13,9 +13,15 @@ from enum import Enum
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from houyi.llm.base import LLMAdapter
+    from houyi.adapters.llm.base import LLMAdapter
 
-from houyi.rag.types import SearchResult
+from houyi.rag.generation.streaming_helpers import (
+    RAG_ANSWER_SYSTEM_PROMPT,
+    build_answer_prompt,
+    build_stream_sources,
+    estimate_stream_confidence,
+)
+from houyi.rag.types import RetrievalResult, SearchResult
 
 logger = logging.getLogger(__name__)
 
@@ -57,21 +63,35 @@ class StreamEvent:
         }
 
 
+def build_non_streaming_events(result: RetrievalResult) -> list[StreamEvent]:
+    """Build static stream events from an already materialized retrieval result.
+
+    This keeps the event payload contract in the generation layer even when the
+    caller falls back from true token streaming to a one-shot answer.
+    """
+    return [
+        StreamEvent(
+            event_type=StreamEventType.START,
+            data={"sources": [source.file_path for source in result.sources]},
+        ),
+        StreamEvent(
+            event_type=StreamEventType.CHUNK,
+            data=result.answer,
+        ),
+        StreamEvent(
+            event_type=StreamEventType.END,
+            data={"confidence": result.confidence},
+        ),
+    ]
+
+
 class StreamingAnswerGenerator:
     """Generate streaming answers from search results.
 
     Yields chunks as they are generated for real-time display.
     """
 
-    SYSTEM_PROMPT = """You are a helpful assistant that answers questions based on provided context.
-
-Guidelines:
-- Answer ONLY based on the provided context
-- Cite sources using [1], [2], etc. markers
-- If the context doesn't contain enough information, say so clearly
-- Be concise but complete
-- If sources conflict, mention the discrepancy
-- Use the same language as the user's question"""
+    SYSTEM_PROMPT = RAG_ANSWER_SYSTEM_PROMPT
 
     def __init__(
         self,
@@ -104,21 +124,12 @@ Guidelines:
         Yields:
             StreamEvent objects
         """
-        from houyi.llm.base import LLMMessage, MessageRole
+        from houyi.adapters.llm.base import LLMMessage, MessageRole
 
         # Emit start event with sources
-        sources = []
-        for i, result in enumerate(results[:10], 1):
-            source_info = {
-                "index": i,
-                "file_path": result.source.file_path if result.source else "",
-                "snippet": result.content[:200] if result.content else "",
-            }
-            sources.append(source_info)
-
         yield StreamEvent(
             event_type=StreamEventType.START,
-            data={"sources": sources, "query": query},
+            data={"sources": build_stream_sources(results), "query": query},
         )
 
         if not results:
@@ -132,15 +143,7 @@ Guidelines:
             )
             return
 
-        # Format context
-        context = self._format_context(results)
-
-        prompt = f"""Context:
-{context}
-
-Question: {query}
-
-Please answer the question based on the context above."""
+        prompt = build_answer_prompt(query, results)
 
         messages = [
             LLMMessage(role=MessageRole.SYSTEM, content=self.SYSTEM_PROMPT),
@@ -170,7 +173,7 @@ Please answer the question based on the context above."""
             )
 
         # Estimate confidence
-        confidence = self._estimate_confidence(full_response, results)
+        confidence = estimate_stream_confidence(full_response, results)
 
         # Emit end event
         yield StreamEvent(
@@ -180,49 +183,6 @@ Please answer the question based on the context above."""
                 "total_length": len(full_response),
             },
         )
-
-    def _format_context(self, results: list[SearchResult]) -> str:
-        """Format search results as numbered context blocks."""
-        blocks = []
-
-        for i, result in enumerate(results[:10], 1):
-            source_info = ""
-            if result.source:
-                source_info = f" (from: {result.source.file_path})"
-
-            block = f"[{i}]{source_info}:\n{result.content.strip()}"
-            blocks.append(block)
-
-        return "\n\n---\n\n".join(blocks)
-
-    def _estimate_confidence(
-        self,
-        answer: str,
-        results: list[SearchResult],
-    ) -> float:
-        """Estimate confidence based on answer quality indicators."""
-        confidence = 0.5
-
-        # Check citations
-        citation_count = sum(1 for i in range(1, 11) if f"[{i}]" in answer)
-        if citation_count > 0:
-            confidence += 0.1 * min(citation_count, 3)
-
-        # Check result scores
-        high_score_count = sum(1 for r in results if r.score > 0.7)
-        if high_score_count > 0:
-            confidence += 0.1 * min(high_score_count, 3)
-
-        # Penalize uncertainty
-        uncertainty_phrases = [
-            "not enough information",
-            "cannot find",
-            "no relevant",
-        ]
-        if any(phrase in answer.lower() for phrase in uncertainty_phrases):
-            confidence -= 0.2
-
-        return max(0.0, min(1.0, confidence))
 
 
 async def stream_sse(

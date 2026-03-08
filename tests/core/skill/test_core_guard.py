@@ -1,4 +1,4 @@
-"""Tests for CoreGuard PreToolUse hook (Layer 4).
+"""Tests for CoreGuard PreToolUse hook.
 
 Covers:
 - DENY for ext__ tools with EXEC side effect
@@ -20,9 +20,9 @@ from unittest.mock import MagicMock
 import pytest
 from pydantic import BaseModel
 
-from houyi.core.skill.core_guard import CoreGuardDecision, CoreGuardResult, evaluate
-from houyi.core.skill.spec import SkillSpec
-from houyi.core.skill_registry import SkillRegistry
+from houyi.domain.skill.core_guard import CoreGuardDecision, CoreGuardResult, evaluate
+from houyi.domain.skill.registry import SkillRegistry
+from houyi.domain.skill.spec import SkillSpec
 
 
 class _In(BaseModel):

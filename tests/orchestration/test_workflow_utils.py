@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import re
 
-from houyi.orchestration.plan import NodeType
-from houyi.orchestration.workflow_utils import (
+from houyi.application.workflow.orchestration.plan import NodeType
+from houyi.application.workflow.workflow_utils import (
     plan_to_workflow_dict,
     sanitize_workflow_name,
     workflow_dict_to_plan,
 )
-from houyi.protocol.ir import EdgeIR, NodeIR, PlanIR
+from houyi.interface.protocol.ir import EdgeIR, NodeIR, PlanIR
 
 
 def test_sanitize_workflow_name_keeps_safe_chars_and_normalizes_spaces() -> None:

@@ -5,37 +5,27 @@ from __future__ import annotations
 import re
 import subprocess
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from houyi.rag.types import SearchResult, Source
 
-if TYPE_CHECKING:
-    from houyi.runtime.agent import Agent
-
 
 class AgenticSearcher:
-    """Search files using grep and read_file operations.
-
-    Can optionally use an Agent instance to leverage existing tools,
-    or fall back to direct subprocess calls.
-    """
+    """Search files using local grep and direct file reads."""
 
     def __init__(
         self,
         knowledge_dir: str,
         chunk_limit: int = 500,
-        agent: Agent | None = None,
     ) -> None:
         """Initialize searcher.
 
         Args:
             knowledge_dir: Knowledge base root directory
             chunk_limit: Max lines to read per chunk
-            agent: Optional Agent for tool execution
         """
         self._knowledge_dir = Path(knowledge_dir)
         self._chunk_limit = chunk_limit
-        self._agent = agent
 
     async def search_files(
         self,
@@ -118,12 +108,6 @@ class AgenticSearcher:
         # Build grep pattern
         pattern = "|".join(re.escape(kw) for kw in keywords)
 
-        if self._agent is not None:
-            # Use Agent's grep tool if available
-            # This is a placeholder for Agent integration
-            pass
-
-        # Fall back to subprocess
         try:
             result = subprocess.run(
                 ["grep", "-n", "-i", "-E", pattern, path],
@@ -203,12 +187,6 @@ class AgenticSearcher:
         start_line = max(1, center_line - context_lines)
         end_line = center_line + context_lines
 
-        if self._agent is not None:
-            # Use Agent's read_file tool if available
-            # This is a placeholder for Agent integration
-            pass
-
-        # Fall back to direct file reading
         try:
             lines = []
             with open(path, encoding="utf-8", errors="ignore") as f:

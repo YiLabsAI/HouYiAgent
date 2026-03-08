@@ -1,4 +1,4 @@
-"""Tests for AgentSpec core tool routing (Layer 5 + Layer 3 sort).
+"""Tests for AgentSpec core tool routing.
 
 Covers:
 - to_system_prompt() includes TOOL ROUTING POLICY when core skills present
@@ -13,8 +13,8 @@ from __future__ import annotations
 
 from pydantic import BaseModel
 
-from houyi.core.agent import AgentSpec
-from houyi.core.skill.spec import SkillSpec
+from houyi.domain.agent import AgentSpec
+from houyi.domain.skill.spec import SkillSpec
 
 
 class _In(BaseModel):

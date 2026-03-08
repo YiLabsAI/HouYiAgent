@@ -1,12 +1,5 @@
-"""MCP gateway stub for execution engine."""
+"""Compatibility export for MCP gateway used by execution engine."""
 
-from __future__ import annotations
+from houyi.adapters.mcp import MCPGateway
 
-from dataclasses import dataclass
-from typing import Any
-
-
-@dataclass(slots=True)
-class MCPGateway:
-    async def invoke(self, _tool_ref: Any, _args: dict[str, Any]) -> dict[str, Any]:
-        return {"error": "mcp_not_configured"}
+__all__ = ["MCPGateway"]

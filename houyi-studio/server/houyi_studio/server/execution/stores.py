@@ -6,7 +6,7 @@ import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from houyi.protocol.ir import CheckpointIR, ExecutionIR, PlanIR
+from houyi.interface.protocol.ir import CheckpointIR, ExecutionIR, PlanIR
 
 logger = logging.getLogger(__name__)
 

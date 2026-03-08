@@ -4,9 +4,9 @@ import pytest
 from pydantic import BaseModel
 
 from houyi import AgentSpec, SkillSpec
-from houyi.orchestration.planner import DAGPlanner
-from houyi.orchestration.state import SessionState, TaskStatus
-from houyi.runtime.executor import LocalExecutor
+from houyi.application.workflow.executor import LocalExecutor
+from houyi.application.workflow.orchestration.planner import DAGPlanner
+from houyi.application.workflow.orchestration.state import SessionState, TaskStatus
 
 
 class TestLocalExecutor:
@@ -17,13 +17,13 @@ class TestLocalExecutor:
         """Test that executor can run a simple plan."""
 
         class Input(BaseModel):
-            query: str
+            task: str
 
         class Output(BaseModel):
             result: str
 
-        def search(input: Input) -> Output:
-            return Output(result="test result")
+        def search(task: str) -> Output:
+            return Output(result=f"test result:{task}")
 
         skill = SkillSpec(
             name="search",
@@ -49,29 +49,23 @@ class TestLocalExecutor:
         executor = LocalExecutor()
         result = await executor.execute(plan, initial_state)
 
-        # Print error if failed
-        if result.status == TaskStatus.FAILED:
-            print(f"Execution failed with error: {result.error}")
-
         assert result.status == TaskStatus.SUCCEEDED
         assert result.trace_id.startswith("trace_")
-        assert result.metrics.total_duration_ms >= 0  # Changed to >= 0 to handle fast execution
-        assert (
-            len(result.metrics.node_durations) >= 1
-        )  # At least 1 node executed (direct skill execution)
+        assert result.metrics.total_duration_ms >= 0
+        assert len(result.metrics.node_durations) >= 1
 
     @pytest.mark.asyncio
     async def test_executor_result_structure(self) -> None:
         """Test that executor returns properly structured results."""
 
         class Input(BaseModel):
-            query: str
+            task: str
 
         class Output(BaseModel):
             result: str
 
-        def search(input: Input) -> Output:
-            return Output(result="test result")
+        def search(task: str) -> Output:
+            return Output(result=f"test result:{task}")
 
         skill = SkillSpec(
             name="search",
@@ -109,16 +103,16 @@ class TestLocalExecutor:
         """Test executor with multiple independent nodes."""
 
         class Input(BaseModel):
-            value: int
+            task: str
 
         class Output(BaseModel):
-            result: int
+            result: str
 
-        def skill1(input: Input) -> Output:
-            return Output(result=input.value * 2)
+        def skill1(task: str) -> Output:
+            return Output(result=f"skill1:{task}")
 
-        def skill2(input: Input) -> Output:
-            return Output(result=input.value + 10)
+        def skill2(task: str) -> Output:
+            return Output(result=f"skill2:{task}")
 
         skill_a = SkillSpec(
             name="skill1",
@@ -151,20 +145,20 @@ class TestLocalExecutor:
 
         assert result.status == TaskStatus.SUCCEEDED
         assert result.output is not None
-        assert len(result.metrics.node_durations) >= 1  # At least 1 node (direct execution)
+        assert len(result.metrics.node_durations) >= 1
 
     @pytest.mark.asyncio
     async def test_executor_metrics_collection(self) -> None:
         """Test that executor collects execution metrics."""
 
         class Input(BaseModel):
-            query: str
+            task: str
 
         class Output(BaseModel):
             result: str
 
-        def search(input: Input) -> Output:
-            return Output(result="test result")
+        def search(task: str) -> Output:
+            return Output(result=f"test result:{task}")
 
         skill = SkillSpec(
             name="search",
@@ -188,7 +182,7 @@ class TestLocalExecutor:
         result = await executor.execute(plan, initial_state)
 
         # Verify metrics
-        assert result.metrics.total_duration_ms >= 0  # Changed to >= 0 to handle fast execution
+        assert result.metrics.total_duration_ms >= 0
         assert len(result.metrics.node_durations) > 0
         for node_id, duration in result.metrics.node_durations.items():
             assert duration >= 0
@@ -199,13 +193,13 @@ class TestLocalExecutor:
         """Test that executor properly manages session state."""
 
         class Input(BaseModel):
-            query: str
+            task: str
 
         class Output(BaseModel):
             result: str
 
-        def search(input: Input) -> Output:
-            return Output(result="test result")
+        def search(task: str) -> Output:
+            return Output(result=f"test result:{task}")
 
         skill = SkillSpec(
             name="search",

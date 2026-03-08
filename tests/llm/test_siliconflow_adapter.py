@@ -1,4 +1,4 @@
-"""Unit tests for houyi.llm.siliconflow_adapter — SiliconFlowAdapter.
+"""Unit tests for houyi.adapters.llm.siliconflow_adapter — SiliconFlowAdapter.
 
 Tests cover:
 - Mock mode (no API key)
@@ -18,8 +18,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from houyi.config.env_config import EnvConfig
-from houyi.llm.siliconflow_adapter import SiliconFlowAdapter
+from houyi.adapters.llm.siliconflow_adapter import SiliconFlowAdapter
+from houyi.infrastructure.config.env_config import EnvConfig
 
 
 @pytest.fixture(autouse=True)

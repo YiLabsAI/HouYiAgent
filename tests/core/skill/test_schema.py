@@ -3,8 +3,8 @@
 Reference: SimpleSkill Specification v0.1 Section 3 (SKILL.md Format)
 """
 
-from houyi.core.skill.hooks import HookEvent, HookType, SkillHook
-from houyi.core.skill.schema import (
+from houyi.domain.skill.hooks import HookEvent, HookType, SkillHook
+from houyi.domain.skill.schema import (
     _parse_constraints,
     _parse_frontmatter,
     _parse_markdown_body,

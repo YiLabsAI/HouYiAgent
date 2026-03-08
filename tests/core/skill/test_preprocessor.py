@@ -13,7 +13,7 @@ import tempfile
 
 import pytest
 
-from houyi.core.skill.preprocessor import (
+from houyi.domain.skill.preprocessor import (
     PreprocessorPipeline,
     PreprocessorResult,
     PreprocessorSpec,

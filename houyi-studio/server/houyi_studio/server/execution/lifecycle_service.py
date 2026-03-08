@@ -5,9 +5,9 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from houyi.execution.execution_backends import ExecutionBackend
-from houyi.execution.execution_lifecycle_service import ExecutionLifecycleManager
-from houyi.protocol.ir import ExecutionIR, PlanIR
+from houyi.application.workflow.execution_backends import ExecutionBackend
+from houyi.application.workflow.execution_lifecycle_service import ExecutionLifecycleManager
+from houyi.interface.protocol.ir import ExecutionIR, PlanIR
 
 from ..gateway.events import ExecutionStatusEvent
 from .observation_service import ObservationService

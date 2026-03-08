@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from houyi.observability.content_store import (
+from houyi.infrastructure.observability.content_store import (
     ContentStoreConfig,
     ContentType,
     FileContentStore,

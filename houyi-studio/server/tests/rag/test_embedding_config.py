@@ -1,4 +1,4 @@
-"""Unit tests for embedding config resolution and config hash.
+"""Tests for embedding config resolution and config hash.
 
 Tests:
 - resolve_embedding_config() priority chain: explicit > env > auto-detect
@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+from pathlib import Path
 from unittest.mock import patch
 
 # ---------------------------------------------------------------------------
@@ -31,6 +32,12 @@ def _import_blocker(blocked_modules: list[str]):
     return blocker
 
 
+def _embedding_config_module():
+    from houyi_studio.server.rag import embedding_config
+
+    return embedding_config
+
+
 # ---------------------------------------------------------------------------
 # Priority chain tests
 # ---------------------------------------------------------------------------
@@ -48,8 +55,9 @@ class TestResolveEmbeddingConfig:
         """Priority 1: explicit override always wins."""
         with (
             patch.dict(os.environ, {"EMBEDDING_PROVIDER": "openai", "OPENAI_API_KEY": "sk-x"}),
-            patch(
-                "houyi_studio.server.rag.embedding_config._is_provider_runtime_available",
+            patch.object(
+                _embedding_config_module(),
+                "_is_provider_runtime_available",
                 return_value=True,
             ),
         ):
@@ -65,8 +73,9 @@ class TestResolveEmbeddingConfig:
 
         with (
             patch.dict(os.environ, {"EMBEDDING_PROVIDER": "openai", "OPENAI_API_KEY": "sk-x"}),
-            patch(
-                "houyi_studio.server.rag.embedding_config._is_provider_runtime_available",
+            patch.object(
+                _embedding_config_module(),
+                "_is_provider_runtime_available",
                 side_effect=_available,
             ),
         ):
@@ -75,8 +84,9 @@ class TestResolveEmbeddingConfig:
             assert cfg.provider == "openai"
 
     def test_explicit_local_strict_mode_raises(self):
-        with patch(
-            "houyi_studio.server.rag.embedding_config._is_provider_runtime_available",
+        with patch.object(
+            _embedding_config_module(),
+            "_is_provider_runtime_available",
             return_value=False,
         ):
             try:
@@ -88,8 +98,9 @@ class TestResolveEmbeddingConfig:
     def test_env_local_strict_mode_raises(self):
         with (
             patch.dict(os.environ, {"EMBEDDING_PROVIDER": "local"}, clear=False),
-            patch(
-                "houyi_studio.server.rag.embedding_config._is_provider_runtime_available",
+            patch.object(
+                _embedding_config_module(),
+                "_is_provider_runtime_available",
                 return_value=False,
             ),
         ):
@@ -101,8 +112,9 @@ class TestResolveEmbeddingConfig:
 
     def test_explicit_provider_with_custom_model(self):
         """Explicit override can include custom model/dimension."""
-        with patch(
-            "houyi_studio.server.rag.embedding_config._is_provider_runtime_available",
+        with patch.object(
+            _embedding_config_module(),
+            "_is_provider_runtime_available",
             return_value=True,
         ):
             cfg, name = self._resolve(
@@ -121,8 +133,9 @@ class TestResolveEmbeddingConfig:
     )
     def test_env_vars_used_when_no_explicit(self):
         """Priority 2: env vars used when no explicit provider given."""
-        with patch(
-            "houyi_studio.server.rag.embedding_config._is_provider_runtime_available",
+        with patch.object(
+            _embedding_config_module(),
+            "_is_provider_runtime_available",
             return_value=True,
         ):
             cfg, name = self._resolve()
@@ -165,8 +178,9 @@ class TestAutoDetectEmbedding:
             cfg, name = detect()
             assert name == "gemini"
         except ImportError:
-            with patch(
-                "houyi_studio.server.rag.embedding_config._is_provider_runtime_available",
+            with patch.object(
+                _embedding_config_module(),
+                "_is_provider_runtime_available",
                 return_value=True,
             ):
                 cfg, name = detect()
@@ -190,8 +204,9 @@ class TestAutoDetectEmbedding:
             cfg, name = detect()
             assert name == "gemini"
         except ImportError:
-            with patch(
-                "houyi_studio.server.rag.embedding_config._is_provider_runtime_available",
+            with patch.object(
+                _embedding_config_module(),
+                "_is_provider_runtime_available",
                 return_value=True,
             ):
                 cfg, name = detect()
@@ -210,8 +225,9 @@ class TestAutoDetectEmbedding:
     def test_openai_detected_when_api_key_set(self):
         """OpenAI provider detected when OPENAI_API_KEY is set."""
         detect = self._auto_detect()
-        with patch(
-            "houyi_studio.server.rag.embedding_config._is_provider_runtime_available",
+        with patch.object(
+            _embedding_config_module(),
+            "_is_provider_runtime_available",
             return_value=True,
         ):
             cfg, name = detect()
@@ -245,6 +261,63 @@ class TestAutoDetectEmbedding:
             cfg, name = detect()
             assert cfg is None
             assert name == "no_provider"
+
+
+class TestStoragePathHelpers:
+    def _auto_detect(self):
+        from houyi_studio.server.rag import _auto_detect_embedding
+
+        return _auto_detect_embedding
+
+    def test_storage_constants_defined(self):
+        from houyi_studio.server.rag import (
+            INDEX_SUBDIR,
+            KNOWLEDGE_STORAGE_DIR,
+            UPLOADS_SUBDIR,
+        )
+
+        assert UPLOADS_SUBDIR == "uploads"
+        assert INDEX_SUBDIR == "index"
+        assert KNOWLEDGE_STORAGE_DIR.is_absolute()
+
+    def test_helper_functions_use_constants(self):
+        from houyi_studio.server.rag import (
+            INDEX_SUBDIR,
+            UPLOADS_SUBDIR,
+            get_library_index_dir,
+            get_library_upload_dir,
+        )
+
+        lib_id = "test_lib"
+        upload_dir = get_library_upload_dir(lib_id)
+        index_dir = get_library_index_dir(lib_id)
+
+        assert upload_dir.name == UPLOADS_SUBDIR
+        assert index_dir.name == INDEX_SUBDIR
+
+    def test_is_index_path_detects_only_internal_index_locations(self):
+        from houyi_studio.server.rag import is_index_path
+
+        index_path = Path(
+            os.path.join("/home", ".houyi", "knowledge", "lib_001", "index", "vectors.bin")
+        )
+        assert is_index_path(index_path)
+
+        second_index_path = Path(
+            os.path.join("/Users", "test", ".houyi", "knowledge", "lib_001", "index", "meta.json")
+        )
+        assert is_index_path(second_index_path)
+
+        upload_path = Path(
+            os.path.join("/home", ".houyi", "knowledge", "lib_001", "uploads", "doc.md")
+        )
+        assert not is_index_path(upload_path)
+
+        regular_path = Path(os.path.join("/home", "user", "documents", "readme.md"))
+        assert not is_index_path(regular_path)
+
+        random_index = Path(os.path.join("/some", "random", "index", "file.txt"))
+        assert not is_index_path(random_index)
 
     @patch.dict(
         os.environ,

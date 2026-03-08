@@ -6,9 +6,10 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
-from houyi.core.skill import ExecutionMode, SkillSpec
-from houyi.core.skill.hooks import HookEvent, HookType, SkillHook
-from houyi.rag.config import _default_knowledge_dir
+from houyi.domain.skill.hooks import HookEvent, HookType, SkillHook
+from houyi.domain.skill.policy import ExecutionMode
+from houyi.domain.skill.spec import SkillSpec
+from houyi.rag.config import RAGConfig, _default_knowledge_dir
 
 
 class Stats(BaseModel):
@@ -74,15 +75,17 @@ class KBAnalyzeOutput(BaseModel):
 async def execute_kb_analyze(input_data: KBAnalyzeInput) -> KBAnalyzeOutput:
     """Execute knowledge base analysis.
 
+    This executor stays intentionally lightweight: it inspects the knowledge tree
+    directly but relies on `RAGConfig.get_index_dir()` for index-location semantics
+    so the skill stays aligned with the main RAG facade's storage contract.
+
     Args:
         input_data: Analysis input parameters
 
     Returns:
         Analysis output with stats and recommendations
     """
-    from pathlib import Path as P
-
-    knowledge_dir = P(input_data.knowledge_dir)
+    knowledge_dir = Path(input_data.knowledge_dir)
 
     # Collect basic stats
     stats = Stats()
@@ -102,8 +105,7 @@ async def execute_kb_analyze(input_data: KBAnalyzeInput) -> KBAnalyzeOutput:
 
             stats.file_types = file_types
 
-            # Check for index
-            index_dir = knowledge_dir.parent / ".rag_index"
+            index_dir = Path(RAGConfig(knowledge_dir=str(knowledge_dir)).get_index_dir())
             if index_dir.exists():
                 # Calculate index size
                 total_size = sum(f.stat().st_size for f in index_dir.rglob("*") if f.is_file())

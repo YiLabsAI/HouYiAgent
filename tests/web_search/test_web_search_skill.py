@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import pytest
 
-from houyi.core.skill import ExecutionMode
-from houyi.web_search.skill import build_web_search_skill
-from houyi.web_search.types import WebSearchMetadata, WebSearchResponse, WebSearchResult
+from houyi.domain.skill.policy import ExecutionMode
+from houyi.skills.web_search.skill import build_web_search_skill
+from houyi.skills.web_search.types import WebSearchMetadata, WebSearchResponse, WebSearchResult
 
 
 class _Service:
@@ -46,7 +46,7 @@ async def test_build_web_search_skill_executes(monkeypatch) -> None:
         assert provider is None
         return service
 
-    monkeypatch.setattr("houyi.web_search.skill.WebSearchService.from_env", _from_env)
+    monkeypatch.setattr("houyi.skills.web_search.skill.WebSearchService.from_env", _from_env)
 
     skill = build_web_search_skill()
     assert skill.execution_mode == ExecutionMode.PLUGIN
@@ -68,7 +68,7 @@ async def test_build_web_search_skill_browse_mode(monkeypatch) -> None:
         assert provider is None
         return service
 
-    monkeypatch.setattr("houyi.web_search.skill.WebSearchService.from_env", _from_env)
+    monkeypatch.setattr("houyi.skills.web_search.skill.WebSearchService.from_env", _from_env)
 
     skill = build_web_search_skill()
     await skill.executor(query="hi", max_results=1, mode="browse")
@@ -86,7 +86,7 @@ async def test_build_web_search_skill_provider_override(monkeypatch) -> None:
         assert provider == "searxng"
         return service
 
-    monkeypatch.setattr("houyi.web_search.skill.WebSearchService.from_env", _from_env)
+    monkeypatch.setattr("houyi.skills.web_search.skill.WebSearchService.from_env", _from_env)
 
     skill = build_web_search_skill()
     await skill.executor(query="hi", max_results=1, provider="searxng")

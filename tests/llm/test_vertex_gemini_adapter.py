@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from houyi.llm.vertex_gemini_adapter import (
+from houyi.adapters.llm.vertex_gemini_adapter import (
     GoogleVertexGeminiAdapter,
     _build_proxy_http_options,
 )
@@ -80,6 +80,31 @@ def test_vertex_gemini_normalize_response_with_tool_calls() -> None:
     assert result.tool_calls[0]["function"]["name"] == "weather"
 
 
+def test_vertex_gemini_normalize_response_without_parts_uses_text() -> None:
+    """Normalize should fall back to response text when candidate parts are absent."""
+
+    class _Content:
+        def __init__(self) -> None:
+            self.parts = None
+
+    class _Candidate:
+        def __init__(self) -> None:
+            self.content = _Content()
+            self.text = None
+
+    class _Response:
+        def __init__(self) -> None:
+            self.candidates = [_Candidate()]
+            self.usage_metadata = None
+            self.text = '{"scores": [9, 1]}'
+
+    adapter = _build_adapter()
+    result = adapter._normalize_response(_Response())
+
+    assert result.content == '{"scores": [9, 1]}'
+    assert result.tool_calls == []
+
+
 def test_vertex_gemini_convert_tools_empty() -> None:
     """Empty or invalid tools should return empty list."""
 
@@ -107,7 +132,7 @@ def test_vertex_gemini_from_env(monkeypatch) -> None:
     monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
     monkeypatch.setattr(GoogleVertexGeminiAdapter, "__init__", _fake_init, raising=True)
 
-    from houyi.config.env_config import EnvConfig
+    from houyi.infrastructure.config.env_config import EnvConfig
 
     EnvConfig._reset()
     try:
@@ -135,7 +160,7 @@ def test_vertex_gemini_from_env_api_key(monkeypatch) -> None:
     monkeypatch.delenv("GOOGLE_CLOUD_PROJECT", raising=False)
     monkeypatch.setattr(GoogleVertexGeminiAdapter, "__init__", _fake_init, raising=True)
 
-    from houyi.config.env_config import EnvConfig
+    from houyi.infrastructure.config.env_config import EnvConfig
 
     EnvConfig._reset()
     try:
@@ -152,7 +177,7 @@ def test_vertex_gemini_from_env_requires_auth(monkeypatch) -> None:
     monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
     monkeypatch.delenv("GOOGLE_APPLICATION_CREDENTIALS", raising=False)
 
-    from houyi.config.env_config import EnvConfig
+    from houyi.infrastructure.config.env_config import EnvConfig
 
     EnvConfig._reset()
     try:
@@ -217,11 +242,13 @@ async def test_vertex_gemini_chat_builds_config() -> None:
         tools=[{"type": "function", "function": {"name": "weather", "parameters": {}}}],
         tool_choice="required",
         max_tokens=5,
+        response_mime_type="application/json",
     )
     assert result.tool_calls
     config = captured["config"]
     assert config.max_output_tokens == 5
     assert config.tool_config.function_calling_config.mode == "ANY"
+    assert config.response_mime_type == "application/json"
 
 
 @pytest.mark.asyncio

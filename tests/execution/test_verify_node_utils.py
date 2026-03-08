@@ -1,6 +1,6 @@
-"""Unit tests for execution/verify_node_utils.py."""
+"""Verification rule normalization scenarios for workflow VERIFY nodes."""
 
-from houyi.execution.verify_node_utils import build_verification_rules
+from houyi.application.workflow.verify_node_utils import build_verification_rules
 
 
 class TestBuildVerificationRules:

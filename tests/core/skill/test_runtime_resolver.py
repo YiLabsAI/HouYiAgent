@@ -12,18 +12,18 @@ Covers:
 
 from __future__ import annotations
 
-from houyi.core.skill.runtime_contract import (
+from houyi.domain.skill.runtime_contract import (
     CapabilityTier,
     RuntimeContract,
     RuntimeMode,
     RuntimeStatus,
 )
-from houyi.core.skill.runtime_resolver import (
+from houyi.domain.skill.runtime_resolver import (
     ResolutionEvent,
     ResolutionStats,
     RuntimeResolver,
 )
-from houyi.core.skill.spec import SkillSpec
+from houyi.domain.skill.spec import SkillSpec
 
 # ── Helpers ──────────────────────────────────────────────────────────
 

@@ -18,6 +18,7 @@ help:
 	@echo "  make dev              Start backend + frontend (tmux)"
 	@echo "  make quick-check      Quick checks (ruff + fast tests)"
 	@echo "  make check            Full checks (ruff + mypy + tests + coverage)"
+	@echo "  make check-integration Local-only integration gate for tests/integration/ (run after make check)"
 	@echo "  make typecheck        Run mypy type checking"
 	@echo "  make format           Auto-format code with ruff"
 	@echo "  make lint             Run all linters (ruff)"
@@ -74,6 +75,9 @@ quick-check:
 # Full checks (run before committing)
 check:
 	@./scripts/check_code.sh
+
+check-integration:
+	@./scripts/check_integration.sh
 
 # Formatting
 format:

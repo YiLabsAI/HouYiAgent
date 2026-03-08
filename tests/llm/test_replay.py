@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from houyi.llm.replay import ReplayDecisionKind, decide_replay
-from houyi.protocol.ir.checkpoint_ir import LLMCallLog
+from houyi.adapters.llm.replay import ReplayDecisionKind, decide_replay
+from houyi.interface.protocol.ir.checkpoint_ir import LLMCallLog
 
 
 def test_decide_replay_returns_recorded_llm_text_when_deterministic() -> None:

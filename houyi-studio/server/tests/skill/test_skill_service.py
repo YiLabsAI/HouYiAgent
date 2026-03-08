@@ -110,7 +110,7 @@ class TestGetSkillDetail:
         from houyi_studio.server.skill.service import SkillService
         from pydantic import BaseModel
 
-        from houyi.core.skill.spec import SkillSpec
+        from houyi.domain.skill.spec import SkillSpec
 
         class _In(BaseModel):
             q: str
@@ -155,7 +155,7 @@ class TestGetSkillDetail:
         from houyi_studio.server.skill.service import SkillService
         from pydantic import BaseModel
 
-        from houyi.core.skill.spec import SkillSpec
+        from houyi.domain.skill.spec import SkillSpec
 
         class _In(BaseModel):
             q: str
@@ -207,7 +207,7 @@ When something fails, DON'T hide it:
         from houyi_studio.server.skill.service import SkillService
         from pydantic import BaseModel
 
-        from houyi.core.skill.spec import SkillSpec
+        from houyi.domain.skill.spec import SkillSpec
 
         class _In(BaseModel):
             q: str
@@ -260,7 +260,7 @@ description: Search the web.
         from houyi_studio.server.skill.service import SkillService
         from pydantic import BaseModel
 
-        from houyi.core.skill.spec import SkillSpec
+        from houyi.domain.skill.spec import SkillSpec
 
         class _In(BaseModel):
             q: str
@@ -323,7 +323,7 @@ python scripts/run.py task_planner.py create --task "Write task_plan.md"
         from houyi_studio.server.skill.service import SkillService
         from pydantic import BaseModel
 
-        from houyi.core.skill.spec import SkillSpec
+        from houyi.domain.skill.spec import SkillSpec
 
         class _In(BaseModel):
             q: str
@@ -380,7 +380,7 @@ Ask question → python scripts/run.py ask_question.py --question "Summarize arc
         from houyi_studio.server.skill.service import SkillService
         from pydantic import BaseModel
 
-        from houyi.core.skill.spec import SkillSpec
+        from houyi.domain.skill.spec import SkillSpec
 
         class _In(BaseModel):
             q: str

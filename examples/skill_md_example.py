@@ -1,7 +1,7 @@
 """Example demonstrating skill.md file support (AgentSkills.io standard)."""
 
 from houyi import Agent, tool
-from houyi.core.skill import SkillSpec
+from houyi.domain.skill.spec import SkillSpec
 
 print("=" * 70)
 print("Phase 3.1: Skill.md Support Examples")

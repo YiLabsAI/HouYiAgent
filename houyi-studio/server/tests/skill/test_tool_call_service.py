@@ -12,7 +12,7 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock, patch
 
-from houyi.execution.tool_call_runner import ToolCallRunner
+from houyi.application.tool_calling.runner import ToolCallRunner
 
 
 class TestToolCallServiceGetRunner:
@@ -31,9 +31,16 @@ class TestToolCallServiceGetRunner:
             skill_registry=overrides.get("skill_registry"),
         )
 
-    @patch("houyi_studio.server.tooling.service.get_skill_service")
-    def test_runner_is_tool_call_runner(self, mock_get_svc: MagicMock) -> None:
+    def _patch_get_skill_service(self, monkeypatch: Any, *, side_effect: Any = None) -> MagicMock:
+        from houyi_studio.server.tooling import service as tooling_service
+
+        mock_get_svc = MagicMock(side_effect=side_effect)
+        monkeypatch.setattr(tooling_service, "get_skill_service", mock_get_svc)
+        return mock_get_svc
+
+    def test_runner_is_tool_call_runner(self, monkeypatch) -> None:
         """_get_runner returns a ToolCallRunner instance."""
+        mock_get_svc = self._patch_get_skill_service(monkeypatch)
         mock_svc = MagicMock()
         mock_svc.policy_enforcer = None
         mock_svc.consent_manager = None
@@ -45,9 +52,9 @@ class TestToolCallServiceGetRunner:
 
         assert isinstance(runner, ToolCallRunner)
 
-    @patch("houyi_studio.server.tooling.service.get_skill_service")
-    def test_governance_components_wired_from_skill_service(self, mock_get_svc: MagicMock) -> None:
+    def test_governance_components_wired_from_skill_service(self, monkeypatch) -> None:
         """policy_enforcer, consent_manager, metrics_store from SkillService are passed to ToolCallRunner."""
+        mock_get_svc = self._patch_get_skill_service(monkeypatch)
         mock_policy = MagicMock()
         mock_consent = MagicMock()
         mock_metrics = MagicMock()
@@ -65,11 +72,11 @@ class TestToolCallServiceGetRunner:
         assert runner.consent_manager is mock_consent
         assert runner.metrics_store is mock_metrics
 
-    @patch("houyi_studio.server.tooling.service.get_skill_service")
-    def test_runner_has_hooks_manager(self, mock_get_svc: MagicMock) -> None:
+    def test_runner_has_hooks_manager(self, monkeypatch) -> None:
         """Runner should have the DEFAULT_HOOKS_MANAGER regardless of SkillService."""
-        from houyi.core.skill.hooks import DEFAULT_HOOKS_MANAGER
+        from houyi.domain.skill.hooks import DEFAULT_HOOKS_MANAGER
 
+        mock_get_svc = self._patch_get_skill_service(monkeypatch)
         mock_svc = MagicMock()
         mock_svc.policy_enforcer = None
         mock_svc.consent_manager = None
@@ -81,9 +88,9 @@ class TestToolCallServiceGetRunner:
 
         assert runner.skill_hooks_manager is DEFAULT_HOOKS_MANAGER
 
-    @patch("houyi_studio.server.tooling.service.get_skill_service")
-    def test_lazy_initialization_caches_runner(self, mock_get_svc: MagicMock) -> None:
+    def test_lazy_initialization_caches_runner(self, monkeypatch) -> None:
         """Second call to _get_runner() returns the cached instance."""
+        mock_get_svc = self._patch_get_skill_service(monkeypatch)
         mock_svc = MagicMock()
         mock_svc.policy_enforcer = None
         mock_svc.consent_manager = None
@@ -98,10 +105,12 @@ class TestToolCallServiceGetRunner:
         # get_skill_service should only be called once (lazy init)
         assert mock_get_svc.call_count == 1
 
-    @patch("houyi_studio.server.tooling.service.get_skill_service")
-    def test_skill_service_unavailable_falls_back_gracefully(self, mock_get_svc: MagicMock) -> None:
+    def test_skill_service_unavailable_falls_back_gracefully(self, monkeypatch) -> None:
         """When SkillService is not available, runner is still created without governance."""
-        mock_get_svc.side_effect = RuntimeError("SkillService not initialized")
+        self._patch_get_skill_service(
+            monkeypatch,
+            side_effect=RuntimeError("SkillService not initialized"),
+        )
 
         svc = self._make_service()
         runner = svc._get_runner()
@@ -111,9 +120,9 @@ class TestToolCallServiceGetRunner:
         assert runner.consent_manager is None
         assert runner.metrics_store is None
 
-    @patch("houyi_studio.server.tooling.service.get_skill_service")
-    def test_skill_service_returns_none_properties(self, mock_get_svc: MagicMock) -> None:
+    def test_skill_service_returns_none_properties(self, monkeypatch) -> None:
         """When SkillService properties are None, runner still works."""
+        mock_get_svc = self._patch_get_skill_service(monkeypatch)
         mock_svc = MagicMock()
         mock_svc.policy_enforcer = None
         mock_svc.consent_manager = None
@@ -185,21 +194,14 @@ class TestToolCallServiceExecute:
             skill_registry=registry,
         )
 
-    @patch("houyi_studio.server.tooling.service.ConsoleToolCallResponseAssembler")
-    @patch(
-        "houyi_studio.server.tooling.service.wrap_tool_choice",
-        side_effect=lambda adapter, tool_choice: adapter,
-    )
-    @patch("houyi_studio.server.tooling.service.ToolCallAdapterRegistry.resolve")
-    @patch("houyi.llm.openai_adapter.OpenAIAdapter", side_effect=ImportError("openai missing"))
     async def test_execute_tool_calls_returns_adapter_init_error_when_openai_missing(
         self,
-        _mock_openai_adapter: MagicMock,
-        mock_registry_resolve: MagicMock,
-        _mock_wrap_tool_choice: MagicMock,
-        _mock_assembler_cls: MagicMock,
         monkeypatch,
     ) -> None:
+        from houyi_studio.server.tooling import service as tooling_service
+
+        from houyi.adapters import llm as llm_adapters
+
         svc = self._make_service(registry=MagicMock())
 
         skill = SimpleNamespace(name="demo", preprocessors=[])
@@ -210,33 +212,44 @@ class TestToolCallServiceExecute:
             ]
         )
 
-        class _FakeRunner:
-            async def run(self, **kwargs):
-                _ = kwargs
-                return SimpleNamespace(content="ok", tool_calls=[], usage={}, metadata={}), []
+        with (
+            patch.object(tooling_service, "ConsoleToolCallResponseAssembler"),
+            patch.object(
+                tooling_service,
+                "wrap_tool_choice",
+                side_effect=lambda adapter, tool_choice: adapter,
+            ),
+            patch.object(
+                tooling_service.ToolCallAdapterRegistry, "resolve"
+            ) as mock_registry_resolve,
+            patch.object(
+                llm_adapters,
+                "OpenAIAdapter",
+                side_effect=ImportError("openai missing"),
+            ),
+        ):
+            mock_registry_resolve.side_effect = lambda request, fallback_factory: SimpleNamespace(
+                inner=fallback_factory()
+            )
 
-        mock_registry_resolve.side_effect = lambda request, fallback_factory: SimpleNamespace(
-            inner=fallback_factory()
-        )
+            monkeypatch.setenv("SILICONFLOW_API_KEY", "test-key")
 
-        monkeypatch.setenv("SILICONFLOW_API_KEY", "test-key")
+            execution = SimpleNamespace(metadata={})
+            node_exec = SimpleNamespace(outputs=None, error=None)
 
-        execution = SimpleNamespace(metadata={})
-        node_exec = SimpleNamespace(outputs=None, error=None)
-
-        handled = await svc.execute_tool_calls(
-            session_id="s1",
-            execution=execution,
-            node_id="node_1",
-            node_exec=node_exec,
-            prompt="Say hello in one sentence",
-            system_prompt=None,
-            user_prompt="Say hello in one sentence",
-            model="deepseek-ai/DeepSeek-V3",
-            tool_names=["demo"],
-            tool_choice=None,
-            max_tool_calls=1,
-        )
+            handled = await svc.execute_tool_calls(
+                session_id="s1",
+                execution=execution,
+                node_id="node_1",
+                node_exec=node_exec,
+                prompt="Say hello in one sentence",
+                system_prompt=None,
+                user_prompt="Say hello in one sentence",
+                model="deepseek-ai/DeepSeek-V3",
+                tool_names=["demo"],
+                tool_choice=None,
+                max_tool_calls=1,
+            )
 
         assert handled is True
         assert isinstance(node_exec.error, str)

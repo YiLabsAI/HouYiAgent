@@ -1,6 +1,6 @@
 """Tests for observability trace manager."""
 
-from houyi.observability.trace_manager import Span, TraceManager
+from houyi.infrastructure.observability.trace_manager import Span, TraceManager
 
 
 class TestTraceManager:

@@ -1,6 +1,6 @@
-"""Unit tests for execution/node_execution_utils.py."""
+"""Node input resolution and output payload extraction scenarios."""
 
-from houyi.execution.node_execution_utils import (
+from houyi.application.workflow.node_execution_utils import (
     extract_output_payload,
     resolve_inputs,
     resolve_value,

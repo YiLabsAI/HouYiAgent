@@ -1,4 +1,4 @@
-"""Unit tests for RAG service - tests real backend logic, not mocks.
+"""Tests for RAG service - tests real backend logic, not mocks.
 
 IMPORTANT: Every test receives an isolated ``tmp_path`` directory via the
 ``knowledge_service`` fixture.  No test ever touches the real
@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 from houyi_studio.server.rag import KnowledgeService
 
-from houyi.config.env_config import ENV_EMBEDDING_MODEL, ENV_EMBEDDING_PROVIDER
+from houyi.infrastructure.config.env_config import ENV_EMBEDDING_MODEL, ENV_EMBEDDING_PROVIDER
 
 
 @pytest.fixture
@@ -180,6 +180,34 @@ class TestDeleteLibrarySafety:
 
 class TestFileIngest:
     """Tests for file ingestion."""
+
+    @pytest.mark.asyncio
+    async def test_uploaded_files_are_not_skipped(self, knowledge_service):
+        from houyi_studio.server.rag import get_library_upload_dir
+
+        created = knowledge_service.create_library(
+            name="UploadFilter",
+            description="",
+            mode="indexed",
+        )
+        lib_id = created["library_id"]
+
+        upload_dir = get_library_upload_dir(lib_id)
+        upload_dir.mkdir(parents=True, exist_ok=True)
+        test_file = upload_dir / "test.md"
+        test_file.write_text("# Test\n\nThis is test content.")
+
+        assert "/uploads/" in str(test_file) or "\\uploads\\" in str(test_file)
+
+        result = await knowledge_service.ingest_files(
+            library_id=lib_id,
+            paths=[str(test_file)],
+        )
+
+        stats = result.get("stats", {})
+        assert stats.get("files_skipped", 0) == 0
+        files_seen = stats.get("files_processed", 0) + stats.get("files_failed", 0)
+        assert files_seen > 0
 
     def test_ingest_single_file(self, knowledge_service):
         """Test ingesting a single markdown file."""

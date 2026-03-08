@@ -1,9 +1,3 @@
-"""Regression tests for a 5-node tool/verify/route workflow.
-
-Migrated from stash console tests to validate that the new SDK-first + studio-server layout
-still preserves route/verify semantics (soft-delete fallback nodes when verified).
-"""
-
 from __future__ import annotations
 
 import asyncio
@@ -13,9 +7,9 @@ from pathlib import Path
 import pytest
 from pydantic import BaseModel
 
-from houyi.core.skill import SkillSpec
-from houyi.core.skill_registry import DEFAULT_SKILL_REGISTRY
-from houyi.protocol.ir import ExecutionIR, PlanIR
+from houyi.domain.skill.registry import DEFAULT_SKILL_REGISTRY
+from houyi.domain.skill.spec import SkillSpec
+from houyi.interface.protocol.ir import ExecutionIR, PlanIR
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _STUDIO_SERVER_ROOT = _REPO_ROOT / "houyi-studio" / "server"
@@ -27,8 +21,8 @@ from houyi_studio.server.execution.node_executor_factory import NodeExecutorFact
 from houyi_studio.server.execution.observation_service import ObservationService  # noqa: E402
 from houyi_studio.server.gateway.event_bus import EventBus  # noqa: E402
 
-from houyi.execution.config_service import ConfigService  # noqa: E402
-from houyi.protocol.ir import NodeIR, NodeType  # noqa: E402
+from houyi.application.workflow.config_service import ConfigService  # noqa: E402
+from houyi.interface.protocol.ir import NodeIR, NodeType  # noqa: E402
 
 
 class _DummyConnectionManager:

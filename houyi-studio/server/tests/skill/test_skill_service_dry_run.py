@@ -189,7 +189,7 @@ class TestDryRun:
         registry.register(skill, overwrite=True)
         svc = SkillService(registry=registry)
 
-        with patch.dict("sys.modules", {"houyi.llm.factory": None}):
+        with patch.dict("sys.modules", {"houyi.adapters.llm": None}):
             result = await svc.dry_run("web_search", "search", {}, live=True)
         assert result["llm_verification"]["success"] is False
         assert "not available" in result["llm_verification"]["message"]

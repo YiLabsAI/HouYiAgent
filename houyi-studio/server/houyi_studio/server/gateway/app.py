@@ -17,7 +17,9 @@ from fastapi import FastAPI, File, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from houyi.config.env_config import (
+from houyi.adapters.llm import DEFAULT_MODEL
+from houyi.domain.skill.registry import DEFAULT_SKILL_REGISTRY
+from houyi.infrastructure.config import (
     ENV_CHAT_DATA_DIR,
     ENV_CHAT_SETTINGS_PATH,
     ENV_CHAT_SYSTEM_PROMPT,
@@ -33,9 +35,7 @@ from houyi.config.env_config import (
     ENV_SILICONFLOW_API_KEY,
     ENV_SILICONFLOW_BASE_URL,
 )
-from houyi.core.skill_registry import DEFAULT_SKILL_REGISTRY
-from houyi.llm.models import DEFAULT_MODEL
-from houyi.protocol.ir import ExecutionStatus, PlanIR
+from houyi.interface.protocol.ir import ExecutionStatus, PlanIR
 
 from ..chat.chat_api import register_chat_routes
 from ..chat.chat_service import ChatService
@@ -214,8 +214,8 @@ def _apply_plan_patches(current_plan: PlanIR, patches: list[PlanPatch]) -> bool:
         if action == "add_node":
             node_data = patch.node or {}
             logger.debug("Adding node with data: %s", truncate_payload(node_data))
-            from houyi.orchestration.plan import NodeType
-            from houyi.protocol.ir.plan_ir import NodeIR
+            from houyi.application.workflow.orchestration.plan import NodeType
+            from houyi.interface.protocol.ir.plan_ir import NodeIR
 
             node_type_str = node_data.get("node_type", "llm")
             if isinstance(node_type_str, str):

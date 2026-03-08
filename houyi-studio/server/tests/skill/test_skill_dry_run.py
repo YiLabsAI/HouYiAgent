@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from houyi_studio.server.skill import loader as skill_loader_module
 from houyi_studio.server.skill.dry_run import (
     DryRunValidator,
     _build_natural_query,
@@ -16,7 +17,7 @@ from houyi_studio.server.skill.dry_run import (
     _simplify_schema,
 )
 
-from houyi.core.skill_registry import SkillRegistry
+from houyi.domain.skill.registry import SkillRegistry
 
 # ── Fakes ─────────────────────────────────────────────────────────────
 
@@ -155,7 +156,7 @@ class TestValidate:
     @pytest.mark.asyncio
     async def test_policy_deny_via_skill_policy(self, registry):
         """When InvocationPolicy is set on the skill, _check_policy reads it directly."""
-        from houyi.core.skill.policy import InvocationPolicy, ModelAutoInvoke
+        from houyi.domain.skill.policy import InvocationPolicy, ModelAutoInvoke
 
         ip = InvocationPolicy()
         ip.model_auto_invoke = ModelAutoInvoke.DENY
@@ -167,7 +168,7 @@ class TestValidate:
 
     @pytest.mark.asyncio
     async def test_policy_allow_with_consent_via_skill_policy(self, registry):
-        from houyi.core.skill.policy import InvocationPolicy, ModelAutoInvoke
+        from houyi.domain.skill.policy import InvocationPolicy, ModelAutoInvoke
 
         ip = InvocationPolicy()
         ip.model_auto_invoke = ModelAutoInvoke.ALLOW_WITH_CONSENT
@@ -180,7 +181,7 @@ class TestValidate:
     @pytest.mark.asyncio
     async def test_policy_deny_blocks_live_execution(self, registry):
         """When policy is deny, live=True should NOT call the LLM."""
-        from houyi.core.skill.policy import InvocationPolicy, ModelAutoInvoke
+        from houyi.domain.skill.policy import InvocationPolicy, ModelAutoInvoke
 
         ip = InvocationPolicy()
         ip.model_auto_invoke = ModelAutoInvoke.DENY
@@ -349,7 +350,7 @@ class TestValidate:
                     return None
                 return "/usr/bin/" + binary
 
-            with patch("houyi_studio.server.skill.loader.shutil.which", side_effect=_which):
+            with patch.object(skill_loader_module.shutil, "which", side_effect=_which):
                 result = await executor(convert_to="docx")
 
             assert result.get("success") is True
@@ -668,7 +669,7 @@ class TestBuildNaturalQuery:
 # ── _live_verify integration ────────────────────────────────────────
 
 
-_FACTORY_PATCH = "houyi.llm.factory.LLMAdapterFactory"
+_FACTORY_PATCH = "houyi.adapters.llm.LLMAdapterFactory"
 
 
 class TestLiveVerifyIntegration:
@@ -752,7 +753,7 @@ class TestLiveVerifyIntegration:
         from houyi_studio.server.skill.dry_run import _live_verify
 
         skill = _Skill(name="test")
-        with patch.dict("sys.modules", {"houyi.llm.factory": None}):
+        with patch.dict("sys.modules", {"houyi.adapters.llm": None}):
             result = await _live_verify(skill, "test", "test", {})
         assert result["success"] is False
         assert "not available" in result["message"]

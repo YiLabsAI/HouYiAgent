@@ -3,7 +3,7 @@
 Reference: SimpleSkill Specification v0.1 Section 5.2-5.3
 """
 
-from houyi.core.skill.policy import (
+from houyi.domain.skill.policy import (
     ExecPerm,
     FilesystemPerm,
     InvocationDecision,

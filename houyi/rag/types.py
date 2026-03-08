@@ -166,54 +166,11 @@ class QualitySummary(BaseModel):
         avg_score = sum(scores) / len(scores)
         above_threshold = sum(1 for s in scores if s >= 0.6)
 
-        # Calculate score distribution
-        distribution = {"80-100": 0, "60-80": 0, "40-60": 0, "20-40": 0, "0-20": 0}
-        for s in scores:
-            if s >= 0.8:
-                distribution["80-100"] += 1
-            elif s >= 0.6:
-                distribution["60-80"] += 1
-            elif s >= 0.4:
-                distribution["40-60"] += 1
-            elif s >= 0.2:
-                distribution["20-40"] += 1
-            else:
-                distribution["0-20"] += 1
-
-        # Assess relevance based on avg score (use tolerance for floating-point comparison)
-        # Adding small epsilon to handle floating-point precision issues
-        eps = 1e-9
-        if avg_score >= 0.7 - eps:
-            relevance = "high"
-        elif avg_score >= 0.5 - eps:
-            relevance = "medium"
-        else:
-            relevance = "low"
-
-        # Assess coverage based on above threshold ratio
-        above_ratio = above_threshold / len(scores) if scores else 0
-        if above_ratio >= 0.6:
-            coverage = "high"
-        elif above_ratio >= 0.3:
-            coverage = "medium"
-        else:
-            coverage = "low"
-
-        # Assess confidence based on score consistency
-        score_range = max_score - min_score
-        if score_range < 0.3 and avg_score >= 0.6:
-            confidence_level = "high"
-        elif score_range < 0.5:
-            confidence_level = "medium"
-        else:
-            confidence_level = "low"
-
-        # Generate suggestion
-        suggestion = None
-        if avg_score < 0.5:
-            suggestion = "Consider refining your query or expanding the knowledge base"
-        elif above_threshold < len(scores) * 0.5:
-            suggestion = "Try more specific keywords for better results"
+        distribution = cls._build_score_distribution(scores)
+        relevance = cls._assess_relevance(avg_score)
+        coverage = cls._assess_coverage(above_threshold, len(scores))
+        confidence_level = cls._assess_confidence(min_score, max_score, avg_score)
+        suggestion = cls._build_suggestion(avg_score, above_threshold, len(scores))
 
         return cls(
             min_score=min_score,
@@ -227,3 +184,54 @@ class QualitySummary(BaseModel):
             suggestion=suggestion,
             score_distribution=distribution,
         )
+
+    @staticmethod
+    def _build_score_distribution(scores: list[float]) -> dict[str, int]:
+        distribution = {"80-100": 0, "60-80": 0, "40-60": 0, "20-40": 0, "0-20": 0}
+        for score in scores:
+            if score >= 0.8:
+                distribution["80-100"] += 1
+            elif score >= 0.6:
+                distribution["60-80"] += 1
+            elif score >= 0.4:
+                distribution["40-60"] += 1
+            elif score >= 0.2:
+                distribution["20-40"] += 1
+            else:
+                distribution["0-20"] += 1
+        return distribution
+
+    @staticmethod
+    def _assess_relevance(avg_score: float) -> str:
+        eps = 1e-9
+        if avg_score >= 0.7 - eps:
+            return "high"
+        if avg_score >= 0.5 - eps:
+            return "medium"
+        return "low"
+
+    @staticmethod
+    def _assess_coverage(above_threshold: int, total_count: int) -> str:
+        above_ratio = above_threshold / total_count if total_count else 0
+        if above_ratio >= 0.6:
+            return "high"
+        if above_ratio >= 0.3:
+            return "medium"
+        return "low"
+
+    @staticmethod
+    def _assess_confidence(min_score: float, max_score: float, avg_score: float) -> str:
+        score_range = max_score - min_score
+        if score_range < 0.3 and avg_score >= 0.6:
+            return "high"
+        if score_range < 0.5:
+            return "medium"
+        return "low"
+
+    @staticmethod
+    def _build_suggestion(avg_score: float, above_threshold: int, total_count: int) -> str | None:
+        if avg_score < 0.5:
+            return "Consider refining your query or expanding the knowledge base"
+        if above_threshold < total_count * 0.5:
+            return "Try more specific keywords for better results"
+        return None

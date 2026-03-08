@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from houyi.core.skill.spec import SkillSpec
+    from houyi.domain.skill.spec import SkillSpec
 
 # ── Constants ─────────────────────────────────────────────────────────
 
@@ -165,7 +165,7 @@ class SkillSerializer:
             return {}
 
         try:
-            from houyi.core.skill.schema import parse_skill_md
+            from houyi.domain.skill.schema import parse_skill_md
 
             parsed = parse_skill_md(skill_md.read_text(encoding="utf-8"))
             meta = {

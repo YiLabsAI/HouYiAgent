@@ -9,24 +9,23 @@ from datetime import datetime
 from typing import Any
 from uuid import uuid4
 
-from houyi.llm.replay import (
+from houyi.adapters.llm.replay import (
     ReplayDecisionKind,
     decide_replay,
 )
-from houyi.llm.replay import (
+from houyi.adapters.llm.replay import (
     get_recorded_llm_response as replay_get_recorded_llm_response,
 )
-from houyi.llm.replay import (
+from houyi.adapters.llm.replay import (
     get_recorded_tool_call_output as replay_get_recorded_tool_call_output,
 )
-from houyi.llm.replay import (
+from houyi.adapters.llm.replay import (
     record_llm_call as replay_record_llm_call,
 )
-from houyi.observability import Span, SpanType, TraceContext
-from houyi.observability.types import TokenUsage
-from houyi.protocol.ir import ExecutionIR, NodeExecutionIR
-from houyi.protocol.ir.checkpoint_ir import LLMCallLog
-from houyi.protocol.ir.tooling_ir import LLMToolCallOutputIR
+from houyi.infrastructure.observability import Span, SpanType, TokenUsage, TraceContext
+from houyi.interface.protocol.ir import ExecutionIR, NodeExecutionIR
+from houyi.interface.protocol.ir.checkpoint_ir import LLMCallLog
+from houyi.interface.protocol.ir.tooling_ir import LLMToolCallOutputIR
 
 from ..gateway.events import SpanUpdateEvent, StreamingOutputEvent
 from ..tooling.service import ToolCallService

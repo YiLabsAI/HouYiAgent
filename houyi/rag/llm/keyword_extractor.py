@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from typing import TYPE_CHECKING, Any
 
+from houyi.rag.llm.json_utils import parse_embedded_json
+
 if TYPE_CHECKING:
-    from houyi.llm.base import LLMAdapter
+    from houyi.adapters.llm.base import LLMAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +61,7 @@ Guidelines:
         Returns:
             Dict with "keywords" list and "synonyms" dict
         """
-        from houyi.llm.base import LLMMessage, MessageRole
+        from houyi.adapters.llm.base import LLMMessage, MessageRole
 
         messages = [
             LLMMessage(role=MessageRole.SYSTEM, content=self.SYSTEM_PROMPT),
@@ -72,8 +73,9 @@ Guidelines:
                 messages=messages,
                 temperature=self._temperature,
                 max_tokens=500,
+                response_mime_type="application/json",
             )
-            return self._parse_response(response.content)
+            return self._parse_response(response.content, query)
         except Exception as e:
             logger.warning("Keyword extraction failed: %s, using simple extraction", e)
             return self._simple_extract(query)
@@ -94,7 +96,7 @@ Guidelines:
         Returns:
             Expanded list of keywords
         """
-        from houyi.llm.base import LLMMessage, MessageRole
+        from houyi.adapters.llm.base import LLMMessage, MessageRole
 
         prompt = f"""Given these search keywords: {keywords}
 {"Context: " + context if context else ""}
@@ -113,6 +115,7 @@ Return ONLY a JSON array: ["term1", "term2", ...]"""
                 messages=messages,
                 temperature=0.5,
                 max_tokens=300,
+                response_mime_type="application/json",
             )
             expanded = self._parse_array(response.content)
             return list(set(keywords + expanded))
@@ -120,42 +123,35 @@ Return ONLY a JSON array: ["term1", "term2", ...]"""
             logger.warning("Keyword expansion failed: %s", e)
             return keywords
 
-    def _parse_response(self, content: str) -> dict[str, Any]:
+    def _parse_response(self, content: str, query: str) -> dict[str, Any]:
         """Parse LLM response to extract keywords."""
         try:
-            # Try to find JSON in response
-            content = content.strip()
-            if content.startswith("```"):
-                # Remove markdown code blocks
-                lines = content.split("\n")
-                content = "\n".join(line for line in lines if not line.startswith("```"))
-
-            data = json.loads(content)
+            data = parse_embedded_json(content)
+            if not isinstance(data, dict):
+                raise ValueError("keyword extractor response must be a JSON object")
 
             keywords = data.get("keywords", [])
             if isinstance(keywords, list):
                 keywords = keywords[: self._max_keywords]
+            else:
+                keywords = []
 
             return {
                 "keywords": keywords,
                 "synonyms": data.get("synonyms", {}),
             }
-        except json.JSONDecodeError:
+        except (TypeError, ValueError):
             logger.warning("Failed to parse JSON response, using simple extraction")
-            return self._simple_extract(content)
+            return self._simple_extract(query)
 
     def _parse_array(self, content: str) -> list[str]:
         """Parse a JSON array from LLM response."""
         try:
-            content = content.strip()
-            if content.startswith("```"):
-                lines = content.split("\n")
-                content = "\n".join(line for line in lines if not line.startswith("```"))
-            data = json.loads(content)
+            data = parse_embedded_json(content)
             if isinstance(data, list):
                 return [str(item) for item in data]
             return []
-        except json.JSONDecodeError:
+        except (TypeError, ValueError):
             return []
 
     def _simple_extract(self, text: str) -> dict[str, Any]:

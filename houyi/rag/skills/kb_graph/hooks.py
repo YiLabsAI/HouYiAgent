@@ -6,7 +6,7 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from houyi.core.skill.hooks import HookContext, HookResult
+    from houyi.domain.skill.hooks import HookContext, HookResult
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +37,7 @@ def get_graph_state() -> dict[str, Any]:
 
 async def pre_graph_hook(context: HookContext) -> HookResult:
     """Hook called before Read/Grep during graph traversal."""
-    from houyi.core.skill.hooks import HookResult
+    from houyi.domain.skill.hooks import HookResult
 
     tool_name = context.tool_name or ""
     tool_args = context.tool_args or {}
@@ -55,7 +55,7 @@ async def pre_graph_hook(context: HookContext) -> HookResult:
 
 async def post_graph_hook(context: HookContext) -> HookResult:
     """Hook called after tool use during graph traversal."""
-    from houyi.core.skill.hooks import HookResult
+    from houyi.domain.skill.hooks import HookResult
 
     tool_result = context.tool_result
 
@@ -82,7 +82,7 @@ async def post_graph_hook(context: HookContext) -> HookResult:
 
 async def stop_hook(context: HookContext) -> HookResult:
     """Hook called before stopping."""
-    from houyi.core.skill.hooks import HookResult
+    from houyi.domain.skill.hooks import HookResult
 
     entities = _graph_state["entities_found"]
     relations = _graph_state["relations_found"]

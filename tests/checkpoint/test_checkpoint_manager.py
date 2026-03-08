@@ -5,8 +5,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
-from houyi.checkpoint import CheckpointManager
-from houyi.protocol.ir import (
+from houyi.infrastructure.checkpoint import CheckpointManager
+from houyi.interface.protocol.ir import (
     CheckpointIR,
     CheckpointTrigger,
     ExecutionIR,
@@ -17,7 +17,7 @@ from houyi.protocol.ir import (
     NodeType,
     PlanIR,
 )
-from houyi.protocol.ir.checkpoint_ir import LLMCallLog
+from houyi.interface.protocol.ir.checkpoint_ir import LLMCallLog
 
 
 @dataclass

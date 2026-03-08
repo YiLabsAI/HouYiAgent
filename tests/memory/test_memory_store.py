@@ -1,11 +1,11 @@
-"""Unit tests for houyi.memory.memory_store.MemoryStore."""
+"""Unit tests for houyi.adapters.memory.store.MemoryStore."""
 
 from __future__ import annotations
 
 import time
 
-from houyi.memory.memory_store import MemoryStore
-from houyi.memory.types import MemoryRecord, MemoryScope
+from houyi.adapters.memory.store import MemoryStore
+from houyi.adapters.memory.types import MemoryRecord, MemoryScope
 
 
 class TestMemoryStoreInMemory:

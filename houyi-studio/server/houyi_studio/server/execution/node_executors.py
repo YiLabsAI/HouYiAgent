@@ -9,23 +9,23 @@ from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any
 
-from houyi.core.skill_registry import DEFAULT_SKILL_REGISTRY
-from houyi.execution.config_service import ConfigService
-from houyi.execution.llm_node_utils import build_llm_node_inputs
-from houyi.execution.route_node_utils import evaluate_route
-from houyi.execution.skill_executor import SkillExecutor
-from houyi.execution.tool_node_utils import (
+from houyi.application.workflow.config_service import ConfigService
+from houyi.application.workflow.llm_node_utils import build_llm_node_inputs
+from houyi.application.workflow.route_node_utils import evaluate_route
+from houyi.application.workflow.skill_executor import SkillExecutor
+from houyi.application.workflow.tool_node_utils import (
     build_inputs_from_context_values,
     extract_schema_fields,
     normalize_tool_name,
 )
-from houyi.execution.verify_node_utils import build_verification_rules
-from houyi.observability import Span, SpanType, TraceContext
-from houyi.protocol.ir import ToolNodeOutputIR
-from houyi.protocol.ir.execution_ir import NodeExecutionIR
-from houyi.protocol.ir.plan_ir import NodeIR
-from houyi.verification import ConstraintChecker, PythonVerifier, SQLVerifier
-from houyi.verification.verifier import VerificationResult
+from houyi.application.workflow.verify_node_utils import build_verification_rules
+from houyi.assurance.verification import ConstraintChecker, PythonVerifier, SQLVerifier
+from houyi.assurance.verification.verifier import VerificationResult
+from houyi.domain.skill.registry import DEFAULT_SKILL_REGISTRY
+from houyi.infrastructure.observability import Span, SpanType, TraceContext
+from houyi.interface.protocol.ir import ToolNodeOutputIR
+from houyi.interface.protocol.ir.execution_ir import NodeExecutionIR
+from houyi.interface.protocol.ir.plan_ir import NodeIR
 
 from ..gateway.events import SpanUpdateEvent
 from .context import ExecutionContext

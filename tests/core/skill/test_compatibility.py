@@ -8,10 +8,6 @@ from the Claude Code community, including:
 - frontend-design
 - notebooklm-skill
 
-Also verifies all 7 internal SKILL.md files load correctly with full
-frontmatter parsing (permissions, invocationPolicy, hooks, etc.).
-
-Reference: SimpleSkill Specification v0.1 Section 3 (SKILL.md Format)
 """
 
 from __future__ import annotations
@@ -21,13 +17,13 @@ from pathlib import Path
 
 import pytest
 
-from houyi.core.skill.policy import (
+from houyi.domain.skill.policy import (
     InvocationPolicy,
     ModelAutoInvoke,
     Permissions,
     SideEffect,
 )
-from houyi.core.skill.spec import SkillSpec
+from houyi.domain.skill.spec import SkillSpec
 
 # =========================================================================
 # Internal SKILL.md Loading Tests
@@ -425,7 +421,7 @@ class TestSkillRegistryIntegration:
 
     def test_register_from_skill_file(self, tmp_path: Path) -> None:
         """Test loading and registering a skill from SKILL.md via registry."""
-        from houyi.core.skill_registry import SkillRegistry
+        from houyi.domain.skill.registry import SkillRegistry
 
         skill_md = tmp_path / "SKILL.md"
         skill_md.write_text(
@@ -455,7 +451,7 @@ class TestSkillRegistryIntegration:
 
     def test_register_from_directory(self, tmp_path: Path) -> None:
         """Test discovering and registering skills from a directory tree."""
-        from houyi.core.skill_registry import SkillRegistry
+        from houyi.domain.skill.registry import SkillRegistry
 
         # Create multiple skill directories
         for name in ["skill-a", "skill-b"]:
@@ -480,7 +476,7 @@ class TestSkillRegistryIntegration:
 
     def test_register_all_internal_skills(self) -> None:
         """Smoke test: register all internal SKILL.md files via directory scan."""
-        from houyi.core.skill_registry import SkillRegistry
+        from houyi.domain.skill.registry import SkillRegistry
 
         project_root = Path(__file__).resolve()
         for parent in [project_root, *list(project_root.parents)]:

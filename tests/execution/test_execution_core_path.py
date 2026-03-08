@@ -2,11 +2,11 @@ import asyncio
 
 import pytest
 
-from houyi.execution.execution_lifecycle_service import ExecutionLifecycleManager
-from houyi.execution.execution_order_service import get_execution_order
-from houyi.execution.plan_execution_loop import PlanExecutionLoop
-from houyi.orchestration.plan import NodeType
-from houyi.protocol.ir import EdgeIR, ExecutionIR, ExecutionStatus, NodeIR, PlanIR
+from houyi.application.workflow.execution_lifecycle_service import ExecutionLifecycleManager
+from houyi.application.workflow.execution_order_service import get_execution_order
+from houyi.application.workflow.orchestration.plan import NodeType
+from houyi.application.workflow.plan_execution_loop import PlanExecutionLoop
+from houyi.interface.protocol.ir import EdgeIR, ExecutionIR, ExecutionStatus, NodeIR, PlanIR
 
 
 def _make_plan(*, node_ids: list[str], edges: list[tuple[str, str]], entry_node_id: str) -> PlanIR:

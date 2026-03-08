@@ -10,7 +10,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 from pydantic import BaseModel
 
-from houyi.core.skill.spec import ExecutionMode, SkillSpec
+from houyi.domain.skill.hooks import HookEvent, SkillHook
+from houyi.domain.skill.spec import ExecutionMode, SkillSpec
 
 
 class TestExecutionMode:
@@ -614,7 +615,6 @@ class TestSkillSpecSimpleSkillExtensions:
 
     def test_skill_with_hooks(self) -> None:
         """Test SkillSpec with hooks."""
-        from houyi.core.skill.hooks import HookEvent, SkillHook
 
         class Input(BaseModel):
             data: str

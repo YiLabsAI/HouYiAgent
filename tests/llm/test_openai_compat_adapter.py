@@ -6,8 +6,8 @@ import types
 
 import pytest
 
-from houyi.llm.base import LLMResponse
-from houyi.llm.openai_compat_adapter import OpenAICompatibleAdapter
+from houyi.adapters.llm.base import LLMResponse
+from houyi.adapters.llm.openai_compat_adapter import OpenAICompatibleAdapter
 
 
 class _FakeChatCompletions:

@@ -148,7 +148,7 @@ class VertexAIProbe(ProviderProbe):
 
     def _get_adapter(self):
         """Lazy-import and instantiate VertexAIAdapter."""
-        from houyi.llm.vertex_httpx_adapter import VertexAIAdapter
+        from houyi.adapters.llm import VertexAIAdapter
 
         return VertexAIAdapter()
 

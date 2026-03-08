@@ -26,7 +26,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
 
-from houyi.observability.query import ObservabilityQuery
+from houyi.infrastructure.observability import ObservabilityQuery
 
 from .chat_service import ChatService
 from .import_export import ChatExporter, CherryStudioImporter

@@ -1,4 +1,4 @@
-"""Entity and relation extraction using LLM."""
+"""Heuristic entity and relation extraction for indexed graph ingest."""
 
 from __future__ import annotations
 
@@ -11,14 +11,11 @@ async def extract_entities(
     chunks: list[Chunk],
     llm_model: str = "",
 ) -> tuple[list[Entity], list[Relation]]:
-    """Extract entities and relations from chunks using LLM.
-
-    In full implementation, this would use Houyi's LLM adapter
-    to extract structured entity/relation data.
+    """Extract entities and relations from chunks for graph ingest.
 
     Args:
         chunks: Chunks to process
-        llm_model: LLM model to use (empty = default)
+        llm_model: Reserved compatibility parameter for future model-driven extraction
 
     Returns:
         Tuple of (entities, relations)
@@ -28,8 +25,6 @@ async def extract_entities(
     entity_map: dict[str, str] = {}  # name -> entity_id
 
     for chunk in chunks:
-        # Simple extraction based on patterns
-        # In full impl, would use LLM for NER and RE
         chunk_entities = _simple_entity_extraction(chunk.content)
 
         for name, entity_type in chunk_entities:
@@ -45,7 +40,6 @@ async def extract_entities(
                     )
                 )
 
-        # Extract simple co-occurrence relations
         entity_list = list(chunk_entities)
         for i, (name1, _) in enumerate(entity_list):
             for name2, _ in entity_list[i + 1 :]:
@@ -64,21 +58,15 @@ async def extract_entities(
 
 
 def _simple_entity_extraction(text: str) -> list[tuple[str, str]]:
-    """Simple rule-based entity extraction.
-
-    This is a placeholder for LLM-based extraction.
-    """
+    """Simple rule-based entity extraction."""
     import re
 
     entities: list[tuple[str, str]] = []
 
-    # Extract capitalized phrases (simple NER)
-    # Pattern: 2-4 capitalized words
     pattern = r"\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,3})\b"
     matches = re.findall(pattern, text)
 
     for match in matches:
-        # Simple type classification
         if any(kw in match.lower() for kw in ["company", "inc", "corp", "ltd"]):
             entity_type = "organization"
         elif any(
@@ -102,10 +90,9 @@ def _simple_entity_extraction(text: str) -> list[tuple[str, str]]:
         else:
             entity_type = "concept"
 
-        if len(match) > 3:  # Filter short matches
+        if len(match) > 3:
             entities.append((match, entity_type))
 
-    # Deduplicate
     seen = set()
     unique_entities = []
     for name, etype in entities:
@@ -113,4 +100,4 @@ def _simple_entity_extraction(text: str) -> list[tuple[str, str]]:
             seen.add(name)
             unique_entities.append((name, etype))
 
-    return unique_entities[:50]  # Limit entities per chunk
+    return unique_entities[:50]

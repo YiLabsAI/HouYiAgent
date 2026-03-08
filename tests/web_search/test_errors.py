@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from houyi.web_search import errors
+from houyi.skills.web_search import errors
 
 
 def test_web_search_error_hierarchy() -> None:

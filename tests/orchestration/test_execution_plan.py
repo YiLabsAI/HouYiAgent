@@ -1,6 +1,6 @@
 """Tests for ExecutionPlan class."""
 
-from houyi.orchestration.plan import ExecutionPlan, IRNode, NodeType
+from houyi.application.workflow.orchestration.plan import ExecutionPlan, IRNode, NodeType
 
 
 class TestExecutionPlanCreation:

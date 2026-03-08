@@ -10,20 +10,18 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
-from houyi.execution.config_service import ConfigService
-from houyi.execution.execution_backend_resolver import ExecutionBackendResolver
-from houyi.execution.execution_backends import ExecutionBackend
-from houyi.execution.execution_order_service import ExecutionOrderService
-from houyi.execution.retry_policy import (
+from houyi.adapters.llm import LLMAdapterFactory
+from houyi.application.tool_calling.retry_policy import (
     RetryPolicy,
     calculate_retry_delay,
     get_num_retries_from_policy,
 )
-from houyi.llm.factory import LLMAdapterFactory
-from houyi.observability.context import TraceContext
-from houyi.observability.trace_manager import Span
-from houyi.observability.types import SpanType
-from houyi.protocol.ir import (
+from houyi.application.workflow.config_service import ConfigService
+from houyi.application.workflow.execution_backend_resolver import ExecutionBackendResolver
+from houyi.application.workflow.execution_backends import ExecutionBackend
+from houyi.application.workflow.execution_order_service import ExecutionOrderService
+from houyi.infrastructure.observability import Span, SpanType, TraceContext
+from houyi.interface.protocol.ir import (
     CheckpointTrigger,
     ExecutionIR,
     ExecutionStatus,

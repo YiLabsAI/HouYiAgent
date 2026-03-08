@@ -17,7 +17,7 @@ from datetime import date, timedelta
 from houyi_studio.server.gateway.app import app
 
 from houyi import tool
-from houyi.core.skill_registry import DEFAULT_SKILL_REGISTRY
+from houyi.domain.skill.registry import DEFAULT_SKILL_REGISTRY
 
 PID_FILE = os.path.join(tempfile.gettempdir(), "houyi-console-e2e.pid")
 

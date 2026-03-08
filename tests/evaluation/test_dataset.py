@@ -5,8 +5,8 @@ import json
 import tempfile
 from pathlib import Path
 
-from houyi.evaluation.dataset import Dataset
-from houyi.evaluation.dataset import TestCase as EvalTestCase
+from houyi.assurance.evaluation.dataset import Dataset
+from houyi.assurance.evaluation.dataset import TestCase as EvalTestCase
 
 
 def test_testcase_creation():

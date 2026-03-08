@@ -3,7 +3,7 @@
 Reference: SimpleSkill Specification v0.1 Section 5.1 (Capability Negotiation)
 """
 
-from houyi.core.skill.capability import (
+from houyi.domain.skill.capability import (
     DEFAULT_HOUYI_CAPABILITIES,
     CapabilityMatchResult,
     CapabilityNegotiator,

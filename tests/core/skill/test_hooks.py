@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from houyi.core.skill.hooks import (
+from houyi.domain.skill.hooks import (
     HookContext,
     HookEvent,
     HookResult,
@@ -12,7 +12,7 @@ from houyi.core.skill.hooks import (
     SkillHook,
     SkillHooksManager,
 )
-from houyi.core.skill.schema import parse_hooks_config, parse_skill_md
+from houyi.domain.skill.schema import parse_hooks_config, parse_skill_md
 
 
 class TestSkillHook:

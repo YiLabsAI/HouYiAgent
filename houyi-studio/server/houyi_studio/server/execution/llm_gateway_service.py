@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from houyi.protocol.ir import ExecutionIR, NodeExecutionIR
+from houyi.interface.protocol.ir import ExecutionIR, NodeExecutionIR
 
 from .llm_execution_flow import LLMExecutionFlow
 

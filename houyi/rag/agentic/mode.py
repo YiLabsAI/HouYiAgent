@@ -8,13 +8,22 @@ from enum import Enum
 from typing import TYPE_CHECKING, Any
 
 from houyi.rag.agentic.navigator import DirectoryNavigator
+from houyi.rag.agentic.policies import (
+    build_answer_simple,
+    deduplicate_results,
+    extract_entities,
+    extract_keywords_simple,
+    get_top_files,
+    refine_keywords,
+    should_terminate,
+)
 from houyi.rag.agentic.searcher import AgenticSearcher
 from houyi.rag.config import AgenticConfig
 from houyi.rag.types import RAGMode, RetrievalResult, SearchResult
 
 if TYPE_CHECKING:
-    from houyi.llm.base import LLMAdapter
-    from houyi.runtime.agent import Agent
+    from houyi.adapters.llm.base import LLMAdapter
+    from houyi.application.runtime.agent import Agent
 
 logger = logging.getLogger(__name__)
 
@@ -44,13 +53,14 @@ class RoundResult:
 class AgenticMode:
     """Agentic RAG mode using LLM + Agent tools.
 
-    This mode operates without pre-built indexes by:
+    This mode owns round orchestration for search-over-files retrieval.
+
+    It operates without pre-built vector indexes by:
     1. Reading hierarchical directory indexes (data_structure.md)
     2. Using grep/read_file tools to search and retrieve content
-    3. Iteratively refining search over multiple rounds
-    4. Using LLM for keyword extraction and answer generation (when available)
-
-    Reference: https://github.com/ConardLi/rag-skill
+    3. Iteratively refining file search over multiple rounds
+    4. Delegating round heuristics and fallback policies to `agentic.policies`
+    5. Using LLM collaborators for keyword extraction and answer generation when available
     """
 
     def __init__(
@@ -78,7 +88,6 @@ class AgenticMode:
         self._searcher = AgenticSearcher(
             knowledge_dir=knowledge_dir,
             chunk_limit=config.chunk_limit,
-            agent=agent,
         )
 
         # Initialize LLM components if adapter is provided
@@ -163,7 +172,7 @@ class AgenticMode:
                     searched_files.add(result.source.file_path)
 
             # Check early termination
-            if self._should_terminate(all_results, round_type):
+            if should_terminate(all_results, round_type):
                 logger.debug(
                     "Early termination at round %d (%s): sufficient results",
                     round_num + 1,
@@ -172,7 +181,7 @@ class AgenticMode:
                 break
 
         # Deduplicate and rank results
-        all_results = self._deduplicate_results(all_results)
+        all_results = deduplicate_results(all_results)
 
         # Build response
         sources = [r.source for r in all_results if r.source is not None]
@@ -215,106 +224,105 @@ class AgenticMode:
         all_results: list[SearchResult],
         searched_files: set[str],
     ) -> RoundResult:
-        """Execute a single search round based on type."""
+        """Execute one search round and return round-local metadata.
+
+        This method is responsible for selecting the inputs for a round.
+        The actual search invocation is funneled through `_search_round_files()`
+        so that all rounds share the same search call shape and metadata can
+        consistently reflect the effective search workload in that round.
+        """
         keywords: list[str] = []
         results: list[SearchResult] = []
         paths_to_search = candidate_paths
+        exclude_files = searched_files
 
         if round_type == SearchRoundType.BROAD:
-            # Round 1: Broad search with initial keywords
             keywords = initial_keywords
-            results = await self._searcher.search_files(
-                paths=paths_to_search,
-                keywords=keywords,
-                exclude_files=searched_files,
-            )
 
         elif round_type == SearchRoundType.FOCUSED:
-            # Round 2: Focus on files that had hits in round 1
-            top_files = self._get_top_files(all_results, limit=5)
+            top_files = get_top_files(all_results, limit=5)
             if top_files:
                 paths_to_search = top_files
             keywords = initial_keywords
-            results = await self._searcher.search_files(
-                paths=paths_to_search,
-                keywords=keywords,
-                exclude_files=searched_files,
-            )
 
         elif round_type == SearchRoundType.SEMANTIC:
-            # Round 3: Semantic expansion using LLM
             keywords = await self._expand_keywords_semantic(
                 initial_keywords,
                 all_results[:5],
             )
-            results = await self._searcher.search_files(
-                paths=candidate_paths,
-                keywords=keywords,
-                exclude_files=searched_files,
-            )
 
         elif round_type == SearchRoundType.CROSS_REF:
-            # Round 4: Cross-reference via entities
-            entities = self._extract_entities(all_results[:10])
+            entities = extract_entities(all_results[:10])
             if entities:
                 keywords = entities[:5]
-                results = await self._searcher.search_files(
-                    paths=candidate_paths,
-                    keywords=keywords,
-                    exclude_files=searched_files,
-                )
+            else:
+                paths_to_search = []
 
         elif round_type == SearchRoundType.VERIFY:
-            # Round 5: Re-verify top results with refined query
-            refined_keywords = self._refine_keywords(query, all_results[:5])
+            refined_keywords = refine_keywords(query, all_results[:5])
             keywords = refined_keywords or initial_keywords
-            top_files = self._get_top_files(all_results, limit=3)
+            top_files = get_top_files(all_results, limit=3)
             if top_files:
-                results = await self._searcher.search_files(
-                    paths=top_files,
-                    keywords=keywords,
-                    exclude_files=set(),  # Allow re-searching
-                )
+                paths_to_search = top_files
+                exclude_files = set()
+            else:
+                paths_to_search = []
+
+        files_searched = self._count_searchable_paths(
+            paths=paths_to_search,
+            keywords=keywords,
+            exclude_files=exclude_files,
+        )
+
+        results = await self._search_round_files(
+            paths=paths_to_search,
+            keywords=keywords,
+            exclude_files=exclude_files,
+        )
 
         return RoundResult(
             round_type=round_type,
             round_num=round_num,
             keywords_used=keywords,
             results=results,
-            files_searched=len(paths_to_search),
+            files_searched=files_searched,
         )
 
-    def _should_terminate(
+    def _count_searchable_paths(
         self,
-        results: list[SearchResult],
-        current_round: SearchRoundType,
-    ) -> bool:
-        """Determine if search should terminate early."""
-        # Don't terminate before round 2
-        if current_round == SearchRoundType.BROAD:
-            return False
+        paths: list[str],
+        keywords: list[str],
+        exclude_files: set[str],
+    ) -> int:
+        """Count the paths that a round will actually try to search.
 
-        # Check for sufficient high-quality results
-        high_score = [r for r in results if r.score > 0.7]
-        if len(high_score) >= 5:
-            return True
+        Round metadata should describe the effective search workload rather than
+        the broader candidate set retained for later rounds.
+        """
+        if not paths or not keywords:
+            return 0
 
-        return len(results) >= 10
+        return sum(1 for path in paths if path not in exclude_files)
 
-    def _get_top_files(
+    async def _search_round_files(
         self,
-        results: list[SearchResult],
-        limit: int = 5,
-    ) -> list[str]:
-        """Get paths of top-scoring files."""
-        file_scores: dict[str, float] = {}
-        for r in results:
-            if r.source and r.source.file_path:
-                path = r.source.file_path
-                file_scores[path] = max(file_scores.get(path, 0), r.score)
+        paths: list[str],
+        keywords: list[str],
+        exclude_files: set[str],
+    ) -> list[SearchResult]:
+        """Run the file search for a round when both paths and keywords exist.
 
-        sorted_files = sorted(file_scores.items(), key=lambda x: x[1], reverse=True)
-        return [f[0] for f in sorted_files[:limit]]
+        A round can still report zero searched files by passing an empty `paths`
+        list, which keeps round metadata aligned with the actual work attempted.
+        """
+        if not paths or not keywords:
+            return []
+
+        return await self._searcher.search_files(
+            paths=paths,
+            keywords=keywords,
+            exclude_files=exclude_files,
+        )
 
     async def _expand_keywords_semantic(
         self,
@@ -337,65 +345,6 @@ class AgenticMode:
             logger.debug("Semantic expansion failed: %s", e)
             return keywords
 
-    def _extract_entities(self, results: list[SearchResult]) -> list[str]:
-        """Extract entities from results for cross-referencing."""
-        import re
-
-        entities = set()
-        for r in results:
-            if not r.content:
-                continue
-
-            # Extract capitalized words (potential entities)
-            words = r.content.split()
-            for word in words:
-                clean = re.sub(r"[^\w]", "", word)
-                if clean and clean[0].isupper() and len(clean) > 2:
-                    entities.add(clean)
-
-            # Extract quoted phrases
-            quoted = re.findall(r'"([^"]+)"', r.content)
-            entities.update(quoted)
-
-        return list(entities)[:10]
-
-    def _refine_keywords(
-        self,
-        query: str,
-        results: list[SearchResult],
-    ) -> list[str]:
-        """Refine keywords based on query and results."""
-        # Extract words that appear in both query and results
-        query_words = set(query.lower().split())
-        result_words: set[str] = set()
-
-        for r in results:
-            if r.content:
-                result_words.update(r.content.lower().split())
-
-        # Find intersection and filter
-        common = query_words & result_words
-        refined = [w for w in common if len(w) > 2]
-
-        return refined[:5] if refined else []
-
-    def _deduplicate_results(
-        self,
-        results: list[SearchResult],
-    ) -> list[SearchResult]:
-        """Remove duplicate results and sort by score."""
-        seen_content: set[str] = set()
-        unique: list[SearchResult] = []
-
-        for r in sorted(results, key=lambda x: x.score, reverse=True):
-            # Use content hash for deduplication
-            content_key = r.content[:100] if r.content else r.chunk_id or ""
-            if content_key and content_key not in seen_content:
-                seen_content.add(content_key)
-                unique.append(r)
-
-        return unique
-
     async def _extract_keywords_async(self, query: str) -> list[str]:
         """Extract keywords using LLM if available, otherwise use simple extraction."""
         if self._keyword_extractor:
@@ -408,14 +357,14 @@ class AgenticMode:
                 logger.debug("LLM keyword extraction failed: %s", e)
 
         # Fallback to simple extraction
-        return self._extract_keywords_simple(query)
+        return extract_keywords_simple(query)
 
     async def _generate_answer(
         self,
         query: str,
         results: list[SearchResult],
     ) -> tuple[str, float]:
-        """Generate answer using LLM if available."""
+        """Generate an answer, preferring the LLM path and falling back locally."""
         if not results:
             return "No relevant information found.", 0.0
 
@@ -431,61 +380,4 @@ class AgenticMode:
                 logger.warning("LLM answer generation failed: %s", e)
 
         # Fallback to simple concatenation
-        return self._build_answer_simple(results), min(len(results) * 0.1, 0.7)
-
-    def _extract_keywords_simple(self, query: str) -> list[str]:
-        """Simple keyword extraction (fallback when LLM unavailable)."""
-        stop_words = {
-            "a",
-            "an",
-            "the",
-            "is",
-            "are",
-            "was",
-            "were",
-            "be",
-            "been",
-            "have",
-            "has",
-            "had",
-            "do",
-            "does",
-            "did",
-            "will",
-            "would",
-            "could",
-            "should",
-            "may",
-            "might",
-            "can",
-            "of",
-            "to",
-            "in",
-            "for",
-            "on",
-            "with",
-            "at",
-            "by",
-            "from",
-            "what",
-            "how",
-            "why",
-            "when",
-            "where",
-            "which",
-            "who",
-        }
-        words = query.replace("?", "").split()
-        return [w for w in words if w.lower() not in stop_words and len(w) > 1]
-
-    def _build_answer_simple(self, results: list[SearchResult]) -> str:
-        """Build answer by concatenating results (fallback when LLM unavailable)."""
-        contents = []
-        for r in results[:5]:
-            if r.content:
-                contents.append(r.content.strip())
-
-        if not contents:
-            return "No relevant information found."
-
-        return "\n\n---\n\n".join(contents)
+        return build_answer_simple(results), min(len(results) * 0.1, 0.7)

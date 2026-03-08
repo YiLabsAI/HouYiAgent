@@ -1,4 +1,4 @@
-"""Unit tests for houyi.llm.vertex_httpx_adapter — VertexAIAdapter.
+"""Unit tests for houyi.adapters.llm.vertex_httpx_adapter — VertexAIAdapter.
 
 Tests cover:
 - Mock mode (no SA / project)
@@ -19,8 +19,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from houyi.config.env_config import EnvConfig
-from houyi.llm.vertex_httpx_adapter import VertexAIAdapter
+from houyi.adapters.llm.vertex_httpx_adapter import VertexAIAdapter
+from houyi.infrastructure.config.env_config import EnvConfig
 
 
 @pytest.fixture(autouse=True)

@@ -1,8 +1,7 @@
-"""Tests for RAG types and configuration."""
+"""Tests for RAG types."""
 
 import pytest
 
-from houyi.rag.config import AgenticConfig, IndexedConfig, RAGConfig
 from houyi.rag.types import (
     Chunk,
     Document,
@@ -155,58 +154,6 @@ class TestRetrievalResult:
         assert result.confidence == 0.9
         assert result.sources == []
         assert result.mode_used == RAGMode.AUTO
-
-
-class TestRAGConfig:
-    """Tests for RAGConfig."""
-
-    def test_default_config(self) -> None:
-        """Test default RAGConfig."""
-        config = RAGConfig()
-        assert config.mode == RAGMode.AUTO
-        assert config.knowledge_dir == "knowledge/"
-        assert isinstance(config.agentic, AgenticConfig)
-        assert isinstance(config.indexed, IndexedConfig)
-
-    def test_for_agentic(self) -> None:
-        """Test creating agentic config."""
-        config = RAGConfig.for_agentic(knowledge_dir="/custom/path")
-        assert config.mode == RAGMode.AGENTIC
-        assert config.knowledge_dir == "/custom/path"
-
-    def test_for_indexed(self) -> None:
-        """Test creating indexed config."""
-        config = RAGConfig.for_indexed(
-            knowledge_dir="/data",
-            strategies=[RetrievalStrategy.VECTOR],
-        )
-        assert config.mode == RAGMode.INDEXED
-        assert config.knowledge_dir == "/data"
-        assert RetrievalStrategy.VECTOR in config.indexed.strategies
-
-
-class TestAgenticConfig:
-    """Tests for AgenticConfig."""
-
-    def test_default_values(self) -> None:
-        """Test default AgenticConfig values."""
-        config = AgenticConfig()
-        assert config.max_rounds == 5
-        assert config.index_file == "data_structure.md"
-        assert config.chunk_limit == 500
-
-
-class TestIndexedConfig:
-    """Tests for IndexedConfig."""
-
-    def test_default_values(self) -> None:
-        """Test default IndexedConfig values."""
-        config = IndexedConfig()
-        assert config.top_k == 10
-        assert config.use_rerank is True
-        assert config.use_crag is True
-        assert RetrievalStrategy.BM25 in config.strategies
-        assert RetrievalStrategy.VECTOR in config.strategies
 
 
 class TestQualitySummary:

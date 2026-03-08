@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from houyi.config.env_config import ENV_KNOWLEDGE_STORAGE
+from houyi.infrastructure.config.env_config import ENV_KNOWLEDGE_STORAGE
 
 # Detect the real project root (workspace)
 _PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))

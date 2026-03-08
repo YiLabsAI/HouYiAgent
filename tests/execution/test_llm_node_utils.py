@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from houyi.execution.llm_node_utils import build_llm_node_inputs
+from houyi.application.workflow.llm_node_utils import build_llm_node_inputs
 
 
 def test_build_llm_node_inputs_converts_max_tokens_string_and_uses_resolved_tool_settings() -> None:

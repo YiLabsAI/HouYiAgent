@@ -2,8 +2,8 @@
 
 from pydantic import BaseModel
 
-from houyi.core.agent import AgentSpec
-from houyi.core.skill import SkillSpec
+from houyi.domain.agent import AgentSpec
+from houyi.domain.skill.spec import SkillSpec
 
 
 class TestAgentSpec:

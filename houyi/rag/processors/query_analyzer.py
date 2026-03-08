@@ -12,11 +12,47 @@ from enum import Enum
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from houyi.llm.base import LLMAdapter
+    from houyi.adapters.llm.base import LLMAdapter
 
 from houyi.rag.types import RetrievalStrategy
 
 logger = logging.getLogger(__name__)
+
+
+DEFAULT_RETRIEVAL_STRATEGIES = [
+    RetrievalStrategy.BM25,
+    RetrievalStrategy.VECTOR,
+]
+
+
+QUERY_TYPE_STRATEGY_MAP = {
+    "factual": [RetrievalStrategy.BM25, RetrievalStrategy.VECTOR],
+    "conceptual": [RetrievalStrategy.VECTOR, RetrievalStrategy.GRAPH],
+    "procedural": [RetrievalStrategy.VECTOR, RetrievalStrategy.BM25],
+    "analytical": [RetrievalStrategy.VECTOR, RetrievalStrategy.GRAPH],
+    "keyword": [RetrievalStrategy.BM25],
+    "exploratory": [
+        RetrievalStrategy.VECTOR,
+        RetrievalStrategy.BM25,
+        RetrievalStrategy.GRAPH,
+    ],
+}
+
+
+LLM_STRATEGY_MAP = {
+    "bm25": RetrievalStrategy.BM25,
+    "vector": RetrievalStrategy.VECTOR,
+    "graph": RetrievalStrategy.GRAPH,
+}
+
+
+def _base_strategies_for_query_type(query_type: QueryType) -> list[RetrievalStrategy]:
+    return list(QUERY_TYPE_STRATEGY_MAP.get(query_type.value, DEFAULT_RETRIEVAL_STRATEGIES))
+
+
+def _parse_llm_strategies(strategy_names: list[str] | None) -> list[RetrievalStrategy]:
+    names = strategy_names or ["bm25", "vector"]
+    return [LLM_STRATEGY_MAP[name] for name in names if name in LLM_STRATEGY_MAP]
 
 
 class QueryType(str, Enum):
@@ -341,24 +377,7 @@ class QueryAnalyzer:
         entities: list[str],
     ) -> list[RetrievalStrategy]:
         """Select retrieval strategies based on analysis."""
-        # Strategy selection rules
-        strategy_map = {
-            QueryType.FACTUAL: [RetrievalStrategy.BM25, RetrievalStrategy.VECTOR],
-            QueryType.CONCEPTUAL: [RetrievalStrategy.VECTOR, RetrievalStrategy.GRAPH],
-            QueryType.PROCEDURAL: [RetrievalStrategy.VECTOR, RetrievalStrategy.BM25],
-            QueryType.ANALYTICAL: [RetrievalStrategy.VECTOR, RetrievalStrategy.GRAPH],
-            QueryType.KEYWORD: [RetrievalStrategy.BM25],
-            QueryType.EXPLORATORY: [
-                RetrievalStrategy.VECTOR,
-                RetrievalStrategy.BM25,
-                RetrievalStrategy.GRAPH,
-            ],
-        }
-
-        strategies = strategy_map.get(
-            query_type,
-            [RetrievalStrategy.BM25, RetrievalStrategy.VECTOR],
-        )
+        strategies = _base_strategies_for_query_type(query_type)
 
         # Add graph if entities detected (might benefit from relationship traversal)
         if entities and RetrievalStrategy.GRAPH not in strategies:
@@ -416,7 +435,7 @@ Strategy selection guide:
 
 Return only valid JSON, no explanation."""
 
-        from houyi.llm.base import LLMMessage, MessageRole
+        from houyi.adapters.llm.base import LLMMessage, MessageRole
 
         messages = [
             LLMMessage(role=MessageRole.SYSTEM, content=system_prompt),
@@ -428,18 +447,7 @@ Return only valid JSON, no explanation."""
         import json
 
         result = json.loads(response.content)
-
-        # Map strategies
-        strategy_map = {
-            "bm25": RetrievalStrategy.BM25,
-            "vector": RetrievalStrategy.VECTOR,
-            "graph": RetrievalStrategy.GRAPH,
-        }
-        strategies = [
-            strategy_map[s]
-            for s in result.get("strategies", ["bm25", "vector"])
-            if s in strategy_map
-        ]
+        strategies = _parse_llm_strategies(result.get("strategies"))
 
         return QueryAnalysis(
             query=query,

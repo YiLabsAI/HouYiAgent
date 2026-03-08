@@ -8,16 +8,17 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from houyi.core.tool_call_adapter_hooks import (
-    _ADAPTER_HOOKS,
-    ToolCallAdapterContext,
-    resolve_tool_call_adapter,
-)
-from houyi.llm.models import (
+from houyi.adapters.llm import factory as llm_factory_module
+from houyi.adapters.llm.models import (
     ADAPTER_FAKE,
     ADAPTER_REAL,
     PROVIDER_OPENAI_COMPAT,
     PROVIDER_SILICONFLOW,
+)
+from houyi.application.tool_calling.tool_call_adapter_hooks import (
+    _ADAPTER_HOOKS,
+    ToolCallAdapterContext,
+    resolve_tool_call_adapter,
 )
 from houyi.testkit.fake_adapter import FakeToolCallAdapter
 
@@ -87,7 +88,11 @@ def test_resolve_delegates_to_factory_for_known_provider() -> None:
     """Non-fake adapter_name should delegate to LLMAdapterFactory.create()."""
 
     sentinel = MagicMock(name="FactoryAdapter")
-    with patch("houyi.llm.factory.LLMAdapterFactory.create", return_value=sentinel) as mock_create:
+    with patch.object(
+        llm_factory_module.LLMAdapterFactory,
+        "create",
+        return_value=sentinel,
+    ) as mock_create:
         context = ToolCallAdapterContext(
             adapter_name=PROVIDER_SILICONFLOW,
             tool_names=[],
@@ -119,8 +124,9 @@ def test_resolve_returns_none_for_real() -> None:
 def test_resolve_returns_none_when_factory_fails() -> None:
     """If the factory raises, resolve should return None gracefully."""
 
-    with patch(
-        "houyi.llm.factory.LLMAdapterFactory.create",
+    with patch.object(
+        llm_factory_module.LLMAdapterFactory,
+        "create",
         side_effect=ValueError("no key"),
     ):
         context = ToolCallAdapterContext(

@@ -10,7 +10,7 @@ import json
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from houyi.llm.base import LLMResponse
+from houyi.adapters.llm.base import LLMResponse
 
 
 class FakeToolCallAdapter:

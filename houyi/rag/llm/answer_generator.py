@@ -5,10 +5,15 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
+from houyi.rag.generation.streaming_helpers import (
+    RAG_ANSWER_SYSTEM_PROMPT,
+    build_answer_prompt,
+    estimate_stream_confidence,
+)
 from houyi.rag.types import SearchResult
 
 if TYPE_CHECKING:
-    from houyi.llm.base import LLMAdapter
+    from houyi.adapters.llm.base import LLMAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -23,23 +28,15 @@ class AnswerGenerator:
     - Support streaming for long answers
     """
 
-    SYSTEM_PROMPT = """You are a helpful assistant that answers questions based on provided context.
+    SYSTEM_PROMPT = RAG_ANSWER_SYSTEM_PROMPT
 
-Guidelines:
-- Answer ONLY based on the provided context
-- Cite sources using [1], [2], etc. markers
-- If the context doesn't contain enough information, say so clearly
-- Be concise but complete
-- If sources conflict, mention the discrepancy
-- Use the same language as the user's question
-
-Format your answer as:
-<answer text with [1][2] citations>
-
-Sources:
-[1] <source description>
-[2] <source description>
-..."""
+    _UNCERTAINTY_PHRASES = [
+        "not enough information",
+        "cannot find",
+        "no relevant",
+        "unable to determine",
+        "insufficient information",
+    ]
 
     def __init__(
         self,
@@ -74,19 +71,12 @@ Sources:
         Returns:
             Tuple of (answer_text, confidence_score)
         """
-        from houyi.llm.base import LLMMessage, MessageRole
+        from houyi.adapters.llm.base import LLMMessage, MessageRole
 
         if not results:
             return "No relevant information found in knowledge base.", 0.0
 
-        context = self._format_context(results)
-
-        prompt = f"""Context:
-{context}
-
-Question: {query}
-
-Please answer the question based on the context above."""
+        prompt = build_answer_prompt(query, results)
 
         messages = [
             LLMMessage(role=MessageRole.SYSTEM, content=self.SYSTEM_PROMPT),
@@ -101,57 +91,16 @@ Please answer the question based on the context above."""
             )
 
             answer = response.content
-            confidence = self._estimate_confidence(answer, results)
+            confidence = estimate_stream_confidence(
+                answer,
+                results,
+                uncertainty_phrases=self._UNCERTAINTY_PHRASES,
+            )
 
             return answer, confidence
         except Exception as e:
             logger.error("Answer generation failed: %s", e)
             return self._fallback_answer(results), 0.3
-
-    def _format_context(self, results: list[SearchResult]) -> str:
-        """Format search results as numbered context blocks."""
-        blocks = []
-
-        for i, result in enumerate(results[:10], 1):  # Limit to top 10
-            source_info = ""
-            if result.source:
-                source_info = f" (from: {result.source.file_path})"
-
-            block = f"[{i}]{source_info}:\n{result.content.strip()}"
-            blocks.append(block)
-
-        return "\n\n---\n\n".join(blocks)
-
-    def _estimate_confidence(
-        self,
-        answer: str,
-        results: list[SearchResult],
-    ) -> float:
-        """Estimate confidence based on answer quality indicators."""
-        confidence = 0.5  # Base confidence
-
-        # Check if answer contains citations
-        citation_count = sum(1 for i in range(1, 11) if f"[{i}]" in answer)
-        if citation_count > 0:
-            confidence += 0.1 * min(citation_count, 3)
-
-        # Check result quality
-        high_score_count = sum(1 for r in results if r.score > 0.7)
-        if high_score_count > 0:
-            confidence += 0.1 * min(high_score_count, 3)
-
-        # Penalize if answer indicates uncertainty
-        uncertainty_phrases = [
-            "not enough information",
-            "cannot find",
-            "no relevant",
-            "unable to determine",
-            "insufficient information",
-        ]
-        if any(phrase in answer.lower() for phrase in uncertainty_phrases):
-            confidence -= 0.2
-
-        return max(0.0, min(1.0, confidence))
 
     def _fallback_answer(self, results: list[SearchResult]) -> str:
         """Generate a simple fallback answer by concatenating results."""

@@ -19,9 +19,9 @@ from houyi_studio.server.skill.startup_hooks import (
 )
 from pydantic import BaseModel
 
-from houyi.config.env_config import ENV_STARTUP_SKILLS_DIR, EnvConfig
-from houyi.core.skill.spec import SkillSpec
-from houyi.core.skill_registry import SkillRegistry
+from houyi.domain.skill.registry import SkillRegistry
+from houyi.domain.skill.spec import SkillSpec
+from houyi.infrastructure.config.env_config import ENV_STARTUP_SKILLS_DIR, EnvConfig
 
 
 @pytest.fixture(autouse=True)

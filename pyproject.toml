@@ -199,12 +199,6 @@ max-statements = 50
     "E402",  # module level import not at top (examples show step-by-step)
     "T20",
 ]
-"houyi/core/skill/consent.py" = ["T20"]   # CLI consent prompts use print
-"houyi/evaluation/**/*.py" = ["T20"]      # evaluation output is print-based
-"houyi/execution/local_executor.py" = ["T20"]
-"houyi/runtime/executor.py" = ["T20"]
-"houyi/observability/exporters.py" = ["T20"]
-"houyi/observability/trace_manager.py" = ["T20"]
 "houyi/skills/**/*.py" = ["E402"]  # conditional late imports in skill modules
 
 [tool.mypy]

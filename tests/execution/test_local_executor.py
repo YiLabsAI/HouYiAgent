@@ -1,10 +1,12 @@
 """Tests for execution/local_executor.py"""
 
 import pytest
+from pydantic import BaseModel
 
-from houyi.execution.local_executor import ExecutionResult, LocalExecutor
-from houyi.orchestration.plan import ExecutionPlan, IRNode, NodeType
-from houyi.orchestration.state import SessionState
+from houyi.application.workflow.executor import ExecutionResult, LocalExecutor
+from houyi.application.workflow.orchestration.plan import ExecutionPlan, IRNode, NodeType
+from houyi.application.workflow.orchestration.state import SessionState, TaskStatus
+from houyi.domain.skill.spec import SkillSpec
 
 
 @pytest.mark.asyncio
@@ -187,6 +189,119 @@ async def test_local_executor_empty_plan():
 
     assert result.success is True
     assert result.metadata["nodes_executed"] == 0
+
+
+@pytest.mark.asyncio
+async def test_local_executor_result_exposes_compat_and_structured_fields():
+    """Test executor result supports legacy and structured fields together."""
+    executor = LocalExecutor()
+
+    node = IRNode(
+        node_id="node1",
+        node_type=NodeType.LLM,
+        inputs={"prompt": "test"},
+        outputs={"result": "$answer"},
+        metadata={},
+    )
+
+    plan = ExecutionPlan(plan_id="test_plan_structured", nodes=[node], entry_node="node1")
+    state = SessionState(session_id="test_session", agent_id="test_agent")
+
+    result = await executor.execute(plan, state)
+
+    assert result.success is True
+    assert result.status == TaskStatus.SUCCEEDED
+    assert result.task_id.startswith("task_")
+    assert result.trace_id.startswith("trace_")
+    assert result.metrics.total_duration_ms >= 0
+    assert result.metrics.node_durations["node1"] >= 0
+    assert result.metadata["nodes_executed"] == 1
+    assert result.error is None
+
+
+@pytest.mark.asyncio
+async def test_local_executor_tool_node_failure_returns_structured_error():
+    """Test executor returns structured failure details for tool execution errors."""
+    executor = LocalExecutor()
+
+    class Input(BaseModel):
+        task: str
+
+    class Output(BaseModel):
+        result: str
+
+    def failing_skill(task: str):
+        raise ValueError(f"Intentional error: {task}")
+
+    skill = SkillSpec(
+        name="failing_skill",
+        description="A failing skill",
+        input_schema=Input,
+        output_schema=Output,
+        executor=failing_skill,
+    )
+
+    node = IRNode(
+        node_id="fail_node",
+        node_type=NodeType.TOOL,
+        skill_ref=skill,
+        inputs={"task": "boom"},
+        outputs={"result": "$answer"},
+        metadata={"direct_execution": True},
+    )
+
+    plan = ExecutionPlan(plan_id="test_plan_failure", nodes=[node], entry_node="fail_node")
+    state = SessionState(session_id="test_session", agent_id="test_agent")
+
+    result = await executor.execute(plan, state)
+
+    assert result.success is False
+    assert result.status == TaskStatus.FAILED
+    assert result.error is not None
+    assert "Intentional error" in result.error
+
+
+@pytest.mark.asyncio
+async def test_local_executor_tool_node_direct_execution_tracks_metrics():
+    """Test direct tool execution keeps legacy context behavior and structured metrics."""
+    executor = LocalExecutor()
+
+    class EchoInput(BaseModel):
+        task: str
+
+    class EchoOutput(BaseModel):
+        result: str
+
+    def echo_skill(task: str):
+        return {"result": f"echo:{task}"}
+
+    skill = SkillSpec(
+        name="echo",
+        description="Echo a task",
+        input_schema=EchoInput,
+        output_schema=EchoOutput,
+        executor=echo_skill,
+    )
+
+    node = IRNode(
+        node_id="tool_node",
+        node_type=NodeType.TOOL,
+        skill_ref=skill,
+        inputs={"task": "hello"},
+        outputs={"result": "$answer"},
+        metadata={"direct_execution": True},
+    )
+
+    plan = ExecutionPlan(plan_id="test_plan_tool_metrics", nodes=[node], entry_node="tool_node")
+    state = SessionState(session_id="test_session", agent_id="test_agent")
+
+    result = await executor.execute(plan, state)
+
+    assert result.success is True
+    assert result.status == TaskStatus.SUCCEEDED
+    assert result.metrics.node_durations["tool_node"] >= 0
+    assert result.metadata["nodes_executed"] == 1
+    assert result.output["result"] == "echo:hello"
 
 
 def test_execution_result():

@@ -8,7 +8,7 @@ import time
 
 import pytest
 
-from houyi.verification import (
+from houyi.assurance.verification import (
     PythonVerifier,
     SQLVerifier,
     VerificationRule,
