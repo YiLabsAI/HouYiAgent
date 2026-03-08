@@ -5,30 +5,34 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
-from houyi.application.tool_calling.budget import prepare_tool_loop_messages
 from houyi.application.tool_calling.context import (
-    ToolCallBatchExecutionContext,
     ToolCallExecutionContext,
-    ToolRoundPhaseContext,
 )
+from houyi.application.tool_calling.event_dispatcher import _ToolCallEventDispatcher
+from houyi.application.tool_calling.lifecycle_service import _ToolCallLifecycleService
 from houyi.application.tool_calling.orchestrator import ToolLoopOrchestrator
 from houyi.application.tool_calling.placeholder_resolver import PlaceholderResolver
+from houyi.application.tool_calling.preparation_hook_service import (
+    _ToolCallPreparationHookService,
+)
+from houyi.application.tool_calling.preparation_policy_service import (
+    _ToolCallPreparationPolicyService,
+)
+from houyi.application.tool_calling.preparation_service import _ToolCallPreparationService
+from houyi.application.tool_calling.prepared_tool_call_executor import (
+    _PreparedToolCallExecutor,
+)
+from houyi.application.tool_calling.result_presenter import _ToolCallResultPresenter
 from houyi.application.tool_calling.runner_execution_service import _ToolCallExecutionService
 from houyi.application.tool_calling.runner_models import (
     _BlockedToolCallPresentationRequest,
     _ExecutedToolCall,
-    _HookCtx,
     _parse_max_parallel_calls,
     _parse_tool_latency_seconds,
     _PreparedToolCall,
     _ToolCallPreparationRequest,
 )
 from houyi.application.tool_calling.runner_runtime_services import (
-    _PreparedToolCallExecutor,
-    _ToolCallEventDispatcher,
-    _ToolCallLifecycleService,
-    _ToolCallPreparationService,
-    _ToolCallResultPresenter,
     _ToolLoopSessionBuilder,
 )
 from houyi.application.tool_calling.tool_results import ToolResultBuilder
@@ -44,7 +48,7 @@ logger = logging.getLogger(__name__)
 
 
 class _ToolCallRunnerBase:
-    """Shared state/wiring and compatibility delegates for ToolCallRunner."""
+    """Shared state and collaborator wiring for ToolCallRunner."""
 
     def __init__(
         self,
@@ -61,6 +65,8 @@ class _ToolCallRunnerBase:
         self.metrics_store = metrics_store
         self._consent_cache: dict[str, bool] = {}  # skill_name -> consent_granted
         self._metrics_collectors: dict[str, Any] = {}  # skill_name -> MetricsCollector
+        self._preparation_hook_service = _ToolCallPreparationHookService(self)
+        self._preparation_policy_service = _ToolCallPreparationPolicyService(self)
         self._preparation_service = _ToolCallPreparationService(self)
         self._lifecycle_service = _ToolCallLifecycleService(self)
         self._prepared_tool_call_executor = _PreparedToolCallExecutor(self)
@@ -99,21 +105,6 @@ class _ToolCallRunnerBase:
             index=index,
             round_index_value=round_index_value,
             parallel_group_id=parallel_group_id,
-        )
-
-    def _resolve_tool_call_inputs(
-        self,
-        *,
-        tool_call: Any,
-        parsed_args: dict[str, Any] | None,
-        resolved_outputs: dict[str, Any] | None,
-        skills_by_name: dict[str, SkillSpec],
-    ) -> tuple[str | None, str | None, dict[str, Any], SkillSpec | None]:
-        return self._preparation_service._resolve_tool_call_inputs(
-            tool_call=tool_call,
-            parsed_args=parsed_args,
-            resolved_outputs=resolved_outputs,
-            skills_by_name=skills_by_name,
         )
 
 
@@ -169,23 +160,6 @@ class ToolCallRunner(_ToolCallRunnerBase):
                 block_reason=block_reason,
             )
         )
-
-    async def _check_consent_if_required(
-        self,
-        tool_name: str,
-        args: dict[str, Any],
-        tool_call_id: str | None,
-    ) -> tuple[bool, dict[str, Any] | None, dict[str, Any] | None]:
-        return await self._preparation_service._check_consent_if_required(
-            tool_name,
-            args,
-            tool_call_id,
-        )
-
-    async def _trigger_pre_tool_use_hook(
-        self, tool_name: str, args: dict[str, Any], skill: SkillSpec | None
-    ) -> str | None:
-        return await self._preparation_service._trigger_pre_tool_use_hook(tool_name, args, skill)
 
     def _get_cached_tool_result(
         self,
@@ -258,30 +232,6 @@ class ToolCallRunner(_ToolCallRunnerBase):
         if not fast_path_enabled:
             return False
         return has_placeholders or (bool(all_tool_names) and called_tools >= all_tool_names)
-
-    @staticmethod
-    def _prepare_chat_messages(
-        messages: list[Any], tool_loop_max_message_chars: int, tool_loop_max_total_chars: int
-    ) -> list[Any]:
-        return prepare_tool_loop_messages(
-            messages,
-            tool_loop_max_message_chars,
-            tool_loop_max_total_chars,
-        )
-
-    @staticmethod
-    def _build_assistant_tool_message(response: Any) -> dict[str, Any]:
-        assistant_tool_message: dict[str, Any] = {
-            "role": "assistant",
-            "content": response.content or "",
-            "tool_calls": response.tool_calls,
-        }
-        response_metadata = getattr(response, "metadata", None)
-        if isinstance(response_metadata, dict):
-            reasoning_content = response_metadata.get("reasoning_content")
-            if isinstance(reasoning_content, str):
-                assistant_tool_message["reasoning_content"] = reasoning_content
-        return assistant_tool_message
 
     def _enrich_result_with_cache_metadata(
         self,
@@ -386,21 +336,6 @@ class ToolCallRunner(_ToolCallRunnerBase):
         self._execution_service._finish_execution_span(exec_span)
         return response, tool_trace
 
-    async def _execute_round_tool_phase(self, phase_ctx: ToolRoundPhaseContext) -> bool:
-        return await ToolLoopOrchestrator.execute_round_tool_phase(
-            phase_ctx,
-        )
-
-    async def _execute_parallel_tool_calls(
-        self, batch_ctx: ToolCallBatchExecutionContext
-    ) -> list[tuple[int, dict[str, Any], dict[str, Any], float]]:
-        return await ToolLoopOrchestrator.execute_parallel_tool_calls(batch_ctx)
-
-    async def _execute_serial_tool_calls(
-        self, batch_ctx: ToolCallBatchExecutionContext
-    ) -> list[tuple[int, dict[str, Any], dict[str, Any], float]]:
-        return await ToolLoopOrchestrator.execute_serial_tool_calls(batch_ctx)
-
     async def _handle_tool_call_impl(
         self,
         exec_ctx: ToolCallExecutionContext,
@@ -429,44 +364,4 @@ class ToolCallRunner(_ToolCallRunnerBase):
             state=state,
             services=services,
             tool_start=tool_start,
-        )
-
-    async def _handle_consent_rejection(
-        self,
-        *,
-        tool_name: str | None,
-        args: dict[str, Any],
-        tool_call_id: str | None,
-        index: int,
-        round_index_value: int | None,
-        parallel_group_id: str | None,
-        requested_tool_name: str | None,
-    ) -> tuple[int, dict[str, Any], dict[str, Any], float] | None:
-        return await self._preparation_service._handle_consent_rejection(
-            tool_name=tool_name,
-            args=args,
-            tool_call_id=tool_call_id,
-            index=index,
-            round_index_value=round_index_value,
-            parallel_group_id=parallel_group_id,
-            requested_tool_name=requested_tool_name,
-        )
-
-    async def _apply_before_tool_hooks(
-        self,
-        *,
-        tool_name: str | None,
-        args: dict[str, Any],
-        skill: SkillSpec | None,
-        tool_call_id: str | None,
-        tool_hooks: list[Any],
-        allow_tool_replace: bool,
-    ) -> tuple[_HookCtx, str | None]:
-        return await self._preparation_service._apply_before_tool_hooks(
-            tool_name=tool_name,
-            args=args,
-            skill=skill,
-            tool_call_id=tool_call_id,
-            tool_hooks=tool_hooks,
-            allow_tool_replace=allow_tool_replace,
         )

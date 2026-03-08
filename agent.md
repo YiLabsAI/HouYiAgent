@@ -469,6 +469,23 @@ ruff check houyi/ --fix
 - `test_smoke_login.py` (execution scope in filename)
 - `class TestSmokeWorkflow:` (execution scope in class name)
 
+### Test Function Naming
+
+- Test function names SHOULD follow `test_<subject>_<behavior>[_<condition>]`.
+- Prefer concise behavior-oriented names over implementation-heavy sentences.
+- Avoid repeating file or module context that is already clear from the test file path.
+- Do not encode execution tier into function names; use `pytest.mark` or CI/workflow selection instead.
+
+✅ **Correct**:
+- `test_write_file_creates_parents()`
+- `test_find_files_iterative_exact_match()`
+- `test_find_files_default_contains_mode()`
+
+❌ **Incorrect**:
+- `test_write_file_executor_creates_parents()` (repeats file-local implementation context)
+- `test_find_files_executor_iterative_subdirs_exact_match()` (too implementation-heavy)
+- `test_smoke_find_files()` (execution tier in function name)
+
 ### Test Structure
 
 ```python

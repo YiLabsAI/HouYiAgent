@@ -36,7 +36,7 @@ def test_build_retrieval_plan_filters_none_tasks() -> None:
 
 
 @pytest.mark.asyncio
-async def test_execute_sequential_retrieval_handles_success_timeout_and_failure() -> None:
+async def test_execute_sequential_retrieval_success_timeout_and_failure() -> None:
     async def slow() -> list[str]:
         await asyncio.sleep(0.01)
         return ["late"]
@@ -61,7 +61,7 @@ async def test_execute_sequential_retrieval_handles_success_timeout_and_failure(
 
 
 @pytest.mark.asyncio
-async def test_execute_parallel_retrieval_returns_empty_for_no_tasks() -> None:
+async def test_execute_parallel_retrieval_no_tasks() -> None:
     results = await execute_parallel_retrieval(
         RetrievalExecutionRequest(
             strategies=[],
@@ -73,7 +73,7 @@ async def test_execute_parallel_retrieval_returns_empty_for_no_tasks() -> None:
     assert results == []
 
 
-def test_collect_parallel_results_records_success_and_failure() -> None:
+def test_collect_parallel_results_success_and_failure() -> None:
     async def ok() -> list[str]:
         return ["ok"]
 

@@ -682,6 +682,287 @@ class TestToolCallRunner:
         assert len(tool_trace) == 3
         assert {entry.get("parallel_group_id") for entry in tool_trace} == {"round_1"}
 
+    @pytest.mark.asyncio
+    async def test_before_tool_call_hook_can_patch_args_before_execution(self) -> None:
+        class _PatchArgsHook:
+            async def before_tool_call(self, tool_call: dict[str, Any]) -> dict[str, Any]:
+                return {"args": {"patched": tool_call["args"]["value"] + 1}}
+
+        class _CapturingExecutor(_DummyExecutor):
+            def __init__(self) -> None:
+                super().__init__()
+                self.calls: list[dict[str, Any]] = []
+
+            async def execute(self, skill: SkillSpec, args: dict[str, Any]) -> dict[str, Any]:
+                self.calls.append({"skill": skill.name, "args": dict(args)})
+                return {"patched": args["patched"]}
+
+        class _Input(BaseModel):
+            patched: int
+
+        class _Output(BaseModel):
+            patched: int
+
+        skill = SkillSpec(
+            name="patch_args",
+            description="patch args",
+            input_schema=_Input,
+            output_schema=_Output,
+            executor=lambda input_data: _Output(patched=input_data.patched),
+        )
+        adapter = _FakeAdapter(
+            [
+                _FakeResponse(
+                    content="",
+                    tool_calls=[
+                        {
+                            "id": "call_patch",
+                            "type": "function",
+                            "function": {
+                                "name": "patch_args",
+                                "arguments": json.dumps({"value": 2}),
+                            },
+                        }
+                    ],
+                ),
+                _FakeResponse(content="done", tool_calls=[]),
+            ]
+        )
+
+        executor = _CapturingExecutor()
+        runner = ToolCallRunner()
+        _, tool_trace = await runner.run(
+            adapter=adapter,
+            messages=[{"role": "user", "content": "hi"}],
+            tools=[skill.to_tool_schema()],
+            skills=[skill],
+            executor=executor,
+            max_rounds=2,
+            tool_hooks=[_PatchArgsHook()],
+        )
+
+        assert executor.calls == [{"skill": "patch_args", "args": {"patched": 3}}]
+        assert tool_trace[0]["args"] == {"patched": 3}
+
+    @pytest.mark.asyncio
+    async def test_before_tool_call_records_attempted_replacement_when_not_allowed(self) -> None:
+        class _ReplaceHook:
+            async def before_tool_call(self, tool_call: dict[str, Any]) -> dict[str, Any]:
+                return {"tool_name": "tool2"}
+
+        class _CapturingExecutor(_DummyExecutor):
+            def __init__(self) -> None:
+                super().__init__()
+                self.executed_skills: list[str] = []
+
+            async def execute(self, skill: SkillSpec, args: dict[str, Any]) -> dict[str, Any]:
+                self.executed_skills.append(skill.name)
+                return {"executed_skill": skill.name, **args}
+
+        class _Input(BaseModel):
+            pass
+
+        class _Output(BaseModel):
+            source: str
+
+        skill1 = SkillSpec(
+            name="tool1",
+            description="tool1",
+            input_schema=_Input,
+            output_schema=_Output,
+            executor=lambda _input: _Output(source="tool1"),
+        )
+        skill2 = SkillSpec(
+            name="tool2",
+            description="tool2",
+            input_schema=_Input,
+            output_schema=_Output,
+            executor=lambda _input: _Output(source="tool2"),
+        )
+        adapter = _FakeAdapter(
+            [
+                _FakeResponse(
+                    content="",
+                    tool_calls=[
+                        {
+                            "id": "call_replace_blocked",
+                            "type": "function",
+                            "function": {"name": "tool1", "arguments": "{}"},
+                        }
+                    ],
+                ),
+                _FakeResponse(content="done", tool_calls=[]),
+            ]
+        )
+
+        executor = _CapturingExecutor()
+        runner = ToolCallRunner()
+        _, tool_trace = await runner.run(
+            adapter=adapter,
+            messages=[{"role": "user", "content": "hi"}],
+            tools=[skill1.to_tool_schema(), skill2.to_tool_schema()],
+            skills=[skill1, skill2],
+            executor=executor,
+            max_rounds=2,
+            tool_hooks=[_ReplaceHook()],
+            allow_tool_replace=False,
+        )
+
+        assert executor.executed_skills == ["tool1"]
+        assert tool_trace[0]["tool_name"] == "tool1"
+        assert tool_trace[0]["tool_override"] == {
+            "from": "tool1",
+            "to": "tool2",
+            "allowed": False,
+            "applied": False,
+        }
+        assert tool_trace[0]["result"]["raw"]["executed_skill"] == "tool1"
+
+    @pytest.mark.asyncio
+    async def test_before_tool_call_can_replace_tool_when_allowed(self) -> None:
+        class _ReplaceHook:
+            async def before_tool_call(self, tool_call: dict[str, Any]) -> dict[str, Any]:
+                return {"tool_name": "tool2", "args": {"from_hook": True}}
+
+        class _CapturingExecutor(_DummyExecutor):
+            def __init__(self) -> None:
+                super().__init__()
+                self.executed_skills: list[str] = []
+
+            async def execute(self, skill: SkillSpec, args: dict[str, Any]) -> dict[str, Any]:
+                self.executed_skills.append(skill.name)
+                return {"executed_skill": skill.name, **args}
+
+        class _Input(BaseModel):
+            from_hook: bool = False
+
+        class _Output(BaseModel):
+            source: str
+
+        skill1 = SkillSpec(
+            name="tool1",
+            description="tool1",
+            input_schema=_Input,
+            output_schema=_Output,
+            executor=lambda _input: _Output(source="tool1"),
+        )
+        skill2 = SkillSpec(
+            name="tool2",
+            description="tool2",
+            input_schema=_Input,
+            output_schema=_Output,
+            executor=lambda _input: _Output(source="tool2"),
+        )
+        adapter = _FakeAdapter(
+            [
+                _FakeResponse(
+                    content="",
+                    tool_calls=[
+                        {
+                            "id": "call_replace_allowed",
+                            "type": "function",
+                            "function": {"name": "tool1", "arguments": "{}"},
+                        }
+                    ],
+                ),
+                _FakeResponse(content="done", tool_calls=[]),
+            ]
+        )
+
+        executor = _CapturingExecutor()
+        runner = ToolCallRunner()
+        _, tool_trace = await runner.run(
+            adapter=adapter,
+            messages=[{"role": "user", "content": "hi"}],
+            tools=[skill1.to_tool_schema(), skill2.to_tool_schema()],
+            skills=[skill1, skill2],
+            executor=executor,
+            max_rounds=2,
+            tool_hooks=[_ReplaceHook()],
+            allow_tool_replace=True,
+        )
+
+        assert executor.executed_skills == ["tool2"]
+        assert tool_trace[0]["tool_name"] == "tool2"
+        assert tool_trace[0]["args"] == {"from_hook": True}
+        assert tool_trace[0]["tool_override"] == {
+            "from": "tool1",
+            "to": "tool2",
+            "allowed": True,
+            "applied": True,
+        }
+        assert tool_trace[0]["result"]["raw"]["executed_skill"] == "tool2"
+
+    @pytest.mark.asyncio
+    async def test_pre_tool_use_hook_fires_without_interrupting_execution(self) -> None:
+        from houyi.domain.skill.hooks import HookEvent, HookType, SkillHook, SkillHooksManager
+
+        seen: list[dict[str, Any]] = []
+
+        async def on_pre_tool_use(ctx: Any) -> dict[str, Any]:
+            seen.append(
+                {
+                    "tool_name": ctx.tool_name,
+                    "tool_args": dict(ctx.tool_args),
+                    "skill_name": ctx.skill_name,
+                }
+            )
+            return {"success": True, "output": "noted"}
+
+        hooks = SkillHooksManager()
+        hooks.register_hooks(
+            SkillSpec(
+                name="hooked",
+                description="hooked skill hooks",
+                input_schema=_EmptyInput,
+                output_schema=_SimpleOutput,
+                hooks=[
+                    SkillHook(
+                        event=HookEvent.PRE_TOOL_USE,
+                        hook_type=HookType.HANDLER,
+                        handler=on_pre_tool_use,
+                    )
+                ],
+            )
+        )
+
+        skill = SkillSpec(
+            name="hooked",
+            description="hooked tool",
+            input_schema=_EmptyInput,
+            output_schema=_SimpleOutput,
+            executor=lambda _: _SimpleOutput(ok=True),
+        )
+        adapter = _FakeAdapter(
+            [
+                _FakeResponse(
+                    content="",
+                    tool_calls=[
+                        {
+                            "id": "call_pre_tool_use",
+                            "type": "function",
+                            "function": {"name": "hooked", "arguments": "{}"},
+                        }
+                    ],
+                ),
+                _FakeResponse(content="done", tool_calls=[]),
+            ]
+        )
+
+        runner = ToolCallRunner(skill_hooks_manager=hooks)
+        response, tool_trace = await runner.run(
+            adapter=adapter,
+            messages=[{"role": "user", "content": "hi"}],
+            tools=[skill.to_tool_schema()],
+            skills=[skill],
+            executor=_DummyExecutor(),
+            max_rounds=2,
+        )
+
+        assert response.content == "done"
+        assert len(tool_trace) == 1
+        assert seen == [{"tool_name": "hooked", "tool_args": {}, "skill_name": "hooked"}]
+
 
 class _EmptyInput(BaseModel):
     """Empty input schema for testing."""

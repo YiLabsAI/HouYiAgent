@@ -29,6 +29,20 @@ def build_fast_path_prompt(*, tool_names: list[str], skills: list[Any]) -> str:
     )
 
 
+def build_assistant_tool_message(response: Any) -> dict[str, Any]:
+    assistant_tool_message: dict[str, Any] = {
+        "role": "assistant",
+        "content": response.content or "",
+        "tool_calls": response.tool_calls,
+    }
+    response_metadata = getattr(response, "metadata", None)
+    if isinstance(response_metadata, dict):
+        reasoning_content = response_metadata.get("reasoning_content")
+        if isinstance(reasoning_content, str):
+            assistant_tool_message["reasoning_content"] = reasoning_content
+    return assistant_tool_message
+
+
 @dataclass(frozen=True)
 class ToolCallMessagesResult:
     messages: list[dict[str, Any]]
@@ -74,6 +88,7 @@ def build_tool_call_messages(
 __all__ = [
     "ToolCallMessagesResult",
     "apply_fast_path_tool_choice",
+    "build_assistant_tool_message",
     "build_fast_path_prompt",
     "build_tool_call_messages",
 ]

@@ -147,7 +147,7 @@ class TestContextualizerIntegration:
     """Tests for Contextualizer integration with IndexedMode."""
 
     @pytest.mark.asyncio
-    async def test_indexed_mode_contextualizer_initialized_with_llm(self) -> None:
+    async def test_indexed_mode_initializes_contextualizer_with_llm(self) -> None:
         """Test that IndexedMode initializes Contextualizer when LLM is provided."""
         from typing import Any
 
@@ -173,7 +173,7 @@ class TestContextualizerIntegration:
         assert mode._contextualizer is not None
 
     @pytest.mark.asyncio
-    async def test_indexed_mode_no_contextualizer_without_llm(self) -> None:
+    async def test_indexed_mode_skips_contextualizer_without_llm(self) -> None:
         """Test that IndexedMode has no Contextualizer without LLM."""
         from houyi.rag.config import EmbeddingConfig, GraphConfig, IndexedConfig
         from houyi.rag.indexed.mode import IndexedMode

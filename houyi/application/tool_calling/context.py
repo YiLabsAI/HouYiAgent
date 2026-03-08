@@ -73,7 +73,7 @@ class ToolLoopRuntimeServices:
 
 @dataclass
 class ToolLoopContext:
-    # Runner bridge that provides existing execution-layer helper methods.
+    # Runner facade coordinating loop-level collaborators and runtime services.
     runner: Any
     # Static policy and budget configuration for this loop.
     config: ToolLoopConfig
@@ -141,7 +141,7 @@ class ToolRoundPhaseServices:
 
 @dataclass
 class ToolRoundPhaseContext:
-    # Runner bridge that provides existing execution-layer helper methods.
+    # Runner facade coordinating per-round execution collaborators.
     runner: Any
     # Static policy and budget configuration for this round phase.
     config: ToolRoundPhaseConfig
@@ -197,7 +197,7 @@ class ToolCallBatchExecutionServices:
 
 @dataclass
 class ToolCallBatchExecutionContext:
-    # Runner bridge that provides existing execution-layer helper methods.
+    # Runner facade coordinating batch execution collaborators.
     runner: Any
     # Static policy and batch execution configuration.
     config: ToolCallBatchExecutionConfig

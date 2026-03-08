@@ -54,7 +54,7 @@ def test_get_location_uses_country_code_query(monkeypatch) -> None:
     assert "countryCode=CN" in seen_urls[0]
 
 
-def test_get_location_fallbacks_without_country_code(monkeypatch) -> None:
+def test_get_location_fallbacks_without_code(monkeypatch) -> None:
     seen_urls: list[str] = []
 
     def _fake_fetch(url: str, *args: Any, **kwargs: Any) -> dict[str, Any]:
@@ -82,7 +82,7 @@ def test_get_location_fallbacks_without_country_code(monkeypatch) -> None:
     assert "countryCode=" not in seen_urls[1]
 
 
-def test_get_location_not_found_after_fallback(monkeypatch) -> None:
+def test_get_location_not_found_after_fallbacks(monkeypatch) -> None:
     def _fake_fetch(url: str, *args: Any, **kwargs: Any) -> dict[str, Any]:
         return {"results": []}
 
@@ -118,7 +118,7 @@ def test_get_location_handles_coordinates_not_available(monkeypatch) -> None:
     assert out["error"] == "Coordinates not available"
 
 
-def test_location_post_tool_use_formats_success_summary() -> None:
+def test_location_post_tool_use_success_summary() -> None:
     class _Ctx:
         tool_result: dict[str, Any] = {
             "found": True,

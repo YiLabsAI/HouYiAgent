@@ -1,4 +1,4 @@
-"""Tool-calling orchestrator primitives and compatibility surface."""
+"""Tool-calling orchestrator primitives for per-round execution flow."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import logging
 import time
 from typing import Any
 
+from houyi.application.tool_calling.budget import prepare_tool_loop_messages
 from houyi.application.tool_calling.context import (
     ToolCallBatchExecutionContext,
     ToolLoopConfig,
@@ -18,6 +19,7 @@ from houyi.application.tool_calling.context import (
     build_tool_call_execution_context,
     build_tool_round_phase_context,
 )
+from houyi.application.tool_calling.tool_call_messages import build_assistant_tool_message
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +38,7 @@ class ToolLoopOrchestrator:
         for round_index in range(config.tool_loop_max_rounds):
             round_start = time.perf_counter() if config.tool_loop_enable_timing else 0.0
             chat_start = time.perf_counter() if config.tool_loop_enable_timing else 0.0
-            chat_messages = runner._prepare_chat_messages(
+            chat_messages = prepare_tool_loop_messages(
                 state.tool_loop_messages,
                 config.tool_loop_max_message_chars,
                 config.tool_loop_max_total_chars,
@@ -69,10 +71,10 @@ class ToolLoopOrchestrator:
                     )
                 return response
 
-            assistant_tool_message = runner._build_assistant_tool_message(response)
+            assistant_tool_message = build_assistant_tool_message(response)
             state.tool_loop_messages.append(assistant_tool_message)
 
-            should_stop = await runner._execute_round_tool_phase(
+            should_stop = await ToolLoopOrchestrator.execute_round_tool_phase(
                 build_tool_round_phase_context(
                     loop_ctx=ctx,
                     response=response,

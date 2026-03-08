@@ -23,7 +23,7 @@ def _build_context(*, graph_enabled: bool = True) -> RetrievalDispatchContext:
 
 
 @pytest.mark.asyncio
-async def test_create_retrieval_task_for_vector_strategy() -> None:
+async def test_create_task_vector_strategy() -> None:
     context = _build_context()
 
     name, task = create_retrieval_task(
@@ -36,7 +36,7 @@ async def test_create_retrieval_task_for_vector_strategy() -> None:
 
 
 @pytest.mark.asyncio
-async def test_create_retrieval_task_for_bm25_strategy() -> None:
+async def test_create_task_bm25_strategy() -> None:
     context = _build_context()
 
     name, task = create_retrieval_task(
@@ -48,7 +48,7 @@ async def test_create_retrieval_task_for_bm25_strategy() -> None:
     assert await task == ["bm25"]
 
 
-def test_create_retrieval_task_skips_graph_when_disabled() -> None:
+def test_create_task_skips_graph_when_disabled() -> None:
     context = _build_context(graph_enabled=False)
 
     task = create_retrieval_task(
@@ -60,7 +60,7 @@ def test_create_retrieval_task_skips_graph_when_disabled() -> None:
 
 
 @pytest.mark.asyncio
-async def test_create_retrieval_task_for_graph_strategy_when_enabled() -> None:
+async def test_create_task_graph_strategy() -> None:
     context = _build_context(graph_enabled=True)
 
     name, task = create_retrieval_task(

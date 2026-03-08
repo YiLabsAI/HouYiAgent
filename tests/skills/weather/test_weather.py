@@ -35,7 +35,7 @@ def test_get_weather_coords_openmeteo_success(monkeypatch) -> None:
     assert out.startswith("ok:39.9,116.4:")
 
 
-def test_get_weather_city_auto_uses_geocoding_then_openmeteo(monkeypatch) -> None:
+def test_get_weather_city_auto_uses_openmeteo(monkeypatch) -> None:
     monkeypatch.setattr(
         weather_skill,
         "_resolve_coordinates_from_city",
@@ -56,7 +56,7 @@ def test_get_weather_city_auto_uses_geocoding_then_openmeteo(monkeypatch) -> Non
     assert out.startswith("openmeteo:40.0,116.0:")
 
 
-def test_get_weather_city_openmeteo_reports_geocode_error(monkeypatch) -> None:
+def test_get_weather_openmeteo_reports_geocode_error(monkeypatch) -> None:
     monkeypatch.setattr(
         weather_skill,
         "_resolve_coordinates_from_city",
@@ -66,7 +66,7 @@ def test_get_weather_city_openmeteo_reports_geocode_error(monkeypatch) -> None:
     assert out == "Weather unavailable: City not found"
 
 
-def test_get_weather_auto_fallbacks_to_wttr_when_openmeteo_fails(monkeypatch) -> None:
+def test_get_weather_auto_fallbacks_to_wttr(monkeypatch) -> None:
     def _raise(*args: Any, **kwargs: Any) -> str:
         raise OSError("network")
 

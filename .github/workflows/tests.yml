@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [ main ]
 
+permissions:
+  contents: read
+  id-token: write
+
 jobs:
   test:
     runs-on: ${{ matrix.os }}
@@ -46,7 +50,9 @@ jobs:
         files: ./coverage.xml
         flags: unittests
         name: codecov-umbrella
-        fail_ci_if_error: false
+        use_oidc: true
+        verbose: true
+        fail_ci_if_error: true
 
   server-test:
     runs-on: ubuntu-latest
