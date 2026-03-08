@@ -15,7 +15,7 @@ def workspace_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return tmp_path
 
 
-def test_build_builtin_local_tools_contains_six_expected_names() -> None:
+def test_build_tools_names() -> None:
     tools = local_tools.build_builtin_local_tools()
     names = [tool.name for tool in tools]
     assert names == [
@@ -28,7 +28,7 @@ def test_build_builtin_local_tools_contains_six_expected_names() -> None:
     ]
 
 
-def test_build_builtin_local_tools_sets_policy_by_risk() -> None:
+def test_build_tools_policies() -> None:
     tools = {tool.name: tool for tool in local_tools.build_builtin_local_tools()}
 
     assert tools["houyi_read_file"].invocation_policy.model_auto_invoke == ModelAutoInvoke.ALLOW
@@ -40,7 +40,7 @@ def test_build_builtin_local_tools_sets_policy_by_risk() -> None:
     )
 
 
-def test_register_builtin_local_tools_registers_all() -> None:
+def test_register_tools() -> None:
     registry = SkillRegistry()
 
     registered = local_tools.register_builtin_local_tools(registry)
@@ -50,7 +50,7 @@ def test_register_builtin_local_tools_registers_all() -> None:
 
 
 @pytest.mark.asyncio
-async def test_read_file_executor_reads_with_line_range(workspace_root: Path) -> None:
+async def test_read_file_line_range(workspace_root: Path) -> None:
     target = workspace_root / "a.txt"
     target.write_text("one\ntwo\nthree\n", encoding="utf-8")
 
@@ -61,7 +61,7 @@ async def test_read_file_executor_reads_with_line_range(workspace_root: Path) ->
 
 
 @pytest.mark.asyncio
-async def test_write_file_executor_creates_parents(workspace_root: Path) -> None:
+async def test_write_file_creates_parents(workspace_root: Path) -> None:
     result = await local_tools._write_file_executor(
         path="nested/target.txt",
         content="hello",
@@ -73,7 +73,7 @@ async def test_write_file_executor_creates_parents(workspace_root: Path) -> None
 
 
 @pytest.mark.asyncio
-async def test_find_files_executor_filters_by_pattern(workspace_root: Path) -> None:
+async def test_find_files_pattern(workspace_root: Path) -> None:
     (workspace_root / "keep.py").write_text("print('x')", encoding="utf-8")
     (workspace_root / "skip.txt").write_text("x", encoding="utf-8")
 
@@ -85,7 +85,7 @@ async def test_find_files_executor_filters_by_pattern(workspace_root: Path) -> N
 
 
 @pytest.mark.asyncio
-async def test_find_files_executor_iterative_subdirs_exact_match(workspace_root: Path) -> None:
+async def test_find_files_iterative_exact_match(workspace_root: Path) -> None:
     nested = workspace_root / "src" / "skills"
     nested.mkdir(parents=True)
     (nested / "skill.md").write_text("# skill", encoding="utf-8")
@@ -99,13 +99,16 @@ async def test_find_files_executor_iterative_subdirs_exact_match(workspace_root:
     )
 
     assert result["success"] is True
-    assert any(item.endswith("src/skills/skill.md") for item in result["data"]["matches"])
+    assert any(
+        Path(item).parts[-3:] == ("src", "skills", "skill.md")
+        for item in result["data"]["matches"]
+    )
     assert result["data"]["iterative_subdirs"] is True
-    assert any(path.endswith("src") for path in result["data"]["searched_dirs"])
+    assert any(Path(path).name == "src" for path in result["data"]["searched_dirs"])
 
 
 @pytest.mark.asyncio
-async def test_find_files_executor_iterative_subdirs_respects_max_depth(
+async def test_find_files_max_depth(
     workspace_root: Path,
 ) -> None:
     deep = workspace_root / "a" / "b" / "c"
@@ -125,7 +128,7 @@ async def test_find_files_executor_iterative_subdirs_respects_max_depth(
 
 
 @pytest.mark.asyncio
-async def test_find_files_executor_default_contains_mode(workspace_root: Path) -> None:
+async def test_find_files_default_contains_mode(workspace_root: Path) -> None:
     (workspace_root / "skill.md").write_text("x", encoding="utf-8")
 
     result = await local_tools._find_files_executor(root_path=".", pattern="skill")
@@ -137,7 +140,7 @@ async def test_find_files_executor_default_contains_mode(workspace_root: Path) -
 
 
 @pytest.mark.asyncio
-async def test_find_files_executor_wildcard_pattern_auto_uses_glob(workspace_root: Path) -> None:
+async def test_find_files_glob_mode(workspace_root: Path) -> None:
     (workspace_root / "main.py").write_text("print('x')", encoding="utf-8")
 
     result = await local_tools._find_files_executor(root_path=".", pattern="*.py")
@@ -149,7 +152,7 @@ async def test_find_files_executor_wildcard_pattern_auto_uses_glob(workspace_roo
 
 
 @pytest.mark.asyncio
-async def test_list_dir_executor_non_recursive(workspace_root: Path) -> None:
+async def test_list_dir_non_recursive(workspace_root: Path) -> None:
     (workspace_root / "a.txt").write_text("a", encoding="utf-8")
     nested = workspace_root / "nested"
     nested.mkdir()
@@ -164,7 +167,7 @@ async def test_list_dir_executor_non_recursive(workspace_root: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_grep_executor_matches_lines(workspace_root: Path) -> None:
+async def test_grep_matches_lines(workspace_root: Path) -> None:
     (workspace_root / "x.txt").write_text("alpha\nneedle here\nomega\n", encoding="utf-8")
 
     result = await local_tools._grep_executor(path=".", query="needle")
@@ -175,7 +178,7 @@ async def test_grep_executor_matches_lines(workspace_root: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_shell_exec_executor_blocks_dangerous_command(workspace_root: Path) -> None:
+async def test_shell_exec_blocks_dangerous_command(workspace_root: Path) -> None:
     result = await local_tools._shell_exec_executor(command="sudo ls", cwd=".")
 
     assert result["success"] is False
@@ -183,7 +186,7 @@ async def test_shell_exec_executor_blocks_dangerous_command(workspace_root: Path
 
 
 @pytest.mark.asyncio
-async def test_shell_exec_executor_runs_safe_command(workspace_root: Path) -> None:
+async def test_shell_exec_runs_safe_command(workspace_root: Path) -> None:
     result = await local_tools._shell_exec_executor(command="echo hello", cwd=".")
 
     assert result["success"] is True
@@ -191,7 +194,7 @@ async def test_shell_exec_executor_runs_safe_command(workspace_root: Path) -> No
 
 
 @pytest.mark.asyncio
-async def test_executors_reject_paths_outside_workspace(workspace_root: Path) -> None:
+async def test_executors_reject_outside_workspace(workspace_root: Path) -> None:
     outside_path = str(workspace_root.parent / "outside.txt")
 
     read_result = await local_tools._read_file_executor(path=outside_path)

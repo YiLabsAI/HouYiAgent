@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import tempfile
+from pathlib import Path
 
 import pytest
 
@@ -1035,4 +1036,4 @@ class TestIndexDir:
                 graph_config=GraphConfig(),
             )
 
-            assert mode._index_dir == tmpdir + "/.houyi"
+            assert Path(mode._index_dir) == Path(tmpdir) / ".houyi"
