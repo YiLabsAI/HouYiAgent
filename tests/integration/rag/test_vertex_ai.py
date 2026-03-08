@@ -26,12 +26,20 @@ from houyi.infrastructure.config.env_config import (
     EnvConfig,
 )
 
+
+def _is_google_genai_installed() -> bool:
+    try:
+        return importlib.util.find_spec("google.genai") is not None
+    except ModuleNotFoundError:
+        return False
+
+
 EnvConfig._reset()
 _env = EnvConfig.get()
 VERTEX_PROJECT = _env.google_project
 VERTEX_API_KEY = _env.google_api_key
 VERTEX_CREDENTIALS = _env.google_credentials_path
-GOOGLE_GENAI_INSTALLED = importlib.util.find_spec("google.genai") is not None
+GOOGLE_GENAI_INSTALLED = _is_google_genai_installed()
 
 
 def _vertex_skip_reason() -> str | None:

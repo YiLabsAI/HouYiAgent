@@ -139,7 +139,7 @@ fi
 run_check "Type Check (mypy)" uv run mypy houyi/
 
 # ── 4. SDK unit tests (with coverage, single pass) ──────────────────
-run_check "SDK Tests + Coverage" uv run pytest tests/ -x -n auto \
+run_check "SDK Tests + Coverage" uv run pytest tests/ --ignore=tests/integration -x -n auto \
     --cov=houyi --cov-report=term-missing --cov-fail-under=85
 
 # ── 5. Server tests ─────────────────────────────────────────────────

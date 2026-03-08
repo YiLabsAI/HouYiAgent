@@ -136,9 +136,11 @@ Restarts only the UI (useful when iterating on frontend code).
 - ✅ Ruff basic checks (tests)
 - ✅ Mypy type checking
 - ✅ Changed-file complexity and class-size gates
-- ✅ SDK unit tests
+- ✅ SDK tests excluding `tests/integration/`
 - ✅ Studio server tests
 - ✅ SDK coverage check (must be ≥85%)
+
+**Note**: `check_code.sh` intentionally excludes env-backed integration tests under `tests/integration/`. Use `check_integration.sh` after `make check` when you need to validate provider-backed or credential-backed paths.
 
 **When to use**: Before committing code, before opening PR
 
