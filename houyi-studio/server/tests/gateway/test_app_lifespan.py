@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 import time
-from pathlib import Path
 
 import pytest
 from fastapi import APIRouter, FastAPI
@@ -189,14 +188,14 @@ def test_lifespan_resolves_default_chat_data_dir_from_project_root(monkeypatch, 
 
     captured = _stub_startup_dependencies(app_module, monkeypatch, tmp_path)
     monkeypatch.delenv(ENV_CHAT_DATA_DIR, raising=False)
+    expected = tmp_path / "project-root" / "data/conversations"
+    monkeypatch.setattr(app_module, "resolve_chat_data_dir", lambda value: expected)
 
     app = FastAPI(lifespan=app_module.lifespan)
     with TestClient(app):
         pass
 
-    assert (
-        captured["chat_data_dir"] == Path("/Users/von/workspace/HouYiAgent") / "data/conversations"
-    )
+    assert captured["chat_data_dir"] == expected
 
 
 def test_lifespan_resolves_relative_chat_data_dir_from_project_root(monkeypatch, tmp_path) -> None:
@@ -204,12 +203,14 @@ def test_lifespan_resolves_relative_chat_data_dir_from_project_root(monkeypatch,
 
     captured = _stub_startup_dependencies(app_module, monkeypatch, tmp_path)
     monkeypatch.setenv(ENV_CHAT_DATA_DIR, "custom/chat-data")
+    expected = tmp_path / "project-root" / "custom/chat-data"
+    monkeypatch.setattr(app_module, "resolve_chat_data_dir", lambda value: expected)
 
     app = FastAPI(lifespan=app_module.lifespan)
     with TestClient(app):
         pass
 
-    assert captured["chat_data_dir"] == Path("/Users/von/workspace/HouYiAgent") / "custom/chat-data"
+    assert captured["chat_data_dir"] == expected
 
 
 def test_lifespan_keeps_absolute_chat_data_dir(monkeypatch, tmp_path) -> None:

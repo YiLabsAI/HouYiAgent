@@ -5,9 +5,9 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from pathlib import Path
 
 import pytest
+from houyi_studio.server.chat import json_store as json_store_module
 from houyi_studio.server.chat.json_store import JsonStore, resolve_chat_data_dir
 from houyi_studio.server.chat.types import (
     Conversation,
@@ -17,25 +17,29 @@ from houyi_studio.server.chat.types import (
 )
 
 
-@pytest.fixture
-def store(tmp_path):
-    return JsonStore(data_dir=tmp_path / "conversations")
-
-
-def test_resolve_chat_data_dir_defaults_to_project_root():
+def test_resolve_chat_data_dir_defaults_to_project_root(monkeypatch, tmp_path):
+    project_root = tmp_path / "project-root"
+    monkeypatch.setattr(json_store_module, "_project_root", lambda: project_root)
     resolved = resolve_chat_data_dir()
-    assert resolved == Path("/Users/von/workspace/HouYiAgent") / "data/conversations"
+    assert resolved == project_root / "data/conversations"
 
 
-def test_resolve_chat_data_dir_resolves_relative_path_from_project_root():
+def test_resolve_chat_data_dir_resolves_relative_path_from_project_root(monkeypatch, tmp_path):
+    project_root = tmp_path / "project-root"
+    monkeypatch.setattr(json_store_module, "_project_root", lambda: project_root)
     resolved = resolve_chat_data_dir("custom/chat-data")
-    assert resolved == Path("/Users/von/workspace/HouYiAgent") / "custom/chat-data"
+    assert resolved == project_root / "custom/chat-data"
 
 
 def test_resolve_chat_data_dir_keeps_absolute_path(tmp_path):
     absolute = tmp_path / "chat-data"
     resolved = resolve_chat_data_dir(absolute)
     assert resolved == absolute
+
+
+@pytest.fixture
+def store(tmp_path):
+    return JsonStore(data_dir=tmp_path / "conversations")
 
 
 @pytest.fixture
