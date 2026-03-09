@@ -1,6 +1,11 @@
-"""Unit tests for GoogleVertexGeminiAdapter conversions."""
+"""Covers Gemini SDK adapter conversion, auth-mode setup, and SDK error wrapping."""
 
 from __future__ import annotations
+
+import builtins
+import os
+import types
+from unittest.mock import patch
 
 import pytest
 
@@ -103,6 +108,94 @@ def test_vertex_gemini_normalize_response_without_parts_uses_text() -> None:
 
     assert result.content == '{"scores": [9, 1]}'
     assert result.tool_calls == []
+
+
+def test_vertex_gemini_normalize_response_uses_parsed_object_string() -> None:
+    """Normalize should stringify parsed structured output when present."""
+
+    class _Response:
+        def __init__(self) -> None:
+            self.candidates = []
+            self.usage_metadata = None
+            self.parsed = {"city": "Tokyo", "score": 9}
+            self.text = "ignored"
+
+    adapter = _build_adapter()
+    result = adapter._normalize_response(_Response())
+
+    assert result.content == '{"city": "Tokyo", "score": 9}'
+    assert result.tool_calls == []
+
+
+def test_vertex_gemini_extract_candidate_content_prefers_candidate_text() -> None:
+    adapter = _build_adapter()
+
+    class _Candidate:
+        text = "direct text"
+        content = None
+
+    assert adapter._extract_candidate_content(_Candidate()) == "direct text"
+
+
+def test_vertex_gemini_prepare_contents_and_system_separates_system_message() -> None:
+    adapter = _build_adapter()
+
+    class _Part:
+        @staticmethod
+        def from_text(*, text):
+            return {"text": text}
+
+    class _Content:
+        def __init__(self, role=None, parts=None) -> None:
+            self.role = role
+            self.parts = parts
+
+    fake_types = types.SimpleNamespace(Content=_Content, Part=_Part)
+    system_instruction, contents = adapter._prepare_contents_and_system(
+        fake_types,
+        [
+            {"role": "system", "content": "be concise"},
+            {"role": "user", "content": "hello"},
+            {"role": "assistant", "content": "hi"},
+        ],
+    )
+
+    assert system_instruction == "be concise"
+    assert len(contents) == 2
+    assert contents[0].role == "user"
+    assert contents[0].parts == [{"text": "hello"}]
+    assert contents[1].role == "model"
+
+
+def test_vertex_gemini_build_generate_config_sets_system_instruction() -> None:
+    adapter = _build_adapter()
+
+    class _Config:
+        def __init__(self, **kwargs) -> None:
+            self.kwargs = kwargs
+
+    fake_types = types.SimpleNamespace(GenerateContentConfig=_Config)
+    config = adapter._build_generate_config(
+        fake_types,
+        temperature=0.1,
+        max_tokens=8,
+        tools=None,
+        system_instruction="be concise",
+        extra_kwargs={"response_mime_type": "application/json"},
+    )
+
+    assert config.kwargs["temperature"] == 0.1
+    assert config.kwargs["max_output_tokens"] == 8
+    assert config.kwargs["system_instruction"] == "be concise"
+    assert config.kwargs["response_mime_type"] == "application/json"
+
+
+def test_vertex_gemini_tool_choice_dict_maps_to_any() -> None:
+    adapter = _build_adapter()
+    assert (
+        adapter._convert_tool_choice({"type": "function"})["function_calling_config"]["mode"]
+        == "ANY"
+    )
 
 
 def test_vertex_gemini_convert_tools_empty() -> None:
@@ -259,12 +352,19 @@ async def test_vertex_gemini_stream_chat() -> None:
     adapter = _build_adapter()
 
     class _Chunk:
-        def __init__(self, text: str) -> None:
+        def __init__(self, text: str, usage_metadata=None) -> None:
             self.text = text
+            self.usage_metadata = usage_metadata
+
+    class _UsageMetadata:
+        def __init__(self) -> None:
+            self.prompt_token_count = 4
+            self.candidates_token_count = 2
+            self.total_token_count = 6
 
     async def _fake_stream(model=None, contents=None, config=None):
-        for text in ["hello", " world"]:
-            yield _Chunk(text)
+        yield _Chunk("hello")
+        yield _Chunk(" world", usage_metadata=_UsageMetadata())
 
     class _Models:
         async def generate_content_stream(self, model=None, contents=None, config=None):
@@ -281,6 +381,116 @@ async def test_vertex_gemini_stream_chat() -> None:
         chunks.append((chunk.content_delta, chunk.reasoning_delta))
 
     assert chunks == [("hello", None), (" world", None)]
+    assert adapter.last_usage == {"prompt_tokens": 4, "completion_tokens": 2, "total_tokens": 6}
+    assert adapter.last_finish_reason == "stop"
+
+
+def test_vertex_gemini_init_vertex_ai_mode_sets_credentials_env(monkeypatch) -> None:
+    created = {}
+
+    class _Client:
+        def __init__(self, **kwargs) -> None:
+            created.update(kwargs)
+
+    fake_genai = types.SimpleNamespace(Client=_Client)
+    fake_google = types.SimpleNamespace(genai=fake_genai)
+    monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", "preexisting.json")
+    monkeypatch.setattr(
+        "houyi.adapters.llm.vertex_gemini_adapter.detect_proxy",
+        lambda: None,
+    )
+
+    with patch.dict("sys.modules", {"google": fake_google, "google.genai": fake_genai}):
+        adapter = GoogleVertexGeminiAdapter(
+            model="gemini-test",
+            project="proj",
+            location="asia-east1",
+            credentials_path="new-creds.json",
+        )
+
+    assert adapter._auth_mode == "vertex_ai"
+    assert created["vertexai"] is True
+    assert created["project"] == "proj"
+    assert created["location"] == "asia-east1"
+    assert os.environ["GOOGLE_APPLICATION_CREDENTIALS"] == "preexisting.json"
+
+
+def test_vertex_gemini_init_raises_import_error_when_sdk_missing():
+    original_import = builtins.__import__
+
+    def _fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "google":
+            raise ImportError("missing google")
+        return original_import(name, globals, locals, fromlist, level)
+
+    with patch("builtins.__import__", side_effect=_fake_import):
+        with pytest.raises(ImportError, match="Google GenAI SDK not installed"):
+            GoogleVertexGeminiAdapter(model="gemini-test", api_key="test-key")
+
+
+@pytest.mark.asyncio
+async def test_vertex_gemini_chat_wraps_sdk_errors() -> None:
+    pytest.importorskip("google.genai")
+
+    class _Part:
+        @staticmethod
+        def from_text(*, text):
+            return {"text": text}
+
+    class _Content:
+        def __init__(self, role=None, parts=None) -> None:
+            self.role = role
+            self.parts = parts
+
+    class _Config:
+        def __init__(self, **kwargs) -> None:
+            self.kwargs = kwargs
+
+    fake_types = types.SimpleNamespace(Content=_Content, Part=_Part, GenerateContentConfig=_Config)
+    adapter = _build_adapter()
+
+    class _Models:
+        async def generate_content(self, **kwargs):
+            raise Exception("401 UNAUTHENTICATED")
+
+    adapter._client = type("FakeClient", (), {"aio": type("Aio", (), {"models": _Models()})()})()
+
+    with patch.dict("sys.modules", {"google.genai": types.SimpleNamespace(types=fake_types)}):
+        with pytest.raises(RuntimeError, match="GOOGLE_API_KEY"):
+            await adapter.chat([{"role": "user", "content": "hi"}])
+
+
+@pytest.mark.asyncio
+async def test_vertex_gemini_stream_wraps_sdk_errors() -> None:
+    pytest.importorskip("google.genai")
+
+    class _Part:
+        @staticmethod
+        def from_text(*, text):
+            return {"text": text}
+
+    class _Content:
+        def __init__(self, role=None, parts=None) -> None:
+            self.role = role
+            self.parts = parts
+
+    class _Config:
+        def __init__(self, **kwargs) -> None:
+            self.kwargs = kwargs
+
+    fake_types = types.SimpleNamespace(Content=_Content, Part=_Part, GenerateContentConfig=_Config)
+    adapter = _build_adapter()
+
+    class _Models:
+        async def generate_content_stream(self, **kwargs):
+            raise Exception("404 NOT_FOUND")
+
+    adapter._client = type("FakeClient", (), {"aio": type("Aio", (), {"models": _Models()})()})()
+
+    with patch.dict("sys.modules", {"google.genai": types.SimpleNamespace(types=fake_types)}):
+        with pytest.raises(RuntimeError, match="GEMINI_MODEL"):
+            async for _ in adapter.stream_chat([{"role": "user", "content": "hi"}]):
+                pass
 
 
 class TestBuildProxyHttpOptions:
@@ -321,3 +531,28 @@ class TestWrapSdkErrorRegion:
         )
         msg = str(exc)
         assert "GOOGLE_CLOUD_LOCATION" in msg
+
+    def test_401_error_explains_developer_api_credentials(self):
+        adapter = _build_adapter()
+        exc = adapter._wrap_sdk_error(Exception("401 UNAUTHENTICATED"))
+        msg = str(exc)
+        assert "GOOGLE_API_KEY" in msg
+        assert "AIza" in msg
+
+    def test_403_error_explains_permissions(self):
+        adapter = _build_adapter()
+        exc = adapter._wrap_sdk_error(Exception("403 PERMISSION_DENIED"))
+        assert "aiplatform.user role" in str(exc)
+
+    def test_404_error_explains_model_config(self):
+        adapter = _build_adapter()
+        exc = adapter._wrap_sdk_error(Exception("404 NOT_FOUND"))
+        assert "GEMINI_MODEL" in str(exc)
+
+    def test_other_error_preserves_auth_mode_and_model_context(self):
+        adapter = _build_adapter()
+        exc = adapter._wrap_sdk_error(Exception("socket closed"))
+        msg = str(exc)
+        assert "developer_api" in msg
+        assert "test-model" in msg
+        assert "socket closed" in msg

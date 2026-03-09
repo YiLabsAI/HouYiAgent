@@ -1,15 +1,4 @@
-"""Unit tests for houyi.adapters.llm.vertex_httpx_adapter — VertexAIAdapter.
-
-Tests cover:
-- Mock mode (no SA / project)
-- Service account loading and project_id resolution
-- OpenAI-compatible URL construction (global vs regional)
-- max_tokens clamping
-- Retry / backoff (429, 400, 401, persistent 500)
-- Access token caching
-- Model name formatting
-- Reasoning (reasoning_effort, reasoning_content parsing)
-"""
+"""Covers Vertex httpx adapter auth fallback, request shaping, retry, and SSE parsing."""
 
 from __future__ import annotations
 
@@ -795,3 +784,322 @@ class TestVertexAIAdapterReasoning:
         assert chunks[0] == ("", "Let me think...")
         assert chunks[1] == ("The answer is 42", None)
         assert chunks[2] == (".", "done")
+
+
+class TestVertexAIAdapterHelpers:
+    def test_build_chat_body_includes_tools_and_clamps_max_tokens(self):
+        body = VertexAIAdapter._build_chat_body(
+            model="gemini-2.5-pro",
+            normalized_messages=[{"role": "user", "content": "hi"}],
+            temperature=0.3,
+            max_tokens=999999,
+            tools=[{"type": "function", "function": {"name": "search"}}],
+            extra_kwargs={"tool_choice": "required"},
+        )
+
+        assert body["model"] == "google/gemini-2.5-pro"
+        assert body["messages"] == [{"role": "user", "content": "hi"}]
+        assert body["temperature"] == 0.3
+        assert body["stream"] is False
+        assert body["max_tokens"] == 65536
+        assert body["tools"] == [{"type": "function", "function": {"name": "search"}}]
+        assert body["tool_choice"] == "required"
+
+    def test_build_stream_body_filters_supported_keys_and_sets_reasoning(self):
+        body = VertexAIAdapter._build_stream_body(
+            model="gemini-2.5-pro",
+            normalized_messages=[{"role": "user", "content": "hi"}],
+            temperature=0.2,
+            max_tokens=10,
+            extra_kwargs={
+                "top_p": 0.8,
+                "stop": ["END"],
+                "unsupported": "ignored",
+                "enable_reasoning": True,
+            },
+        )
+
+        assert body["model"] == "google/gemini-2.5-pro"
+        assert body["stream"] is True
+        assert body["temperature"] == 0.2
+        assert body["max_tokens"] == 10
+        assert body["top_p"] == 0.8
+        assert body["stop"] == ["END"]
+        assert "unsupported" not in body
+        assert body["reasoning_effort"] == "high"
+
+    def test_parse_sse_event_handles_done_invalid_and_non_dict_payloads(self):
+        event, done = VertexAIAdapter._parse_sse_event("data: [DONE]")
+        assert event is None
+        assert done is True
+
+        event, done = VertexAIAdapter._parse_sse_event("data: not-json")
+        assert event is None
+        assert done is False
+
+        event, done = VertexAIAdapter._parse_sse_event("data: [1, 2]")
+        assert event is None
+        assert done is False
+
+    def test_extract_stream_chunk_and_update_usage(self):
+        adapter = VertexAIAdapter.__new__(VertexAIAdapter)
+        adapter.last_usage = None
+
+        adapter._update_stream_usage_from_event(
+            {"usage": {"prompt_tokens": 3, "completion_tokens": 4, "total_tokens": 7}}
+        )
+        chunk = adapter._extract_stream_chunk(
+            {"choices": [{"delta": {"content": "ok", "reasoning_content": "think"}}]}
+        )
+
+        assert adapter.last_usage == {"prompt_tokens": 3, "completion_tokens": 4, "total_tokens": 7}
+        assert chunk is not None
+        assert chunk.content_delta == "ok"
+        assert chunk.reasoning_delta == "think"
+
+    @pytest.mark.asyncio
+    async def test_retry_or_raise_transport_returns_false_when_not_retryable(self, tmp_path):
+        sa_path, _ = _make_sa_file(tmp_path)
+        with patch.dict(os.environ, {"GOOGLE_APPLICATION_CREDENTIALS": sa_path}):
+            adapter = VertexAIAdapter()
+
+        retry_controller = MagicMock()
+        retry_controller.on_transport_exception.return_value = type(
+            "Decision", (), {"retry": False, "bucket": "other", "delay_seconds": 0.0}
+        )()
+
+        result = await adapter._retry_or_raise_transport(
+            retry_controller=retry_controller,
+            exc=Exception("boom"),
+            label="Vertex AI chat",
+        )
+
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_chat_returns_error_response_when_authentication_fails(self, tmp_path):
+        sa_path, _ = _make_sa_file(tmp_path)
+        with patch.dict(
+            os.environ,
+            {
+                "GOOGLE_APPLICATION_CREDENTIALS": sa_path,
+                "GOOGLE_CLOUD_LOCATION": "global",
+            },
+        ):
+            adapter = VertexAIAdapter()
+
+        with patch.object(adapter, "_get_access_token", AsyncMock(return_value=None)):
+            result = await adapter.chat([{"role": "user", "content": "hi"}])
+
+        assert result.finish_reason == "error"
+        assert result.metadata == {"error": "Failed to authenticate with Vertex AI"}
+        assert result.content == ""
+
+    @pytest.mark.asyncio
+    async def test_stream_chat_yields_authentication_error_chunk(self, tmp_path):
+        sa_path, _ = _make_sa_file(tmp_path)
+        with patch.dict(
+            os.environ,
+            {
+                "GOOGLE_APPLICATION_CREDENTIALS": sa_path,
+                "GOOGLE_CLOUD_LOCATION": "global",
+            },
+        ):
+            adapter = VertexAIAdapter()
+
+        with patch.object(adapter, "_get_access_token", AsyncMock(return_value=None)):
+            chunks = []
+            async for chunk in adapter.stream_chat([{"role": "user", "content": "hi"}]):
+                chunks.append(chunk.content_delta)
+
+        assert chunks == ["[Error: Failed to authenticate with Vertex AI]"]
+
+    def test_parse_sse_event_returns_none_for_non_prefixed_line(self):
+        event, done = VertexAIAdapter._parse_sse_event("event: ping")
+        assert event is None
+        assert done is False
+
+    def test_extract_stream_chunk_returns_none_when_no_meaningful_delta(self):
+        assert VertexAIAdapter._extract_stream_chunk({"choices": []}) is None
+        assert VertexAIAdapter._extract_stream_chunk({"choices": [{"delta": {}}]}) is None
+
+
+class TestVertexAIAdapterJwtAndToken:
+    def test_sign_jwt_with_openssl_returns_compact_token(self, tmp_path):
+        sa_path, sa = _make_sa_file(tmp_path)
+        with patch.dict(os.environ, {"GOOGLE_APPLICATION_CREDENTIALS": sa_path}):
+            adapter = VertexAIAdapter()
+
+        proc = MagicMock(returncode=0, stdout=b"sig-bytes", stderr=b"")
+        with patch("subprocess.run", return_value=proc):
+            token = adapter._sign_jwt_with_openssl()
+
+        assert token.count(".") == 2
+        assert sa["client_email"] not in token
+
+    def test_sign_jwt_with_openssl_raises_when_openssl_fails(self, tmp_path):
+        sa_path, _ = _make_sa_file(tmp_path)
+        with patch.dict(os.environ, {"GOOGLE_APPLICATION_CREDENTIALS": sa_path}):
+            adapter = VertexAIAdapter()
+
+        proc = MagicMock(returncode=1, stdout=b"", stderr=b"bad key")
+        with patch("subprocess.run", return_value=proc):
+            with pytest.raises(RuntimeError, match="openssl signing failed"):
+                adapter._sign_jwt_with_openssl()
+
+    @pytest.mark.asyncio
+    async def test_get_access_token_returns_none_without_service_account(self):
+        with patch.dict(os.environ, {}, clear=True):
+            adapter = VertexAIAdapter()
+
+        assert await adapter._get_access_token() is None
+
+    @pytest.mark.asyncio
+    async def test_get_access_token_returns_none_on_transport_error_after_retries(self, tmp_path):
+        sa_path, _ = _make_sa_file(tmp_path)
+
+        class ConnectBoom(Exception):
+            pass
+
+        mock_httpx_client = AsyncMock()
+        mock_httpx_client.post = AsyncMock(side_effect=ConnectBoom("connect fail"))
+        mock_httpx_client.__aenter__ = AsyncMock(return_value=mock_httpx_client)
+        mock_httpx_client.__aexit__ = AsyncMock(return_value=False)
+
+        with patch.dict(os.environ, {"GOOGLE_APPLICATION_CREDENTIALS": sa_path}):
+            adapter = VertexAIAdapter()
+
+        with (
+            patch.object(adapter, "_sign_jwt_with_openssl", return_value="fake-jwt"),
+            patch("httpx.AsyncClient", return_value=mock_httpx_client),
+            patch("httpx.TransportError", ConnectBoom),
+            patch("houyi.adapters.llm.vertex_httpx_adapter.asyncio.sleep", new=AsyncMock()),
+            patch("houyi.infrastructure.net.proxy.detect_proxy", return_value=None),
+        ):
+            token = await adapter._get_access_token()
+
+        assert token is None
+        assert mock_httpx_client.post.await_count == 4
+
+    @pytest.mark.asyncio
+    async def test_get_access_token_resets_cached_token_on_401_then_returns_none(self, tmp_path):
+        import time
+
+        sa_path, _ = _make_sa_file(tmp_path)
+
+        mock_resp = MagicMock(status_code=401, headers={})
+        mock_resp.raise_for_status.side_effect = RuntimeError("401")
+
+        mock_httpx_client = AsyncMock()
+        mock_httpx_client.post = AsyncMock(return_value=mock_resp)
+        mock_httpx_client.__aenter__ = AsyncMock(return_value=mock_httpx_client)
+        mock_httpx_client.__aexit__ = AsyncMock(return_value=False)
+
+        with patch.dict(os.environ, {"GOOGLE_APPLICATION_CREDENTIALS": sa_path}):
+            adapter = VertexAIAdapter()
+            adapter._access_token = "stale-token"
+            adapter._token_expiry = time.time() - 10
+
+        with (
+            patch.object(adapter, "_sign_jwt_with_openssl", return_value="fake-jwt"),
+            patch("httpx.AsyncClient", return_value=mock_httpx_client),
+            patch("houyi.infrastructure.net.proxy.detect_proxy", return_value=None),
+        ):
+            token = await adapter._get_access_token()
+
+        assert token is None
+        assert adapter._access_token is None
+        assert adapter._token_expiry == 0
+
+
+class TestVertexAIAdapterChat:
+    @pytest.mark.asyncio
+    async def test_chat_success_updates_last_usage_and_model(self, tmp_path):
+        sa_path, _ = _make_sa_file(tmp_path)
+        captured = {}
+
+        mock_resp = MagicMock(status_code=200)
+        mock_resp.json.return_value = {
+            "model": "google/gemini-2.5-pro",
+            "choices": [{"message": {"content": "ok", "tool_calls": []}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7},
+        }
+
+        mock_httpx_client = AsyncMock()
+        mock_httpx_client.post = AsyncMock(
+            side_effect=lambda url, headers=None, json=None: captured.update(
+                {"url": url, "headers": headers, "json": json}
+            )
+            or mock_resp
+        )
+        mock_httpx_client.__aenter__ = AsyncMock(return_value=mock_httpx_client)
+        mock_httpx_client.__aexit__ = AsyncMock(return_value=False)
+
+        with patch.dict(
+            os.environ,
+            {"GOOGLE_APPLICATION_CREDENTIALS": sa_path, "GOOGLE_CLOUD_LOCATION": "global"},
+        ):
+            adapter = VertexAIAdapter()
+
+        with (
+            patch.object(adapter, "_get_access_token", AsyncMock(return_value="token-1")),
+            patch("httpx.AsyncClient", return_value=mock_httpx_client),
+            patch("houyi.infrastructure.net.proxy.detect_proxy", return_value=None),
+        ):
+            result = await adapter.chat(
+                [{"role": "user", "content": "hi"}],
+                tools=[{"type": "function", "function": {"name": "search"}}],
+                tool_choice="required",
+                max_tokens=9,
+            )
+
+        assert captured["json"]["tool_choice"] == "required"
+        assert captured["json"]["tools"] == [{"type": "function", "function": {"name": "search"}}]
+        assert result.content == "ok"
+        assert adapter.last_usage == {"prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7}
+
+    @pytest.mark.asyncio
+    async def test_chat_retries_once_on_transport_error_then_succeeds(self, tmp_path):
+        sa_path, _ = _make_sa_file(tmp_path)
+
+        class ConnectBoom(Exception):
+            pass
+
+        mock_resp = MagicMock(status_code=200)
+        mock_resp.json.return_value = {
+            "model": "google/gemini-2.5-pro",
+            "choices": [{"message": {"content": "ok", "tool_calls": []}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        }
+
+        attempts = 0
+
+        async def _post(url, headers=None, json=None):
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                raise ConnectBoom("connect fail")
+            return mock_resp
+
+        mock_httpx_client = AsyncMock()
+        mock_httpx_client.post = AsyncMock(side_effect=_post)
+        mock_httpx_client.__aenter__ = AsyncMock(return_value=mock_httpx_client)
+        mock_httpx_client.__aexit__ = AsyncMock(return_value=False)
+
+        with patch.dict(
+            os.environ,
+            {"GOOGLE_APPLICATION_CREDENTIALS": sa_path, "GOOGLE_CLOUD_LOCATION": "global"},
+        ):
+            adapter = VertexAIAdapter()
+
+        with (
+            patch.object(adapter, "_get_access_token", AsyncMock(return_value="token-1")),
+            patch("httpx.AsyncClient", return_value=mock_httpx_client),
+            patch("httpx.TransportError", ConnectBoom),
+            patch("houyi.adapters.llm.vertex_httpx_adapter.asyncio.sleep", new=AsyncMock()),
+            patch("houyi.infrastructure.net.proxy.detect_proxy", return_value=None),
+        ):
+            result = await adapter.chat([{"role": "user", "content": "hi"}])
+
+        assert attempts == 2
+        assert result.content == "ok"
