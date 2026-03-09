@@ -78,7 +78,7 @@ Restarts only the backend (useful when iterating on Python code).
 
 Notes:
 - This script runs embedding warmup before launching the backend.
-- Default embedding cache path is `${ROOT_DIR}/.cache/fastembed`.
+- Default embedding cache path is `${HOME}/.cache/fastembed`.
 - You can override it via environment variable:
 
 ```bash

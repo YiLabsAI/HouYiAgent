@@ -45,18 +45,19 @@ WEB_SEARCH_CACHE_TTL=${WEB_SEARCH_CACHE_TTL:-600}
 WEB_SEARCH_CACHE_MAX_SIZE=${WEB_SEARCH_CACHE_MAX_SIZE:-256}
 WEB_SEARCH_CACHE_LOG_HITS=${WEB_SEARCH_CACHE_LOG_HITS:-1}
 WEB_SEARCH_PROVIDER=${WEB_SEARCH_PROVIDER:-ddg}
-FASTEMBED_CACHE_PATH=${FASTEMBED_CACHE_PATH:-${ROOT_DIR}/.cache/fastembed}
+FASTEMBED_CACHE_PATH=${FASTEMBED_CACHE_PATH:-${HOME}/.cache/fastembed}
+EMBED_WARMUP_TIMEOUT_SECONDS=${EMBED_WARMUP_TIMEOUT_SECONDS:-30}
 
 # Port configuration (override with env vars to avoid conflicts)
 HOUYI_PORT=${HOUYI_PORT:-8000}
 HOUYI_UI_PORT=${HOUYI_UI_PORT:-3000}
 VITE_WS_HOST=${VITE_WS_HOST:-localhost:${HOUYI_PORT}}
 
-# Create a new session and run backend (ensure houyi-studio-server is installed first)
-tmux new-session -d -s $SESSION_NAME -n "backend" "cd ${ROOT_DIR} && uv sync --extra dev --extra rag-full --extra model-adapters --extra websearch-ddg --extra websearch-tavily --extra websearch-readability --quiet && (uv run python -c 'import houyi_studio' 2>/dev/null || uv pip install -e houyi-studio/server --quiet) && echo '🚀 Warming up embedding models...' && env FASTEMBED_CACHE_PATH=${FASTEMBED_CACHE_PATH} uv run python scripts/warmup_embeddings.py && echo '✅ Embedding warmup complete' && env FASTEMBED_CACHE_PATH=${FASTEMBED_CACHE_PATH} HOUYI_PORT=${HOUYI_PORT} WEB_SEARCH_CACHE_ENABLED=${WEB_SEARCH_CACHE_ENABLED} WEB_SEARCH_CACHE_TTL=${WEB_SEARCH_CACHE_TTL} WEB_SEARCH_CACHE_MAX_SIZE=${WEB_SEARCH_CACHE_MAX_SIZE} WEB_SEARCH_CACHE_LOG_HITS=${WEB_SEARCH_CACHE_LOG_HITS} WEB_SEARCH_PROVIDER=${WEB_SEARCH_PROVIDER} uv run python -m houyi_studio.server"
+# Create a new session and run backend
+tmux new-session -d -s $SESSION_NAME -n "backend" "cd ${ROOT_DIR} && env FASTEMBED_CACHE_PATH=${FASTEMBED_CACHE_PATH} EMBED_WARMUP_TIMEOUT_SECONDS=${EMBED_WARMUP_TIMEOUT_SECONDS} WEB_SEARCH_CACHE_ENABLED=${WEB_SEARCH_CACHE_ENABLED} WEB_SEARCH_CACHE_TTL=${WEB_SEARCH_CACHE_TTL} WEB_SEARCH_CACHE_MAX_SIZE=${WEB_SEARCH_CACHE_MAX_SIZE} WEB_SEARCH_CACHE_LOG_HITS=${WEB_SEARCH_CACHE_LOG_HITS} WEB_SEARCH_PROVIDER=${WEB_SEARCH_PROVIDER} HOUYI_PORT=${HOUYI_PORT} ./scripts/restart-backend.sh"
 
 # Create a new window for frontend
-tmux new-window -t $SESSION_NAME -n "frontend" "cd ${ROOT_DIR}/houyi-studio/ui && VITE_WS_HOST=${VITE_WS_HOST} pnpm exec vite --host 127.0.0.1 --port ${HOUYI_UI_PORT} --strictPort"
+tmux new-window -t $SESSION_NAME -n "frontend" "cd ${ROOT_DIR} && env VITE_WS_HOST=${VITE_WS_HOST} HOUYI_UI_PORT=${HOUYI_UI_PORT} ./scripts/restart-frontend.sh"
 
 # Select backend window
 tmux select-window -t $SESSION_NAME:0

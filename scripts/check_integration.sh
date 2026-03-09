@@ -17,7 +17,7 @@ fi
 
 if [ ! -d ".venv" ]; then
     echo -e "${RED}✗ .venv not found.${NC}"
-    echo "Run: uv sync --extra dev --extra rag-full --extra vertex-ai"
+    echo "Run: uv sync --extra dev --extra studio-server --extra rag-full --extra vertex-ai"
     exit 1
 fi
 
@@ -30,10 +30,16 @@ ensure_integration_deps() {
     if ! uv run python -c "import dotenv" 2>/dev/null; then need_sync=1; fi
     if ! uv run python -c "from google import genai" 2>/dev/null; then need_sync=1; fi
     if ! uv run python -c "import google.auth" 2>/dev/null; then need_sync=1; fi
+    if ! uv run python -c "import houyi_studio" 2>/dev/null; then need_sync=1; fi
 
     if [ $need_sync -eq 1 ]; then
         echo -e "${YELLOW}  Installing missing local integration dependencies...${NC}"
-        uv sync --extra dev --extra rag-full --extra vertex-ai --quiet
+        uv sync --extra dev --extra studio-server --extra rag-full --extra vertex-ai --quiet
+    fi
+
+    if ! uv run python -c "import houyi_studio" 2>/dev/null; then
+        echo -e "${YELLOW}  Linking local houyi-studio-server package...${NC}"
+        uv pip install --no-deps -e houyi-studio/server --quiet
     fi
 
     echo -e "${GREEN}✓ Local integration dependencies verified${NC}"
