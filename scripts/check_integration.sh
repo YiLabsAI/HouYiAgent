@@ -113,7 +113,7 @@ ensure_integration_deps
 start_isolated_backend
 
 run_check "Integration Tests" \
-    env HOUYI_PORT=${HOUYI_INTEGRATION_BACKEND_PORT} HOUYI_INTEGRATION_BACKEND_PORT=${HOUYI_INTEGRATION_BACKEND_PORT} uv run python -m pytest tests/integration/ houyi-studio/server/tests/integration/ -v -s
+    env HOUYI_PORT=${HOUYI_INTEGRATION_BACKEND_PORT} HOUYI_INTEGRATION_BACKEND_PORT=${HOUYI_INTEGRATION_BACKEND_PORT} uv run python -m pytest tests/integration/ --ignore=tests/integration/live houyi-studio/server/tests/integration/ -v -s
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo -e "${GREEN}✓ Local integration gate passed.${NC}"

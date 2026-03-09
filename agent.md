@@ -211,7 +211,7 @@ profile causes `ModuleNotFoundError` at runtime — the most common source of
 | **Console development** | SDK + RAG + Studio server + UI | `make install-all` (single `uv sync --extra dev --extra rag`) |
 | **Run backend only** | SDK + RAG + Studio server | `uv sync --extra dev --extra rag && uv pip install -e houyi-studio/server` |
 | **Run frontend only** | UI node_modules | `cd houyi-studio/ui && pnpm install` |
-| **Unit tests** | SDK + dev tools | `make install-dev && make test` |
+| **Unit tests** | SDK + dev tools | `make install-dev && make test-unit` |
 | **Integration tests** | SDK + Studio server | `make install-dev && make test-integration` |
 | **E2E tests** | Full stack + Playwright | `make install-all && pnpm run e2e:install-browsers && make test-e2e` |
 | **PyPI release** | Production deps only | `uv sync && uv build` |
@@ -273,12 +273,25 @@ make lint             # Run all linters
 make lint-fix         # Run linters with auto-fix
 
 # Testing
-make test             # Run SDK unit tests
-make test-server      # Run Studio server tests
+make test-sdk-unit    # Run SDK unit tests
+make test-server-unit # Run Studio server unit tests
+make test-unit        # Run all unit tests
 make test-cov         # Run tests with coverage report
 make test-fast        # Run tests (fail fast)
-make test-integration # Run integration tests (auto-installs studio deps)
-make test-e2e         # Run Playwright e2e tests
+make test-sdk-integration # Run SDK integration tests (excludes live)
+make test-server-integration # Run Studio server integration tests
+make test-integration # Run all local integration tests
+make test-sdk-integration-live # Run all SDK live integration tests
+make test-sdk-integration-live-ddg # Run the DDG live integration variant
+make test-sdk-integration-live-searxng # Run the SearxNG live integration variant
+make test-sdk-integration-live-tavily # Run the Tavily live integration variant
+make test-sdk-integration-live-serper # Run the Serper live integration variant
+make test-e2e-smoke   # Run Playwright smoke e2e tests
+make test-e2e         # Run full Playwright e2e tests
+make check-unit       # Static checks + all unit tests
+make check-integration # Local integration gate (SDK + server, excludes live)
+make check-e2e-smoke  # Smoke browser gate
+make check            # Aggregate pre-commit gate
 
 # Cleanup
 make clean            # Remove cache and build files
@@ -407,8 +420,10 @@ ruff check houyi/ --fix
 | Category | Description | Recommended Frameworks / Tools |
 |----------|-------------|-------------------------------|
 | **Unit** | Fast, deterministic tests for a single module or class. External calls such as database, network, filesystem side effects, and upper-layer to lower-layer dependencies SHOULD be mocked or stubbed at the boundary. | `pytest`, `pytest-mock`, `unittest.mock`, `pytest-asyncio` |
-| **Integration** | Tests for real collaboration across modules, adapters, persistence, or external boundaries. Use real components selectively where interaction fidelity matters. | `pytest`, `pytest-asyncio`, fixture factories, test containers or local test services when needed |
+| **Integration** | Local integration tests for real collaboration across modules, adapters, persistence, websocket, and backend boundaries. These tests use isolated local services and MUST remain suitable for default gates. | `pytest`, `pytest-asyncio`, fixture factories, local test services |
+| **E2E Smoke (Playwright)** | Minimal browser validation for core product paths. Smoke tests MUST stay fast, deterministic, and suitable for frequent local or CI execution. | `Playwright`, `pnpm`, backend startup scripts |
 | **E2E (Playwright)** | Full user workflow validation through the actual UI and backend stack. | `Playwright`, `pnpm`, backend startup scripts |
+| **Live** | Explicit opt-in tests that hit real external providers or real network-backed services. Live tests MUST NOT run in default local or CI gates. | `pytest`, `Playwright`, provider credentials, explicit environment variables |
 
 ### Test Layout Policy
 
@@ -454,6 +469,25 @@ ruff check houyi/ --fix
 >    - **[Rule]** Only `integration`, `e2e`, and `export-surface` tests may intentionally avoid source mirroring.
 >    - All other tests default to mirrored placement.
 >    - **[Example]** `tests/integration/...` may validate cross-module workflows without mapping to a single source file.
+
+### Execution Policy
+
+- **Default gate**
+  - `make check` is the aggregate pre-commit gate: static checks + unit + local integration + e2e smoke.
+  - `make check-unit` runs static checks plus SDK/server unit tests.
+  - `make check-integration` runs only local integration tests.
+  - `make check-e2e-smoke` runs only the smoke browser gate.
+  - Neither command may depend on real external providers.
+- **Live tests**
+  - Tests that require real providers or billable network calls MUST live under a `live/` directory.
+  - Live tests MUST be opt-in and MUST NOT execute only because credentials happen to exist in the shell.
+  - The default live opt-in for the SDK live tool-call scenario is `HOUYI_RUN_LIVE_LLM_TOOL_SCENARIO_TESTS=1`.
+  - Use `make test-sdk-integration-live` for the aggregate SDK live integration run.
+  - Prefer provider-specific commands such as `make test-sdk-integration-live-ddg` and `make test-sdk-integration-live-serper` when validating a single provider.
+- **UI E2E policy**
+  - `smoke/` is the fast browser gate and should cover only a minimal stable path.
+  - Full E2E remains broader product coverage and may be slower.
+  - Live UI E2E, if added later, must live under `houyi-studio/ui/tests/e2e/live/` and stay outside default gates.
 
 ### Naming Convention
 

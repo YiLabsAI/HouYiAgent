@@ -1,5 +1,3 @@
-"""Tests for LLMEntityExtractor."""
-
 from __future__ import annotations
 
 import pytest

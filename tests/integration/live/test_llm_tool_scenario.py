@@ -19,7 +19,7 @@ from houyi.skills.web_search.skill import build_web_search_skill
 
 
 def _load_console_tools() -> None:
-    script_path = Path(__file__).resolve().parent / "fixtures" / "console_tools.py"
+    script_path = Path(__file__).resolve().parents[1] / "fixtures" / "console_tools.py"
     spec = spec_from_file_location("console_tools", script_path)
     if spec and spec.loader:
         module = module_from_spec(spec)
@@ -87,10 +87,10 @@ async def test_llm_tool_scenario_weather_and_web_search(
     """Run tool-call loop: weather + web search for bank inquiry."""
 
     load_dotenv()
-    if os.getenv("HOUYI_RUN_LLM_TOOL_SCENARIO_INTEGRATION_TESTS") != "1":
+    if os.getenv("HOUYI_RUN_LIVE_LLM_TOOL_SCENARIO_TESTS") != "1":
         pytest.skip(
-            "Network integration test disabled by default; set "
-            "HOUYI_RUN_LLM_TOOL_SCENARIO_INTEGRATION_TESTS=1 to enable"
+            "Live integration test disabled by default; set "
+            "HOUYI_RUN_LIVE_LLM_TOOL_SCENARIO_TESTS=1 to enable"
         )
     os.environ.setdefault("HOUYI_DISABLE_LIVE_WEATHER", "1")
     if requires_key:
@@ -108,7 +108,7 @@ async def test_llm_tool_scenario_weather_and_web_search(
 
     tool_names = ["get_date", "get_location", "get_weather", "web_search"]
     skills = [s for name in tool_names if (s := DEFAULT_SKILL_REGISTRY.get(name)) is not None]
-    tools = DEFAULT_SKILL_REGISTRY.to_tool_schemas()
+    tools = DEFAULT_SKILL_REGISTRY.as_tool_schemas()
 
     tomorrow = (date.today() + timedelta(days=1)).isoformat()
     adapter = ScenarioAdapter(tomorrow)

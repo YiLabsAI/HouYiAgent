@@ -1,5 +1,3 @@
-"""Tests for indexed graph extractor."""
-
 from __future__ import annotations
 
 import pytest

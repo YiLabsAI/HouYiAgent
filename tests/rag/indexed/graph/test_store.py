@@ -1,5 +1,3 @@
-"""Tests for GraphStore."""
-
 from __future__ import annotations
 
 import tempfile

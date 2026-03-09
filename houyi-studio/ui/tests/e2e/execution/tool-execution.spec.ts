@@ -1,7 +1,7 @@
 import fs from 'fs';
 import { test, expect } from '@playwright/test';
 import type { Page } from '@playwright/test';
-import { DEFAULT_MODEL } from '../../src/constants/models';
+import { DEFAULT_MODEL } from '../../../src/constants/models';
 
 type E2EConfig = {
   disableLiveWeather?: boolean;

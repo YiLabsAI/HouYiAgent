@@ -1,5 +1,3 @@
-"""Tests for contextualizer."""
-
 import pytest
 
 from houyi.rag.indexed.document.contextualizer import (

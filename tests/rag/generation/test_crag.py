@@ -1,5 +1,3 @@
-"""Tests for CRAG validation."""
-
 from __future__ import annotations
 
 import asyncio

@@ -1,5 +1,3 @@
-"""Tests for community detection."""
-
 from __future__ import annotations
 
 from houyi.rag.indexed.graph.community import (

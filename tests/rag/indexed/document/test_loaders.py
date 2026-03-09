@@ -1,5 +1,3 @@
-"""Tests for indexed document loaders."""
-
 from __future__ import annotations
 
 import tempfile

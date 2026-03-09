@@ -31,6 +31,19 @@ class TestEmbeddingFactory:
         assert embedder.model == "BAAI/bge-small-en-v1.5"
         assert embedder.dimension == 384
 
+    def test_create_embedder_vertex(self) -> None:
+        config = EmbeddingConfig(
+            provider="vertex",
+            model="text-embedding-004",
+            dimension=768,
+        )
+        embedder = create_embedder(config)
+        from houyi.rag.indexed.embedding import GeminiEmbedder
+
+        assert isinstance(embedder, GeminiEmbedder)
+        assert embedder.model == "text-embedding-004"
+        assert embedder.dimension == 768
+
     def test_api_embedder_unknown_provider(self) -> None:
         embedder = APIEmbedder(
             provider="unknown",

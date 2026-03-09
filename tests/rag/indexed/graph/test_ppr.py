@@ -1,5 +1,3 @@
-"""Tests for PPR calculator."""
-
 from __future__ import annotations
 
 from houyi.rag.indexed.graph.ppr import PPRCalculator, PPRResult, compute_ppr

@@ -1,4 +1,11 @@
-.PHONY: help install install-dev install-studio install-all lock lock-check dev test test-server test-cov test-fast test-integration test-e2e lint lint-fix lint-imports quick-check check clean format typecheck
+.PHONY: help install install-dev install-studio install-all lock lock-check dev \
+	test test-server test-cov test-fast \
+	test-sdk-unit test-server-unit test-unit \
+	test-sdk-integration test-server-integration test-integration \
+	test-sdk-integration-live test-sdk-integration-live-ddg test-sdk-integration-live-searxng test-sdk-integration-live-tavily test-sdk-integration-live-serper \
+	test-e2e test-e2e-smoke \
+	check check-unit check-integration check-e2e-smoke \
+	lint lint-fix lint-imports quick-check clean format typecheck
 
 # Default target
 help:
@@ -17,8 +24,10 @@ help:
 	@echo "Development:"
 	@echo "  make dev              Start backend + frontend (tmux)"
 	@echo "  make quick-check      Quick checks (ruff + fast tests)"
-	@echo "  make check            Full checks (ruff + mypy + tests + coverage)"
-	@echo "  make check-integration Local-only integration gate for tests/integration/ (run after make check)"
+	@echo "  make check            Aggregate pre-commit gate (static + unit + integration + e2e smoke)"
+	@echo "  make check-unit       Static checks + SDK unit tests + server unit tests"
+	@echo "  make check-integration Local-only integration gate (SDK + server, excludes live)"
+	@echo "  make check-e2e-smoke  Smoke browser gate"
 	@echo "  make typecheck        Run mypy type checking"
 	@echo "  make format           Auto-format code with ruff"
 	@echo "  make lint             Run all linters (ruff)"
@@ -26,12 +35,21 @@ help:
 	@echo "  make lint-imports     Check import layer boundaries"
 	@echo ""
 	@echo "Testing:"
-	@echo "  make test             Run SDK unit tests"
-	@echo "  make test-server      Run Studio server tests"
+	@echo "  make test-sdk-unit    Run SDK unit tests"
+	@echo "  make test-server-unit Run Studio server unit tests"
+	@echo "  make test-unit        Run all unit tests"
 	@echo "  make test-cov         Run tests with coverage report"
 	@echo "  make test-fast        Run tests (fail fast)"
-	@echo "  make test-integration Run integration tests (requires studio server deps)"
-	@echo "  make test-e2e         Run Playwright e2e tests (requires running backend)"
+	@echo "  make test-sdk-integration Run SDK integration tests (excludes live)"
+	@echo "  make test-server-integration Run Studio server integration tests"
+	@echo "  make test-integration Run all local integration tests"
+	@echo "  make test-sdk-integration-live Run all SDK live integration tests"
+	@echo "  make test-sdk-integration-live-ddg Run the DDG live integration variant"
+	@echo "  make test-sdk-integration-live-searxng Run the SearxNG live integration variant"
+	@echo "  make test-sdk-integration-live-tavily Run the Tavily live integration variant"
+	@echo "  make test-sdk-integration-live-serper Run the Serper live integration variant"
+	@echo "  make test-e2e-smoke   Run Playwright smoke e2e tests"
+	@echo "  make test-e2e         Run full Playwright e2e tests"
 	@echo ""
 	@echo "Cleanup:"
 	@echo "  make clean            Remove cache and build files"
@@ -74,10 +92,18 @@ quick-check:
 
 # Full checks (run before committing)
 check:
+	@$(MAKE) check-unit
+	@$(MAKE) check-integration
+	@$(MAKE) check-e2e-smoke
+
+check-unit:
 	@./scripts/check_code.sh
 
 check-integration:
 	@./scripts/check_integration.sh
+
+check-e2e-smoke:
+	@$(MAKE) test-e2e-smoke
 
 # Formatting
 format:
@@ -103,26 +129,67 @@ dev:
 	@./scripts/dev.sh
 
 # Testing
+test-sdk-unit:
+	uv run pytest tests/ --ignore=tests/integration -v -n auto
+
+test-server-unit:
+	@uv run python -c "import houyi_studio" 2>/dev/null || (echo '📦 Installing studio server...' && uv pip install -e houyi-studio/server --quiet)
+	uv run pytest houyi-studio/server/tests/ --ignore=houyi-studio/server/tests/integration -v
+
+test-unit:
+	@$(MAKE) test-sdk-unit
+	@$(MAKE) test-server-unit
+
 test:
-	uv run pytest tests/ -v -n auto
+	@$(MAKE) test-sdk-unit
 
 test-cov:
 	uv run pytest tests/ --cov=houyi --cov-report=term-missing --cov-report=html
 
 test-fast:
-	uv run pytest tests/ -x --tb=short
+	uv run pytest tests/ --ignore=tests/integration -x --tb=short
 
 # Studio server tests
 test-server:
-	@uv run python -c "import houyi_studio" 2>/dev/null || (echo '📦 Installing studio server...' && uv pip install -e houyi-studio/server --quiet)
-	uv run pytest houyi-studio/server/tests/ -v
+	@$(MAKE) test-server-unit
 
 # Integration tests (requires studio server deps)
-test-integration:
+test-sdk-integration:
 	@uv run python -c "import houyi_studio" 2>/dev/null || (echo '📦 Installing studio server...' && uv pip install -e houyi-studio/server --quiet)
-	uv run pytest tests/integration/ -v
+	uv run pytest tests/integration/ --ignore=tests/integration/live -v
+
+test-server-integration:
+	@uv run python -c "import houyi_studio" 2>/dev/null || (echo '📦 Installing studio server...' && uv pip install -e houyi-studio/server --quiet)
+	uv run pytest houyi-studio/server/tests/integration/ -v
+
+
+test-integration:
+	@$(MAKE) test-sdk-integration
+	@$(MAKE) test-server-integration
+
+# Live tests (explicitly executed, never part of default gates)
+test-sdk-integration-live:
+	HOUYI_RUN_LIVE_LLM_TOOL_SCENARIO_TESTS=1 uv run pytest tests/integration/live/ -v
+
+test-sdk-integration-live-ddg:
+	HOUYI_RUN_LIVE_LLM_TOOL_SCENARIO_TESTS=1 DDG_INTEGRATION_TEST=1 uv run pytest tests/integration/live/ -k 'ddg' -v
+
+test-sdk-integration-live-searxng:
+	@if [ -z "$$SEARXNG_BASE_URL" ]; then echo 'SEARXNG_BASE_URL is required'; exit 1; fi
+	HOUYI_RUN_LIVE_LLM_TOOL_SCENARIO_TESTS=1 SEARXNG_BASE_URL="$$SEARXNG_BASE_URL" uv run pytest tests/integration/live/ -k 'searxng' -v
+
+test-sdk-integration-live-tavily:
+	@if [ -z "$$TAVILY_API_KEY" ]; then echo 'TAVILY_API_KEY is required'; exit 1; fi
+	HOUYI_RUN_LIVE_LLM_TOOL_SCENARIO_TESTS=1 TAVILY_API_KEY="$$TAVILY_API_KEY" uv run pytest tests/integration/live/ -k 'tavily' -v
+
+test-sdk-integration-live-serper:
+	@if [ -z "$$SERPER_API_KEY" ]; then echo 'SERPER_API_KEY is required'; exit 1; fi
+	HOUYI_RUN_LIVE_LLM_TOOL_SCENARIO_TESTS=1 SERPER_API_KEY="$$SERPER_API_KEY" uv run pytest tests/integration/live/ -k 'serper' -v
 
 # E2E tests (requires backend running + Playwright browsers)
+test-e2e-smoke:
+	@cd houyi-studio/ui && pnpm install --frozen-lockfile && pnpm exec playwright test tests/e2e/smoke
+
 test-e2e:
 	@cd houyi-studio/ui && pnpm install --frozen-lockfile && pnpm test:e2e
 

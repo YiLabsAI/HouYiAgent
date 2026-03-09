@@ -1,5 +1,3 @@
-"""Tests for citation generation."""
-
 from __future__ import annotations
 
 from houyi.rag.generation.citation import Citation, CitationGenerator, CitedAnswer

@@ -18,6 +18,7 @@ from houyi_studio.server.chat.chat_service import ChatService
 from houyi_studio.server.chat.json_store import JsonStore
 
 from houyi.adapters.llm.base import StreamChunk
+from houyi.application.context.token_estimator import TokenEstimator
 
 
 def _make_mock_llm(content_chunks=None, reasoning_chunks=None):
@@ -204,25 +205,35 @@ class TestContextBurst:
     no crashes or data loss.
     """
 
-    def test_500_message_truncation(self, smoke_env):
-        """Send 500+ messages, verify truncation and newest preserved."""
+    def test_message_truncation_preserves_newest_messages(self, smoke_env):
+        """Send enough messages to trigger truncation and preserve the newest context."""
         client, store = smoke_env
+        burst_turns = 30
+        payload = "Padding text to consume more tokens and trigger truncation faster. " * 8
 
         # Create conversation
         resp = client.post("/api/chat/conversations", json={"title": "Burst Test"})
         conv_id = resp.json()["conversation_id"]
 
         # Send many messages to build up history
-        for i in range(250):
+        for i in range(burst_turns):
             resp = client.post(
                 f"/api/chat/conversations/{conv_id}/messages",
-                json={"content": f"Message number {i} with padding text to consume tokens"},
+                json={"content": f"Message number {i}. {payload}"},
             )
             assert resp.status_code == 200
 
-        # Verify conversation has 500 messages (250 user + 250 assistant)
+        # Verify conversation has the expected persisted history before the truncation trigger
         conv = store.get(conv_id)
-        assert len(conv.messages) == 500
+        assert len(conv.messages) == burst_turns * 2
+
+        estimator = TokenEstimator(model="smoke-model")
+        history_before_final = [m.to_llm_message() for m in conv.messages]
+        full_history_with_final = [
+            *history_before_final,
+            {"role": "user", "content": "Final message after burst"},
+        ]
+        assert estimator.count_messages(full_history_with_final) > estimator.max_input_tokens
 
         # Send one more message — this triggers context planning with truncation
         resp = client.post(
@@ -243,10 +254,12 @@ class TestContextBurst:
         usage_event = next(e for e in events if e["event"] == "context.usage")["data"]
         usage = usage_event["usage"]
         assert usage["used_tokens"] <= usage["max_context_tokens"]
+        assert usage["used_tokens"] < usage["max_context_tokens"]
+        assert usage["used_tokens"] < estimator.count_messages(full_history_with_final)
 
         # Verify final message persisted
         conv = store.get(conv_id)
-        assert len(conv.messages) == 502  # 500 + 1 user + 1 assistant
+        assert len(conv.messages) == (burst_turns * 2) + 2
         assert conv.messages[-2].content == "Final message after burst"
         assert conv.messages[-1].role.value == "assistant"
 

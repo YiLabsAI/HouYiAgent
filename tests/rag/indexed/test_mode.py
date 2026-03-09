@@ -1,5 +1,3 @@
-"""Tests for IndexedMode."""
-
 from __future__ import annotations
 
 import tempfile

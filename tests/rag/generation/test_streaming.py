@@ -1,5 +1,3 @@
-"""Tests for streaming generation."""
-
 import pytest
 
 from houyi.adapters.llm.base import StreamChunk
