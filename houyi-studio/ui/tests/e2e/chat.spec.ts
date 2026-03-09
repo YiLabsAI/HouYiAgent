@@ -80,6 +80,126 @@ test.describe('Chat mode', () => {
     await cleanupTestConversations(page);
   });
 
+  test('long thinking output keeps the inner reasoning panel scrolled to the bottom', async ({ page }) => {
+    await page.goto('/');
+    await switchToChat(page);
+    await createConversation(page);
+
+    const streamState = await page.evaluate(async () => {
+      const chatStore = (window as any).__chatStore;
+      if (!chatStore) {
+        throw new Error('Chat store not found');
+      }
+
+      const conversationId = chatStore.getState().activeConversationId;
+      if (!conversationId) {
+        throw new Error('Active conversation not found');
+      }
+
+      const messageId = `mock-assistant-${Date.now()}`;
+      const reasoningChunks = Array.from(
+        { length: 180 },
+        (_, i) => `Step ${i + 1}: reasoning detail line ${i + 1} with extra context for scroll overflow validation.\n`,
+      );
+      const initialReasoning = reasoningChunks[0] ?? '';
+
+      chatStore.setState((state: any) => {
+        const conversation = state.activeConversation;
+        if (!conversation) return state;
+        return {
+          ...state,
+          activeConversation: {
+            ...conversation,
+            messages: [
+              ...conversation.messages,
+              {
+                message_id: messageId,
+                role: 'assistant',
+                content: '',
+                reasoning_content: initialReasoning,
+                metadata: {},
+                created_at: Date.now() / 1000,
+              },
+            ],
+          },
+          streaming: {
+            ...state.streaming,
+            isStreaming: true,
+            messageId,
+            contentBuffer: '',
+            reasoningBuffer: initialReasoning,
+            streamConversationId: conversationId,
+          },
+        };
+      });
+
+      return { messageId, reasoningChunks: reasoningChunks.slice(1) };
+    });
+
+    const assistantBubble = page.getByTestId('message-bubble').last();
+    const thinkingButton = assistantBubble.getByRole('button', { name: /Thinking/ });
+    await expect(thinkingButton).toBeVisible({ timeout: 10000 });
+
+    const reasoningPanel = thinkingButton.locator('xpath=following-sibling::div[1]');
+    await expect(reasoningPanel).toBeVisible({ timeout: 10000 });
+
+    await page.evaluate(async ({ messageId, reasoningChunks }) => {
+      const chatStore = (window as any).__chatStore;
+      for (const chunk of reasoningChunks as string[]) {
+        chatStore.setState((state: any) => {
+          const nextReasoning = `${state.streaming.reasoningBuffer || ''}${chunk}`;
+          const conversation = state.activeConversation;
+          const messages = Array.isArray(conversation?.messages) ? [...conversation.messages] : [];
+          const existingIndex = messages.findIndex((message: any) => message?.message_id === messageId);
+          if (existingIndex >= 0) {
+            messages[existingIndex] = {
+              ...messages[existingIndex],
+              reasoning_content: nextReasoning,
+            };
+          }
+          return {
+            ...state,
+            activeConversation: conversation
+              ? {
+                  ...conversation,
+                  messages,
+                }
+              : conversation,
+            streaming: {
+              ...state.streaming,
+              isStreaming: true,
+              messageId,
+              reasoningBuffer: nextReasoning,
+            },
+          };
+        });
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+    }, streamState);
+
+    await expect.poll(async () => reasoningPanel.evaluate((el) => {
+      const textLength = el.textContent?.length ?? 0;
+      return (
+        textLength > 1000
+        && el.scrollHeight > el.clientHeight
+        && el.scrollTop >= el.scrollHeight - el.clientHeight - 8
+      );
+    })).toBe(true);
+
+    const panelMetrics = await reasoningPanel.evaluate((el) => ({
+      scrollTop: el.scrollTop,
+      scrollHeight: el.scrollHeight,
+      clientHeight: el.clientHeight,
+      textLength: el.textContent?.length ?? 0,
+    }));
+
+    expect(panelMetrics.textLength).toBeGreaterThan(1000);
+    expect(panelMetrics.scrollHeight).toBeGreaterThan(panelMetrics.clientHeight);
+    expect(panelMetrics.scrollTop).toBeGreaterThanOrEqual(
+      panelMetrics.scrollHeight - panelMetrics.clientHeight - 8,
+    );
+  });
+
   // --- P-039B: Switching large conversations must NOT trigger settings-request storms ---
   test('switching between large conversations does not spam /api/chat/settings', async ({ page }) => {
     await page.goto('/');

@@ -5,9 +5,10 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from pathlib import Path
 
 import pytest
-from houyi_studio.server.chat.json_store import JsonStore
+from houyi_studio.server.chat.json_store import JsonStore, resolve_chat_data_dir
 from houyi_studio.server.chat.types import (
     Conversation,
     ConversationStatus,
@@ -19,6 +20,22 @@ from houyi_studio.server.chat.types import (
 @pytest.fixture
 def store(tmp_path):
     return JsonStore(data_dir=tmp_path / "conversations")
+
+
+def test_resolve_chat_data_dir_defaults_to_project_root():
+    resolved = resolve_chat_data_dir()
+    assert resolved == Path("/Users/von/workspace/HouYiAgent") / "data/conversations"
+
+
+def test_resolve_chat_data_dir_resolves_relative_path_from_project_root():
+    resolved = resolve_chat_data_dir("custom/chat-data")
+    assert resolved == Path("/Users/von/workspace/HouYiAgent") / "custom/chat-data"
+
+
+def test_resolve_chat_data_dir_keeps_absolute_path(tmp_path):
+    absolute = tmp_path / "chat-data"
+    resolved = resolve_chat_data_dir(absolute)
+    assert resolved == absolute
 
 
 @pytest.fixture

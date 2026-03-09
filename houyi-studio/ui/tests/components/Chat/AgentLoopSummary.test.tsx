@@ -16,12 +16,15 @@ describe('AgentLoopSummary', () => {
         rounds={2}
         toolCalls={3}
         traceId="trace-123"
-        usage={{ total_tokens: 88 }}
+        usage={{ prompt_tokens: 34, completion_tokens: 54, total_tokens: 88 }}
       />,
     );
 
     expect(screen.getByText('Agent Loop')).toBeInTheDocument();
     expect(screen.getByText(/2 rounds/)).toBeInTheDocument();
+    expect(screen.getByText('In 34')).toBeInTheDocument();
+    expect(screen.getByText('Out 54')).toBeInTheDocument();
+    expect(screen.getByText('Total 88')).toBeInTheDocument();
     expect(screen.queryByText(/Iterations:/)).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button'));

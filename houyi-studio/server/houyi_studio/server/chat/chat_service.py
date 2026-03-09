@@ -86,6 +86,34 @@ _VISION_RE = re.compile("|".join(_VISION_PATTERNS), re.IGNORECASE)
 _DEFAULT_CHAT_MAX_TOOL_ITERATIONS = 10
 
 
+def _build_generation_metadata(
+    *,
+    usage_payload: dict[str, Any] | None,
+    first_token_ms: float | None,
+    generation_time_ms: float | None,
+) -> dict[str, Any]:
+    metadata: dict[str, Any] = {}
+    if first_token_ms is not None:
+        metadata["first_token_latency_ms"] = round(first_token_ms, 2)
+    if generation_time_ms is not None:
+        metadata["generation_time_ms"] = round(generation_time_ms, 2)
+    completion_tokens = 0
+    if isinstance(usage_payload, dict):
+        completion_tokens = int(usage_payload.get("completion_tokens", 0) or 0)
+    if generation_time_ms and generation_time_ms > 0 and completion_tokens > 0:
+        metadata["tokens_per_second"] = round(
+            completion_tokens / (generation_time_ms / 1000),
+            2,
+        )
+    return metadata
+
+
+def is_vision_model(model: str | None) -> bool:
+    if not model:
+        return False
+    return bool(_VISION_RE.search(model))
+
+
 def _read_positive_int_env(env_name: str, default: int) -> int:
     raw = os.getenv(env_name)
     if raw is None:
@@ -179,11 +207,6 @@ class _ToolLoopGateDecision:
     enabled_skills: list[str]
     mode: str
     reason: str
-
-
-def is_vision_model(model_id: str) -> bool:
-    """Return True if *model_id* is known to accept image_url content parts."""
-    return bool(_VISION_RE.search(model_id))
 
 
 def _json_safe(value: Any) -> Any:
@@ -650,6 +673,12 @@ class ChatService:
                 content=request.content,
                 attachments=request.attachments,
             )
+            user_input_tokens = TokenEstimator(model=model).count_message(user_msg.to_llm_message())
+            user_msg.metadata["usage"] = {
+                "input_tokens": user_input_tokens,
+                "prompt_tokens": user_input_tokens,
+                "total_tokens": user_input_tokens,
+            }
             conversation.messages.append(user_msg)
             conversation.updated_at = time.time()
             self.json_store.update(conversation)
@@ -955,7 +984,7 @@ class ChatService:
         model: str,
         context_usage: dict[str, Any],
         chat_span: Span,
-    ) -> tuple[list[str], list[str], list[str], dict[str, Any] | None]:
+    ) -> tuple[list[str], list[str], list[str], dict[str, Any] | None, dict[str, Any]]:
         llm_span = Span(
             name="llm.call",
             parent=chat_span,
@@ -1016,7 +1045,12 @@ class ChatService:
             )
         llm_span.set_status("ok")
         llm_span.end()
-        return sse_chunks, content_parts, reasoning_parts, usage_payload
+        generation_metadata = _build_generation_metadata(
+            usage_payload=usage_payload,
+            first_token_ms=first_token_ms,
+            generation_time_ms=(time.perf_counter() - stream_started_at) * 1000,
+        )
+        return sse_chunks, content_parts, reasoning_parts, usage_payload, generation_metadata
 
     async def _persist_assistant_message(
         self,
@@ -1028,6 +1062,7 @@ class ChatService:
         reasoning_parts: list[str],
         persisted_tool_messages: list[Message],
         usage_payload: dict[str, Any] | None,
+        generation_metadata: dict[str, Any],
         chat_span: Span,
     ) -> bool:
         assistant_msg.content = "".join(content_parts)
@@ -1046,6 +1081,7 @@ class ChatService:
         async with conv_lock:
             if isinstance(usage_payload, dict) and usage_payload:
                 assistant_msg.metadata["usage"] = usage_payload
+            assistant_msg.metadata.update(generation_metadata)
             assistant_msg.metadata["trace_id"] = chat_span.trace_id
 
             conversation = self.json_store.get(conversation_id)
@@ -1115,6 +1151,7 @@ class ChatService:
             llm_messages = prepared.llm_messages
             context_usage = prepared.context_usage
             llm_adapter = self._get_adapter_for_model(prepared.model)
+            generation_metadata: dict[str, Any] = {}
 
             resolved_chat_skills = self._resolve_enabled_chat_skills(request)
             tool_gate = self._gate_tool_loop(
@@ -1239,9 +1276,10 @@ class ChatService:
                         yield sse_chunk
 
                     usage_payload = _json_safe(getattr(llm_adapter, "last_usage", None))
+                    generation_time_ms = (time.perf_counter() - stream_started_at) * 1000
                     llm_span.set_attribute(
                         "chat.stream_total_ms",
-                        round((time.perf_counter() - stream_started_at) * 1000, 2),
+                        round(generation_time_ms, 2),
                     )
                     llm_span.set_attribute("chat.stream_chunk_count", llm_chunk_count)
                     if first_token_ms is None:
@@ -1253,10 +1291,16 @@ class ChatService:
                         )
                     llm_span.set_status("ok")
                     llm_span.end()
+                    generation_metadata = _build_generation_metadata(
+                        usage_payload=usage_payload,
+                        first_token_ms=first_token_ms,
+                        generation_time_ms=generation_time_ms,
+                    )
 
             completion_metadata: dict[str, Any] = {"trace_id": chat_span.trace_id}
             if isinstance(usage_payload, dict) and usage_payload:
                 completion_metadata["usage"] = usage_payload
+            completion_metadata.update(generation_metadata)
             yield SSEEvent(
                 event="message.complete",
                 data={
@@ -1274,6 +1318,7 @@ class ChatService:
                     reasoning_parts=reasoning_parts,
                     persisted_tool_messages=persisted_tool_messages,
                     usage_payload=usage_payload,
+                    generation_metadata=generation_metadata,
                     chat_span=chat_span,
                 )
 

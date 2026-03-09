@@ -289,6 +289,15 @@ class Conversation(BaseModel):
         return len(self.messages)
 
     @property
+    def visible_message_count(self) -> int:
+        """Message count aligned with the chat timeline's primary visible items."""
+        return sum(
+            1
+            for message in self.messages
+            if message.role not in {MessageRole.SYSTEM, MessageRole.TOOL}
+        )
+
+    @property
     def last_message_at(self) -> float | None:
         """Timestamp of the last message, or None if empty."""
         if not self.messages:
@@ -302,6 +311,7 @@ class Conversation(BaseModel):
             "title": self.title,
             "status": self.status.value,
             "message_count": self.message_count,
+            "visible_message_count": self.visible_message_count,
             "model": self.model,
             "temperature": self.temperature,
             "max_tokens": self.max_tokens,

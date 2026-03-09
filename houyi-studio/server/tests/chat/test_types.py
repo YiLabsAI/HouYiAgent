@@ -335,6 +335,17 @@ class TestConversation:
         conv = Conversation()
         assert conv.message_count == 0
 
+    def test_visible_message_count_excludes_system_and_tool(self):
+        conv = Conversation(
+            messages=[
+                Message(role=MessageRole.SYSTEM, content="sys"),
+                Message(role=MessageRole.USER, content="Hi"),
+                Message(role=MessageRole.TOOL, content="tool result"),
+                Message(role=MessageRole.ASSISTANT, content="Hello"),
+            ]
+        )
+        assert conv.visible_message_count == 2
+
     def test_last_message_at(self):
         t = time.time()
         conv = Conversation(
@@ -389,6 +400,7 @@ class TestConversation:
         assert summary["title"] == "Test Chat"
         assert summary["status"] == "active"
         assert summary["message_count"] == 1
+        assert summary["visible_message_count"] == 1
         assert summary["model"] == GPT_4O
         assert "created_at" in summary
         assert "updated_at" in summary

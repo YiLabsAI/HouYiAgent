@@ -14,6 +14,7 @@ Run with: pytest tests/integration/rag/test_vertex_ai.py -v -s
 from __future__ import annotations
 
 import importlib.util
+import os
 import tempfile
 from pathlib import Path
 
@@ -40,10 +41,17 @@ VERTEX_PROJECT = _env.google_project
 VERTEX_API_KEY = _env.google_api_key
 VERTEX_CREDENTIALS = _env.google_credentials_path
 GOOGLE_GENAI_INSTALLED = _is_google_genai_installed()
+VERTEX_INTEGRATION_ENABLED = os.getenv("HOUYI_RUN_VERTEX_INTEGRATION_TESTS") == "1"
 
 
 def _vertex_skip_reason() -> str | None:
     missing: list[str] = []
+
+    if not VERTEX_INTEGRATION_ENABLED:
+        return (
+            "Vertex/Gemini integration tests disabled by default; set "
+            "HOUYI_RUN_VERTEX_INTEGRATION_TESTS=1 to enable"
+        )
 
     if not GOOGLE_GENAI_INSTALLED:
         missing.append("install google-genai")

@@ -6,6 +6,7 @@ Run: python -m houyi_studio.server
 
 import asyncio
 import json
+import os
 import time
 
 import websockets
@@ -13,10 +14,15 @@ import websockets
 from houyi.adapters.llm.models import DEFAULT_MODEL
 
 
+def _checkpoint_ws_uri() -> str:
+    port = os.getenv("HOUYI_PORT") or os.getenv("HOUYI_INTEGRATION_BACKEND_PORT") or "8000"
+    return f"ws://127.0.0.1:{port}/ws/session/test_session"
+
+
 async def test_checkpoint_integration():
     """Test complete checkpoint workflow via WebSocket."""
 
-    uri = "ws://localhost:8000/ws/session/test_session"
+    uri = _checkpoint_ws_uri()
 
     try:
         async with websockets.connect(uri) as websocket:
@@ -176,13 +182,14 @@ async def test_checkpoint_integration():
 
 
 if __name__ == "__main__":
+    uri = _checkpoint_ws_uri()
     print("=" * 60)
     print("Checkpoint Restore Integration Test")
     print("=" * 60)
     print("\nPrerequisites:")
     print("1. Backend server must be running:")
     print("   python -m houyi_studio.server")
-    print("2. Server should be accessible at ws://localhost:8000")
+    print(f"2. Server should be accessible at {uri}")
     print("\nStarting test...")
     print("=" * 60)
 

@@ -11,7 +11,7 @@ if ! command -v uv &> /dev/null; then
 fi
 
 if [ ! -d "${ROOT_DIR}/.venv" ]; then
-    echo "❌ .venv not found. Run: uv sync --extra dev --extra rag-full"
+    echo "❌ .venv not found. Run: uv sync --extra dev --extra studio-server --extra rag-full --extra model-adapters"
     exit 1
 fi
 
@@ -34,7 +34,7 @@ cd "$ROOT_DIR"
 
 # Sync backend runtime dependencies from the root project extras
 echo "🔄 Syncing backend dependencies..."
-uv sync --extra dev --extra studio-server --extra rag-full --extra websearch-ddg --extra websearch-tavily --extra websearch-readability --quiet
+uv sync --extra dev --extra studio-server --extra rag-full --extra model-adapters --extra websearch-ddg --extra websearch-tavily --extra websearch-readability --quiet
 
 # Ensure the local houyi_studio package is linked into the venv after sync
 if ! uv run python -c "import houyi_studio" 2>/dev/null; then

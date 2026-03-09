@@ -1,6 +1,19 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { MessageBubble } from '@/components/Chat/MessageBubble';
+
+vi.mock('@/stores/useChatStore', async () => {
+  const actual = await vi.importActual<typeof import('@/stores/useChatStore')>('@/stores/useChatStore');
+  return {
+    ...actual,
+    useChatStore: Object.assign(actual.useChatStore, {
+      getState: actual.useChatStore.getState,
+      setState: actual.useChatStore.setState,
+    }),
+  };
+});
+
+const { useChatStore } = await import('@/stores/useChatStore');
 
 describe('MessageBubble(tool)', () => {
   it('renders ToolCallBubble for tool role message', () => {
@@ -65,13 +78,74 @@ describe('MessageBubble(tool)', () => {
 
     expect(screen.getByText('Tool calls 1')).toBeInTheDocument();
     expect(screen.getByText('Rounds 1')).toBeInTheDocument();
-    expect(screen.getByText('Tokens 42')).toBeInTheDocument();
+    expect(screen.queryByText(/Stats/)).not.toBeInTheDocument();
+    expect(screen.getByText('Tokens: 42')).toBeInTheDocument();
 
     fireEvent.click(screen.getByText('View trace'));
     expect(onOpenTrace).toHaveBeenCalledWith('trace-123');
 
     fireEvent.click(screen.getByText('Show steps'));
     expect(screen.getByText('houyi_read_file')).toBeInTheDocument();
+  });
+
+  it('renders assistant latency and throughput stats', () => {
+    render(
+      <MessageBubble
+        message={{
+          message_id: 'assistant-stats-1',
+          role: 'assistant',
+          content: 'done',
+          metadata: {
+            usage: { prompt_tokens: 20, completion_tokens: 40, total_tokens: 60 },
+            first_token_latency_ms: 187.4,
+            tokens_per_second: 22.25,
+          },
+          created_at: Date.now() / 1000,
+        }}
+      />,
+    );
+
+    expect(screen.queryByText(/Stats/)).not.toBeInTheDocument();
+    expect(screen.getByText('First token 187 ms')).toBeInTheDocument();
+    expect(screen.getByText('22 tokens/s')).toBeInTheDocument();
+    expect(screen.getByText(/Tokens: 60\s*↑20\s*↓40/)).toBeInTheDocument();
+  });
+
+  it('renders user input token stats', () => {
+    render(
+      <MessageBubble
+        message={{
+          message_id: 'user-stats-1',
+          role: 'user',
+          content: 'hello world',
+          metadata: {
+            usage: { input_tokens: 12, prompt_tokens: 12, total_tokens: 12 },
+          },
+          created_at: Date.now() / 1000,
+        }}
+      />,
+    );
+
+    expect(screen.getAllByText('You')).toHaveLength(1);
+    expect(screen.getByText('Tokens: 12')).toBeInTheDocument();
+  });
+
+  it('does not render user token badge when only prompt_tokens exists', () => {
+    render(
+      <MessageBubble
+        message={{
+          message_id: 'user-stats-prompt-only',
+          role: 'user',
+          content: 'hello world',
+          metadata: {
+            usage: { prompt_tokens: 12, total_tokens: 12 },
+          },
+          created_at: Date.now() / 1000,
+        }}
+      />,
+    );
+
+    expect(screen.queryByText('Tokens: 12')).not.toBeInTheDocument();
   });
 
   it('keeps assistant bubble when content is empty but tool steps exist', () => {
@@ -255,5 +329,84 @@ describe('MessageBubble(tool)', () => {
 
     expect(screen.getByText('Tool calls 1')).toBeInTheDocument();
     expect(screen.getByText('Show steps')).toBeInTheDocument();
+  });
+
+  it('keeps the streaming thinking panel scrolled to the latest text', () => {
+    let lastAssignedScrollTop = 0;
+    const scrollHeightDescriptor = Object.getOwnPropertyDescriptor(HTMLDivElement.prototype, 'scrollHeight');
+    const scrollTopDescriptor = Object.getOwnPropertyDescriptor(HTMLDivElement.prototype, 'scrollTop');
+
+    Object.defineProperty(HTMLDivElement.prototype, 'scrollHeight', {
+      configurable: true,
+      get() {
+        return 480;
+      },
+    });
+    Object.defineProperty(HTMLDivElement.prototype, 'scrollTop', {
+      configurable: true,
+      get() {
+        return lastAssignedScrollTop;
+      },
+      set(value: number) {
+        lastAssignedScrollTop = value;
+      },
+    });
+
+    useChatStore.setState((state) => ({
+      ...state,
+      streaming: {
+        ...state.streaming,
+        messageId: 'assistant-stream-reasoning',
+        reasoningBuffer: 'line 1\nline 2\nline 3',
+      },
+    }));
+
+    const { rerender } = render(
+      <MessageBubble
+        message={{
+          message_id: 'assistant-stream-reasoning',
+          role: 'assistant',
+          content: '',
+          metadata: {},
+          created_at: Date.now() / 1000,
+        }}
+        isStreaming
+      />,
+    );
+
+    try {
+      act(() => {
+        useChatStore.setState((state) => ({
+          ...state,
+          streaming: {
+            ...state.streaming,
+            messageId: 'assistant-stream-reasoning',
+            reasoningBuffer: 'line 1\nline 2\nline 3\nline 4',
+          },
+        }));
+
+        rerender(
+          <MessageBubble
+            message={{
+              message_id: 'assistant-stream-reasoning',
+              role: 'assistant',
+              content: '',
+              metadata: {},
+              created_at: Date.now() / 1000,
+            }}
+            isStreaming
+          />,
+        );
+      });
+
+      expect(lastAssignedScrollTop).toBe(480);
+    } finally {
+      if (scrollHeightDescriptor) {
+        Object.defineProperty(HTMLDivElement.prototype, 'scrollHeight', scrollHeightDescriptor);
+      }
+      if (scrollTopDescriptor) {
+        Object.defineProperty(HTMLDivElement.prototype, 'scrollTop', scrollTopDescriptor);
+      }
+    }
   });
 });

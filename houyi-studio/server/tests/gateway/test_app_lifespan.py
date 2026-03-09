@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+import time
+from pathlib import Path
 
 import pytest
 from fastapi import APIRouter, FastAPI
@@ -23,13 +25,21 @@ from houyi.infrastructure.config.env_config import (
 def _stub_startup_dependencies(app_module, monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(app_module, "get_execution_engine", lambda: object())
     monkeypatch.setattr(app_module, "register_console_skills", lambda: None)
-    monkeypatch.setattr(app_module, "JsonStore", lambda data_dir: object())
+
+    captured: dict[str, object] = {}
+
+    def _json_store(data_dir):
+        captured["chat_data_dir"] = data_dir
+        return object()
+
+    monkeypatch.setattr(app_module, "JsonStore", _json_store)
     monkeypatch.setattr(app_module, "SettingsStore", lambda settings_path: object())
     monkeypatch.setattr(app_module, "ChatService", lambda **kwargs: object())
     monkeypatch.setattr(app_module, "register_chat_routes", lambda *args, **kwargs: APIRouter())
 
     monkeypatch.setenv(ENV_CHAT_DATA_DIR, str(tmp_path / "chat-data"))
     monkeypatch.setenv(ENV_CHAT_SETTINGS_PATH, str(tmp_path / "settings.json"))
+    return captured
 
 
 def test_lifespan_fail_fast_for_explicit_local_embedding(monkeypatch, tmp_path) -> None:
@@ -148,3 +158,69 @@ def test_lifespan_real_resolver_auto_mode_warns_no_provider(monkeypatch, tmp_pat
             pass
 
     assert "No embedding provider detected at startup" in caplog.text
+
+
+def test_lifespan_embedding_resolution_timeout_degrades_startup(
+    monkeypatch, tmp_path, caplog
+) -> None:
+    from houyi_studio.server.gateway import app as app_module
+
+    _stub_startup_dependencies(app_module, monkeypatch, tmp_path)
+    monkeypatch.delenv(ENV_EMBEDDING_PROVIDER, raising=False)
+    monkeypatch.setenv("HOUYI_EMBEDDING_STARTUP_TIMEOUT_SECONDS", "0.01")
+
+    def _slow_resolve(*, strict_explicit: bool = False, **kwargs):
+        time.sleep(0.2)
+        return None, "no_provider"
+
+    monkeypatch.setattr(app_module, "resolve_embedding_config", _slow_resolve)
+
+    app = FastAPI(lifespan=app_module.lifespan)
+    with caplog.at_level(logging.WARNING):
+        with TestClient(app):
+            pass
+
+    assert "Embedding config resolution timed out" in caplog.text
+    assert "No embedding provider detected at startup" in caplog.text
+
+
+def test_lifespan_resolves_default_chat_data_dir_from_project_root(monkeypatch, tmp_path) -> None:
+    from houyi_studio.server.gateway import app as app_module
+
+    captured = _stub_startup_dependencies(app_module, monkeypatch, tmp_path)
+    monkeypatch.delenv(ENV_CHAT_DATA_DIR, raising=False)
+
+    app = FastAPI(lifespan=app_module.lifespan)
+    with TestClient(app):
+        pass
+
+    assert (
+        captured["chat_data_dir"] == Path("/Users/von/workspace/HouYiAgent") / "data/conversations"
+    )
+
+
+def test_lifespan_resolves_relative_chat_data_dir_from_project_root(monkeypatch, tmp_path) -> None:
+    from houyi_studio.server.gateway import app as app_module
+
+    captured = _stub_startup_dependencies(app_module, monkeypatch, tmp_path)
+    monkeypatch.setenv(ENV_CHAT_DATA_DIR, "custom/chat-data")
+
+    app = FastAPI(lifespan=app_module.lifespan)
+    with TestClient(app):
+        pass
+
+    assert captured["chat_data_dir"] == Path("/Users/von/workspace/HouYiAgent") / "custom/chat-data"
+
+
+def test_lifespan_keeps_absolute_chat_data_dir(monkeypatch, tmp_path) -> None:
+    from houyi_studio.server.gateway import app as app_module
+
+    captured = _stub_startup_dependencies(app_module, monkeypatch, tmp_path)
+    absolute = tmp_path / "absolute-chat-data"
+    monkeypatch.setenv(ENV_CHAT_DATA_DIR, str(absolute))
+
+    app = FastAPI(lifespan=app_module.lifespan)
+    with TestClient(app):
+        pass
+
+    assert captured["chat_data_dir"] == absolute

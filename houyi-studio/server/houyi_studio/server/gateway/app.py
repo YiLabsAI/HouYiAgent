@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import logging
 import os
 import re
@@ -39,7 +40,7 @@ from houyi.interface.protocol.ir import ExecutionStatus, PlanIR
 
 from ..chat.chat_api import register_chat_routes
 from ..chat.chat_service import ChatService
-from ..chat.json_store import JsonStore
+from ..chat.json_store import JsonStore, resolve_chat_data_dir
 from ..chat.settings_store import SettingsStore
 from ..execution.command_handler import ExecutionCommandHandler
 from ..execution.engine import ExecutionEngine
@@ -67,7 +68,9 @@ load_dotenv()
 
 LOG_LEVEL = configure_logging()
 logger = logging.getLogger(__name__)
-
+LOG_LEVEL = get_log_level().upper()
+_EMBEDDING_STARTUP_TIMEOUT_SECONDS = 3.0
+_embedding_startup_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
 execution_engine: ExecutionEngine | None = None
 command_parser = CommandParser(logger=logger)
 command_dispatcher = CommandDispatcher()
@@ -274,13 +277,34 @@ def _apply_plan_patches(current_plan: PlanIR, patches: list[PlanPatch]) -> bool:
     return plan_modified
 
 
+def _resolve_startup_embedding_config(*, strict_explicit: bool = False):
+    timeout_seconds = float(
+        os.getenv(
+            "HOUYI_EMBEDDING_STARTUP_TIMEOUT_SECONDS", str(_EMBEDDING_STARTUP_TIMEOUT_SECONDS)
+        )
+    )
+    future = _embedding_startup_executor.submit(
+        resolve_embedding_config,
+        strict_explicit=strict_explicit,
+    )
+    try:
+        return future.result(timeout=timeout_seconds)
+    except concurrent.futures.TimeoutError:
+        future.cancel()
+        logger.warning(
+            "Embedding config resolution timed out after %.1fs; skipping provider activation at startup",
+            timeout_seconds,
+        )
+        return None, "startup_timeout"
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     get_execution_engine()
     register_console_skills()
 
     # Initialize Chat subsystem
-    chat_data_dir = os.getenv(ENV_CHAT_DATA_DIR, "data/conversations")
+    chat_data_dir = resolve_chat_data_dir(os.getenv(ENV_CHAT_DATA_DIR))
     settings_path = os.getenv(ENV_CHAT_SETTINGS_PATH, "data/settings.json")
     json_store = JsonStore(data_dir=chat_data_dir)
     settings_store = SettingsStore(settings_path=settings_path)
@@ -353,7 +377,7 @@ async def lifespan(app: FastAPI):
         configured_embedding_model or "(default)",
     )
     try:
-        embedding_cfg, detected_provider = resolve_embedding_config(
+        embedding_cfg, detected_provider = _resolve_startup_embedding_config(
             strict_explicit=configured_embedding_provider == "local"
         )
     except RuntimeError as exc:

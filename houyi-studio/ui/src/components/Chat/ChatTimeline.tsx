@@ -23,6 +23,9 @@ import { MessageBubble } from './MessageBubble';
 import { TypingIndicator } from './TypingIndicator';
 import { Bot } from 'lucide-react';
 
+const INITIAL_RENDER_LIMIT = 120;
+const RENDER_LIMIT_INCREMENT = 120;
+
 // Module-level scroll position cache — survives re-renders, no state needed.
 // Uses message-based anchoring: stores which message was at the viewport center
 // and its pixel offset from the container top. This is robust against scrollHeight
@@ -124,6 +127,18 @@ type TimelineItem = {
   toolSteps: ChatMessage[];
 };
 
+const formatDateDivider = (timestamp: number): string => {
+  return new Date(timestamp * 1000).toLocaleDateString(undefined, {
+    month: '2-digit',
+    day: '2-digit',
+    weekday: 'short',
+  });
+};
+
+const getDateDividerKey = (timestamp: number): string => {
+  return new Date(timestamp * 1000).toISOString().slice(0, 10);
+};
+
 export const ChatTimeline: React.FC<ChatTimelineProps> = ({
   messages,
   streamingMessageId,
@@ -135,7 +150,7 @@ export const ChatTimeline: React.FC<ChatTimelineProps> = ({
   const contentRef = React.useRef<HTMLDivElement>(null);
   const [autoScroll, setAutoScroll] = React.useState(true);
   const [highlightedMsgId, setHighlightedMsgId] = React.useState<string | null>(null);
-  const [renderLimit, setRenderLimit] = React.useState(120);
+  const [renderLimit, setRenderLimit] = React.useState(INITIAL_RENDER_LIMIT);
   const restoreRafRef = React.useRef<number | null>(null);
   const resizeObserverRef = React.useRef<ResizeObserver | null>(null);
   const resizeRafRef = React.useRef<number | null>(null);
@@ -147,7 +162,6 @@ export const ChatTimeline: React.FC<ChatTimelineProps> = ({
   // protection window.  Without this, wheel scrolling doesn't save snapshots.
   const lastWheelAtRef = React.useRef<number>(0);
   const lastRestoreAtRef = React.useRef<number>(0);
-  const lastAutoLoadMoreAtRef = React.useRef<number>(0);
   const prevMessageCountRef = React.useRef(messages.length);
   const prevConversationIdRef = React.useRef<string | null>(conversationId);
   // The conversation ID we need to restore scroll for.  null = no pending restore.
@@ -160,6 +174,11 @@ export const ChatTimeline: React.FC<ChatTimelineProps> = ({
   const prevMessagesFingerprintRef = React.useRef<string>('');
   const scrollToMessageId = useChatStore((s) => s.scrollToMessageId);
   const clearScrollTarget = useChatStore((s) => s.clearScrollTarget);
+  const streamingReasoningLength = useChatStore((s) => (
+    streamingMessageId && s.streaming.messageId === streamingMessageId
+      ? s.streaming.reasoningBuffer.length
+      : 0
+  ));
 
   // Cheap fingerprint: first message ID + length.  Changes when the store
   // replaces activeConversation with data from a different conversation.
@@ -281,6 +300,14 @@ export const ChatTimeline: React.FC<ChatTimelineProps> = ({
       ids.add(m.message_id);
     }
 
+    // Keep the actively streaming message fully visible. Long reasoning output
+    // grows inside a nested scroll panel; if content-visibility remains auto
+    // here, the outer timeline can continue scrolling while the live text falls
+    // outside the visible paint region.
+    if (streamingMessageId) {
+      ids.add(streamingMessageId);
+    }
+
     // Also prioritize any message containing Mermaid blocks. Mermaid rendering
     // can be expensive and interacts poorly with content-visibility during
     // scroll (especially scrollbar dragging), causing visible jitter.
@@ -291,7 +318,7 @@ export const ChatTimeline: React.FC<ChatTimelineProps> = ({
     }
 
     return ids;
-  }, [visibleMessages]);
+  }, [visibleMessages, streamingMessageId]);
 
   // Track which conversation's messages are currently rendered in the DOM.
   // Updated by effect 2 after a successful restore (i.e. after the store
@@ -413,7 +440,7 @@ export const ChatTimeline: React.FC<ChatTimelineProps> = ({
   // Keep current window during in-conversation mutations (delete/edit/new stream)
   // so the viewport does not jump back to the progressive-loading header.
   React.useLayoutEffect(() => {
-    setRenderLimit(120);
+    setRenderLimit(INITIAL_RENDER_LIMIT);
   }, [conversationId]);
 
   // --- 2. Restore scroll position after new conversation's messages render ---
@@ -481,7 +508,7 @@ export const ChatTimeline: React.FC<ChatTimelineProps> = ({
   }, [scrollToMessageId, clearScrollTarget]);
 
   // Track streaming content length for scroll trigger
-  const streamingContent = streamingMessageId
+  const streamingContentLength = streamingMessageId
     ? timelineItems.find((item) => item.message.message_id === streamingMessageId)?.message.content?.length ?? 0
     : 0;
 
@@ -532,7 +559,7 @@ export const ChatTimeline: React.FC<ChatTimelineProps> = ({
     }
 
     prevMessageCountRef.current = messages.length;
-  }, [messages.length, autoScroll, streamingContent, streamingMessageId, isWaitingForResponse]);
+  }, [messages.length, autoScroll, streamingContentLength, streamingReasoningLength, streamingMessageId, isWaitingForResponse]);
 
   // Mark wheel events as user-initiated scrolling.  Wheel events don't
   // trigger pointerdown, so without this the post-restore protection guard
@@ -577,20 +604,6 @@ export const ChatTimeline: React.FC<ChatTimelineProps> = ({
     const atBottom = distanceFromBottom < 60;
     setAutoScroll(atBottom);
 
-    // Progressive loading: when user reaches the older-boundary threshold,
-    // reveal more history automatically in chunks.
-    const hasMoreOlderMessages = messages.length > renderLimit;
-    const nearOlderBoundary = maxScroll - distanceFromBottom < 120;
-    const now = Date.now();
-    if (
-      hasMoreOlderMessages
-      && nearOlderBoundary
-      && now - lastAutoLoadMoreAtRef.current > 250
-    ) {
-      lastAutoLoadMoreAtRef.current = now;
-      setRenderLimit((n) => Math.min(messages.length, n + 120));
-    }
-
     // Continuously save scroll position for the currently rendered conversation.
     // This is more reliable than saving only on conversation switch, because
     // BUG-041's store strategy may keep old messages visible while the new
@@ -628,8 +641,9 @@ export const ChatTimeline: React.FC<ChatTimelineProps> = ({
           <div className="px-4 py-2">
             <button
               type="button"
+              data-testid="chat-timeline-show-more"
               className="text-[11px] text-gray-500 hover:text-gray-300 underline"
-              onClick={() => setRenderLimit((n) => Math.min(messages.length, n + 120))}
+              onClick={() => setRenderLimit((n) => Math.min(messages.length, n + RENDER_LIMIT_INCREMENT))}
             >
               Show more
             </button>
@@ -639,21 +653,39 @@ export const ChatTimeline: React.FC<ChatTimelineProps> = ({
           </div>
         )}
 
-        {timelineItems.map(({ message: msg, toolSteps }) => (
-          <div
-            key={msg.message_id}
-            data-message-id={msg.message_id}
-            className={`houyi-message-item ${priorityIds.has(msg.message_id) ? 'houyi-message-item--priority' : ''} ${highlightedMsgId === msg.message_id ? 'bg-yellow-500/10 rounded-lg transition-colors duration-300' : ''}`}
-          >
-            <MessageBubble
-              message={msg}
-              toolSteps={toolSteps}
-              isStreaming={msg.message_id === streamingMessageId}
-              isLastMessage={Boolean(lastMsg && msg.message_id === lastMsg.message_id && !isWaitingForResponse)}
-              onOpenTrace={onOpenTrace}
-            />
-          </div>
-        ))}
+        {timelineItems.map(({ message: msg, toolSteps }, index) => {
+          const dividerKey = getDateDividerKey(msg.created_at);
+          const prevMsg = timelineItems[index - 1]?.message;
+          const shouldShowDateDivider = !prevMsg || getDateDividerKey(prevMsg.created_at) !== dividerKey;
+
+          return (
+            <React.Fragment key={msg.message_id}>
+              {shouldShowDateDivider && (
+                <div className="px-4 py-2" data-testid="chat-date-divider">
+                  <div className="flex items-center gap-3 text-[10px] text-gray-500">
+                    <div className="h-px flex-1 bg-gray-800" />
+                    <span className="shrink-0 rounded-full border border-gray-700 bg-gray-900 px-2 py-0.5 tabular-nums">
+                      {formatDateDivider(msg.created_at)}
+                    </span>
+                    <div className="h-px flex-1 bg-gray-800" />
+                  </div>
+                </div>
+              )}
+              <div
+                data-message-id={msg.message_id}
+                className={`houyi-message-item ${priorityIds.has(msg.message_id) ? 'houyi-message-item--priority' : ''} ${highlightedMsgId === msg.message_id ? 'bg-yellow-500/10 rounded-lg transition-colors duration-300' : ''}`}
+              >
+                <MessageBubble
+                  message={msg}
+                  toolSteps={toolSteps}
+                  isStreaming={msg.message_id === streamingMessageId}
+                  isLastMessage={Boolean(lastMsg && msg.message_id === lastMsg.message_id && !isWaitingForResponse)}
+                  onOpenTrace={onOpenTrace}
+                />
+              </div>
+            </React.Fragment>
+          );
+        })}
         {/* Ghost assistant bubble: shown after user sends a message but before
             the first SSE event arrives (no assistant message in the list yet) */}
         {isWaitingForResponse && (

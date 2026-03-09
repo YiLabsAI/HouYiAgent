@@ -15,11 +15,13 @@ import tempfile
 from datetime import date, timedelta
 
 from houyi_studio.server.gateway.app import app
+from houyi_studio.server.logging_config import build_logging_config
 
 from houyi import tool
 from houyi.domain.skill.registry import DEFAULT_SKILL_REGISTRY
 
 PID_FILE = os.path.join(tempfile.gettempdir(), "houyi-console-e2e.pid")
+DEFAULT_E2E_BACKEND_PORT = "9000"
 
 _QUIET_VALUES = {"1", "true", "yes", "on"}
 
@@ -110,6 +112,17 @@ if __name__ == "__main__":
 
     _write_pid_file()
     atexit.register(_cleanup_pid_file)
+    e2e_port = int(
+        os.environ.get("HOUYI_PORT")
+        or os.environ.get("HOUYI_E2E_BACKEND_PORT")
+        or DEFAULT_E2E_BACKEND_PORT
+    )
+    log_level = (os.environ.get("HOUYI_LOG_LEVEL") or "WARNING").lower()
     uvicorn.run(
-        app, host="127.0.0.1", port=int(os.environ.get("HOUYI_PORT", "8000")), log_level="info"
+        app,
+        host="127.0.0.1",
+        port=e2e_port,
+        log_level=log_level,
+        log_config=build_logging_config(log_level),
+        access_log=False,
     )

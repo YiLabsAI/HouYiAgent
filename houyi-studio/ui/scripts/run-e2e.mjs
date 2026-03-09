@@ -14,6 +14,8 @@ const passthroughArgs = separatorIndex >= 0 ? args.slice(separatorIndex + 1) : [
 
 const env = { ...process.env };
 const CONFIG_PATH = path.join(os.tmpdir(), 'houyi-console-e2e-config.json');
+const DEFAULT_E2E_BACKEND_PORT = '9000';
+const DEFAULT_E2E_UI_PORT = '3100';
 let quiet;
 let logLevel;
 let disableLiveWeather;
@@ -204,6 +206,8 @@ const configPayload = {
 
 fs.writeFileSync(CONFIG_PATH, `${JSON.stringify(configPayload, null, 2)}\n`, 'utf-8');
 env.HOUYI_E2E_CONFIG = CONFIG_PATH;
+env.HOUYI_E2E_BACKEND_PORT = env.HOUYI_E2E_BACKEND_PORT || DEFAULT_E2E_BACKEND_PORT;
+env.HOUYI_E2E_UI_PORT = env.HOUYI_E2E_UI_PORT || DEFAULT_E2E_UI_PORT;
 
 const command = process.platform === 'win32' ? 'npx.cmd' : 'npx';
 const child = spawn(command, ['playwright', 'test', ...passthroughArgs], {

@@ -17,8 +17,26 @@ from .types import Conversation
 
 logger = logging.getLogger(__name__)
 
-# Default data directory (relative to workspace root)
+# Default data directory (relative to project root)
 _DEFAULT_DATA_DIR = "data/conversations"
+
+
+def _project_root() -> Path:
+    current = Path(__file__).resolve()
+    git_root: Path | None = None
+    for parent in current.parents:
+        if (parent / ".git").exists():
+            git_root = parent
+    if git_root is not None:
+        return git_root
+    return Path.cwd()
+
+
+def resolve_chat_data_dir(data_dir: str | Path | None = None) -> Path:
+    raw_path = Path(data_dir) if data_dir else Path(_DEFAULT_DATA_DIR)
+    if raw_path.is_absolute():
+        return raw_path
+    return _project_root() / raw_path
 
 
 class JsonStore:
@@ -38,9 +56,9 @@ class JsonStore:
 
         Args:
             data_dir: Directory for conversation JSON files.
-                      Defaults to 'data/conversations' relative to CWD.
+                      Defaults to 'data/conversations' relative to project root.
         """
-        self._data_dir = Path(data_dir) if data_dir else Path(_DEFAULT_DATA_DIR)
+        self._data_dir = resolve_chat_data_dir(data_dir)
         self._data_dir.mkdir(parents=True, exist_ok=True)
         self._index: dict[str, dict[str, Any]] = {}
         self._locks: dict[str, asyncio.Lock] = {}

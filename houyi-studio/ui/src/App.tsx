@@ -15,6 +15,7 @@ import { RunSettingsDrawer } from './components/RunSettingsDrawer';
 import { CenterStage } from './components/CenterStage';
 import { useConsoleStore } from './stores/useConsoleStore';
 import { useThemeStore } from './stores/useThemeStore';
+import { useChatStore } from './stores/useChatStore';
 import { ObsFullView } from './components/panels/ObsFullView';
 import { KnowledgeResultsPanel } from './components/panels/KnowledgeResultsPanel';
 import { useSkillsLogic } from './components/LeftSidebar/useSkillsLogic';
@@ -261,6 +262,7 @@ function App() {
   React.useEffect(() => {
     if (import.meta.env.MODE !== 'production') {
       (window as any).__consoleStore = useConsoleStore;
+      (window as any).__chatStore = useChatStore;
     }
   }, []);
 

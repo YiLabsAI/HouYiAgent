@@ -4,8 +4,8 @@ import path from 'path'
 
 // https://vitejs.dev/config/
 export default defineConfig(({ mode }) => {
-  const backendPort = process.env.HOUYI_PORT || '8000'
-  const uiPort = parseInt(process.env.HOUYI_UI_PORT || '3000', 10)
+  const backendPort = process.env.HOUYI_PORT || process.env.HOUYI_E2E_BACKEND_PORT || '8000'
+  const uiPort = parseInt(process.env.HOUYI_UI_PORT || process.env.HOUYI_E2E_UI_PORT || '3000', 10)
 
   return {
     plugins: [react()],

@@ -1,14 +1,15 @@
 /// <reference types="node" />
 
-import { spawn, spawnSync } from 'child_process';
+import { spawn } from 'child_process';
 import fs from 'fs';
 import http from 'http';
 import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
-const SERVER_URL = 'http://127.0.0.1:8000/';
-const SERVER_PORT = 8000;
+const E2E_BACKEND_PORT = Number(process.env.HOUYI_E2E_BACKEND_PORT || '9000');
+const SERVER_URL = `http://127.0.0.1:${E2E_BACKEND_PORT}/`;
+const SERVER_PORT = E2E_BACKEND_PORT;
 const PID_FILE = path.join(os.tmpdir(), 'houyi-console-e2e.pid');
 const UV_PID_FILE = path.join(os.tmpdir(), 'houyi-console-e2e-uv.pid');
 const SKIP_KILL_PORT = process.env.SKIP_KILL_E2E_PORT === '1';
@@ -44,18 +45,6 @@ const loadE2EConfig = (): E2EConfig => {
 };
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
-const getListeningPid = (): number | null => {
-  const result = spawnSync('lsof', ['-nP', `-iTCP:${SERVER_PORT}`, '-sTCP:LISTEN', '-t'], {
-    encoding: 'utf-8',
-  });
-  if (result.status !== 0 || !result.stdout) {
-    return null;
-  }
-  const pidRaw = result.stdout.split('\n')[0]?.trim();
-  const pid = Number(pidRaw);
-  return Number.isFinite(pid) ? pid : null;
-};
 
 const isServerUp = async (): Promise<boolean> => {
   return new Promise((resolve) => {
@@ -95,7 +84,7 @@ const tryKillPid = (pid: number, signal: NodeJS.Signals): boolean => {
 export default async function globalSetup(): Promise<void> {
   if (await isServerUp()) {
     if (SKIP_KILL_PORT) {
-      console.log('[E2E] Reusing existing server on 127.0.0.1:8000 (SKIP_KILL_E2E_PORT=1)');
+      console.log(`[E2E] Reusing existing server on 127.0.0.1:${SERVER_PORT} (SKIP_KILL_E2E_PORT=1)`);
       return;
     }
 
@@ -110,20 +99,10 @@ export default async function globalSetup(): Promise<void> {
     }
 
     if (await isServerUp()) {
-      const pid = getListeningPid();
-      if (pid) {
-        tryKillPid(pid, 'SIGTERM');
-        await waitForServerDown();
-        if (await isServerUp()) {
-          tryKillPid(pid, 'SIGKILL');
-          await waitForServerDown();
-        }
-      }
-    }
-
-    if (await isServerUp()) {
       throw new Error(
-        'Console server already running on 127.0.0.1:8000. Automatic cleanup failed; stop it or set SKIP_KILL_E2E_PORT=1.',
+        `E2E backend port 127.0.0.1:${SERVER_PORT} is already in use by a non-e2e process. `
+        + 'For safety, Playwright setup will not kill arbitrary listeners. '
+        + `Stop that process, choose another HOUYI_E2E_BACKEND_PORT, or set SKIP_KILL_E2E_PORT=1 to reuse it intentionally.`,
       );
     }
   }
@@ -163,6 +142,7 @@ export default async function globalSetup(): Promise<void> {
   const e2eDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'houyi-e2e-chat-'));
   const e2eSettingsPath = path.join(e2eDataDir, 'settings.json');
   console.log(`[E2E] Using isolated chat data dir: ${e2eDataDir}`);
+  console.log(`[E2E] Starting isolated backend on 127.0.0.1:${SERVER_PORT}`);
 
   const child = spawn('uv', ['run', 'python', 'tests/integration/fixtures/console_tools.py'], {
     cwd: repoRoot,
@@ -174,7 +154,9 @@ export default async function globalSetup(): Promise<void> {
       HOUYI_CHAT_DATA_DIR: e2eDataDir,
       HOUYI_CHAT_SETTINGS_PATH: e2eSettingsPath,
       HOUYI_E2E_QUIET: quietLogs ? '1' : '0',
+      HOUYI_E2E_BACKEND_PORT: String(SERVER_PORT),
       HOUYI_LOG_LEVEL: logLevel,
+      HOUYI_PORT: String(SERVER_PORT),
       HOUYI_TOOLCALL_MAX_RETRIES: String(toolcallRetries),
       HOUYI_TOOLCALL_TIMEOUT: String(toolcallTimeout),
       HOUYI_TOOLCALL_TIMING: toolcallTiming ? '1' : '0',

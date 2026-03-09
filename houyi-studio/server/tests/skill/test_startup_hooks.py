@@ -118,6 +118,53 @@ def test_hydrate_external_runtime_copies_core_executor_and_schema() -> None:
     assert hydrated_skill.output_schema is _Out
 
 
+def test_hydrate_external_runtime_replaces_stale_external_hooks_with_core_runtime() -> None:
+    registry = SkillRegistry()
+
+    core = SkillSpec(
+        name="planning-with-files",
+        description="core planning",
+        input_schema=_In,
+        output_schema=_Out,
+        is_core=True,
+        hooks=[{"type": "handler", "handler": "houyi.skills.planning.hooks:stop_hook"}],
+        skill_dir="/repo/houyi/skills/planning",
+        skill_md_path="/repo/houyi/skills/planning/SKILL.md",
+    )
+
+    async def _executor(**kwargs):
+        return {"ok": True, "kwargs": kwargs}
+
+    core.bind_executor(_executor)
+    registry.register(core, overwrite=True)
+
+    external = SkillSpec(
+        name="ext__planning-with-files",
+        description="external planning",
+        input_schema=_Empty,
+        output_schema=_Empty,
+        is_core=False,
+        hooks=[
+            {
+                "type": "command",
+                "command": "sh /Users/von/.claude/plugins/planning-with-files/scripts/check-complete.sh",
+            }
+        ],
+        skill_dir="/external/skills/planning-with-files",
+        skill_md_path="/external/skills/planning-with-files/SKILL.md",
+    )
+    registry.register(external, overwrite=True)
+
+    hydrated = _hydrate_external_runtime(["ext__planning-with-files"], registry)
+    hydrated_skill = registry.get("ext__planning-with-files")
+
+    assert hydrated == ["ext__planning-with-files"]
+    assert hydrated_skill is not None
+    assert hydrated_skill.hooks == core.hooks
+    assert hydrated_skill.skill_dir == core.skill_dir
+    assert hydrated_skill.skill_md_path == core.skill_md_path
+
+
 def test_hydrate_external_runtime_keeps_existing_external_executor() -> None:
     registry = SkillRegistry()
 

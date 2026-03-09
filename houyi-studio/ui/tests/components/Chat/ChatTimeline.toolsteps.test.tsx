@@ -2,6 +2,17 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatTimeline } from '@/components/Chat/ChatTimeline';
 
+function buildMessages(count: number) {
+  const now = Date.now() / 1000;
+  return Array.from({ length: count }, (_, index) => ({
+    message_id: `m-${index + 1}`,
+    role: index % 2 === 0 ? 'user' as const : 'assistant' as const,
+    content: `message ${index + 1}`,
+    metadata: {},
+    created_at: now + index,
+  }));
+}
+
 describe('ChatTimeline tool-step association', () => {
   beforeEach(() => {
     vi.stubGlobal(
@@ -269,5 +280,76 @@ describe('ChatTimeline tool-step association', () => {
     );
 
     expect(screen.getByText('hello')).toBeInTheDocument();
+  });
+
+  it('renders only the most recent 120 messages until Show more is clicked', () => {
+    render(
+      <ChatTimeline
+        conversationId="c7"
+        streamingMessageId={null}
+        isWaitingForResponse={false}
+        messages={buildMessages(160)}
+      />,
+    );
+
+    expect(screen.getAllByTestId('message-bubble')).toHaveLength(120);
+    expect(screen.queryByText('message 1')).not.toBeInTheDocument();
+    expect(screen.getByText('message 160')).toBeInTheDocument();
+    expect(screen.getByTestId('chat-timeline-show-more')).toBeInTheDocument();
+    expect(screen.getByText('Showing 120 / 160')).toBeInTheDocument();
+  });
+
+  it('keeps Show more visible until all older history is explicitly revealed', () => {
+    render(
+      <ChatTimeline
+        conversationId="c8"
+        streamingMessageId={null}
+        isWaitingForResponse={false}
+        messages={buildMessages(260)}
+      />,
+    );
+
+    const showMore = screen.getByTestId('chat-timeline-show-more');
+    fireEvent.click(showMore);
+
+    expect(screen.getAllByTestId('message-bubble')).toHaveLength(240);
+    expect(screen.getByTestId('chat-timeline-show-more')).toBeInTheDocument();
+    expect(screen.getByText('Showing 240 / 260')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('chat-timeline-show-more'));
+
+    expect(screen.getAllByTestId('message-bubble')).toHaveLength(260);
+    expect(screen.queryByTestId('chat-timeline-show-more')).not.toBeInTheDocument();
+  });
+
+  it('renders date dividers when messages cross calendar days', () => {
+    const base = new Date('2026-03-09T10:00:00Z').getTime() / 1000;
+    render(
+      <ChatTimeline
+        conversationId="c9"
+        streamingMessageId={null}
+        isWaitingForResponse={false}
+        messages={[
+          {
+            message_id: 'd1',
+            role: 'user',
+            content: 'day one',
+            metadata: {},
+            created_at: base,
+          },
+          {
+            message_id: 'd2',
+            role: 'assistant',
+            content: 'day two',
+            metadata: {},
+            created_at: base + 86_400,
+          },
+        ]}
+      />,
+    );
+
+    expect(screen.getAllByTestId('chat-date-divider')).toHaveLength(2);
+    expect(screen.getByText('day one')).toBeInTheDocument();
+    expect(screen.getByText('day two')).toBeInTheDocument();
   });
 });

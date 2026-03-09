@@ -168,6 +168,14 @@ def _schema_is_empty(schema: object | None) -> bool:
     return not props and not required
 
 
+def _should_inherit_core_runtime(external: object, core: object) -> bool:
+    external_hooks = getattr(external, "hooks", None) or []
+    core_hooks = getattr(core, "hooks", None) or []
+    if external_hooks and not core_hooks:
+        return False
+    return bool(core_hooks) or getattr(core, "runtime_contract", None) is not None
+
+
 def _hydrate_external_runtime(
     registered_skills: list[str],
     registry=None,
@@ -239,6 +247,11 @@ def _hydrate_external_runtime(
             updates["input_schema"] = core.input_schema
         if _schema_is_empty(getattr(external, "output_schema", None)):
             updates["output_schema"] = core.output_schema
+        if _should_inherit_core_runtime(external, core):
+            updates["hooks"] = list(getattr(core, "hooks", None) or [])
+            updates["skill_dir"] = getattr(core, "skill_dir", None)
+            updates["skill_md_path"] = getattr(core, "skill_md_path", None)
+            updates["runtime_contract"] = getattr(core, "runtime_contract", None)
 
         hydrated_skill = external.model_copy(update=updates)
         skill_registry.register(hydrated_skill, overwrite=True)

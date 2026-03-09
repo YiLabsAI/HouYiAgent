@@ -50,6 +50,7 @@ export interface ConversationSummary {
   title: string;
   status: ConversationStatus;
   message_count: number;
+  visible_message_count?: number;
   model: string;
   created_at: number;
   updated_at: number;

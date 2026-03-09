@@ -323,6 +323,20 @@ class TestSendMessage:
         full_content = "".join(e["data"].get("content", "") for e in deltas)
         assert "Hello from mock!" in full_content
 
+        complete = next(e for e in events if e["event"] == "message.complete")
+        metadata = complete["data"]["metadata"]
+        assert metadata["usage"]["total_tokens"] == 15
+        assert metadata["first_token_latency_ms"] >= 0
+        assert metadata["generation_time_ms"] >= 0
+        assert metadata["tokens_per_second"] > 0
+
+        conv = store.get(conv_id)
+        assert conv is not None
+        assert conv.messages[0].metadata["usage"]["input_tokens"] > 0
+        assert conv.messages[1].metadata["usage"]["total_tokens"] == 15
+        assert conv.messages[1].metadata["first_token_latency_ms"] >= 0
+        assert conv.messages[1].metadata["tokens_per_second"] > 0
+
     def test_streams_final_response_after_tool_loop(self, app_and_client, monkeypatch):
         _, client, _ = app_and_client
         create_resp = client.post("/api/chat/conversations", json={"title": "Tool Loop Replay"})
@@ -676,8 +690,10 @@ class TestSendMessage:
         assert len(conv.messages) == 2  # user + assistant
         assert conv.messages[0].role.value == "user"
         assert conv.messages[0].content == "Test persist"
+        assert conv.messages[0].metadata["usage"]["input_tokens"] > 0
         assert conv.messages[1].role.value == "assistant"
         assert len(conv.messages[1].content) > 0
+        assert conv.messages[1].metadata["usage"]["total_tokens"] == 15
 
     def test_send_message_not_found(self, app_and_client):
         _, client, _ = app_and_client

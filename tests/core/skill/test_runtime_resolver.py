@@ -189,12 +189,12 @@ class TestHooksRootNormalization:
         """hooks_root is resolved relative to project_root."""
         rc = RuntimeContract(
             mode=RuntimeMode.TEMPLATE,
-            hooks_root="skills/planning-with-files",
+            hooks_root="houyi/skills/planning",
         )
         skill = _make_skill(runtime=rc)
         resolver = RuntimeResolver(project_root=tmp_path)
         resolved = resolver.resolve(skill)
-        expected = tmp_path / "skills" / "planning-with-files"
+        expected = tmp_path / "houyi" / "skills" / "planning"
         assert resolved.skill_dir == expected
 
     def test_hooks_root_none_keeps_original_skill_dir(self, tmp_path):

@@ -38,11 +38,11 @@ class TestRuntimeContract:
         rc = RuntimeContract(
             mode=RuntimeMode.SCRIPT,
             adapter="houyi.skills.planning.adapter:execute",
-            hooks_root="skills/planning-with-files",
+            hooks_root="houyi/skills/planning",
         )
         assert rc.mode == RuntimeMode.SCRIPT
         assert rc.adapter == "houyi.skills.planning.adapter:execute"
-        assert rc.hooks_root == "skills/planning-with-files"
+        assert rc.hooks_root == "houyi/skills/planning"
 
     def test_valid_template_mode(self):
         rc = RuntimeContract(mode=RuntimeMode.TEMPLATE)

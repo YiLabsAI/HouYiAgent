@@ -61,6 +61,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
   const [isEditing, setIsEditing] = React.useState(false);
   const [editText, setEditText] = React.useState('');
   const editRef = React.useRef<HTMLTextAreaElement>(null);
+  const reasoningContentRef = React.useRef<HTMLDivElement>(null);
   const editMessage = useChatStore((s) => s.editMessage);
   const sendMessage = useChatStore((s) => s.sendMessage);
   const streamingReasoning = useChatStore((s) =>
@@ -91,13 +92,27 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
     || (isStreaming && !normalizedStreamingReasoning);
   const shouldAutoExpandReasoning = isStreaming && !rawContent;
   const traceId = typeof message.metadata?.trace_id === 'string' ? message.metadata.trace_id : null;
+  const usagePromptTokens = Number(message.metadata?.usage?.prompt_tokens || 0);
+  const usageCompletionTokens = Number(message.metadata?.usage?.completion_tokens || 0);
   const usageTotalTokens = Number(message.metadata?.usage?.total_tokens || 0);
+  const usageInputTokens = Number(message.metadata?.usage?.input_tokens || 0);
+  const firstTokenLatencyMs = Number(message.metadata?.first_token_latency_ms || 0);
+  const tokensPerSecond = Number(message.metadata?.tokens_per_second || 0);
   const hasToolSummary = toolSteps.length > 0;
+  const assistantMetricCount = [
+    usageTotalTokens > 0,
+    usagePromptTokens > 0,
+    usageCompletionTokens > 0,
+    firstTokenLatencyMs > 0,
+    tokensPerSecond > 0,
+  ].filter(Boolean).length;
   const shouldShowMetaPanel = isAssistant
-    && (traceId || usageTotalTokens > 0 || (hasToolSummary && !isStreaming));
+    && (traceId || assistantMetricCount > 0 || (hasToolSummary && !isStreaming));
+  const shouldShowUserMetaPanel = isUser && usageInputTokens > 0;
   const roundCount = toolSteps.length > 0
     ? new Set(toolSteps.map((step) => Number(step.metadata?.round_index || 0)).filter((v) => Number.isFinite(v) && v > 0)).size
     : 0;
+  const hoverMetricCount = [firstTokenLatencyMs > 0, tokensPerSecond > 0].filter(Boolean).length;
   const isEmptyAssistantPlaceholder =
     isAssistant
     && !isStreaming
@@ -116,6 +131,13 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
     }
     prevIsStreamingRef.current = isStreaming;
   }, [isAssistant, isLastMessage, isStreaming, toolSteps.length]);
+
+  React.useLayoutEffect(() => {
+    if (!isStreaming || !(showReasoning || shouldAutoExpandReasoning)) return;
+    const panel = reasoningContentRef.current;
+    if (!panel) return;
+    panel.scrollTop = panel.scrollHeight;
+  }, [isStreaming, showReasoning, shouldAutoExpandReasoning, normalizedStreamingReasoning, normalizedAssistantReasoning]);
 
   if (isEmptyAssistantPlaceholder) {
     return null;
@@ -192,7 +214,10 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
               </span>
             </button>
             {(showReasoning || shouldAutoExpandReasoning) && (
-              <div className="mt-1 pl-3 py-1.5 border-l-2 border-gray-500 text-[11px] text-gray-400 whitespace-pre-wrap break-words max-h-[300px] overflow-y-auto">
+              <div
+                ref={reasoningContentRef}
+                className="mt-1 pl-3 py-1.5 border-l-2 border-gray-500 text-[11px] text-gray-400 whitespace-pre-wrap break-words max-h-[300px] overflow-y-auto"
+              >
                 {normalizedAssistantReasoning || normalizedStreamingReasoning}
                 {isStreaming && !normalizedAssistantContent && (
                   <span className="inline-block w-1 h-3 ml-0.5 bg-gray-400 animate-pulse rounded-sm" />
@@ -276,9 +301,36 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
           </div>
         ) : null}
 
+        {shouldShowUserMetaPanel && (
+          <div className="mt-1.5 flex items-center gap-1.5 text-[10px] text-gray-300">
+            <span className="text-[11px] text-gray-500 tabular-nums">
+              {`Tokens: ${usageInputTokens}`}
+            </span>
+          </div>
+        )}
+
         {/* Timestamp + edited indicator */}
         {shouldShowMetaPanel && (
           <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[10px] text-gray-300">
+            {usageTotalTokens > 0 && (
+              <div className="group relative">
+                <span className="text-[11px] text-gray-500 tabular-nums">
+                  {`Tokens: ${usageTotalTokens}`}
+                  {usagePromptTokens > 0 && ` ↑${usagePromptTokens}`}
+                  {usageCompletionTokens > 0 && ` ↓${usageCompletionTokens}`}
+                </span>
+                {hoverMetricCount > 0 && (
+                  <div className={`pointer-events-none absolute ${isUser ? 'right-0' : 'left-0'} ${isLastMessage ? 'top-full mt-1' : 'bottom-full mb-1'} z-10 hidden whitespace-nowrap rounded-2xl bg-white px-4 py-3 text-[12px] text-gray-800 shadow-lg ring-1 ring-black/5 group-hover:block`}>
+                    <div className="flex items-center gap-1">
+                      {firstTokenLatencyMs > 0 && <span>{`First token ${Math.round(firstTokenLatencyMs)} ms`}</span>}
+                      {firstTokenLatencyMs > 0 && tokensPerSecond > 0 && <span>|</span>}
+                      {tokensPerSecond > 0 && <span>{`${Math.round(tokensPerSecond)} tokens/s`}</span>}
+                    </div>
+                    <div className={`absolute ${isLastMessage ? '-top-1.5' : '-bottom-1.5'} h-3 w-3 rotate-45 bg-white ring-1 ring-black/5 ${isUser ? 'right-5' : 'left-5'}`} />
+                  </div>
+                )}
+              </div>
+            )}
             {hasToolSummary && (
               <span className="rounded-md border border-cyan-500/30 bg-cyan-500/10 px-1.5 py-0.5 text-cyan-200">
                 Tool calls {toolSteps.length}
@@ -287,11 +339,6 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
             {roundCount > 0 && (
               <span className="rounded-md border border-gray-600 bg-gray-800/80 px-1.5 py-0.5 text-gray-300">
                 Rounds {roundCount}
-              </span>
-            )}
-            {usageTotalTokens > 0 && (
-              <span className="rounded-md border border-blue-500/30 bg-blue-500/10 px-1.5 py-0.5 text-blue-200">
-                Tokens {usageTotalTokens}
               </span>
             )}
             {traceId && onOpenTrace && (
@@ -324,7 +371,10 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
 
         <div className="flex items-center gap-1">
           <span className="text-[9px] text-gray-600">
-            {new Date(message.created_at * 1000).toLocaleTimeString()}
+            {new Date(message.created_at * 1000).toLocaleTimeString([], {
+              hour: '2-digit',
+              minute: '2-digit',
+            })}
           </span>
           {message.metadata?.edited && (
             <span className="text-[9px] text-gray-600 italic">(edited)</span>
