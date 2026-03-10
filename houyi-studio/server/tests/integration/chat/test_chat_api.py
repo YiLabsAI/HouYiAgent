@@ -440,6 +440,7 @@ class TestSendMessage:
                             "tool_name": "demo_ok",
                             "parallel_group_id": "round_1",
                             "round_index": 1,
+                            "duration_ms": 1280.0,
                             "args": {"q": "alpha"},
                             "result": {"raw": {"success": True, "value": "ok"}},
                         },
@@ -448,6 +449,7 @@ class TestSendMessage:
                             "tool_name": "demo_err",
                             "parallel_group_id": "round_1",
                             "round_index": 1,
+                            "duration_ms": 245.0,
                             "args": {"q": "beta"},
                             "result": {"raw": {"error": "boom", "code": "tool_failed"}},
                         },
@@ -492,14 +494,17 @@ class TestSendMessage:
 
         starts = [e for e in events if e["event"] == "tool_call.start"]
         assert starts[0]["data"]["parallel_group_id"] == "round_1"
+        assert starts[0]["data"]["duration_ms"] == 1280.0
         assert starts[0]["data"]["tool_call_id"] == "call_ok"
         assert starts[1]["data"]["tool_call_id"] == "call_err"
 
         result_evt = next(e for e in events if e["event"] == "tool_call.result")
         error_evt = next(e for e in events if e["event"] == "tool_call.error")
         assert result_evt["data"]["trace_id"] == trace_id
+        assert result_evt["data"]["duration_ms"] == 1280.0
         assert result_evt["data"]["result"]["success"] is True
         assert error_evt["data"]["trace_id"] == trace_id
+        assert error_evt["data"]["duration_ms"] == 245.0
         assert error_evt["data"]["error"]["error"] == "boom"
 
         complete = next(e for e in events if e["event"] == "message.complete")
@@ -567,6 +572,7 @@ class TestSendMessage:
                             "tool_name": "demo",
                             "parallel_group_id": "round_1",
                             "round_index": 1,
+                            "duration_ms": 321.0,
                             "args": {"path": "README.md"},
                             "result": {"raw": {"matches": ["README.md"]}},
                         }
@@ -615,6 +621,9 @@ class TestSendMessage:
         assert tool_msg.tool_call_id == "call_1"
         assert tool_msg.name == "demo"
         assert "README.md" in tool_msg.content
+        assert tool_msg.metadata.get("duration_ms") == 321.0
+        assert tool_msg.metadata.get("parallel_group_id") == "round_1"
+        assert tool_msg.metadata.get("round_index") == 1
 
         assert final_assistant.role.value == "assistant"
         assert final_assistant.content == "Final answer"

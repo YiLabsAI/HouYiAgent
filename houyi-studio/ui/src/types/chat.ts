@@ -112,6 +112,7 @@ export interface SSEToolCallStart {
   tool_name?: string;
   parallel_group_id?: string;
   round_index?: number;
+  duration_ms?: number;
   arguments?: Record<string, any>;
 }
 
@@ -122,6 +123,7 @@ export interface SSEToolCallResult {
   tool_name?: string;
   parallel_group_id?: string;
   round_index?: number;
+  duration_ms?: number;
   result?: any;
 }
 
@@ -132,6 +134,7 @@ export interface SSEToolCallError {
   tool_name?: string;
   parallel_group_id?: string;
   round_index?: number;
+  duration_ms?: number;
   error?: any;
 }
 

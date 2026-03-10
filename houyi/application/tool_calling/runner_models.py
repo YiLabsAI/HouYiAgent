@@ -137,6 +137,7 @@ class _ToolCallPresentationRequest:
     tool_call_id: str | None
     round_index_value: int | None
     parallel_group_id: str | None
+    duration_ms: float | None
     args: dict[str, Any]
     result: dict[str, Any]
     attempted_tool_name: str | None

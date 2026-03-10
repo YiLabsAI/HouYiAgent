@@ -35,6 +35,29 @@ describe('MessageBubble(tool)', () => {
     expect(screen.getByText('ok')).toBeInTheDocument();
   });
 
+  it('renders tool duration and parallel group metadata', () => {
+    render(
+      <MessageBubble
+        message={{
+          message_id: 'tool-msg-meta-1',
+          role: 'tool',
+          content: '{"result":"ok"}',
+          name: 'web_search',
+          tool_call_id: 'call-meta-1',
+          metadata: {
+            tool_status: 'ok',
+            duration_ms: 1485,
+            parallel_group_id: 'round_1',
+          },
+          created_at: Date.now() / 1000,
+        }}
+      />,
+    );
+
+    expect(screen.getByText('Duration 1.5s')).toBeInTheDocument();
+    expect(screen.getByText('Parallel round_1')).toBeInTheDocument();
+  });
+
   it('does not render empty non-streaming assistant placeholder', () => {
     const { container } = render(
       <MessageBubble

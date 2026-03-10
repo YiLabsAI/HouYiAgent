@@ -200,6 +200,79 @@ test.describe('Chat mode', () => {
     );
   });
 
+  test('tool steps show duration and parallel group metadata', async ({ page }) => {
+    await page.goto('/');
+    await switchToChat(page);
+    await createConversation(page);
+
+    await page.evaluate(() => {
+      const chatStore = (window as any).__chatStore;
+      if (!chatStore) {
+        throw new Error('Chat store not found');
+      }
+
+      chatStore.setState((state: any) => {
+        const conversation = state.activeConversation;
+        if (!conversation) {
+          throw new Error('Active conversation not found');
+        }
+
+        const now = Date.now() / 1000;
+
+        return {
+          ...state,
+          activeConversation: {
+            ...conversation,
+            messages: [
+              {
+                message_id: `user-tool-${Date.now()}`,
+                role: 'user',
+                content: 'search the docs',
+                metadata: {},
+                created_at: now,
+              },
+              {
+                message_id: `assistant-tool-carrier-${Date.now()}`,
+                role: 'assistant',
+                content: '',
+                tool_calls: [{ id: 'call-tool-1' }],
+                metadata: {},
+                created_at: now + 1,
+              },
+              {
+                message_id: `tool-step-${Date.now()}`,
+                role: 'tool',
+                content: '{"matches":["README.md"]}',
+                name: 'houyi_read_file',
+                tool_call_id: 'call-tool-1',
+                metadata: {
+                  tool_status: 'ok',
+                  round_index: 1,
+                  parallel_group_id: 'round_1',
+                  duration_ms: 1485,
+                },
+                created_at: now + 1.5,
+              },
+              {
+                message_id: `assistant-tool-final-${Date.now()}`,
+                role: 'assistant',
+                content: 'Found the relevant file.',
+                metadata: { trace_id: 'trace-tool-1', usage: { total_tokens: 42 } },
+                created_at: now + 2,
+              },
+            ],
+          },
+        };
+      });
+    });
+
+    await expect(page.getByText('Tool calls 1')).toBeVisible({ timeout: 10000 });
+    await page.getByText('Show steps').click();
+    await expect(page.getByText('houyi_read_file')).toBeVisible({ timeout: 10000 });
+    await expect(page.getByText('Duration 1.5s')).toBeVisible({ timeout: 10000 });
+    await expect(page.getByText('Parallel round_1')).toBeVisible({ timeout: 10000 });
+  });
+
   // --- P-039B: Switching large conversations must NOT trigger settings-request storms ---
   test('switching between large conversations does not spam /api/chat/settings', async ({ page }) => {
     await page.goto('/');

@@ -53,6 +53,7 @@ class TestToolCallResultPresenter:
                 tool_call_id="call_1",
                 round_index_value=1,
                 parallel_group_id=None,
+                duration_ms=125.0,
                 args={"x": 1},
                 result=result,
                 attempted_tool_name=None,
@@ -67,10 +68,12 @@ class TestToolCallResultPresenter:
         assert trace_entry["requested_tool_name"] == "tool1"
         assert trace_entry["round_index"] == 1
         assert trace_entry["parallel_group_id"] is None
+        assert trace_entry["duration_ms"] == 125.0
         assert trace_entry["args"] == {"x": 1}
         assert trace_entry["tool_override"] is None
         assert tool_message["name"] == "tool1"
         assert tool_message["content"] == ToolResultBuilder.format(result)
+        assert tool_message["metadata"]["duration_ms"] == 125.0
 
     def test_build_trace_and_message_records_unapplied_override(self) -> None:
         presenter = _ToolCallResultPresenter()
@@ -83,6 +86,7 @@ class TestToolCallResultPresenter:
                 tool_call_id="call_replace",
                 round_index_value=1,
                 parallel_group_id="round_1",
+                duration_ms=240.0,
                 args={},
                 result=result,
                 attempted_tool_name="tool2",
@@ -113,6 +117,7 @@ class TestToolCallResultPresenter:
                 tool_call_id="call_replace",
                 round_index_value=2,
                 parallel_group_id="round_2",
+                duration_ms=320.0,
                 args={"from_hook": True},
                 result=result,
                 attempted_tool_name="tool2",
@@ -149,6 +154,7 @@ class TestToolCallResultPresenter:
                 tool_call_id="call_big",
                 round_index_value=1,
                 parallel_group_id=None,
+                duration_ms=None,
                 args={},
                 result=result,
                 attempted_tool_name="tool_big",
@@ -182,6 +188,7 @@ class TestToolCallResultPresenter:
                 tool_call_id="call_no_summary",
                 round_index_value=1,
                 parallel_group_id=None,
+                duration_ms=None,
                 args={},
                 result=result,
                 attempted_tool_name="tool_big",

@@ -52,6 +52,7 @@ class _ToolCallResultPresenter:
             "tool_call_id": request.tool_call_id,
             "round_index": request.round_index_value,
             "parallel_group_id": request.parallel_group_id,
+            "duration_ms": request.duration_ms,
             "args": request.args,
             "result": request.result,
             "tool_override": (
@@ -71,6 +72,11 @@ class _ToolCallResultPresenter:
             "tool_call_id": request.tool_call_id,
             "name": request.tool_name,
             "content": ToolResultBuilder.format(request.result),
+            "metadata": {
+                "round_index": request.round_index_value,
+                "parallel_group_id": request.parallel_group_id,
+                "duration_ms": request.duration_ms,
+            },
         }
         if not request.tool_result_summary_enabled:
             return trace_entry, tool_message

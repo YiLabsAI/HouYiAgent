@@ -9,6 +9,15 @@ interface ToolCallBubbleProps {
 export const ToolCallBubble: React.FC<ToolCallBubbleProps> = ({ message }) => {
   const [expanded, setExpanded] = React.useState(false);
   const status = String(message.metadata?.tool_status || 'done');
+  const parallelGroupId = typeof message.metadata?.parallel_group_id === 'string'
+    ? message.metadata.parallel_group_id
+    : null;
+  const durationMs = Number(message.metadata?.duration_ms);
+  const formattedDuration = Number.isFinite(durationMs) && durationMs > 0
+    ? durationMs >= 1000
+      ? `${(durationMs / 1000).toFixed(durationMs >= 10_000 ? 0 : 1)}s`
+      : `${Math.round(durationMs)} ms`
+    : null;
   const statusClass =
     status === 'error'
       ? 'text-red-300 bg-red-500/10 border-red-500/30'
@@ -57,6 +66,12 @@ export const ToolCallBubble: React.FC<ToolCallBubbleProps> = ({ message }) => {
         </span>
         {expanded ? <ChevronDown size={14} className="text-gray-500" /> : <ChevronRight size={14} className="text-gray-500" />}
       </button>
+      {(formattedDuration || parallelGroupId) && (
+        <div className="mt-1 flex flex-wrap items-center gap-2 text-[10px] text-gray-500">
+          {formattedDuration && <span>Duration {formattedDuration}</span>}
+          {parallelGroupId && <span>Parallel {parallelGroupId}</span>}
+        </div>
+      )}
       <div className="mt-1 text-[11px] text-gray-400">{preview}</div>
       {expanded && (
         <pre className="mt-2 max-h-56 overflow-auto rounded border border-gray-800 bg-gray-950/80 p-2 text-[11px] leading-relaxed text-gray-300 whitespace-pre-wrap break-words">

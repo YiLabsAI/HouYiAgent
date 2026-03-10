@@ -842,6 +842,7 @@ function handleSSEEvent(
             tool_status: 'running',
             round_index: evt.round_index,
             parallel_group_id: evt.parallel_group_id,
+            duration_ms: evt.duration_ms,
           },
           created_at: Date.now() / 1000,
         };
@@ -901,6 +902,9 @@ function handleSSEEvent(
             metadata: {
               ...m.metadata,
               tool_status: eventType === 'tool_call.result' ? 'ok' : 'error',
+              parallel_group_id: evt.parallel_group_id ?? m.metadata?.parallel_group_id,
+              round_index: evt.round_index ?? m.metadata?.round_index,
+              duration_ms: evt.duration_ms ?? m.metadata?.duration_ms,
             },
           };
         });

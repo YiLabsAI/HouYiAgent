@@ -706,8 +706,16 @@ class ChatService:
     def _collect_persisted_tool_messages(
         self,
         intermediate_messages: list[dict[str, Any]],
+        tool_trace: list[dict[str, Any]] | None = None,
     ) -> list[Message]:
         persisted_tool_messages: list[Message] = []
+        tool_trace_by_call_id: dict[str, dict[str, Any]] = {}
+        for entry in tool_trace or []:
+            if not isinstance(entry, dict):
+                continue
+            call_id = entry.get("tool_call_id")
+            if isinstance(call_id, str) and call_id:
+                tool_trace_by_call_id[call_id] = entry
         for intermediate in intermediate_messages:
             role = intermediate.get("role")
             if role == MessageRole.ASSISTANT.value and intermediate.get("tool_calls"):
@@ -725,16 +733,34 @@ class ChatService:
                 )
                 continue
             if role == MessageRole.TOOL.value:
+                metadata = intermediate.get("metadata")
+                tool_call_id = (
+                    str(intermediate.get("tool_call_id"))
+                    if intermediate.get("tool_call_id")
+                    else None
+                )
+                trace_meta = (
+                    tool_trace_by_call_id.get(tool_call_id or "")
+                    if tool_call_id is not None
+                    else None
+                )
+                merged_metadata = dict(metadata) if isinstance(metadata, dict) else {}
+                if isinstance(trace_meta, dict):
+                    if trace_meta.get("round_index") is not None:
+                        merged_metadata.setdefault("round_index", trace_meta.get("round_index"))
+                    if trace_meta.get("parallel_group_id") is not None:
+                        merged_metadata.setdefault(
+                            "parallel_group_id", trace_meta.get("parallel_group_id")
+                        )
+                    if trace_meta.get("duration_ms") is not None:
+                        merged_metadata.setdefault("duration_ms", trace_meta.get("duration_ms"))
                 persisted_tool_messages.append(
                     Message(
                         role=MessageRole.TOOL,
                         content=str(intermediate.get("content") or ""),
-                        tool_call_id=(
-                            str(intermediate.get("tool_call_id"))
-                            if intermediate.get("tool_call_id")
-                            else None
-                        ),
+                        tool_call_id=tool_call_id,
                         name=(str(intermediate.get("name")) if intermediate.get("name") else None),
+                        metadata=merged_metadata,
                     )
                 )
         return persisted_tool_messages
@@ -826,6 +852,7 @@ class ChatService:
             tool_name = entry.get("tool_name")
             parallel_group_id = entry.get("parallel_group_id")
             round_value = entry.get("round_index")
+            duration_ms = entry.get("duration_ms")
             args = entry.get("args")
             result = entry.get("result") if isinstance(entry.get("result"), dict) else {}
             raw_result = result.get("raw") if isinstance(result, dict) else None
@@ -840,6 +867,7 @@ class ChatService:
                         "tool_name": tool_name,
                         "parallel_group_id": parallel_group_id,
                         "round_index": round_value,
+                        "duration_ms": duration_ms,
                         "arguments": args,
                     },
                 ).encode()
@@ -856,6 +884,7 @@ class ChatService:
                             "tool_name": tool_name,
                             "parallel_group_id": parallel_group_id,
                             "round_index": round_value,
+                            "duration_ms": duration_ms,
                             "error": raw_result,
                         },
                     ).encode()
@@ -871,6 +900,7 @@ class ChatService:
                             "tool_name": tool_name,
                             "parallel_group_id": parallel_group_id,
                             "round_index": round_value,
+                            "duration_ms": duration_ms,
                             "result": raw_result,
                         },
                     ).encode()
@@ -879,7 +909,10 @@ class ChatService:
         intermediate_messages = [
             msg for msg in tool_loop_messages[len(llm_messages) :] if isinstance(msg, dict)
         ]
-        persisted_tool_messages = self._collect_persisted_tool_messages(intermediate_messages)
+        persisted_tool_messages = self._collect_persisted_tool_messages(
+            intermediate_messages,
+            tool_trace,
+        )
 
         usage_payload: dict[str, Any] | None = None
         if isinstance(getattr(tool_loop_response, "usage", None), dict):

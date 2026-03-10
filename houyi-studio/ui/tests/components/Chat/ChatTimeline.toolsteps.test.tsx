@@ -56,7 +56,12 @@ describe('ChatTimeline tool-step association', () => {
             name: 'houyi_read_file',
             tool_call_id: 'call-1',
             content: '{"ok":true}',
-            metadata: { tool_status: 'ok', round_index: 1 },
+            metadata: {
+              tool_status: 'ok',
+              round_index: 1,
+              parallel_group_id: 'round_1',
+              duration_ms: 1485,
+            },
             created_at: now + 2,
           },
           {
@@ -74,6 +79,8 @@ describe('ChatTimeline tool-step association', () => {
     expect(screen.getByText('Tool calls 1')).toBeInTheDocument();
     fireEvent.click(screen.getByText('Show steps'));
     expect(screen.getByText('houyi_read_file')).toBeInTheDocument();
+    expect(screen.getByText('Duration 1.5s')).toBeInTheDocument();
+    expect(screen.getByText('Parallel round_1')).toBeInTheDocument();
   });
 
   it('shows steps when only assistant tool_calls placeholder exists', () => {
