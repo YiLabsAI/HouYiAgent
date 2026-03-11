@@ -148,7 +148,7 @@ class TestManifestPermissions:
 
 
 class TestToolDefinition:
-    """§4.1: Tool MUST define name, description, inputSchema, outputSchema."""
+    """§4.1: Tool MUST define name, description, inputSchema; outputSchema is recommended."""
 
     def test_tool_schema_has_required_fields(self) -> None:
         spec = SkillSpec(
@@ -175,7 +175,7 @@ class TestToolDefinition:
 
 
 class TestSkillDefinition:
-    """§4.2: Skill MUST define id, description, invocationPolicy."""
+    """§4.2: Skill MUST define an identifier, description, and invocationPolicy."""
 
     def test_skill_has_invocation_policy(self) -> None:
         policy = InvocationPolicy(
@@ -192,7 +192,7 @@ class TestSkillDefinition:
         assert spec.invocation_policy is not None
 
     def test_skill_allowed_tools(self) -> None:
-        """§4.2: toolRefs[] — skills can declare allowed tools."""
+        """§4.2: toolRefs[] or host-native equivalent — skills can declare allowed tools."""
         spec = SkillSpec(
             name="multi-tool",
             description="Uses multiple tools",

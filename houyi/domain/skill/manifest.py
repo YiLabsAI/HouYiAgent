@@ -251,7 +251,7 @@ class Trust:
 class SkillManifest:
     """SimpleSkill manifest (simpleskill.json).
 
-    Reference: SimpleSkill Specification v0.1 Section 3.1-3.7
+    Reference: SimpleSkill Specification 0.1.0 Section 3.1-3.7
     """
 
     id: str

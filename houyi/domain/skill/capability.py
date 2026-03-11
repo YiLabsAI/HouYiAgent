@@ -5,7 +5,7 @@ This module implements capability negotiation as specified in §5.1:
 - Extensions can query host capabilities before registration
 - Runtime capability matching for activation decisions
 
-Reference: SimpleSkill Specification v0.1 Section 5.1 (Capability Negotiation)
+Reference: SimpleSkill Specification 0.1.0 Section 5.1 (Capability Negotiation)
 """
 
 from __future__ import annotations

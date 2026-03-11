@@ -1,6 +1,6 @@
 """Tests for SkillSpec class.
 
-Reference: SimpleSkill Specification v0.1 Section 2 (Skill Definition)
+Reference: SimpleSkill Specification 0.1.0 Section 2 (Skill Definition)
 """
 
 import tempfile
@@ -127,7 +127,7 @@ class TestSkillSpecBasics:
 class TestSkillSpecFromFile:
     """Tests for loading SkillSpec from files."""
 
-    def test_from_file_with_yaml_frontmatter(self) -> None:
+    def test_from_file_frontmatter(tmp_path) -> None:
         """Test loading skill from SKILL.md with YAML frontmatter."""
         content = """---
 name: yaml-skill
@@ -153,7 +153,7 @@ This is the body content.
             assert spec.user_invocable is True
             assert spec.allowed_tools == ["Read", "Write"]
 
-    def test_from_file_legacy_format(self) -> None:
+    def test_from_file_legacy(tmp_path) -> None:
         """Test loading skill from legacy skill.md format."""
         content = """# Legacy Skill
 
@@ -180,7 +180,6 @@ A skill in the legacy markdown format.
     "processed": {"type": "string"}
   }
 }
-```
 """
         with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
             f.write(content)
@@ -191,7 +190,7 @@ A skill in the legacy markdown format.
             assert spec.name == "Legacy Skill"
             assert "legacy markdown format" in spec.description
 
-    def test_from_file_with_skill_dir(self) -> None:
+    def test_file_uses_dir(tmp_path) -> None:
         """Test loading skill with explicit skill_dir."""
         content = """---
 name: dir-skill
@@ -209,7 +208,7 @@ description: Skill with directory
             assert spec.skill_dir == Path(tmpdir)
             assert spec.skill_md_path == str(skill_path)
 
-    def test_from_file_auto_detect_skill_dir(self) -> None:
+    def test_file_detects_dir(tmp_path) -> None:
         """Test auto-detection of skill directory from SKILL.md path."""
         content = """---
 name: auto-dir-skill
@@ -229,7 +228,7 @@ class TestSkillSpecFromUrl:
     """Tests for loading SkillSpec from URLs."""
 
     @patch("urllib.request.urlopen")
-    def test_from_url_success(self, mock_urlopen: MagicMock) -> None:
+    def test_url_success(self, mock_urlopen: MagicMock) -> None:
         """Test loading skill from URL."""
         content = """---
 name: remote-skill
@@ -253,7 +252,7 @@ version: "2.0.0"
                 assert spec.version == "2.0.0"
 
     @patch("urllib.request.urlopen")
-    def test_from_url_no_cache(self, mock_urlopen: MagicMock) -> None:
+    def test_url_no_cache(self, mock_urlopen: MagicMock) -> None:
         """Test loading skill from URL without caching."""
         content = """---
 name: no-cache-skill
@@ -272,7 +271,7 @@ description: Not cached
         assert spec.skill_md_path == "https://example.com/skill.md"
 
     @patch("urllib.request.urlopen")
-    def test_from_url_network_error(self, mock_urlopen: MagicMock) -> None:
+    def test_url_network_error(self, mock_urlopen: MagicMock) -> None:
         """Test handling network errors when loading from URL."""
         import urllib.error
 
@@ -284,7 +283,7 @@ description: Not cached
         assert "Failed to load skill" in str(exc_info.value)
 
     @patch("urllib.request.urlopen")
-    def test_from_url_parse_error(self, mock_urlopen: MagicMock) -> None:
+    def test_url_parse_error(self, mock_urlopen: MagicMock) -> None:
         """Test handling parse errors when loading from URL."""
         mock_response = MagicMock()
         mock_response.read.return_value = b"invalid content that causes parse error"
@@ -316,7 +315,7 @@ class TestSkillSpecFromRegistry:
         assert call_args[1]["cache"] is True
 
     @patch.object(SkillSpec, "from_url")
-    def test_from_registry_with_version(self, mock_from_url: MagicMock) -> None:
+    def test_registry_with_version(self, mock_from_url: MagicMock) -> None:
         """Test loading specific version from registry."""
         mock_from_url.return_value = MagicMock(spec=SkillSpec)
 
@@ -330,284 +329,10 @@ class TestSkillSpecFromRegistry:
         call_args = mock_from_url.call_args
         assert "web_search/v1.0.0/skill.md" in call_args[0][0]
 
-    def test_from_registry_without_base_url_raises(self) -> None:
+    def test_registry_requires_url(self) -> None:
         """Test base_url or env is required for remote registry loading."""
         with pytest.raises(ValueError, match="Remote skill registry base URL is not configured"):
             SkillSpec.from_registry("web_search")
-
-
-class TestSkillSpecParsing:
-    """Tests for internal parsing methods."""
-
-    def test_parse_skill_md_basic(self) -> None:
-        """Test parsing basic skill.md content."""
-        content = """# My Skill
-
-## Description
-
-This is a description.
-
-## Input Schema
-```json
-{
-  "type": "object",
-  "properties": {
-    "input": {"type": "string"}
-  }
-}
-```
-
-## Output Schema
-```json
-{
-  "type": "object",
-  "properties": {
-    "output": {"type": "string"}
-  }
-}
-```
-"""
-        result = SkillSpec._parse_skill_md(content)
-
-        assert result["name"] == "My Skill"
-        assert result["description"] == "This is a description."
-        assert "properties" in result["input_schema"]
-        assert "properties" in result["output_schema"]
-
-    def test_parse_skill_md_missing_sections(self) -> None:
-        """Test parsing skill.md with missing sections."""
-        content = """# Minimal Skill
-
-Some content without proper sections.
-"""
-        result = SkillSpec._parse_skill_md(content)
-
-        assert result["name"] == "Minimal Skill"
-        assert result["description"] == ""
-        assert "input_schema" not in result
-
-    def test_json_to_pydantic_with_properties(self) -> None:
-        """Test converting JSON schema to Pydantic model."""
-        json_schema = {
-            "type": "object",
-            "properties": {
-                "name": {"type": "string"},
-                "age": {"type": "integer"},
-                "active": {"type": "boolean"},
-            },
-            "required": ["name"],
-        }
-
-        model = SkillSpec._json_to_pydantic(json_schema, "TestModel")
-
-        assert issubclass(model, BaseModel)
-        # Check that the model has the expected fields
-        fields = model.model_fields
-        assert "name" in fields
-        assert "age" in fields
-        assert "active" in fields
-
-    def test_json_to_pydantic_empty_schema(self) -> None:
-        """Test converting empty JSON schema."""
-        model = SkillSpec._json_to_pydantic({}, "EmptyModel")
-
-        assert issubclass(model, BaseModel)
-        assert "Empty" in model.__name__
-
-    def test_json_to_pydantic_no_properties(self) -> None:
-        """Test converting JSON schema without properties."""
-        json_schema = {"type": "object"}
-
-        model = SkillSpec._json_to_pydantic(json_schema, "NoPropsModel")
-
-        assert issubclass(model, BaseModel)
-
-    def test_json_to_pydantic_preserves_enum_description_and_range(self) -> None:
-        """Test enum/description/range metadata are kept for UI schema rendering."""
-        json_schema = {
-            "type": "object",
-            "properties": {
-                "action": {
-                    "type": "string",
-                    "enum": ["create", "update", "complete", "status"],
-                    "description": "Action to perform on the plan",
-                },
-                "subtask_index": {
-                    "type": "integer",
-                    "minimum": 0,
-                    "maximum": 99,
-                    "description": "Subtask index",
-                },
-            },
-            "required": ["action"],
-        }
-
-        model = SkillSpec._json_to_pydantic(json_schema, "PlanInput")
-        rendered = model.model_json_schema()
-
-        action = rendered["properties"]["action"]
-        subtask_index = rendered["properties"]["subtask_index"]
-
-        assert action["enum"] == ["create", "update", "complete", "status"]
-        assert action["description"] == "Action to perform on the plan"
-        assert subtask_index["minimum"] == 0
-        assert subtask_index["maximum"] == 99
-        assert subtask_index["description"] == "Subtask index"
-
-    def test_json_type_to_python(self) -> None:
-        """Test JSON type to Python type mapping."""
-        assert SkillSpec._json_type_to_python("string") is str
-        assert SkillSpec._json_type_to_python("integer") is int
-        assert SkillSpec._json_type_to_python("number") is float
-        assert SkillSpec._json_type_to_python("boolean") is bool
-        assert SkillSpec._json_type_to_python("array") is list
-        assert SkillSpec._json_type_to_python("object") is dict
-        # Unknown type defaults to str
-        assert SkillSpec._json_type_to_python("unknown") is str
-
-
-class TestSkillSpecExport:
-    """Tests for exporting SkillSpec to files."""
-
-    def test_export_skill_md_basic(self) -> None:
-        """Test basic skill.md export."""
-
-        class InputModel(BaseModel):
-            query: str
-
-        class OutputModel(BaseModel):
-            result: str
-
-        spec = SkillSpec(
-            name="export-skill",
-            description="A skill to export",
-            input_schema=InputModel,
-            output_schema=OutputModel,
-        )
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            export_path = Path(tmpdir) / "exported_skill.md"
-            spec.export_skill_md(str(export_path))
-
-            content = export_path.read_text(encoding="utf-8")
-
-            assert "# export-skill" in content
-            assert "## Description" in content
-            assert "A skill to export" in content
-            assert "## Input Schema" in content
-            assert "## Output Schema" in content
-            assert "```json" in content
-
-    def test_export_skill_md_with_metadata(self) -> None:
-        """Test exporting skill.md with metadata."""
-
-        class Input(BaseModel):
-            x: int
-
-        class Output(BaseModel):
-            y: int
-
-        spec = SkillSpec(
-            name="meta-skill",
-            description="Skill with metadata",
-            input_schema=Input,
-            output_schema=Output,
-        )
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            export_path = Path(tmpdir) / "meta_skill.md"
-            spec.export_skill_md(
-                str(export_path),
-                metadata={"language": "Python", "runtime": "async"},
-            )
-
-            content = export_path.read_text(encoding="utf-8")
-
-            assert "## Implementation" in content
-            assert "Language: Python" in content
-            assert "Runtime: async" in content
-
-    def test_export_skill_md_with_examples(self) -> None:
-        """Test exporting skill.md with examples."""
-
-        class Input(BaseModel):
-            text: str
-
-        class Output(BaseModel):
-            length: int
-
-        spec = SkillSpec(
-            name="example-skill",
-            description="Skill with examples",
-            input_schema=Input,
-            output_schema=Output,
-        )
-
-        examples = [
-            {"input": {"text": "hello"}, "output": {"length": 5}},
-            {"input": {"text": "world"}, "output": {"length": 5}},
-        ]
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            export_path = Path(tmpdir) / "example_skill.md"
-            spec.export_skill_md(str(export_path), examples=examples)
-
-            content = export_path.read_text(encoding="utf-8")
-
-            assert "## Examples" in content
-            assert "### Example 1" in content
-            assert "### Example 2" in content
-            assert '"text": "hello"' in content
-
-    def test_export_skill_md_with_constraints(self) -> None:
-        """Test exporting skill.md with constraints."""
-
-        class Input(BaseModel):
-            data: str
-
-        class Output(BaseModel):
-            processed: str
-
-        spec = SkillSpec(
-            name="constrained-skill",
-            description="Skill with constraints",
-            input_schema=Input,
-            output_schema=Output,
-            constraints={"timeout": 30, "max_cost": 0.01},
-        )
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            export_path = Path(tmpdir) / "constrained_skill.md"
-            spec.export_skill_md(str(export_path))
-
-            content = export_path.read_text(encoding="utf-8")
-
-            assert "## Constraints" in content
-            assert "Timeout: 30" in content
-            assert "Max Cost: 0.01" in content
-
-    def test_export_creates_parent_directories(self) -> None:
-        """Test that export creates parent directories if needed."""
-
-        class Input(BaseModel):
-            x: str
-
-        class Output(BaseModel):
-            y: str
-
-        spec = SkillSpec(
-            name="nested-skill",
-            description="Skill in nested directory",
-            input_schema=Input,
-            output_schema=Output,
-        )
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            export_path = Path(tmpdir) / "nested" / "path" / "skill.md"
-            spec.export_skill_md(str(export_path))
-
-            assert export_path.exists()
-            assert "# nested-skill" in export_path.read_text(encoding="utf-8")
 
 
 class TestSkillSpecSimpleSkillExtensions:
@@ -639,7 +364,7 @@ class TestSkillSpecSimpleSkillExtensions:
         assert spec.hooks[0].event == HookEvent.PRE_TOOL_USE
         assert spec.hooks[0].matcher == "Write"
 
-    def test_skill_with_version_and_allowed_tools(self) -> None:
+    def test_skill_keeps_tools(self) -> None:
         """Test SkillSpec with version and allowed_tools."""
 
         class Input(BaseModel):

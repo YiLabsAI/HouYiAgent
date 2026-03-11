@@ -1,6 +1,6 @@
 """Tests for SimpleSkill invocation policy and consent.
 
-Reference: SimpleSkill Specification v0.1 Section 5.2-5.3
+Reference: SimpleSkill Specification 0.1.0 Section 5.2-5.3
 """
 
 from houyi.domain.skill.policy import (

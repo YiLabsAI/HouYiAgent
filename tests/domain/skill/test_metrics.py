@@ -1,6 +1,6 @@
 """Tests for SimpleSkill evaluation metrics.
 
-Reference: SimpleSkill Specification v0.1 Section 7 (Evaluation / Selection)
+Reference: SimpleSkill Specification 0.1.0 Section 7 (Evaluation / Selection)
 """
 
 import json

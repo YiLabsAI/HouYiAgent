@@ -1,6 +1,6 @@
 """Tests for SimpleSkill capability negotiation.
 
-Reference: SimpleSkill Specification v0.1 Section 5.1 (Capability Negotiation)
+Reference: SimpleSkill Specification 0.1.0 Section 5.1 (Capability Negotiation)
 """
 
 from houyi.domain.skill.capability import (

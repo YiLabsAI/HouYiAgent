@@ -1,6 +1,6 @@
 """Tests for skill schema parsing.
 
-Reference: SimpleSkill Specification v0.1 Section 3 (SKILL.md Format)
+Reference: SimpleSkill Specification 0.1.0 Section 3 (SKILL.md Format)
 """
 
 from houyi.domain.skill.hooks import HookEvent, HookType, SkillHook
