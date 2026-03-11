@@ -102,7 +102,7 @@ async def test_openai_compat_adapter_chat(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_openai_compat_adapter_chat_strict_contract_sanitizes_messages(monkeypatch) -> None:
+async def test_chat_sanitizes_messages_with_strict_contract(monkeypatch) -> None:
     response = _FakeOpenAIResponse("ok", "test-model")
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     monkeypatch.setenv("OPENAI_BASE_URL", "https://example.test")
@@ -161,7 +161,7 @@ async def test_openai_compat_adapter_stream(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_openai_compat_adapter_stream_strict_contract_sanitizes_messages(monkeypatch) -> None:
+async def test_stream_sanitizes_messages_with_strict_contract(monkeypatch) -> None:
     class _Delta:
         def __init__(self, content: str) -> None:
             self.content = content

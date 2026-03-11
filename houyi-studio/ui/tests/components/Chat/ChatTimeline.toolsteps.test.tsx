@@ -13,6 +13,108 @@ function buildMessages(count: number) {
   }));
 }
 
+function installScrollableTimelineLayout() {
+  const scrollTopAssignments: number[] = [];
+  const scrollTopValues = new WeakMap<Element, number>();
+
+  const scrollTopDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollTop');
+  const scrollHeightDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollHeight');
+  const clientHeightDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientHeight');
+  const rectSpy = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+    if (this.dataset.testid === 'chat-timeline') {
+      return {
+        x: 0,
+        y: 0,
+        top: 0,
+        left: 0,
+        right: 320,
+        bottom: 400,
+        width: 320,
+        height: 400,
+        toJSON: () => ({}),
+      } as DOMRect;
+    }
+
+    const messageId = this.dataset.messageId;
+    if (messageId) {
+      const numericId = Number(messageId.replace('m-', ''));
+      const top = (numericId % 10) * 40;
+      return {
+        x: 0,
+        y: top,
+        top,
+        left: 0,
+        right: 320,
+        bottom: top + 32,
+        width: 320,
+        height: 32,
+        toJSON: () => ({}),
+      } as DOMRect;
+    }
+
+    return {
+      x: 0,
+      y: 0,
+      top: 0,
+      left: 0,
+      right: 0,
+      bottom: 0,
+      width: 0,
+      height: 0,
+      toJSON: () => ({}),
+    } as DOMRect;
+  });
+
+  Object.defineProperty(HTMLElement.prototype, 'scrollTop', {
+    configurable: true,
+    get() {
+      return scrollTopValues.get(this) ?? 0;
+    },
+    set(value: number) {
+      scrollTopValues.set(this, value);
+      if ((this as HTMLElement).dataset.testid === 'chat-timeline') {
+        scrollTopAssignments.push(value);
+      }
+    },
+  });
+
+  Object.defineProperty(HTMLElement.prototype, 'scrollHeight', {
+    configurable: true,
+    get() {
+      return (this as HTMLElement).dataset.testid === 'chat-timeline' ? 2400 : 0;
+    },
+  });
+
+  Object.defineProperty(HTMLElement.prototype, 'clientHeight', {
+    configurable: true,
+    get() {
+      return (this as HTMLElement).dataset.testid === 'chat-timeline' ? 400 : 0;
+    },
+  });
+
+  return {
+    scrollTopAssignments,
+    restore() {
+      rectSpy.mockRestore();
+      if (scrollTopDescriptor) {
+        Object.defineProperty(HTMLElement.prototype, 'scrollTop', scrollTopDescriptor);
+      } else {
+        delete (HTMLElement.prototype as unknown as Record<string, unknown>).scrollTop;
+      }
+      if (scrollHeightDescriptor) {
+        Object.defineProperty(HTMLElement.prototype, 'scrollHeight', scrollHeightDescriptor);
+      } else {
+        delete (HTMLElement.prototype as unknown as Record<string, unknown>).scrollHeight;
+      }
+      if (clientHeightDescriptor) {
+        Object.defineProperty(HTMLElement.prototype, 'clientHeight', clientHeightDescriptor);
+      } else {
+        delete (HTMLElement.prototype as unknown as Record<string, unknown>).clientHeight;
+      }
+    },
+  };
+}
+
 describe('ChatTimeline tool-step association', () => {
   beforeEach(() => {
     vi.stubGlobal(
@@ -75,11 +177,12 @@ describe('ChatTimeline tool-step association', () => {
       />,
     );
 
-    expect(screen.getByText('done')).toBeInTheDocument();
-    expect(screen.getByText('Tool calls 1')).toBeInTheDocument();
-    fireEvent.click(screen.getByText('Show steps'));
+    expect(screen.getAllByText('done').length).toBeGreaterThan(0);
+    expect(screen.getByRole('button', { name: 'Tool activity 1' })).toBeInTheDocument();
+    expect(screen.queryByText('houyi_read_file')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Tool activity 1' }));
     expect(screen.getByText('houyi_read_file')).toBeInTheDocument();
-    expect(screen.getByText('Duration 1.5s')).toBeInTheDocument();
+    expect(screen.getAllByText('Duration 1.5s').length).toBeGreaterThan(0);
     expect(screen.getByText('Parallel round_1')).toBeInTheDocument();
   });
 
@@ -125,8 +228,8 @@ describe('ChatTimeline tool-step association', () => {
       />,
     );
 
-    expect(screen.getByText('Tool calls 1')).toBeInTheDocument();
-    fireEvent.click(screen.getByText('Show steps'));
+    expect(screen.getByRole('button', { name: 'Tool activity 1' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Tool activity 1' }));
     expect(screen.getByText('web_search')).toBeInTheDocument();
   });
 
@@ -173,8 +276,9 @@ describe('ChatTimeline tool-step association', () => {
     );
 
     expect(screen.getByText('Found docs.')).toBeInTheDocument();
-    expect(screen.getByText('Tool calls 1')).toBeInTheDocument();
-    fireEvent.click(screen.getByText('Show steps'));
+    expect(screen.queryByText('I will search now.')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Tool activity 1' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Tool activity 1' }));
     expect(screen.getByText('houyi_find_files')).toBeInTheDocument();
   });
 
@@ -244,9 +348,8 @@ describe('ChatTimeline tool-step association', () => {
       />,
     );
 
-    expect(screen.queryByText('Tool calls 1')).not.toBeInTheDocument();
-    expect(screen.queryByText('Show steps')).not.toBeInTheDocument();
-    expect(screen.queryByText('Hide steps')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Tool activity 1' })).toBeInTheDocument();
+    expect(screen.queryByText('houyi_find_files')).not.toBeInTheDocument();
   });
 
   it('rerenders safely when an empty assistant placeholder stops streaming', () => {
@@ -329,6 +432,95 @@ describe('ChatTimeline tool-step association', () => {
     expect(screen.queryByTestId('chat-timeline-show-more')).not.toBeInTheDocument();
   });
 
+  it('preserves the current scroll anchor when Show more reveals older messages', () => {
+    const layout = installScrollableTimelineLayout();
+    try {
+      render(
+        <ChatTimeline
+          conversationId="c10"
+          streamingMessageId={null}
+          isWaitingForResponse={false}
+          messages={buildMessages(260)}
+        />,
+      );
+
+      const timeline = screen.getByTestId('chat-timeline');
+      timeline.scrollTop = 180;
+      layout.scrollTopAssignments.length = 0;
+
+      fireEvent.click(screen.getByTestId('chat-timeline-show-more'));
+
+      expect(layout.scrollTopAssignments).toContain(180);
+      expect(screen.getByText('Showing 240 / 260')).toBeInTheDocument();
+    } finally {
+      layout.restore();
+    }
+  });
+
+  it('preserves the scroll anchor on the final Show more expansion before the button disappears', () => {
+    const layout = installScrollableTimelineLayout();
+    try {
+      render(
+        <ChatTimeline
+          conversationId="c11"
+          streamingMessageId={null}
+          isWaitingForResponse={false}
+          messages={buildMessages(260)}
+        />,
+      );
+
+      const timeline = screen.getByTestId('chat-timeline');
+
+      timeline.scrollTop = 120;
+      fireEvent.click(screen.getByTestId('chat-timeline-show-more'));
+
+      layout.scrollTopAssignments.length = 0;
+      timeline.scrollTop = 320;
+      fireEvent.click(screen.getByTestId('chat-timeline-show-more'));
+
+      expect(layout.scrollTopAssignments).toContain(320);
+      expect(screen.queryByTestId('chat-timeline-show-more')).not.toBeInTheDocument();
+    } finally {
+      layout.restore();
+    }
+  });
+
+  it('does not show progressive-loading controls when raw messages exceed 120 but folded timeline items do not', () => {
+    const now = Date.now() / 1000;
+    const messages = Array.from({ length: 80 }, (_, index) => {
+      const offset = index * 2;
+      return [
+        {
+          message_id: `u-fold-${index + 1}`,
+          role: 'user' as const,
+          content: `question ${index + 1}`,
+          metadata: {},
+          created_at: now + offset,
+        },
+        {
+          message_id: `a-fold-${index + 1}`,
+          role: 'assistant' as const,
+          content: '',
+          metadata: {},
+          created_at: now + offset + 1,
+        },
+      ];
+    }).flat();
+
+    render(
+      <ChatTimeline
+        conversationId="c13"
+        streamingMessageId={null}
+        isWaitingForResponse={false}
+        messages={messages}
+      />,
+    );
+
+    expect(screen.getAllByTestId('message-bubble')).toHaveLength(80);
+    expect(screen.queryByTestId('chat-timeline-show-more')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Showing \d+ \/ \d+/)).not.toBeInTheDocument();
+  });
+
   it('renders date dividers when messages cross calendar days', () => {
     const base = new Date('2026-03-09T10:00:00Z').getTime() / 1000;
     render(
@@ -358,5 +550,52 @@ describe('ChatTimeline tool-step association', () => {
     expect(screen.getAllByTestId('chat-date-divider')).toHaveLength(2);
     expect(screen.getByText('day one')).toBeInTheDocument();
     expect(screen.getByText('day two')).toBeInTheDocument();
+  });
+
+  it('keeps stable key across ids', () => {
+    const first = [
+      {
+        message_id: 'tmp-1',
+        ui_render_id: 'ui-user-1',
+        role: 'user' as const,
+        content: 'hello',
+        metadata: {},
+        created_at: 1,
+      },
+    ];
+
+    const second = [
+      {
+        message_id: 'user-1',
+        ui_render_id: 'ui-user-1',
+        role: 'user' as const,
+        content: 'hello',
+        metadata: { persisted: true },
+        created_at: 1,
+      },
+    ];
+
+    const { rerender } = render(
+      <ChatTimeline
+        conversationId="c12"
+        streamingMessageId={null}
+        isWaitingForResponse={false}
+        messages={first}
+      />,
+    );
+
+    const firstNode = screen.getByText('hello').closest('[data-testid="message-bubble"]');
+
+    rerender(
+      <ChatTimeline
+        conversationId="c12"
+        streamingMessageId={null}
+        isWaitingForResponse={false}
+        messages={second}
+      />,
+    );
+
+    const secondNode = screen.getByText('hello').closest('[data-testid="message-bubble"]');
+    expect(secondNode).toBe(firstNode);
   });
 });

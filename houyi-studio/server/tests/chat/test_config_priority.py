@@ -7,11 +7,14 @@ Tests cover model selection and system_instructions resolution.
 """
 
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
+from houyi_studio.server.chat import chat_service as chat_service_module
 from houyi_studio.server.chat.chat_service import ChatService
 from houyi_studio.server.chat.json_store import JsonStore
+from houyi_studio.server.chat.settings_store import GlobalSettings, ProviderConfig
 from houyi_studio.server.chat.types import Conversation, Message, MessageRole, SendMessageRequest
 
 from houyi.adapters.llm.base import StreamChunk
@@ -67,7 +70,7 @@ class TestModelPriority:
     """Verify model selection follows request > conversation > global."""
 
     @pytest.mark.asyncio
-    async def test_global_default_used_when_no_overrides(self, store: JsonStore):
+    async def test_uses_global_model(self, store: JsonStore):
         """When neither request nor conversation specify model, global default is used."""
         conv = _make_conversation(store, model="", system_instructions="")
         service = ChatService(
@@ -92,7 +95,7 @@ class TestModelPriority:
             )
 
     @pytest.mark.asyncio
-    async def test_conversation_model_overrides_global(self, store: JsonStore):
+    async def test_uses_conversation_model(self, store: JsonStore):
         """Conversation-level model overrides global default."""
         conv = _make_conversation(store, model=CONV_MODEL)
         service = ChatService(
@@ -112,7 +115,7 @@ class TestModelPriority:
             assert used_model == CONV_MODEL
 
     @pytest.mark.asyncio
-    async def test_request_model_overrides_conversation(self, store: JsonStore):
+    async def test_uses_request_model(self, store: JsonStore):
         """Request-level model overrides conversation-level model."""
         conv = _make_conversation(store, model=CONV_MODEL)
         service = ChatService(
@@ -136,7 +139,7 @@ class TestSystemInstructionsPriority:
     """Verify system_instructions follows conversation > global."""
 
     @pytest.mark.asyncio
-    async def test_global_system_used_when_conversation_empty(self, store: JsonStore):
+    async def test_uses_global_system(self, store: JsonStore):
         """When conversation has no system_instructions, global default is used."""
         conv = _make_conversation(store, system_instructions="")
         service = ChatService(
@@ -160,7 +163,7 @@ class TestSystemInstructionsPriority:
             assert GLOBAL_SYSTEM in system_msgs[0]["content"]
 
     @pytest.mark.asyncio
-    async def test_conversation_system_overrides_global(self, store: JsonStore):
+    async def test_uses_conversation_system(self, store: JsonStore):
         """Conversation-level system_instructions overrides global."""
         conv = _make_conversation(store, system_instructions=CONV_SYSTEM)
         service = ChatService(
@@ -187,7 +190,7 @@ class TestEnableReasoningPassthrough:
     """Verify enable_reasoning is passed through to LLM adapter."""
 
     @pytest.mark.asyncio
-    async def test_enable_reasoning_passed_to_adapter(self, store: JsonStore):
+    async def test_passes_enable_reasoning(self, store: JsonStore):
         conv = _make_conversation(store)
         service = ChatService(
             json_store=store,
@@ -204,7 +207,61 @@ class TestEnableReasoningPassthrough:
             assert call_kwargs.kwargs.get("enable_reasoning") is True
 
     @pytest.mark.asyncio
-    async def test_reasoning_not_passed_when_disabled(self, store: JsonStore):
+    async def test_raises_reasoning_max_tokens(self, store: JsonStore):
+        conv = _make_conversation(store)
+        service = ChatService(
+            json_store=store,
+            default_model=GLOBAL_MODEL,
+        )
+        mock_adapter = _mock_llm_adapter()
+
+        with _patch_adapter(service, mock_adapter):
+            request = SendMessageRequest(content="test", enable_reasoning=True, max_tokens=32)
+            chunks = []
+            async for chunk in service.send_message(conv.conversation_id, request):
+                chunks.append(chunk)
+
+            call_kwargs = mock_adapter.stream_chat.call_args
+            assert call_kwargs.kwargs.get("enable_reasoning") is True
+            assert call_kwargs.kwargs.get("max_tokens") == 512
+
+            complete_chunks = [chunk for chunk in chunks if "event: message.complete" in chunk]
+            assert complete_chunks
+            assert '"budget": {' in complete_chunks[-1]
+            assert '"max_tokens_guardrail_applied": true' in complete_chunks[-1]
+            assert '"answer_reserve": 512' in complete_chunks[-1]
+
+            persisted = store.get(conv.conversation_id)
+            assert persisted is not None
+            assert persisted.messages[-1].metadata["budget"]["max_tokens_guardrail_applied"] is True
+            assert persisted.messages[-1].metadata["budget"]["answer_reserve"] == 512
+
+    @pytest.mark.asyncio
+    async def test_keeps_provider_default_max_tokens(self, store: JsonStore):
+        conv = _make_conversation(store)
+        service = ChatService(
+            json_store=store,
+            default_model=GLOBAL_MODEL,
+        )
+        mock_adapter = _mock_llm_adapter()
+
+        with _patch_adapter(service, mock_adapter):
+            chunks = []
+            request = SendMessageRequest(content="test", enable_reasoning=True)
+            async for chunk in service.send_message(conv.conversation_id, request):
+                chunks.append(chunk)
+
+            call_kwargs = mock_adapter.stream_chat.call_args
+            assert call_kwargs.kwargs.get("enable_reasoning") is True
+            assert "max_tokens" not in (call_kwargs.kwargs or {})
+
+            complete_chunks = [chunk for chunk in chunks if "event: message.complete" in chunk]
+            assert complete_chunks
+            assert '"max_tokens_guardrail_applied": false' in complete_chunks[-1]
+            assert '"max_tokens_source": "provider_default"' in complete_chunks[-1]
+
+    @pytest.mark.asyncio
+    async def test_skips_enable_reasoning(self, store: JsonStore):
         conv = _make_conversation(store)
         service = ChatService(
             json_store=store,
@@ -219,3 +276,34 @@ class TestEnableReasoningPassthrough:
 
             call_kwargs = mock_adapter.stream_chat.call_args
             assert "enable_reasoning" not in (call_kwargs.kwargs or {})
+
+
+class TestProviderRouting:
+    def test_uses_vertex_adapter(self, store: JsonStore):
+        settings = GlobalSettings(
+            providers=[
+                ProviderConfig(
+                    id="google-ai-custom",
+                    name="Google AI",
+                    base_url="https://generativelanguage.googleapis.com/v1beta/openai",
+                    models=["gemini-2.5-pro"],
+                    enabled=True,
+                )
+            ]
+        )
+        settings_store = SimpleNamespace(get=lambda: settings)
+        service = ChatService(
+            json_store=store,
+            default_model=GLOBAL_MODEL,
+            settings_store=settings_store,
+        )
+
+        with patch.object(
+            chat_service_module,
+            "create_vertex_adapter",
+            return_value="vertex-adapter",
+        ) as mocked:
+            adapter = service._get_adapter_for_model("gemini-2.5-pro")
+
+        assert adapter == "vertex-adapter"
+        mocked.assert_called_once()

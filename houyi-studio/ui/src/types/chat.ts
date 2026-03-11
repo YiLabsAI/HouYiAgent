@@ -13,6 +13,7 @@ export interface Attachment {
 
 export interface ChatMessage {
   message_id: string;
+  ui_render_id?: string;
   role: MessageRole;
   content: string;
   reasoning_content?: string | null;

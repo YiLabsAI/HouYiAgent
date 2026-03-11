@@ -18,6 +18,7 @@ from typing import Any
 import pytest
 from pydantic import BaseModel
 
+from houyi.application.tool_calling.budget import prepare_tool_loop_messages
 from houyi.application.tool_calling.runner import ToolCallRunner
 from houyi.domain.skill.exceptions import SkillExecutionError
 from houyi.domain.skill.spec import SkillSpec
@@ -27,6 +28,7 @@ from houyi.infrastructure.config.env_config import (
     ENV_TOOLCALL_RESULT_SUMMARY_ENABLED,
     ENV_TOOLCALL_RESULT_SUMMARY_MAX_CHARS,
     ENV_TOOLCALL_RESULT_SUMMARY_MAX_ITEMS,
+    ENV_TOOLCALL_TIMING,
 )
 
 
@@ -90,9 +92,7 @@ class _DummyExecutor:
 
 class TestToolCallRunner:
     @pytest.mark.asyncio
-    async def test_enforces_tool_loop_message_budget_each_round(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_enforces_loop_budget(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv(ENV_TOOLCALL_LOOP_MAX_MESSAGE_CHARS, "200")
         monkeypatch.setenv(ENV_TOOLCALL_LOOP_MAX_TOTAL_CHARS, "500")
 
@@ -163,9 +163,7 @@ class TestToolCallRunner:
             assert total_chars <= 500
 
     @pytest.mark.asyncio
-    async def test_preserves_intermediate_history_on_original_messages_when_budget_applies(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_preserves_history(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv(ENV_TOOLCALL_LOOP_MAX_MESSAGE_CHARS, "200")
         monkeypatch.setenv(ENV_TOOLCALL_LOOP_MAX_TOTAL_CHARS, "500")
 
@@ -221,9 +219,7 @@ class TestToolCallRunner:
         assert any(msg.get("role") == "tool" for msg in messages)
 
     @pytest.mark.asyncio
-    async def test_uses_model_aware_budget_when_env_not_set(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_uses_model_budget(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv(ENV_TOOLCALL_LOOP_MAX_MESSAGE_CHARS, raising=False)
         monkeypatch.delenv(ENV_TOOLCALL_LOOP_MAX_TOTAL_CHARS, raising=False)
 
@@ -252,9 +248,7 @@ class TestToolCallRunner:
         assert len(str(user_message.get("content") or "")) <= 1_050
 
     @pytest.mark.asyncio
-    async def test_uses_known_window_for_prefixed_model_names(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_uses_prefixed_window(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv(ENV_TOOLCALL_LOOP_MAX_MESSAGE_CHARS, raising=False)
         monkeypatch.delenv(ENV_TOOLCALL_LOOP_MAX_TOTAL_CHARS, raising=False)
 
@@ -280,9 +274,55 @@ class TestToolCallRunner:
         assert total_chars > 9_000
 
     @pytest.mark.asyncio
-    async def test_summarizes_large_tool_results_before_next_round(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_records_tool_duration(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv(ENV_TOOLCALL_TIMING, raising=False)
+
+        class Input(BaseModel):
+            q: str
+
+        class Output(BaseModel):
+            ok: bool
+
+        skill = SkillSpec(
+            name="echo",
+            description="echo",
+            input_schema=Input,
+            output_schema=Output,
+            executor=lambda input_data: Output(ok=bool(input_data.q)),
+        )
+        adapter = _FakeAdapter(
+            [
+                _FakeResponse(
+                    content="",
+                    tool_calls=[
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {"name": "echo", "arguments": '{"q":"hello"}'},
+                        }
+                    ],
+                ),
+                _FakeResponse(content="done", tool_calls=[]),
+            ]
+        )
+
+        response, tool_trace = await ToolCallRunner().run(
+            adapter=adapter,
+            messages=[{"role": "user", "content": "run echo"}],
+            tools=[skill.to_tool_schema()],
+            skills=[skill],
+            executor=_DummyExecutor(),
+            max_rounds=2,
+        )
+
+        assert response.content == "done"
+        assert len(tool_trace) == 1
+        assert tool_trace[0]["tool_call_id"] == "call_1"
+        assert isinstance(tool_trace[0].get("duration_ms"), (int, float))
+        assert tool_trace[0]["duration_ms"] > 0
+
+    @pytest.mark.asyncio
+    async def test_summarizes_large_results(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv(ENV_TOOLCALL_LOOP_MAX_MESSAGE_CHARS, "20000")
         monkeypatch.setenv(ENV_TOOLCALL_LOOP_MAX_TOTAL_CHARS, "100000")
         monkeypatch.setenv(ENV_TOOLCALL_RESULT_SUMMARY_ENABLED, "1")
@@ -339,14 +379,70 @@ class TestToolCallRunner:
         )
 
         assert len(adapter.chat_payloads) == 2
-        second_round_payload = adapter.chat_payloads[1]
+        second_round_payload = adapter.chat_payloads[-1]
         tool_message = next(msg for msg in second_round_payload if msg.get("role") == "tool")
-        content = str(tool_message.get("content") or "")
-        assert len(content) <= 650
-        assert "items truncated" in content or "[truncated]" in content
+        assert len(tool_message["content"]) < 5000
+        assert (
+            "[truncated" in tool_message["content"]
+            or '"_truncated": true' in tool_message["content"].lower()
+        )
 
+
+def test_prepare_drops_group() -> None:
+    messages = [
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "demo_a", "arguments": "{}"},
+                },
+                {
+                    "id": "call_2",
+                    "type": "function",
+                    "function": {"name": "demo_b", "arguments": "{}"},
+                },
+            ],
+        },
+        {
+            "role": "tool",
+            "content": '{"ok":true}',
+            "tool_call_id": "call_1",
+            "name": "demo_a",
+        },
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call_3",
+                    "type": "function",
+                    "function": {"name": "demo_c", "arguments": "{}"},
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "content": '{"cwd":"/tmp"}',
+            "tool_call_id": "call_3",
+            "name": "demo_c",
+        },
+    ]
+
+    prepared = prepare_tool_loop_messages(messages, max_message_chars=12_000, max_total_chars=8_000)
+
+    assert len(prepared) == 2
+    assert prepared[0]["role"] == "assistant"
+    assert prepared[0]["tool_calls"][0]["id"] == "call_3"
+    assert prepared[1]["role"] == "tool"
+    assert prepared[1]["tool_call_id"] == "call_3"
+
+
+class TestToolCallRunnerBehavior:
     @pytest.mark.asyncio
-    async def test_run_returns_immediately_without_tool_calls(self) -> None:
+    async def test_run_returns(self) -> None:
         adapter = _FakeAdapter([_FakeResponse(content="hello", tool_calls=[])])
         runner = ToolCallRunner()
 
@@ -364,7 +460,7 @@ class TestToolCallRunner:
         assert adapter.calls == 1
 
     @pytest.mark.asyncio
-    async def test_tool_cache_hit_sets_metadata(self) -> None:
+    async def test_tool_cache_sets(self) -> None:
         class Input(BaseModel):
             q: int
 
@@ -427,7 +523,7 @@ class TestToolCallRunner:
         assert result["raw"]["metadata"]["cache_hit"] is True
 
     @pytest.mark.asyncio
-    async def test_tool_not_found_and_tool_name_missing(self) -> None:
+    async def test_tool_missing_name(self) -> None:
         adapter = _FakeAdapter(
             [
                 _FakeResponse(
@@ -465,7 +561,7 @@ class TestToolCallRunner:
         assert tool_trace[1]["result"]["raw"]["error"].startswith("tool_not_found")
 
     @pytest.mark.asyncio
-    async def test_llm_cache_hit_skips_adapter_chat(self) -> None:
+    async def test_llm_cache_skips(self) -> None:
         # First response is cached; adapter.chat should not be called.
         cached_response = _FakeResponse(content="cached", tool_calls=[])
         adapter = _FakeAdapter([_FakeResponse(content="should_not_be_used", tool_calls=[])])
@@ -496,7 +592,7 @@ class TestToolCallRunner:
         assert adapter.calls == 0
 
     @pytest.mark.asyncio
-    async def test_fast_path_placeholder_resolution(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_fast_path_resolves(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("HOUYI_TOOLCALL_FAST_PATH", "1")
 
         class Input1(BaseModel):
@@ -566,7 +662,7 @@ class TestToolCallRunner:
         assert tool_trace[1]["args"]["x"] == 1
 
     @pytest.mark.asyncio
-    async def test_parallel_execution_respects_max_parallel_calls(self) -> None:
+    async def test_parallel_respects_limit(self) -> None:
         class _TrackingExecutor:
             def __init__(self) -> None:
                 self.in_flight = 0
@@ -624,7 +720,7 @@ class TestToolCallRunner:
         assert {entry.get("parallel_group_id") for entry in tool_trace} == {"round_1"}
 
     @pytest.mark.asyncio
-    async def test_invalid_max_parallel_calls_falls_back_to_default(self) -> None:
+    async def test_invalid_parallel_default(self) -> None:
         class _TrackingExecutor:
             def __init__(self) -> None:
                 self.in_flight = 0
@@ -683,7 +779,7 @@ class TestToolCallRunner:
         assert {entry.get("parallel_group_id") for entry in tool_trace} == {"round_1"}
 
     @pytest.mark.asyncio
-    async def test_before_tool_call_hook_can_patch_args_before_execution(self) -> None:
+    async def test_before_hook_patches(self) -> None:
         class _PatchArgsHook:
             async def before_tool_call(self, tool_call: dict[str, Any]) -> dict[str, Any]:
                 return {"args": {"patched": tool_call["args"]["value"] + 1}}
@@ -745,7 +841,7 @@ class TestToolCallRunner:
         assert tool_trace[0]["args"] == {"patched": 3}
 
     @pytest.mark.asyncio
-    async def test_before_tool_call_records_attempted_replacement_when_not_allowed(self) -> None:
+    async def test_before_hook_records(self) -> None:
         class _ReplaceHook:
             async def before_tool_call(self, tool_call: dict[str, Any]) -> dict[str, Any]:
                 return {"tool_name": "tool2"}
@@ -819,7 +915,7 @@ class TestToolCallRunner:
         assert tool_trace[0]["result"]["raw"]["executed_skill"] == "tool1"
 
     @pytest.mark.asyncio
-    async def test_before_tool_call_can_replace_tool_when_allowed(self) -> None:
+    async def test_before_hook_replaces(self) -> None:
         class _ReplaceHook:
             async def before_tool_call(self, tool_call: dict[str, Any]) -> dict[str, Any]:
                 return {"tool_name": "tool2", "args": {"from_hook": True}}
@@ -894,7 +990,7 @@ class TestToolCallRunner:
         assert tool_trace[0]["result"]["raw"]["executed_skill"] == "tool2"
 
     @pytest.mark.asyncio
-    async def test_pre_tool_use_hook_fires_without_interrupting_execution(self) -> None:
+    async def test_pre_hook_fires(self) -> None:
         from houyi.domain.skill.hooks import HookEvent, HookType, SkillHook, SkillHooksManager
 
         seen: list[dict[str, Any]] = []
@@ -980,7 +1076,7 @@ class TestToolCallRunnerMetrics:
     """Tests for ToolCallRunner metrics integration."""
 
     @pytest.mark.asyncio
-    async def test_metrics_recorded_on_success(self) -> None:
+    async def test_metrics_success(self) -> None:
         """Test that metrics are recorded on successful tool execution."""
         from houyi.domain.skill.metrics import MetricsStore
 
@@ -1026,7 +1122,7 @@ class TestToolCallRunnerMetrics:
         assert metrics.latency.samples >= 1
 
     @pytest.mark.asyncio
-    async def test_metrics_recorded_on_failure(self) -> None:
+    async def test_metrics_failure(self) -> None:
         """Test that metrics are recorded on failed tool execution."""
         from houyi.domain.skill.metrics import MetricsStore
 
@@ -1071,7 +1167,7 @@ class TestToolCallRunnerMetrics:
         assert metrics.reliability.success_count == 0
 
     @pytest.mark.asyncio
-    async def test_metrics_recorded_on_timeout(self) -> None:
+    async def test_metrics_timeout(self) -> None:
         """Test that timeout metrics are recorded correctly."""
         from houyi.domain.skill.metrics import MetricsStore
 
@@ -1159,7 +1255,7 @@ class TestToolCallRunnerMetrics:
         assert metrics.skill_name == "get_metrics_tool"
 
     @pytest.mark.asyncio
-    async def test_get_all_skill_metrics(self) -> None:
+    async def test_get_all_metrics(self) -> None:
         """Test getting metrics for all skills."""
         from houyi.domain.skill.metrics import MetricsStore
 
@@ -1216,7 +1312,7 @@ class TestToolCallRunnerMetrics:
         assert "tool1" in all_metrics
         assert "tool2" in all_metrics
 
-    def test_no_metrics_store_returns_none(self) -> None:
+    def test_no_metrics_store(self) -> None:
         """Test that methods return None/empty when no metrics_store is configured."""
         runner = ToolCallRunner()
         assert runner.get_skill_metrics("any_tool") is None

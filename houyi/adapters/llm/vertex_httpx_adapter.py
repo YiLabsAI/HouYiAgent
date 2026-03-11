@@ -60,6 +60,7 @@ class VertexAIAdapter(LLMAdapter):
         self.default_model = _env.gemini_model
         self.model = self.default_model  # uniform interface for callers
         self.last_usage: dict[str, int] | None = None
+        self.last_finish_reason: str | None = None
         self._access_token: str | None = None
         self._token_expiry: float = 0
         self._sa: dict | None = None
@@ -401,18 +402,46 @@ class VertexAIAdapter(LLMAdapter):
         return event, False
 
     @staticmethod
+    def _extract_tool_calls_delta(delta: dict[str, Any]) -> list[dict[str, Any]] | None:
+        tool_calls = delta.get("tool_calls")
+        if not isinstance(tool_calls, list) or not tool_calls:
+            return None
+        tc_delta_list: list[dict[str, Any]] = []
+        for index, tool_call in enumerate(tool_calls):
+            if not isinstance(tool_call, dict):
+                continue
+            tc_delta: dict[str, Any] = {"index": tool_call.get("index", index)}
+            if tool_call.get("id"):
+                tc_delta["id"] = tool_call["id"]
+            if tool_call.get("type"):
+                tc_delta["type"] = tool_call["type"]
+            function_payload = tool_call.get("function")
+            if isinstance(function_payload, dict):
+                tc_delta["function"] = {}
+                if function_payload.get("name"):
+                    tc_delta["function"]["name"] = function_payload["name"]
+                if function_payload.get("arguments") is not None:
+                    tc_delta["function"]["arguments"] = function_payload["arguments"]
+            tc_delta_list.append(tc_delta)
+        return tc_delta_list or None
+
+    @staticmethod
     def _extract_stream_chunk(event: dict[str, Any]) -> StreamChunk | None:
         choices = event.get("choices")
         if not isinstance(choices, list) or not choices:
             return None
         delta = choices[0].get("delta", {})
+        if not isinstance(delta, dict):
+            return None
         content = delta.get("content", "")
         reasoning = delta.get("reasoning_content", "")
-        if not content and not reasoning:
+        tool_calls_delta = VertexAIAdapter._extract_tool_calls_delta(delta)
+        if not content and not reasoning and not tool_calls_delta:
             return None
         return StreamChunk(
             content_delta=content or "",
             reasoning_delta=reasoning if reasoning else None,
+            tool_calls_delta=tool_calls_delta,
         )
 
     async def _handle_stream_error_response(
@@ -452,6 +481,11 @@ class VertexAIAdapter(LLMAdapter):
                 continue
 
             self._update_stream_usage_from_event(event)
+            choices = event.get("choices")
+            if isinstance(choices, list) and choices:
+                finish_reason = choices[0].get("finish_reason")
+                if isinstance(finish_reason, str) and finish_reason:
+                    self.last_finish_reason = finish_reason
             chunk = self._extract_stream_chunk(event)
             if chunk is not None:
                 yield chunk
@@ -655,7 +689,7 @@ class VertexAIAdapter(LLMAdapter):
                         chunk_count += 1
                         yield chunk
 
-                    self.last_finish_reason = "stop"
+                    self.last_finish_reason = self.last_finish_reason or "stop"
                     logger.info(
                         "Vertex AI stream completed: %d chunks, usage=%s",
                         chunk_count,

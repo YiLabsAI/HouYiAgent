@@ -127,6 +127,224 @@ type TimelineItem = {
   toolSteps: ChatMessage[];
 };
 
+const SYNTHETIC_TOOL_CALL_PLACEHOLDER = '__synthetic_tool_call_placeholder';
+
+const isPrimaryChatTimelineItem = (item: TimelineItem): boolean => item.message.role !== 'tool';
+
+const countPrimaryChatTimelineItems = (items: TimelineItem[]): number =>
+  items.reduce((total, item) => total + (isPrimaryChatTimelineItem(item) ? 1 : 0), 0);
+
+const sliceTimelineItemsByPrimaryCount = (
+  items: TimelineItem[],
+  primaryLimit: number,
+): TimelineItem[] => {
+  if (primaryLimit <= 0) return [];
+  let remainingPrimary = primaryLimit;
+  let startIndex = items.length;
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    if (isPrimaryChatTimelineItem(items[index])) {
+      remainingPrimary -= 1;
+    }
+    startIndex = index;
+    if (remainingPrimary <= 0) {
+      break;
+    }
+  }
+  return items.slice(startIndex);
+};
+
+const sanitizeAssistantToolMarkers = (raw: string): string => {
+  const hasToolMarker = /<\|tool_[^|]+\|>|<tool_call\b|<\/tool_call>|<arg_[^>]+>|<\/?think>/i.test(raw);
+  if (!hasToolMarker) return raw;
+
+  const stripped = raw
+    .replace(/<tool_call[^>]*>[\s\S]*?<\/tool_call>/gi, ' ')
+    .replace(/<tool_call[^>]*>/gi, ' ')
+    .replace(/<\/tool_call>/gi, ' ')
+    .replace(/<arg_[^>]+>[\s\S]*?<\/arg_[^>]+>/gi, ' ')
+    .replace(/<\/?think>/gi, ' ')
+    .replace(/<\|tool_calls_section_begin\|>/gi, ' ')
+    .replace(/<\|tool_calls_section_end\|>/gi, ' ')
+    .replace(/<\|tool_call_begin\|>/gi, ' ')
+    .replace(/<\|tool_call_end\|>/gi, ' ')
+    .replace(/<\|tool_call_argument_begin\|>/gi, ' ')
+    .replace(/<\|tool_call_argument_end\|>/gi, ' ')
+    .replace(/<\|tool_[^|]+\|>/gi, ' ')
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+
+  if (stripped) return stripped;
+
+  return raw
+    .replace(/<tool_call[^>]*>/gi, ' ')
+    .replace(/<\/tool_call>/gi, ' ')
+    .replace(/<arg_[^>]+>/gi, ' ')
+    .replace(/<\/arg_[^>]+>/gi, ' ')
+    .replace(/<\/?think>/gi, ' ')
+    .replace(/<\|tool_calls_section_begin\|>/gi, ' ')
+    .replace(/<\|tool_calls_section_end\|>/gi, ' ')
+    .replace(/<\|tool_call_begin\|>/gi, ' ')
+    .replace(/<\|tool_call_end\|>/gi, ' ')
+    .replace(/<\|tool_call_argument_begin\|>/gi, ' ')
+    .replace(/<\|tool_call_argument_end\|>/gi, ' ')
+    .replace(/<\|tool_[^|]+\|>/gi, ' ')
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+};
+
+const isInvisibleAssistantPlaceholder = (
+  item: TimelineItem,
+  streamingMessageId: string | null,
+): boolean => {
+  const { message, toolSteps } = item;
+  if (message.role !== 'assistant') return false;
+  if (message.message_id === streamingMessageId) return false;
+  const rawContent = typeof message.content === 'string' ? message.content : String(message.content ?? '');
+  const rawReasoning = typeof message.reasoning_content === 'string'
+    ? message.reasoning_content
+    : String(message.reasoning_content ?? '');
+  const normalizedAssistantContent = sanitizeAssistantToolMarkers(rawContent);
+  const normalizedAssistantReasoning = sanitizeAssistantToolMarkers(rawReasoning);
+  const hasAssistantToolCalls = Array.isArray(message.tool_calls) && message.tool_calls.length > 0;
+  return !normalizedAssistantContent.trim()
+    && !normalizedAssistantReasoning.trim()
+    && (!message.attachments || message.attachments.length === 0)
+    && toolSteps.length === 0
+    && !hasAssistantToolCalls;
+};
+
+const buildTimelineItems = (
+  messages: ChatMessage[],
+  streamingMessageId: string | null,
+): TimelineItem[] => {
+  const items: TimelineItem[] = [];
+  let pendingToolSteps: ChatMessage[] = [];
+  let latestAssistantCarrier: ChatMessage | null = null;
+  let latestCarrierHasToolCalls = false;
+  const hasOnlySyntheticPendingToolSteps = () =>
+    pendingToolSteps.length > 0
+    && pendingToolSteps.every((step) => step.metadata?.[SYNTHETIC_TOOL_CALL_PLACEHOLDER] === true);
+  const appendPendingToolStep = (step: ChatMessage) => {
+    const incomingCallId = typeof step.tool_call_id === 'string' ? step.tool_call_id : null;
+    const existingIndex = pendingToolSteps.findIndex((pending) => {
+      const pendingCallId = typeof pending.tool_call_id === 'string' ? pending.tool_call_id : null;
+      if (incomingCallId && pendingCallId) return pendingCallId === incomingCallId;
+      return pending.message_id === step.message_id;
+    });
+    if (existingIndex >= 0) {
+      pendingToolSteps[existingIndex] = step;
+      return;
+    }
+    pendingToolSteps.push(step);
+  };
+
+  for (const msg of messages) {
+    const isAssistantToolCallCarrier = msg.role === 'assistant'
+      && Array.isArray(msg.tool_calls)
+      && msg.tool_calls.length > 0;
+    if (isAssistantToolCallCarrier) {
+      latestAssistantCarrier = msg;
+      latestCarrierHasToolCalls = true;
+      msg.tool_calls?.forEach((toolCall, index) => {
+        const callPayload =
+          toolCall && typeof toolCall === 'object'
+            ? (toolCall as Record<string, any>)
+            : {};
+        const fnPayload =
+          callPayload.function && typeof callPayload.function === 'object'
+            ? (callPayload.function as Record<string, any>)
+            : {};
+        const rawArgs = fnPayload.arguments;
+        const argsText = typeof rawArgs === 'string'
+          ? rawArgs
+          : rawArgs != null
+            ? JSON.stringify(rawArgs)
+            : '';
+        appendPendingToolStep({
+          message_id: `${msg.message_id}-tool-call-${index}`,
+          role: 'tool',
+          content: argsText,
+          name: typeof fnPayload.name === 'string' ? fnPayload.name : 'tool',
+          tool_call_id: typeof callPayload.id === 'string' ? callPayload.id : null,
+          metadata: {
+            tool_status: 'ok',
+            round_index: Number(msg.metadata?.round_index || 0) || undefined,
+            [SYNTHETIC_TOOL_CALL_PLACEHOLDER]: true,
+          },
+          created_at: msg.created_at,
+        });
+      });
+      continue;
+    }
+
+    if (msg.role === 'tool') {
+      if (!latestCarrierHasToolCalls) {
+        latestAssistantCarrier = items.length > 0 && items[items.length - 1].message.role === 'assistant'
+          ? items[items.length - 1].message
+          : latestAssistantCarrier;
+        if (
+          streamingMessageId
+          && latestAssistantCarrier
+          && latestAssistantCarrier.message_id === streamingMessageId
+        ) {
+          latestCarrierHasToolCalls = true;
+        }
+      }
+      appendPendingToolStep(msg);
+      continue;
+    }
+
+    if (msg.role === 'assistant') {
+      items.push({ message: msg, toolSteps: pendingToolSteps });
+      latestAssistantCarrier = msg;
+      latestCarrierHasToolCalls = false;
+      pendingToolSteps = [];
+      continue;
+    }
+
+    if (pendingToolSteps.length > 0) {
+      if (!hasOnlySyntheticPendingToolSteps()) {
+        for (const step of pendingToolSteps) {
+          items.push({ message: step, toolSteps: [] });
+        }
+      }
+      pendingToolSteps = [];
+    }
+
+    items.push({ message: msg, toolSteps: [] });
+  }
+
+  if (pendingToolSteps.length > 0) {
+    if (latestAssistantCarrier && latestCarrierHasToolCalls) {
+      const lastIndex = items.length - 1;
+      if (lastIndex >= 0 && items[lastIndex].message.message_id === latestAssistantCarrier.message_id) {
+        items[lastIndex] = {
+          message: collapseAssistantToolCarrier(items[lastIndex].message),
+          toolSteps: [...items[lastIndex].toolSteps, ...pendingToolSteps],
+        };
+      } else {
+        items.push({
+          message: collapseAssistantToolCarrier(latestAssistantCarrier),
+          toolSteps: pendingToolSteps,
+        });
+      }
+    } else {
+      for (const step of pendingToolSteps) {
+        items.push({ message: step, toolSteps: [] });
+      }
+    }
+  }
+
+  return items.filter((item) => !isInvisibleAssistantPlaceholder(item, streamingMessageId));
+};
+
+const collapseAssistantToolCarrier = (message: ChatMessage): ChatMessage => ({
+  ...message,
+  content: '',
+});
+
 const formatDateDivider = (timestamp: number): string => {
   return new Date(timestamp * 1000).toLocaleDateString(undefined, {
     month: '2-digit',
@@ -154,6 +372,7 @@ export const ChatTimeline: React.FC<ChatTimelineProps> = ({
   const restoreRafRef = React.useRef<number | null>(null);
   const resizeObserverRef = React.useRef<ResizeObserver | null>(null);
   const resizeRafRef = React.useRef<number | null>(null);
+  const pendingShowMoreRestoreRef = React.useRef<ScrollSnapshot | null>(null);
   const programmaticScrollRef = React.useRef<boolean>(false);
   const lastUserScrollAtRef = React.useRef<number>(0);
   const isPointerDownInTimelineRef = React.useRef<boolean>(false);
@@ -186,118 +405,31 @@ export const ChatTimeline: React.FC<ChatTimelineProps> = ({
     ? `${messages[0].message_id}:${messages.length}`
     : '';
 
-  // Progressive rendering: for large conversations, render the most recent N messages first.
-  const visibleMessages = React.useMemo(() => {
-    if (messages.length <= renderLimit) return messages;
-    return messages.slice(-renderLimit);
-  }, [messages, renderLimit]);
-
+  const totalTimelineItems = React.useMemo<TimelineItem[]>(
+    () => buildTimelineItems(messages, streamingMessageId),
+    [messages, streamingMessageId],
+  );
+  const totalPrimaryTimelineItemCount = React.useMemo(
+    () => countPrimaryChatTimelineItems(totalTimelineItems),
+    [totalTimelineItems],
+  );
   const timelineItems = React.useMemo<TimelineItem[]>(() => {
-    const items: TimelineItem[] = [];
-    let pendingToolSteps: ChatMessage[] = [];
-    let latestAssistantCarrier: ChatMessage | null = null;
-    const appendPendingToolStep = (step: ChatMessage) => {
-      const incomingCallId = typeof step.tool_call_id === 'string' ? step.tool_call_id : null;
-      const existingIndex = pendingToolSteps.findIndex((pending) => {
-        const pendingCallId = typeof pending.tool_call_id === 'string' ? pending.tool_call_id : null;
-        if (incomingCallId && pendingCallId) return pendingCallId === incomingCallId;
-        return pending.message_id === step.message_id;
-      });
-      if (existingIndex >= 0) {
-        pendingToolSteps[existingIndex] = step;
-        return;
-      }
-      pendingToolSteps.push(step);
-    };
-
-    for (const msg of visibleMessages) {
-      const isAssistantToolCallCarrier = msg.role === 'assistant'
-        && Array.isArray(msg.tool_calls)
-        && msg.tool_calls.length > 0;
-      if (isAssistantToolCallCarrier) {
-        latestAssistantCarrier = msg;
-        msg.tool_calls?.forEach((toolCall, index) => {
-          const callPayload =
-            toolCall && typeof toolCall === 'object'
-              ? (toolCall as Record<string, any>)
-              : {};
-          const fnPayload =
-            callPayload.function && typeof callPayload.function === 'object'
-              ? (callPayload.function as Record<string, any>)
-              : {};
-          const rawArgs = fnPayload.arguments;
-          const argsText = typeof rawArgs === 'string'
-            ? rawArgs
-            : rawArgs != null
-              ? JSON.stringify(rawArgs)
-              : '';
-          appendPendingToolStep({
-            message_id: `${msg.message_id}-tool-call-${index}`,
-            role: 'tool',
-            content: argsText,
-            name: typeof fnPayload.name === 'string' ? fnPayload.name : 'tool',
-            tool_call_id: typeof callPayload.id === 'string' ? callPayload.id : null,
-            metadata: {
-              tool_status: 'ok',
-              round_index: Number(msg.metadata?.round_index || 0) || undefined,
-            },
-            created_at: msg.created_at,
-          });
-        });
-        continue;
-      }
-
-      if (msg.role === 'tool') {
-        appendPendingToolStep(msg);
-        continue;
-      }
-
-      if (msg.role === 'assistant') {
-        latestAssistantCarrier = msg;
-        items.push({ message: msg, toolSteps: pendingToolSteps });
-        pendingToolSteps = [];
-        continue;
-      }
-
-      if (pendingToolSteps.length > 0) {
-        for (const step of pendingToolSteps) {
-          items.push({ message: step, toolSteps: [] });
-        }
-        pendingToolSteps = [];
-      }
-
-      items.push({ message: msg, toolSteps: [] });
-    }
-
-    if (pendingToolSteps.length > 0) {
-      if (latestAssistantCarrier) {
-        const lastIndex = items.length - 1;
-        if (lastIndex >= 0 && items[lastIndex].message.message_id === latestAssistantCarrier.message_id) {
-          items[lastIndex] = {
-            message: items[lastIndex].message,
-            toolSteps: [...items[lastIndex].toolSteps, ...pendingToolSteps],
-          };
-        } else {
-          items.push({ message: latestAssistantCarrier, toolSteps: pendingToolSteps });
-        }
-      } else {
-        for (const step of pendingToolSteps) {
-          items.push({ message: step, toolSteps: [] });
-        }
-      }
-    }
-
-    return items;
-  }, [visibleMessages]);
+    if (totalPrimaryTimelineItemCount <= renderLimit) return totalTimelineItems;
+    return sliceTimelineItemsByPrimaryCount(totalTimelineItems, renderLimit);
+  }, [totalTimelineItems, totalPrimaryTimelineItemCount, renderLimit]);
+  const shownPrimaryTimelineItemCount = React.useMemo(
+    () => countPrimaryChatTimelineItems(timelineItems),
+    [timelineItems],
+  );
 
   const priorityIds = React.useMemo(() => {
     const ids = new Set<string>();
-    if (visibleMessages.length === 0) return ids;
+    if (timelineItems.length === 0) return ids;
 
     // Always prioritize a small tail of messages for instant paint.
-    const tail = visibleMessages.slice(-3);
-    for (const m of tail) {
-      ids.add(m.message_id);
+    const tail = timelineItems.slice(-3);
+    for (const item of tail) {
+      ids.add(item.message.message_id);
     }
 
     // Keep the actively streaming message fully visible. Long reasoning output
@@ -311,14 +443,14 @@ export const ChatTimeline: React.FC<ChatTimelineProps> = ({
     // Also prioritize any message containing Mermaid blocks. Mermaid rendering
     // can be expensive and interacts poorly with content-visibility during
     // scroll (especially scrollbar dragging), causing visible jitter.
-    for (const m of visibleMessages) {
-      if (m.content && m.content.includes('```mermaid')) {
-        ids.add(m.message_id);
+    for (const item of timelineItems) {
+      if (item.message.content && item.message.content.includes('```mermaid')) {
+        ids.add(item.message.message_id);
       }
     }
 
     return ids;
-  }, [visibleMessages, streamingMessageId]);
+  }, [timelineItems, streamingMessageId]);
 
   // Track which conversation's messages are currently rendered in the DOM.
   // Updated by effect 2 after a successful restore (i.e. after the store
@@ -493,6 +625,28 @@ export const ChatTimeline: React.FC<ChatTimelineProps> = ({
     }
   }, [messages, conversationId, messagesFingerprint]);
 
+  React.useLayoutEffect(() => {
+    const pendingShowMoreRestore = pendingShowMoreRestoreRef.current;
+    const el = containerRef.current;
+    if (!pendingShowMoreRestore || !el) return;
+
+    pendingShowMoreRestoreRef.current = null;
+    programmaticScrollRef.current = true;
+    restoreScrollFromSnapshot(el, pendingShowMoreRestore);
+    setAutoScroll(false);
+    lastRestoreAtRef.current = Date.now();
+
+    restoreRafRef.current = requestAnimationFrame(() => {
+      programmaticScrollRef.current = true;
+      refineScrollWithAnchor(el, pendingShowMoreRestore);
+      requestAnimationFrame(() => {
+        refineScrollWithAnchor(el, pendingShowMoreRestore);
+        programmaticScrollRef.current = false;
+        restoreRafRef.current = null;
+      });
+    });
+  }, [timelineItems.length]);
+
   // --- 3. Scroll to a specific message (from search navigation) ---
   React.useEffect(() => {
     if (!scrollToMessageId || !containerRef.current) return;
@@ -614,6 +768,14 @@ export const ChatTimeline: React.FC<ChatTimelineProps> = ({
     }
   };
 
+  const handleShowMore = React.useCallback(() => {
+    const el = containerRef.current;
+    if (el) {
+      pendingShowMoreRestoreRef.current = getScrollSnapshot(el);
+    }
+    setRenderLimit((n) => Math.min(totalPrimaryTimelineItemCount, n + RENDER_LIMIT_INCREMENT));
+  }, [totalPrimaryTimelineItemCount]);
+
   if (messages.length === 0) {
     return (
       <div className="flex-1 flex flex-col items-center justify-center text-gray-500">
@@ -637,18 +799,18 @@ export const ChatTimeline: React.FC<ChatTimelineProps> = ({
     >
       {/* Inner wrapper restores visual order: oldest at top, newest at bottom */}
       <div ref={contentRef} className="py-2">
-        {messages.length > visibleMessages.length && (
+        {totalPrimaryTimelineItemCount > shownPrimaryTimelineItemCount && (
           <div className="px-4 py-2">
             <button
               type="button"
               data-testid="chat-timeline-show-more"
               className="text-[11px] text-gray-500 hover:text-gray-300 underline"
-              onClick={() => setRenderLimit((n) => Math.min(messages.length, n + RENDER_LIMIT_INCREMENT))}
+              onClick={handleShowMore}
             >
               Show more
             </button>
             <span className="ml-2 text-[10px] text-gray-600 tabular-nums">
-              Showing {visibleMessages.length} / {messages.length}
+              Showing {shownPrimaryTimelineItemCount} / {totalPrimaryTimelineItemCount}
             </span>
           </div>
         )}
@@ -657,9 +819,10 @@ export const ChatTimeline: React.FC<ChatTimelineProps> = ({
           const dividerKey = getDateDividerKey(msg.created_at);
           const prevMsg = timelineItems[index - 1]?.message;
           const shouldShowDateDivider = !prevMsg || getDateDividerKey(prevMsg.created_at) !== dividerKey;
+          const renderKey = msg.ui_render_id || msg.message_id;
 
           return (
-            <React.Fragment key={msg.message_id}>
+            <React.Fragment key={renderKey}>
               {shouldShowDateDivider && (
                 <div className="px-4 py-2" data-testid="chat-date-divider">
                   <div className="flex items-center gap-3 text-[10px] text-gray-500">

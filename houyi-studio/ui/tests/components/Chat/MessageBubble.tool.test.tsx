@@ -99,15 +99,17 @@ describe('MessageBubble(tool)', () => {
       />,
     );
 
-    expect(screen.getByText('Tool calls 1')).toBeInTheDocument();
-    expect(screen.getByText('Rounds 1')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Tool activity 1' })).toBeInTheDocument();
+    expect(screen.getAllByText('done').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Rounds 1').length).toBeGreaterThan(0);
     expect(screen.queryByText(/Stats/)).not.toBeInTheDocument();
     expect(screen.getByText('Tokens: 42')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByText('View trace'));
+    fireEvent.click(screen.getAllByText('View trace')[0]);
     expect(onOpenTrace).toHaveBeenCalledWith('trace-123');
 
-    fireEvent.click(screen.getByText('Show steps'));
+    expect(screen.queryByText('houyi_read_file')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Tool activity 1' }));
     expect(screen.getByText('houyi_read_file')).toBeInTheDocument();
   });
 
@@ -121,6 +123,8 @@ describe('MessageBubble(tool)', () => {
           metadata: {
             usage: { prompt_tokens: 20, completion_tokens: 40, total_tokens: 60 },
             first_token_latency_ms: 187.4,
+            decode_tokens_per_second: 26.5,
+            end_to_end_tokens_per_second: 22.25,
             tokens_per_second: 22.25,
           },
           created_at: Date.now() / 1000,
@@ -130,8 +134,40 @@ describe('MessageBubble(tool)', () => {
 
     expect(screen.queryByText(/Stats/)).not.toBeInTheDocument();
     expect(screen.getByText('First token 187 ms')).toBeInTheDocument();
-    expect(screen.getByText('22 tokens/s')).toBeInTheDocument();
+    expect(screen.getByText('Decode 27 tokens/s')).toBeInTheDocument();
+    expect(screen.getByText('E2E 22 tokens/s')).toBeInTheDocument();
     expect(screen.getByText(/Tokens: 60\s*↑20\s*↓40/)).toBeInTheDocument();
+  });
+
+  it('renders reasoning budget metadata', () => {
+    render(
+      <MessageBubble
+        message={{
+          message_id: 'assistant-budget-1',
+          role: 'assistant',
+          content: 'done',
+          metadata: {
+            usage: {
+              prompt_tokens: 20,
+              completion_tokens: 40,
+              total_tokens: 60,
+              reasoning_tokens: 12,
+              answer_tokens: 28,
+              cached_prompt_tokens: 0,
+              usage_confidence: 'reported',
+            },
+            finish_reason: 'length',
+            budget: {
+              answer_reserve: 512,
+              max_tokens_guardrail_applied: true,
+            },
+          },
+          created_at: Date.now() / 1000,
+        }}
+      />,
+    );
+    expect(screen.queryByText('Reserve 512')).not.toBeInTheDocument();
+    expect(screen.getByText('Guardrail')).toBeInTheDocument();
   });
 
   it('renders user input token stats', () => {
@@ -194,9 +230,8 @@ describe('MessageBubble(tool)', () => {
       />,
     );
 
-    expect(screen.getByText('Tool calls 1')).toBeInTheDocument();
-    expect(screen.getByText('Show steps')).toBeInTheDocument();
-    fireEvent.click(screen.getByText('Show steps'));
+    expect(screen.getByRole('button', { name: 'Tool activity 1' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Tool activity 1' }));
     expect(screen.getByText('houyi_grep')).toBeInTheDocument();
   });
 
@@ -224,7 +259,7 @@ describe('MessageBubble(tool)', () => {
     );
 
     expect(screen.queryByText(/tool_calls_section_begin/i)).not.toBeInTheDocument();
-    expect(screen.getByText('Tool calls 1')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Tool activity 1' })).toBeInTheDocument();
   });
 
   it('strips xml-style tool_call payload markers from assistant content', () => {
@@ -251,7 +286,7 @@ describe('MessageBubble(tool)', () => {
     );
 
     expect(screen.queryByText(/<tool_call>/i)).not.toBeInTheDocument();
-    expect(screen.getByText('Tool calls 1')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Tool activity 1' })).toBeInTheDocument();
   });
 
   it('does not sanitize normal assistant text that only mentions parallel_tool_calls', () => {
@@ -310,7 +345,7 @@ describe('MessageBubble(tool)', () => {
     expect(screen.getByText(/houyi_search_text/)).toBeInTheDocument();
   });
 
-  it('hides tool summary while streaming and shows collapsed steps after completion', () => {
+  it('shows inline running tool activity while streaming and expands details on demand', () => {
     const baseMessage = {
       message_id: 'assistant-stream-steps',
       role: 'assistant' as const,
@@ -324,7 +359,43 @@ describe('MessageBubble(tool)', () => {
         role: 'tool' as const,
         content: '{"ok":true}',
         name: 'houyi_read_file',
-        metadata: { tool_status: 'ok', round_index: 1 },
+        metadata: { tool_status: 'running', round_index: 1, duration_ms: 350 },
+        created_at: Date.now() / 1000,
+      },
+    ];
+
+    render(
+      <MessageBubble
+        message={baseMessage}
+        toolSteps={steps}
+        isLastMessage
+        isStreaming
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: 'Tool activity 1' })).toBeInTheDocument();
+    expect(screen.getAllByText('running').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Duration 350 ms').length).toBeGreaterThan(0);
+    expect(screen.queryByText('houyi_read_file')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Tool activity 1' }));
+    expect(screen.getByText('houyi_read_file')).toBeInTheDocument();
+  });
+
+  it('keeps inline tool activity collapsed after streaming completes until manually expanded', () => {
+    const baseMessage = {
+      message_id: 'assistant-stream-steps-complete',
+      role: 'assistant' as const,
+      content: '',
+      metadata: {},
+      created_at: Date.now() / 1000,
+    };
+    const steps = [
+      {
+        message_id: 'tool-step-stream-complete-1',
+        role: 'tool' as const,
+        content: '{"ok":true}',
+        name: 'houyi_read_file',
+        metadata: { tool_status: 'ok', round_index: 1, duration_ms: 420 },
         created_at: Date.now() / 1000,
       },
     ];
@@ -338,9 +409,6 @@ describe('MessageBubble(tool)', () => {
       />,
     );
 
-    expect(screen.queryByText('Tool calls 1')).not.toBeInTheDocument();
-    expect(screen.queryByText('houyi_read_file')).not.toBeInTheDocument();
-
     rerender(
       <MessageBubble
         message={baseMessage}
@@ -350,8 +418,11 @@ describe('MessageBubble(tool)', () => {
       />,
     );
 
-    expect(screen.getByText('Tool calls 1')).toBeInTheDocument();
-    expect(screen.getByText('Show steps')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Tool activity 1' })).toBeInTheDocument();
+    expect(screen.getAllByText('Duration 420 ms').length).toBeGreaterThan(0);
+    expect(screen.queryByText('houyi_read_file')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Tool activity 1' }));
+    expect(screen.getByText('houyi_read_file')).toBeInTheDocument();
   });
 
   it('keeps the streaming thinking panel scrolled to the latest text', () => {

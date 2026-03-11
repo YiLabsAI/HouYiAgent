@@ -27,8 +27,8 @@ uv sync --extra dev
 # If you plan to run real OpenAI/Anthropic adapters
 uv sync --extra dev --extra model-adapters
 
-# If you plan to run Studio server chat + tool loop examples
-uv sync --extra dev --extra model-adapters --extra websearch-ddg --extra websearch-readability
+# If you plan to run the full local dev/test stack used by Studio chat + tool loop + RAG + Vertex tests
+uv sync --extra dev --extra studio-server --extra rag-full --extra model-adapters --extra vertex-ai --extra websearch-ddg --extra websearch-tavily --extra websearch-readability
 ```
 
 ## Quick Start

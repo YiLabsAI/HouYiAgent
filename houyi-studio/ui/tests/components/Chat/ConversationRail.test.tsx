@@ -19,7 +19,7 @@ const conversations: ConversationSummary[] = [
 ];
 
 describe('ConversationRail', () => {
-  it('uses raw message_count as the primary sidebar total', () => {
+  it('uses visible_message_count as the primary sidebar total when available', () => {
     render(
       <ConversationRail
         conversations={conversations}
@@ -33,7 +33,7 @@ describe('ConversationRail', () => {
       />,
     );
 
-    expect(screen.getByText('209 messages')).toBeInTheDocument();
-    expect(screen.queryByText('148 messages')).not.toBeInTheDocument();
+    expect(screen.getByText('148 messages')).toBeInTheDocument();
+    expect(screen.queryByText('209 messages')).not.toBeInTheDocument();
   });
 });

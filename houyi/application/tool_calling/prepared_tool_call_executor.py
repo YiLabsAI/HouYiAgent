@@ -54,7 +54,7 @@ class _PreparedToolCallExecutor:
             tool_reported_cache_hit,
         )
         cache_hit_for_reporting = cache_hit or tool_reported_cache_hit
-        tool_elapsed = time.perf_counter() - tool_start if config.tool_loop_enable_timing else 0.0
+        tool_elapsed = time.perf_counter() - tool_start
         if config.tool_loop_enable_timing:
             logger.info(
                 "[ToolCallRunner] tool=%s call_id=%s elapsed=%.3fs",

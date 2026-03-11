@@ -56,7 +56,7 @@ def _make_skill(
 class TestResolveAdapter:
     """Tests for RuntimeResolver.resolve_adapter()."""
 
-    def test_tool_mode_with_valid_adapter(self, tmp_path):
+    def test_tool_mode_valid(self, tmp_path):
         """Valid adapter dotted path resolves to a callable."""
         # Create a temporary module with a callable
         mod_dir = tmp_path / "fake_pkg"
@@ -82,7 +82,7 @@ class TestResolveAdapter:
             sys.modules.pop("fake_pkg", None)
             sys.modules.pop("fake_pkg.adapter", None)
 
-    def test_tool_mode_missing_adapter_field(self):
+    def test_hooks_root_keeps(self):
         """Tool mode without adapter field leaves executor unbound."""
         rc = RuntimeContract(mode=RuntimeMode.TOOL)
         skill = _make_skill(runtime=rc)
@@ -90,7 +90,7 @@ class TestResolveAdapter:
         resolved = resolver.resolve(skill)
         assert resolved.executor is None
 
-    def test_script_mode_with_adapter(self, tmp_path):
+    def test_script_mode_adapter(self, tmp_path):
         """Script mode with adapter also resolves the callable."""
         mod_dir = tmp_path / "script_pkg"
         mod_dir.mkdir()
@@ -112,7 +112,7 @@ class TestResolveAdapter:
             sys.modules.pop("script_pkg", None)
             sys.modules.pop("script_pkg.run", None)
 
-    def test_template_mode_no_executor(self):
+    def test_template_mode_skips(self):
         """Template mode does not bind any executor."""
         rc = RuntimeContract(mode=RuntimeMode.TEMPLATE)
         skill = _make_skill(runtime=rc)
@@ -140,7 +140,7 @@ class TestResolveAdapter:
         resolved = resolver.resolve(skill)
         assert resolved.executor is original_fn
 
-    def test_adapter_import_failure_graceful(self):
+    def test_adapter_import_fails(self):
         """Invalid adapter path degrades gracefully, logs warning."""
         rc = RuntimeContract(mode=RuntimeMode.TOOL, adapter="no.such.module:fn")
         skill = _make_skill(runtime=rc)
@@ -149,7 +149,7 @@ class TestResolveAdapter:
         assert resolved.executor is None
         assert resolved.runtime_status == RuntimeStatus.UNAVAILABLE
 
-    def test_adapter_bad_format_no_colon(self):
+    def test_adapter_bad_spec(self):
         """Adapter string without colon separator degrades gracefully."""
         rc = RuntimeContract(mode=RuntimeMode.TOOL, adapter="just.a.module.path")
         skill = _make_skill(runtime=rc)
@@ -157,7 +157,7 @@ class TestResolveAdapter:
         resolved = resolver.resolve(skill)
         assert resolved.executor is None
 
-    def test_adapter_attr_not_found(self, tmp_path):
+    def test_adapter_attr_missing(self, tmp_path):
         """Module exists but attribute not found degrades gracefully."""
         mod_dir = tmp_path / "exists_pkg"
         mod_dir.mkdir()
@@ -185,7 +185,7 @@ class TestResolveAdapter:
 class TestHooksRootNormalization:
     """Tests for hooks_root path normalization."""
 
-    def test_hooks_root_resolved_to_absolute(self, tmp_path):
+    def test_hooks_root_resolves(self, tmp_path):
         """hooks_root is resolved relative to project_root."""
         rc = RuntimeContract(
             mode=RuntimeMode.TEMPLATE,
@@ -197,7 +197,7 @@ class TestHooksRootNormalization:
         expected = tmp_path / "houyi" / "skills" / "planning"
         assert resolved.skill_dir == expected
 
-    def test_hooks_root_none_keeps_original_skill_dir(self, tmp_path):
+    def test_hooks_root_keeps(self, tmp_path):
         """When hooks_root is None, skill_dir is unchanged."""
         rc = RuntimeContract(mode=RuntimeMode.TEMPLATE)
         original_dir = tmp_path / "original"
@@ -207,7 +207,7 @@ class TestHooksRootNormalization:
         resolved = resolver.resolve(skill)
         assert resolved.skill_dir == original_dir
 
-    def test_hooks_root_already_absolute(self, tmp_path):
+    def test_hooks_root_absolute(self, tmp_path):
         """Absolute hooks_root is used as-is."""
         abs_path = tmp_path / "absolute" / "path"
         rc = RuntimeContract(
@@ -226,7 +226,7 @@ class TestHooksRootNormalization:
 class TestResolveBatch:
     """Tests for resolving multiple skills at once."""
 
-    def test_resolve_batch(self):
+    def test_stats_batch(self):
         """resolve_batch processes a list of skills."""
         skills = [
             _make_skill(name="a"),
@@ -238,7 +238,7 @@ class TestResolveBatch:
         assert results[0].name == "a"
         assert results[1].name == "b"
 
-    def test_resolve_batch_empty(self):
+    def test_stats_batch_empty(self):
         """Empty list returns empty list."""
         resolver = RuntimeResolver()
         assert resolver.resolve_batch([]) == []
@@ -260,7 +260,7 @@ class TestResolutionEvent:
         assert "fallback_used" not in d
         assert "timestamp" in d
 
-    def test_to_dict_with_all_fields(self):
+    def test_to_dict_fields(self):
         e = ResolutionEvent(
             skill_name="s",
             outcome="degraded",
@@ -319,7 +319,7 @@ class TestResolutionStats:
         assert d["success_rate"] == 0.5
         assert d["degradation_rate"] == 0.5
 
-    def test_unknown_outcome_counted_in_total(self):
+    def test_unknown_outcome_total(self):
         s = ResolutionStats()
         s.record("unknown")
         assert s.total == 1
@@ -333,7 +333,7 @@ class TestResolutionStats:
 class TestAuditTrail:
     """Tests that resolve() emits audit events and updates stats."""
 
-    def test_bound_event_on_successful_adapter(self, tmp_path):
+    def test_bound_event_adapter(self, tmp_path):
         mod_dir = tmp_path / "audit_pkg"
         mod_dir.mkdir()
         (mod_dir / "__init__.py").write_text("")
@@ -361,7 +361,7 @@ class TestAuditTrail:
             sys.modules.pop("audit_pkg", None)
             sys.modules.pop("audit_pkg.run", None)
 
-    def test_skipped_event_when_executor_present(self):
+    def test_skipped_event_executor(self):
         rc = RuntimeContract(mode=RuntimeMode.TOOL, adapter="nope:fn")
         skill = _make_skill(name="skip-test", runtime=rc, executor=lambda x: x)
         resolver = RuntimeResolver()
@@ -380,7 +380,7 @@ class TestAuditTrail:
         assert resolver.audit_log[0].outcome == "template"
         assert resolver.stats.template == 1
 
-    def test_degraded_event_on_adapter_failure(self):
+    def test_degraded_event_failure(self):
         rc = RuntimeContract(mode=RuntimeMode.TOOL, adapter="no.such.mod:fn")
         skill = _make_skill(name="degrade-test", runtime=rc)
         resolver = RuntimeResolver()
@@ -394,7 +394,7 @@ class TestAuditTrail:
         assert "no.such.mod" in evt.error
         assert resolver.stats.degraded == 1
 
-    def test_failed_event_when_no_adapter_no_template(self):
+    def test_failed_event_missing(self):
         rc = RuntimeContract(mode=RuntimeMode.TOOL)
         skill = _make_skill(name="fail-test", runtime=rc)
         resolver = RuntimeResolver()
@@ -404,7 +404,7 @@ class TestAuditTrail:
         assert resolver.audit_log[0].outcome == "failed"
         assert resolver.stats.failed == 1
 
-    def test_no_event_when_no_runtime_contract(self):
+    def test_no_event_contract(self):
         skill = _make_skill(name="no-rc")
         resolver = RuntimeResolver()
         resolver.resolve(skill)
@@ -429,7 +429,7 @@ class TestAuditTrail:
         assert resolver.stats.degraded == 1  # bad adapter format
         assert len(resolver.audit_log) == 3
 
-    def test_audit_log_duration_is_positive(self):
+    def test_audit_duration(self):
         """Duration should be a non-negative float for every event."""
         rc = RuntimeContract(mode=RuntimeMode.TOOL, adapter="no.such:fn")
         skill = _make_skill(name="dur-test", runtime=rc)
@@ -437,7 +437,7 @@ class TestAuditTrail:
         resolver.resolve(skill)
         assert resolver.audit_log[0].duration_ms >= 0
 
-    def test_stats_rates_after_mixed_batch(self, tmp_path):
+    def test_stats_rates_batch(self, tmp_path):
         """Verify success/degradation/failure rates after a realistic batch."""
         mod_dir = tmp_path / "rate_pkg"
         mod_dir.mkdir()
@@ -551,7 +551,7 @@ class TestProbeDependencies:
             sys.modules.pop("probe_attr", None)
             sys.modules.pop("probe_attr.mod", None)
 
-    def test_probe_skips_skills_without_adapter(self):
+    def test_probe_skips(self):
         skills = [
             _make_skill(name="no-rc"),
             _make_skill(name="tmpl", runtime=RuntimeContract(mode=RuntimeMode.TEMPLATE)),
@@ -561,7 +561,7 @@ class TestProbeDependencies:
         results = resolver.probe_dependencies(skills)
         assert len(results) == 0
 
-    def test_probe_bad_format_adapter(self):
+    def test_probe_bad_adapter(self):
         skill = _make_skill(
             name="bad-fmt",
             runtime=RuntimeContract(mode=RuntimeMode.TOOL, adapter="no_colon_here"),

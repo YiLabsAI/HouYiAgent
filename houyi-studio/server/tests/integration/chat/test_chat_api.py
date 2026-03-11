@@ -10,14 +10,17 @@ import io
 import json
 import zipfile
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from houyi_studio.server.chat import chat_api as chat_api_module
+from houyi_studio.server.chat import chat_service as chat_service_module
 from houyi_studio.server.chat.chat_api import register_chat_routes, router
 from houyi_studio.server.chat.chat_service import ChatService
 from houyi_studio.server.chat.json_store import JsonStore
+from houyi_studio.server.chat.settings_store import GlobalSettings, ProviderConfig
 
 from houyi.adapters.llm.base import StreamChunk
 from houyi.adapters.llm.models import GPT_4O
@@ -34,6 +37,7 @@ def _make_mock_llm():
 
     mock.stream_chat = mock_stream_chat
     mock.last_usage = {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
+    mock.last_finish_reason = "stop"
     return mock
 
 
@@ -182,10 +186,7 @@ class TestGetTrace:
                     return fake_trace_view
                 return None
 
-        monkeypatch.setattr(
-            "houyi_studio.server.chat.chat_api.ObservabilityQuery",
-            _FakeObservabilityQuery,
-        )
+        monkeypatch.setattr(chat_api_module, "ObservabilityQuery", _FakeObservabilityQuery)
 
         resp = client.get("/api/chat/trace/trace_123")
         assert resp.status_code == 200
@@ -204,17 +205,14 @@ class TestGetTrace:
         assert len(data["root_span"]["children"]) == 1
         assert data["root_span"]["children"][0]["name"] == "tool.execute"
 
-    def test_get_trace_not_found(self, app_and_client, monkeypatch):
+    def test_get_trace_missing(self, app_and_client, monkeypatch):
         _, client, _ = app_and_client
 
         class _FakeObservabilityQuery:
             def get_trace(self, trace_id: str, include_content: bool = False):
                 return None
 
-        monkeypatch.setattr(
-            "houyi_studio.server.chat.chat_api.ObservabilityQuery",
-            _FakeObservabilityQuery,
-        )
+        monkeypatch.setattr(chat_api_module, "ObservabilityQuery", _FakeObservabilityQuery)
 
         resp = client.get("/api/chat/trace/missing")
         assert resp.status_code == 404
@@ -296,7 +294,7 @@ class TestDeleteConversation:
 class TestSendMessage:
     """POST /api/chat/conversations/{id}/messages"""
 
-    def test_send_message_sse_stream(self, app_and_client):
+    def test_send_message_streams(self, app_and_client):
         _, client, store = app_and_client
         create_resp = client.post("/api/chat/conversations", json={"title": "SSE Test"})
         conv_id = create_resp.json()["conversation_id"]
@@ -326,18 +324,118 @@ class TestSendMessage:
         complete = next(e for e in events if e["event"] == "message.complete")
         metadata = complete["data"]["metadata"]
         assert metadata["usage"]["total_tokens"] == 15
+        assert metadata["usage"]["prompt_tokens"] == 10
+        assert metadata["usage"]["completion_tokens"] == 5
+        assert metadata["usage"]["reasoning_tokens"] == 0
+        assert metadata["usage"]["answer_tokens"] == 5
+        assert metadata["usage"]["cached_prompt_tokens"] == 0
+        assert metadata["usage"]["usage_confidence"] == "reported"
+        assert metadata["finish_reason"] == "stop"
         assert metadata["first_token_latency_ms"] >= 0
         assert metadata["generation_time_ms"] >= 0
         assert metadata["tokens_per_second"] > 0
+        assert metadata["end_to_end_tokens_per_second"] > 0
+        assert metadata["decode_tokens_per_second"] > 0
+
+        finish = next(e for e in events if e["event"] == "message.finish")
+        assert finish["data"]["finish_reason"] == "stop"
 
         conv = store.get(conv_id)
         assert conv is not None
         assert conv.messages[0].metadata["usage"]["input_tokens"] > 0
         assert conv.messages[1].metadata["usage"]["total_tokens"] == 15
+        assert conv.messages[1].metadata["usage"]["reasoning_tokens"] == 0
+        assert conv.messages[1].metadata["usage"]["answer_tokens"] == 5
+        assert conv.messages[1].metadata["usage"]["cached_prompt_tokens"] == 0
+        assert conv.messages[1].metadata["usage"]["usage_confidence"] == "reported"
+        assert conv.messages[1].metadata["finish_reason"] == "stop"
         assert conv.messages[1].metadata["first_token_latency_ms"] >= 0
         assert conv.messages[1].metadata["tokens_per_second"] > 0
 
-    def test_streams_final_response_after_tool_loop(self, app_and_client, monkeypatch):
+    def test_send_message_finish(self, app_and_client, monkeypatch):
+        _, client, store = app_and_client
+        create_resp = client.post("/api/chat/conversations", json={"title": "Finish Reason"})
+        conv_id = create_resp.json()["conversation_id"]
+
+        from houyi_studio.server.chat import chat_api
+
+        service = chat_api._chat_service
+        assert service is not None
+
+        class _AdapterWithLengthStop:
+            last_usage = {"prompt_tokens": 12, "completion_tokens": 8, "total_tokens": 20}
+            last_finish_reason = None
+
+            async def stream_chat(self, *args, **kwargs):
+                _ = (args, kwargs)
+                yield StreamChunk(content_delta="Partial ")
+                yield StreamChunk(content_delta="answer")
+                self.last_finish_reason = "length"
+
+        monkeypatch.setattr(service, "_default_adapter", _AdapterWithLengthStop())
+
+        resp = client.post(
+            f"/api/chat/conversations/{conv_id}/messages",
+            json={"content": "truncate please"},
+        )
+        assert resp.status_code == 200
+
+        events = _parse_sse_response(resp.text)
+        finish = next(e for e in events if e["event"] == "message.finish")
+        complete = next(e for e in events if e["event"] == "message.complete")
+        assert finish["data"]["finish_reason"] == "length"
+        assert complete["data"]["metadata"]["finish_reason"] == "length"
+
+        conv = store.get(conv_id)
+        assert conv is not None
+        assert conv.messages[-1].metadata["finish_reason"] == "length"
+
+    def test_send_message_persists(self, app_and_client, monkeypatch):
+        _, client, store = app_and_client
+        create_resp = client.post("/api/chat/conversations", json={"title": "No Usage Stream"})
+        conv_id = create_resp.json()["conversation_id"]
+
+        from houyi_studio.server.chat import chat_api
+
+        service = chat_api._chat_service
+        assert service is not None
+
+        class _AdapterWithoutUsage:
+            last_usage = None
+            last_finish_reason = None
+
+            async def stream_chat(self, *args, **kwargs):
+                _ = (args, kwargs)
+                yield StreamChunk(content_delta="Final answer")
+                self.last_finish_reason = "stop"
+
+        monkeypatch.setattr(service, "_default_adapter", _AdapterWithoutUsage())
+
+        resp = client.post(
+            f"/api/chat/conversations/{conv_id}/messages",
+            json={"content": "hello"},
+        )
+        assert resp.status_code == 200
+
+        events = _parse_sse_response(resp.text)
+        deltas = [e for e in events if e["event"] == "message.delta"]
+        assert "".join(e["data"].get("content", "") for e in deltas) == "Final answer"
+
+        complete = next(e for e in events if e["event"] == "message.complete")
+        metadata = complete["data"]["metadata"]
+        assert metadata["finish_reason"] == "stop"
+        assert metadata["first_token_latency_ms"] >= 0
+        assert metadata["generation_time_ms"] >= 0
+        assert "tokens_per_second" not in metadata
+
+        conv = store.get(conv_id)
+        assert conv is not None
+        assert conv.messages[-1].content == "Final answer"
+        assert conv.messages[-1].metadata["finish_reason"] == "stop"
+        assert conv.messages[-1].metadata["first_token_latency_ms"] >= 0
+        assert conv.messages[-1].metadata["generation_time_ms"] >= 0
+
+    def test_streams_tool_loop(self, app_and_client, monkeypatch):
         _, client, _ = app_and_client
         create_resp = client.post("/api/chat/conversations", json={"title": "Tool Loop Replay"})
         conv_id = create_resp.json()["conversation_id"]
@@ -379,13 +477,15 @@ class TestSendMessage:
         monkeypatch.setattr(service, "_default_adapter", adapter)
         monkeypatch.setattr(service, "_get_tool_runner", lambda: _FakeToolRunner())
         monkeypatch.setattr(
-            "houyi_studio.server.chat.chat_service.ToolBridge.collect_tool_schemas",
+            chat_service_module.ToolBridge,
+            "collect_tool_schemas",
             lambda self, skill_filter, include_core: [
                 {"type": "function", "function": {"name": "demo"}}
             ],
         )
         monkeypatch.setattr(
-            "houyi_studio.server.chat.chat_service.ToolBridge.collect_skills",
+            chat_service_module.ToolBridge,
+            "collect_skills",
             lambda self, skill_filter, include_core: [SimpleNamespace(name="demo")],
         )
 
@@ -402,8 +502,72 @@ class TestSendMessage:
 
         complete = next(e for e in events if e["event"] == "message.complete")
         assert complete["data"]["metadata"]["usage"]["total_tokens"] == 18
+        assert complete["data"]["metadata"]["usage"]["reasoning_tokens"] == 0
+        assert complete["data"]["metadata"]["usage"]["answer_tokens"] == 7
+        assert complete["data"]["metadata"]["usage"]["cached_prompt_tokens"] == 0
+        assert complete["data"]["metadata"]["usage"]["usage_confidence"] == "reported"
 
-    def test_emits_tool_lifecycle_events_with_trace_metadata(self, app_and_client, monkeypatch):
+    def test_tool_loop_shows_error(self, app_and_client, monkeypatch):
+        _, client, store = app_and_client
+        create_resp = client.post("/api/chat/conversations", json={"title": "Tool Loop Error"})
+        conv_id = create_resp.json()["conversation_id"]
+
+        from houyi_studio.server.chat import chat_api
+
+        service = chat_api._chat_service
+        assert service is not None
+
+        class _AdapterWithStream:
+            last_usage = None
+            last_finish_reason = None
+
+            async def chat(self, *args, **kwargs):
+                _ = (args, kwargs)
+                return SimpleNamespace(content="", tool_calls=[], usage={}, metadata={})
+
+            async def stream_chat(self, *args, **kwargs):
+                _ = (args, kwargs)
+                yield StreamChunk(content_delta="should-not-run")
+
+        class _FailingToolRunner:
+            async def run(self, **kwargs):
+                _ = kwargs
+                raise RuntimeError("429 RESOURCE_EXHAUSTED")
+
+        monkeypatch.setattr(service, "_default_adapter", _AdapterWithStream())
+        monkeypatch.setattr(service, "_get_tool_runner", lambda: _FailingToolRunner())
+        monkeypatch.setattr(
+            chat_service_module.ToolBridge,
+            "collect_tool_schemas",
+            lambda self, skill_filter, include_core: [
+                {"type": "function", "function": {"name": "demo"}}
+            ],
+        )
+        monkeypatch.setattr(
+            chat_service_module.ToolBridge,
+            "collect_skills",
+            lambda self, skill_filter, include_core: [SimpleNamespace(name="demo")],
+        )
+
+        resp = client.post(
+            f"/api/chat/conversations/{conv_id}/messages",
+            json={"content": "hello", "enable_skills": ["demo"]},
+        )
+        assert resp.status_code == 200
+
+        events = _parse_sse_response(resp.text)
+        deltas = [e for e in events if e["event"] == "message.delta"]
+        assert any("temporarily rate limited" in e["data"].get("content", "") for e in deltas)
+        assert any(e["event"] == "message.error" for e in events)
+        complete = next(e for e in events if e["event"] == "message.complete")
+        assert complete["data"]["metadata"]["finish_reason"] == "error"
+
+        conv = store.get(conv_id)
+        assert conv is not None
+        assert "temporarily rate limited" in conv.messages[-1].content
+        assert conv.messages[-1].metadata["finish_reason"] == "error"
+
+    def test_emits_tool_events(self, app_and_client, monkeypatch):
         _, client, _ = app_and_client
         create_resp = client.post("/api/chat/conversations", json={"title": "Tool Lifecycle"})
         conv_id = create_resp.json()["conversation_id"]
@@ -460,14 +624,16 @@ class TestSendMessage:
         monkeypatch.setattr(service, "_default_adapter", adapter)
         monkeypatch.setattr(service, "_get_tool_runner", lambda: _FakeToolRunner())
         monkeypatch.setattr(
-            "houyi_studio.server.chat.chat_service.ToolBridge.collect_tool_schemas",
+            chat_service_module.ToolBridge,
+            "collect_tool_schemas",
             lambda self, skill_filter, include_core: [
                 {"type": "function", "function": {"name": "demo_ok"}},
                 {"type": "function", "function": {"name": "demo_err"}},
             ],
         )
         monkeypatch.setattr(
-            "houyi_studio.server.chat.chat_service.ToolBridge.collect_skills",
+            chat_service_module.ToolBridge,
+            "collect_skills",
             lambda self, skill_filter, include_core: [
                 SimpleNamespace(name="demo_ok"),
                 SimpleNamespace(name="demo_err"),
@@ -511,7 +677,7 @@ class TestSendMessage:
         assert complete["data"]["metadata"]["trace_id"] == trace_id
         assert complete["data"]["metadata"]["usage"]["total_tokens"] == 22
 
-    def test_persists_tool_call_carrier_and_tool_results(self, app_and_client, monkeypatch):
+    def test_persists_tool_results(self, app_and_client, monkeypatch):
         _, client, store = app_and_client
         create_resp = client.post("/api/chat/conversations", json={"title": "Persist Tool Steps"})
         conv_id = create_resp.json()["conversation_id"]
@@ -583,7 +749,8 @@ class TestSendMessage:
         monkeypatch.setattr(service, "_default_adapter", adapter)
         monkeypatch.setattr(service, "_get_tool_runner", lambda: _FakeToolRunner())
         monkeypatch.setattr(
-            "houyi_studio.server.chat.chat_service.ToolBridge.collect_tool_schemas",
+            chat_service_module.ToolBridge,
+            "collect_tool_schemas",
             lambda self, skill_filter, include_core: [
                 {
                     "type": "function",
@@ -596,7 +763,8 @@ class TestSendMessage:
             ],
         )
         monkeypatch.setattr(
-            "houyi_studio.server.chat.chat_service.ToolBridge.collect_skills",
+            chat_service_module.ToolBridge,
+            "collect_skills",
             lambda self, skill_filter, include_core: [SimpleNamespace(name="demo")],
         )
 
@@ -628,8 +796,289 @@ class TestSendMessage:
         assert final_assistant.role.value == "assistant"
         assert final_assistant.content == "Final answer"
         assert final_assistant.metadata.get("usage", {}).get("total_tokens") == 13
+        assert final_assistant.metadata.get("usage", {}).get("reasoning_tokens") == 0
+        assert final_assistant.metadata.get("usage", {}).get("answer_tokens") == 6
+        assert final_assistant.metadata.get("usage", {}).get("cached_prompt_tokens") == 0
+        assert final_assistant.metadata.get("usage", {}).get("usage_confidence") == "reported"
 
-    def test_send_message_accepts_tooling_fields(self, app_and_client):
+    def test_persists_reasoning_replay(self, app_and_client, monkeypatch):
+        _, client, store = app_and_client
+        create_resp = client.post("/api/chat/conversations", json={"title": "Reasoning Replay"})
+        conv_id = create_resp.json()["conversation_id"]
+
+        from houyi_studio.server.chat import chat_api
+
+        service = chat_api._chat_service
+        assert service is not None
+
+        class _AdapterWithNoFinalStream:
+            last_usage = {"prompt_tokens": 4, "completion_tokens": 2, "total_tokens": 6}
+
+            async def chat(self, *args, **kwargs):
+                _ = (args, kwargs)
+                return SimpleNamespace(content="", tool_calls=[], usage={}, metadata={})
+
+            async def stream_chat(self, *args, **kwargs):
+                _ = (args, kwargs)
+                if False:
+                    yield None
+
+        class _FakeToolRunner:
+            async def run(self, **kwargs):
+                messages = kwargs["messages"]
+                messages.extend(
+                    [
+                        {
+                            "role": "assistant",
+                            "content": "",
+                            "tool_calls": [
+                                {
+                                    "id": "call_reasoning",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "demo",
+                                        "arguments": '{"path":"README.md"}',
+                                    },
+                                }
+                            ],
+                        },
+                        {
+                            "role": "tool",
+                            "content": '{"ok":true}',
+                            "tool_call_id": "call_reasoning",
+                            "name": "demo",
+                        },
+                    ]
+                )
+                return (
+                    SimpleNamespace(
+                        content="",
+                        tool_calls=[],
+                        usage={"prompt_tokens": 8, "completion_tokens": 5, "total_tokens": 13},
+                        metadata={"reasoning_content": "final reasoning only"},
+                    ),
+                    [
+                        {
+                            "tool_call_id": "call_reasoning",
+                            "tool_name": "demo",
+                            "parallel_group_id": "round_1",
+                            "round_index": 1,
+                            "duration_ms": 123.0,
+                            "args": {"path": "README.md"},
+                            "result": {"raw": {"ok": True}},
+                        }
+                    ],
+                )
+
+        adapter = _AdapterWithNoFinalStream()
+        monkeypatch.setattr(service, "_default_adapter", adapter)
+        monkeypatch.setattr(service, "_get_tool_runner", lambda: _FakeToolRunner())
+        monkeypatch.setattr(
+            chat_service_module.ToolBridge,
+            "collect_tool_schemas",
+            lambda self, skill_filter, include_core: [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "demo",
+                        "description": "Demo",
+                        "parameters": {},
+                    },
+                }
+            ],
+        )
+        monkeypatch.setattr(
+            chat_service_module.ToolBridge,
+            "collect_skills",
+            lambda self, skill_filter, include_core: [SimpleNamespace(name="demo")],
+        )
+
+        resp = client.post(
+            f"/api/chat/conversations/{conv_id}/messages",
+            json={"content": "reason please", "enable_skills": ["demo"]},
+        )
+        assert resp.status_code == 200
+
+        conv = store.get(conv_id)
+        assert conv is not None
+        assert len(conv.messages) == 4
+
+        final_assistant = conv.messages[-1]
+        assert final_assistant.role.value == "assistant"
+        assert final_assistant.content == ""
+        assert final_assistant.reasoning_content == "final reasoning only"
+        assert final_assistant.metadata.get("usage", {}).get("total_tokens") == 13
+
+    def test_send_orphan_ignored(self, app_and_client, monkeypatch):
+        _, client, store = app_and_client
+        create_resp = client.post(
+            "/api/chat/conversations", json={"title": "Historical Orphan Tool"}
+        )
+        conv_id = create_resp.json()["conversation_id"]
+
+        conversation = store.get(conv_id)
+        assert conversation is not None
+        conversation.messages.extend(
+            [
+                chat_service_module.Message(
+                    role=chat_service_module.MessageRole.USER, content="older"
+                ),
+                chat_service_module.Message(
+                    role=chat_service_module.MessageRole.TOOL,
+                    content='{"legacy":true}',
+                    name="legacy_tool",
+                ),
+            ]
+        )
+        store.update(conversation)
+
+        from houyi_studio.server.chat import chat_api
+
+        service = chat_api._chat_service
+        assert service is not None
+
+        class _AdapterWithFinalText:
+            last_usage = {"prompt_tokens": 6, "completion_tokens": 4, "total_tokens": 10}
+            last_finish_reason = "stop"
+
+            async def stream_chat(self, *args, **kwargs):
+                _ = (args, kwargs)
+                yield StreamChunk(content_delta="Recovered answer")
+
+        monkeypatch.setattr(service, "_default_adapter", _AdapterWithFinalText())
+
+        resp = client.post(
+            f"/api/chat/conversations/{conv_id}/messages",
+            json={"content": "continue"},
+        )
+        assert resp.status_code == 200
+
+        events = _parse_sse_response(resp.text)
+        deltas = [e for e in events if e["event"] == "message.delta"]
+        assert "".join(e["data"].get("content", "") for e in deltas) == "Recovered answer"
+
+        updated = store.get(conv_id)
+        assert updated is not None
+        assert updated.messages[-1].content == "Recovered answer"
+
+    def test_send_stream_error(self, app_and_client, monkeypatch):
+        _, client, store = app_and_client
+        create_resp = client.post("/api/chat/conversations", json={"title": "Stream Error Visible"})
+        conv_id = create_resp.json()["conversation_id"]
+
+        from houyi_studio.server.chat import chat_api
+
+        service = chat_api._chat_service
+        assert service is not None
+
+        class _AdapterWithError:
+            last_usage = None
+            last_finish_reason = None
+
+            async def stream_chat(self, *args, **kwargs):
+                _ = (args, kwargs)
+                raise RuntimeError("429 RESOURCE_EXHAUSTED")
+                yield
+
+        monkeypatch.setattr(service, "_default_adapter", _AdapterWithError())
+
+        resp = client.post(
+            f"/api/chat/conversations/{conv_id}/messages",
+            json={"content": "hello"},
+        )
+        assert resp.status_code == 200
+
+        events = _parse_sse_response(resp.text)
+        deltas = [e for e in events if e["event"] == "message.delta"]
+        assert any("temporarily rate limited" in e["data"].get("content", "") for e in deltas)
+        assert any(e["event"] == "message.error" for e in events)
+
+        conv = store.get(conv_id)
+        assert conv is not None
+        assert "temporarily rate limited" in conv.messages[-1].content
+        assert conv.messages[-1].metadata["finish_reason"] == "error"
+
+    def test_send_empty_stream(self, app_and_client, monkeypatch):
+        _, client, store = app_and_client
+        create_resp = client.post("/api/chat/conversations", json={"title": "Empty Stream Visible"})
+        conv_id = create_resp.json()["conversation_id"]
+
+        from houyi_studio.server.chat import chat_api
+
+        service = chat_api._chat_service
+        assert service is not None
+
+        class _AdapterWithEmptyStream:
+            last_usage = {"prompt_tokens": 2, "completion_tokens": 0, "total_tokens": 2}
+            last_finish_reason = "stop"
+
+            async def stream_chat(self, *args, **kwargs):
+                _ = (args, kwargs)
+                if False:
+                    yield None
+
+        monkeypatch.setattr(service, "_default_adapter", _AdapterWithEmptyStream())
+
+        resp = client.post(
+            f"/api/chat/conversations/{conv_id}/messages",
+            json={"content": "hello"},
+        )
+        assert resp.status_code == 200
+
+        events = _parse_sse_response(resp.text)
+        deltas = [e for e in events if e["event"] == "message.delta"]
+        assert any("empty final response" in e["data"].get("content", "") for e in deltas)
+
+        conv = store.get(conv_id)
+        assert conv is not None
+        assert "empty final response" in conv.messages[-1].content
+        assert conv.messages[-1].metadata["finish_reason"] == "stop"
+
+    def test_send_reasoning_persists(self, app_and_client, monkeypatch):
+        _, client, store = app_and_client
+        create_resp = client.post(
+            "/api/chat/conversations", json={"title": "Reasoning Only Stream"}
+        )
+        conv_id = create_resp.json()["conversation_id"]
+
+        from houyi_studio.server.chat import chat_api
+
+        service = chat_api._chat_service
+        assert service is not None
+
+        class _AdapterWithReasoningOnlyStream:
+            last_usage = {"prompt_tokens": 4, "completion_tokens": 3, "total_tokens": 7}
+            last_finish_reason = "stop"
+
+            async def stream_chat(self, *args, **kwargs):
+                _ = (args, kwargs)
+                yield StreamChunk(reasoning_delta="thinking step 1")
+                yield StreamChunk(reasoning_delta=" + step 2")
+
+        monkeypatch.setattr(service, "_default_adapter", _AdapterWithReasoningOnlyStream())
+
+        resp = client.post(
+            f"/api/chat/conversations/{conv_id}/messages",
+            json={"content": "hello"},
+        )
+        assert resp.status_code == 200
+
+        events = _parse_sse_response(resp.text)
+        deltas = [e for e in events if e["event"] == "message.delta"]
+        assert "".join(e["data"].get("content", "") for e in deltas) == ""
+        assert (
+            "".join(e["data"].get("reasoning_content", "") for e in deltas)
+            == "thinking step 1 + step 2"
+        )
+        assert not any("empty final response" in e["data"].get("content", "") for e in deltas)
+
+        conv = store.get(conv_id)
+        assert conv is not None
+        assert conv.messages[-1].content == ""
+        assert conv.messages[-1].reasoning_content == "thinking step 1 + step 2"
+        assert conv.messages[-1].metadata["finish_reason"] == "stop"
+
+    def test_send_message_tooling(self, app_and_client):
         _, client, _ = app_and_client
         create_resp = client.post("/api/chat/conversations", json={})
         conv_id = create_resp.json()["conversation_id"]
@@ -646,7 +1095,67 @@ class TestSendMessage:
         )
         assert resp.status_code == 200
 
-    def test_send_message_trace_id_is_queryable(self, app_and_client):
+    def test_send_round_limit(self, app_and_client, monkeypatch):
+        _, client, _ = app_and_client
+        create_resp = client.post("/api/chat/conversations", json={"title": "Tool Iteration Limit"})
+        conv_id = create_resp.json()["conversation_id"]
+
+        from houyi_studio.server.chat import chat_api
+
+        service = chat_api._chat_service
+        assert service is not None
+
+        class _CapturedToolRunner:
+            def __init__(self):
+                self.max_rounds = None
+
+            async def run(self, **kwargs):
+                self.max_rounds = kwargs.get("max_rounds")
+                return (
+                    SimpleNamespace(
+                        content="Done",
+                        tool_calls=[],
+                        usage={"prompt_tokens": 5, "completion_tokens": 4, "total_tokens": 9},
+                        metadata={},
+                    ),
+                    [],
+                )
+
+        runner = _CapturedToolRunner()
+        monkeypatch.setattr(service, "_get_tool_runner", lambda: runner)
+        monkeypatch.setattr(
+            chat_service_module.ToolBridge,
+            "collect_tool_schemas",
+            lambda self, skill_filter, include_core: [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "web_search",
+                        "description": "Web search",
+                        "parameters": {},
+                    },
+                }
+            ],
+        )
+        monkeypatch.setattr(
+            chat_service_module.ToolBridge,
+            "collect_skills",
+            lambda self, skill_filter, include_core: [SimpleNamespace(name="web_search")],
+        )
+
+        resp = client.post(
+            f"/api/chat/conversations/{conv_id}/messages",
+            json={
+                "content": "Tooling fields",
+                "enable_skills": ["web_search"],
+                "max_tool_iterations": 3,
+            },
+        )
+
+        assert resp.status_code == 200
+        assert runner.max_rounds == 3
+
+    def test_send_message_trace(self, app_and_client):
         _, client, _ = app_and_client
         create_resp = client.post("/api/chat/conversations", json={"title": "Trace Query"})
         conv_id = create_resp.json()["conversation_id"]
@@ -682,6 +1191,58 @@ class TestSendMessage:
         assert "chat.persist" in stage_names
         assert "chat.stream.llm" in stage_names or "chat.stream.replay" in stage_names
 
+    def test_send_message_routes_google(self, app_and_client, monkeypatch):
+        _, client, store = app_and_client
+        create_resp = client.post("/api/chat/conversations", json={"title": "Google AI Route"})
+        conv_id = create_resp.json()["conversation_id"]
+
+        from houyi_studio.server.chat import chat_api
+
+        service = chat_api._chat_service
+        assert service is not None
+        service._adapter_cache.clear()
+        service._settings_store = SimpleNamespace(
+            get=lambda: GlobalSettings(
+                providers=[
+                    ProviderConfig(
+                        id="google-ai-custom",
+                        name="Google AI",
+                        base_url="https://generativelanguage.googleapis.com/v1beta/openai",
+                        models=["gemini-2.5-pro"],
+                        enabled=True,
+                    )
+                ]
+            )
+        )
+
+        class _VertexAdapter:
+            last_usage = {"prompt_tokens": 7, "completion_tokens": 3, "total_tokens": 10}
+            last_finish_reason = "stop"
+
+            async def stream_chat(self, *args, **kwargs):
+                _ = (args, kwargs)
+                yield StreamChunk(content_delta="Vertex path")
+
+        with patch.object(
+            chat_service_module,
+            "create_vertex_adapter",
+            return_value=_VertexAdapter(),
+        ) as mocked:
+            resp = client.post(
+                f"/api/chat/conversations/{conv_id}/messages",
+                json={"content": "route please", "model": "gemini-2.5-pro"},
+            )
+
+        assert resp.status_code == 200
+        mocked.assert_called_once()
+        events = _parse_sse_response(resp.text)
+        deltas = [e for e in events if e["event"] == "message.delta"]
+        assert "".join(e["data"].get("content", "") for e in deltas) == "Vertex path"
+
+        conv = store.get(conv_id)
+        assert conv is not None
+        assert conv.messages[-1].content == "Vertex path"
+
     def test_send_message_persists(self, app_and_client):
         _, client, store = app_and_client
         create_resp = client.post("/api/chat/conversations", json={})
@@ -704,7 +1265,7 @@ class TestSendMessage:
         assert len(conv.messages[1].content) > 0
         assert conv.messages[1].metadata["usage"]["total_tokens"] == 15
 
-    def test_send_message_not_found(self, app_and_client):
+    def test_send_message_missing(self, app_and_client):
         _, client, _ = app_and_client
         resp = client.post(
             "/api/chat/conversations/nonexistent/messages",
@@ -850,7 +1411,7 @@ def _make_backup_zip(data: dict) -> bytes:
 class TestTraceTreeBuilder:
     """Trace tree assembly scenarios for root/child span structures."""
 
-    def test_empty_spans_returns_none(self):
+    def test_empty_spans_none(self):
         from houyi_studio.server.chat.chat_api import _build_trace_tree
 
         assert _build_trace_tree([]) is None
@@ -874,7 +1435,7 @@ class TestTraceTreeBuilder:
         assert tree["children"] == []
         assert tree["duration_ms"] == pytest.approx(1000.0)
 
-    def test_orphan_span_becomes_root(self):
+    def test_orphan_span_root(self):
         """Span whose parent_id is not in the list should be treated as root."""
         from houyi_studio.server.chat.chat_api import _build_trace_tree
 
@@ -932,7 +1493,7 @@ class TestTraceTreeBuilder:
         assert len(tree["children"][0]["children"]) == 1
         assert tree["children"][0]["children"][0]["name"] == "c"
 
-    def test_children_sorted_by_start_time(self):
+    def test_children_sorted(self):
         from houyi_studio.server.chat.chat_api import _build_trace_tree
 
         root = SimpleNamespace(

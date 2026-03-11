@@ -624,12 +624,28 @@ class SiliconFlowAdapter(LLMAdapter):
         if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
             return None, 0, 0
 
-        delta = choices[0].get("delta")
-        if not isinstance(delta, dict):
-            return None, 0, 0
+        choice = choices[0]
+        finish_reason = choice.get("finish_reason")
+        if isinstance(finish_reason, str) and finish_reason:
+            self.last_finish_reason = finish_reason
 
-        content = delta.get("content")
-        reasoning = delta.get("reasoning_content")
+        delta = choice.get("delta")
+        delta_payload = delta if isinstance(delta, dict) else {}
+        message = choice.get("message")
+        message_payload = message if isinstance(message, dict) else {}
+
+        content = delta_payload.get("content")
+        if not isinstance(content, str) or not content:
+            fallback_content = message_payload.get("content")
+            if isinstance(fallback_content, str):
+                content = fallback_content
+
+        reasoning = delta_payload.get("reasoning_content")
+        if not isinstance(reasoning, str) or not reasoning:
+            fallback_reasoning = message_payload.get("reasoning_content")
+            if isinstance(fallback_reasoning, str):
+                reasoning = fallback_reasoning
+
         content_inc = int(isinstance(content, str) and bool(content))
         reasoning_inc = int(isinstance(reasoning, str) and bool(reasoning))
         if not content_inc and not reasoning_inc:

@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from houyi.skills.web_search import providers as providers_module
 from houyi.skills.web_search.errors import (
     DependencyMissingError,
     ProviderAuthError,
@@ -45,47 +46,48 @@ class TestHttpJsonRequest:
                 return json.dumps({"ok": True}).encode()
 
         monkeypatch.setattr(
-            "houyi.skills.web_search.providers.request.urlopen",
+            providers_module.request,
+            "urlopen",
             lambda *a, **k: _Resp(),
         )
         result = _http_json_request("https://example.com", label="test")
         assert result == {"ok": True}
 
-    def test_http_429_maps_to_rate_limit(self, monkeypatch) -> None:
+    def test_429_maps_limit(self, monkeypatch) -> None:
         from urllib.error import HTTPError
 
         def _urlopen(*a, **k):
             raise HTTPError("", 429, "Rate Limited", {}, None)
 
-        monkeypatch.setattr("houyi.skills.web_search.providers.request.urlopen", _urlopen)
+        monkeypatch.setattr(providers_module.request, "urlopen", _urlopen)
         with pytest.raises(ProviderRateLimitError):
             _http_json_request("https://example.com", label="test")
 
-    def test_http_403_maps_to_auth_error(self, monkeypatch) -> None:
+    def test_403_maps_auth(self, monkeypatch) -> None:
         from urllib.error import HTTPError
 
         def _urlopen(*a, **k):
             raise HTTPError("", 403, "Forbidden", {}, None)
 
-        monkeypatch.setattr("houyi.skills.web_search.providers.request.urlopen", _urlopen)
+        monkeypatch.setattr(providers_module.request, "urlopen", _urlopen)
         with pytest.raises(ProviderAuthError):
             _http_json_request("https://example.com", label="test")
 
-    def test_http_400_maps_to_invalid_response(self, monkeypatch) -> None:
+    def test_400_maps_invalid(self, monkeypatch) -> None:
         from urllib.error import HTTPError
 
         def _urlopen(*a, **k):
             raise HTTPError("", 400, "Bad Request", {}, None)
 
-        monkeypatch.setattr("houyi.skills.web_search.providers.request.urlopen", _urlopen)
+        monkeypatch.setattr(providers_module.request, "urlopen", _urlopen)
         with pytest.raises(ProviderInvalidResponse):
             _http_json_request("https://example.com", label="test")
 
-    def test_timeout_maps_to_provider_timeout(self, monkeypatch) -> None:
+    def test_timeout_maps_error(self, monkeypatch) -> None:
         def _urlopen(*a, **k):
             raise TimeoutError("timed out")
 
-        monkeypatch.setattr("houyi.skills.web_search.providers.request.urlopen", _urlopen)
+        monkeypatch.setattr(providers_module.request, "urlopen", _urlopen)
         with pytest.raises(ProviderTimeoutError):
             _http_json_request("https://example.com", label="test")
 
@@ -109,7 +111,8 @@ class TestHttpJsonRequest:
                 return _Resp()
 
         monkeypatch.setattr(
-            "houyi.skills.web_search.providers.request.build_opener",
+            providers_module.request,
+            "build_opener",
             lambda *a: _FakeOpener(),
         )
         result = _http_json_request(
@@ -126,19 +129,19 @@ class TestHttpJsonRequest:
 # ---------------------------------------------------------------------------
 
 
-def test_tavily_provider_requires_key() -> None:
+def test_tavily_requires_key() -> None:
     with pytest.raises(ProviderAuthError):
         TavilyWebSearchProvider(api_key=None)
 
 
-def test_tavily_provider_missing_dependency(monkeypatch) -> None:
+def test_tavily_missing_dep(monkeypatch) -> None:
     monkeypatch.setitem(sys.modules, "tavily", None)
     with pytest.raises(DependencyMissingError):
         TavilyWebSearchProvider(api_key="test")
 
 
 @pytest.mark.asyncio
-async def test_tavily_provider_search_normalizes(monkeypatch) -> None:
+async def test_tavily_normalizes(monkeypatch) -> None:
     class _Client:
         def __init__(self, *args, **kwargs) -> None:
             self.args = args
@@ -159,7 +162,7 @@ async def test_tavily_provider_search_normalizes(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_tavily_provider_invalid_response(monkeypatch) -> None:
+async def test_tavily_invalid(monkeypatch) -> None:
     class _Client:
         def __init__(self, *args, **kwargs) -> None:
             pass
@@ -183,13 +186,13 @@ async def test_tavily_provider_invalid_response(monkeypatch) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_serper_provider_requires_key() -> None:
+def test_serper_requires_key() -> None:
     with pytest.raises(ProviderAuthError):
         SerperWebSearchProvider(api_key=None)
 
 
 @pytest.mark.asyncio
-async def test_serper_provider_search_normalizes(monkeypatch) -> None:
+async def test_serper_normalizes(monkeypatch) -> None:
     class _Response:
         def __enter__(self):
             return self
@@ -211,9 +214,7 @@ async def test_serper_provider_search_normalizes(monkeypatch) -> None:
                 }
             ).encode("utf-8")
 
-    monkeypatch.setattr(
-        "houyi.skills.web_search.providers.request.urlopen", lambda *_args, **_kwargs: _Response()
-    )
+    monkeypatch.setattr(providers_module.request, "urlopen", lambda *_args, **_kwargs: _Response())
 
     provider = SerperWebSearchProvider(api_key="test")
     results = await provider.search("query", max_results=1)
@@ -223,7 +224,7 @@ async def test_serper_provider_search_normalizes(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_serper_provider_invalid_response(monkeypatch) -> None:
+async def test_serper_invalid(monkeypatch) -> None:
     class _Response:
         def __enter__(self):
             return self
@@ -234,9 +235,7 @@ async def test_serper_provider_invalid_response(monkeypatch) -> None:
         def read(self):
             return json.dumps({"unexpected": []}).encode("utf-8")
 
-    monkeypatch.setattr(
-        "houyi.skills.web_search.providers.request.urlopen", lambda *_args, **_kwargs: _Response()
-    )
+    monkeypatch.setattr(providers_module.request, "urlopen", lambda *_args, **_kwargs: _Response())
 
     provider = SerperWebSearchProvider(api_key="test")
     with pytest.raises(ProviderInvalidResponse):
@@ -248,13 +247,13 @@ async def test_serper_provider_invalid_response(monkeypatch) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_searxng_provider_requires_base_url() -> None:
+def test_searxng_requires_url() -> None:
     with pytest.raises(ProviderAuthError):
         SearxNGWebSearchProvider(base_url=None)
 
 
 @pytest.mark.asyncio
-async def test_searxng_provider_search_normalizes(monkeypatch) -> None:
+async def test_searxng_normalizes(monkeypatch) -> None:
     class _Response:
         def __enter__(self):
             return self
@@ -276,9 +275,7 @@ async def test_searxng_provider_search_normalizes(monkeypatch) -> None:
                 }
             ).encode("utf-8")
 
-    monkeypatch.setattr(
-        "houyi.skills.web_search.providers.request.urlopen", lambda *_args, **_kwargs: _Response()
-    )
+    monkeypatch.setattr(providers_module.request, "urlopen", lambda *_args, **_kwargs: _Response())
 
     provider = SearxNGWebSearchProvider(base_url="https://searx.local")
     results = await provider.search("query", max_results=1)
@@ -289,7 +286,7 @@ async def test_searxng_provider_search_normalizes(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_searxng_provider_invalid_response(monkeypatch) -> None:
+async def test_searxng_invalid(monkeypatch) -> None:
     class _Response:
         def __enter__(self):
             return self
@@ -300,9 +297,7 @@ async def test_searxng_provider_invalid_response(monkeypatch) -> None:
         def read(self):
             return json.dumps({"unexpected": []}).encode("utf-8")
 
-    monkeypatch.setattr(
-        "houyi.skills.web_search.providers.request.urlopen", lambda *_args, **_kwargs: _Response()
-    )
+    monkeypatch.setattr(providers_module.request, "urlopen", lambda *_args, **_kwargs: _Response())
 
     provider = SearxNGWebSearchProvider(base_url="https://searx.local")
     with pytest.raises(ProviderInvalidResponse):
@@ -315,7 +310,7 @@ async def test_searxng_provider_invalid_response(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_ddg_provider_missing_dependency() -> None:
+async def test_ddg_missing_dep(monkeypatch) -> None:
     provider = DuckDuckGoWebSearchProvider()
 
     real_import = __import__
@@ -331,7 +326,7 @@ async def test_ddg_provider_missing_dependency() -> None:
 
 
 @pytest.mark.asyncio
-async def test_ddg_provider_search_normalizes() -> None:
+async def test_ddg_normalizes(monkeypatch) -> None:
     ddgs_mod = types.SimpleNamespace(DDGS=object)
     with (
         patch.dict(sys.modules, {"ddgs": ddgs_mod}),
@@ -357,7 +352,7 @@ async def test_ddg_provider_search_normalizes() -> None:
 
 
 @pytest.mark.asyncio
-async def test_ddg_provider_empty_results() -> None:
+async def test_ddg_empty_results(monkeypatch) -> None:
     ddgs_mod = types.SimpleNamespace(DDGS=object)
     with (
         patch.dict(sys.modules, {"ddgs": ddgs_mod}),
@@ -370,7 +365,7 @@ async def test_ddg_provider_empty_results() -> None:
 
 
 @pytest.mark.asyncio
-async def test_ddg_provider_rate_limit_error() -> None:
+async def test_ddg_rate_limit(monkeypatch) -> None:
     ddgs_mod = types.SimpleNamespace(DDGS=object)
 
     class RatelimitException(Exception):
@@ -390,7 +385,7 @@ async def test_ddg_provider_rate_limit_error() -> None:
 
 
 @pytest.mark.asyncio
-async def test_ddg_provider_generic_error_maps_to_timeout() -> None:
+async def test_ddg_maps_timeout(monkeypatch) -> None:
     ddgs_mod = types.SimpleNamespace(DDGS=object)
     with (
         patch.dict(sys.modules, {"ddgs": ddgs_mod}),
@@ -406,7 +401,7 @@ async def test_ddg_provider_generic_error_maps_to_timeout() -> None:
 
 
 @pytest.mark.asyncio
-async def test_ddg_provider_passes_proxy() -> None:
+async def test_ddg_passes_proxy(monkeypatch) -> None:
     class _DDGS:
         def __init__(self, *, proxy: str | None, timeout: int):
             self.proxy = proxy
@@ -428,13 +423,13 @@ async def test_ddg_provider_passes_proxy() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_bocha_provider_requires_key() -> None:
+def test_bocha_requires_key() -> None:
     with pytest.raises(ProviderAuthError):
         BochaWebSearchProvider(api_key=None)
 
 
 @pytest.mark.asyncio
-async def test_bocha_provider_search_normalizes(monkeypatch) -> None:
+async def test_bocha_normalizes(monkeypatch) -> None:
     response_data = {
         "code": 200,
         "data": {
@@ -462,9 +457,7 @@ async def test_bocha_provider_search_normalizes(monkeypatch) -> None:
         def read(self):
             return json.dumps(response_data).encode("utf-8")
 
-    monkeypatch.setattr(
-        "houyi.skills.web_search.providers.request.urlopen", lambda *a, **k: _Response()
-    )
+    monkeypatch.setattr(providers_module.request, "urlopen", lambda *a, **k: _Response())
 
     provider = BochaWebSearchProvider(api_key="test-key")
     results = await provider.search("测试查询", max_results=5)
@@ -479,7 +472,7 @@ async def test_bocha_provider_search_normalizes(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_bocha_provider_invalid_response(monkeypatch) -> None:
+async def test_bocha_invalid(monkeypatch) -> None:
     class _Response:
         def __enter__(self):
             return self
@@ -490,9 +483,7 @@ async def test_bocha_provider_invalid_response(monkeypatch) -> None:
         def read(self):
             return json.dumps({"code": 200, "data": {"unexpected": True}}).encode("utf-8")
 
-    monkeypatch.setattr(
-        "houyi.skills.web_search.providers.request.urlopen", lambda *a, **k: _Response()
-    )
+    monkeypatch.setattr(providers_module.request, "urlopen", lambda *a, **k: _Response())
 
     provider = BochaWebSearchProvider(api_key="test-key")
     results = await provider.search("q", max_results=1)
@@ -500,7 +491,7 @@ async def test_bocha_provider_invalid_response(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_bocha_provider_proxy_passed_to_http(monkeypatch) -> None:
+async def test_bocha_passes_proxy(monkeypatch) -> None:
     """Proxy URL should be forwarded to the opener."""
     opened_with_proxy = {"called": False}
 
@@ -526,7 +517,8 @@ async def test_bocha_provider_proxy_passed_to_http(monkeypatch) -> None:
             return _Resp()
 
     monkeypatch.setattr(
-        "houyi.skills.web_search.providers.request.build_opener",
+        providers_module.request,
+        "build_opener",
         lambda *a: _FakeOpener(),
     )
 

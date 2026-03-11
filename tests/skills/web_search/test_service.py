@@ -16,9 +16,11 @@ from houyi.infrastructure.config.env_config import (
     ENV_WEB_SEARCH_PROVIDER,
     ENV_WEB_SEARCH_PROXY_ENABLED,
 )
+from houyi.skills.web_search import service as web_search_service_module
 from houyi.skills.web_search.errors import (
     ContentFetchError,
     DependencyMissingError,
+    ProviderAuthError,
     ProviderInvalidResponse,
     ProviderRateLimitError,
     ProviderTimeoutError,
@@ -44,14 +46,14 @@ class _Provider:
         return self._results
 
 
-def test_web_search_service_from_env_invalid_provider() -> None:
+def test_from_env_invalid():
     """from_env should reject unsupported providers."""
 
     with pytest.raises(ValueError):
         WebSearchService.from_env(provider="unknown")
 
 
-def test_web_search_service_from_env_override_env(monkeypatch) -> None:
+def test_from_env_overrides(monkeypatch):
     """Explicit provider should override WEB_SEARCH_PROVIDER env."""
 
     monkeypatch.setenv(ENV_WEB_SEARCH_PROVIDER, "serper")
@@ -59,7 +61,7 @@ def test_web_search_service_from_env_override_env(monkeypatch) -> None:
     assert service.provider.name == "ddg"
 
 
-def test_web_search_service_skip_fallback_without_keys(monkeypatch) -> None:
+def test_skips_fallback_keys(monkeypatch):
     """Fallback providers requiring keys should be skipped when missing."""
 
     monkeypatch.delenv(ENV_SERPER_API_KEY, raising=False)
@@ -70,7 +72,7 @@ def test_web_search_service_skip_fallback_without_keys(monkeypatch) -> None:
     assert [provider.name for provider in providers] == ["ddg"]
 
 
-def test_web_search_service_from_env_global_cache_enabled(monkeypatch) -> None:
+def test_from_env_cache(monkeypatch):
     """from_env should reuse a global cache when WEB_SEARCH_CACHE_TTL is set."""
 
     _reset_global_cache_for_tests()
@@ -82,7 +84,7 @@ def test_web_search_service_from_env_global_cache_enabled(monkeypatch) -> None:
     assert service_a.cache is service_b.cache
 
 
-def test_web_search_service_from_env_global_cache_disabled(monkeypatch) -> None:
+def test_env_cache_off(monkeypatch):
     """WEB_SEARCH_CACHE_ENABLED=false should disable cache usage entirely."""
 
     _reset_global_cache_for_tests()
@@ -93,7 +95,7 @@ def test_web_search_service_from_env_global_cache_disabled(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_web_search_service_search_success() -> None:
+async def test_search_succeeds():
     """search should normalize results and return metadata."""
 
     provider = _Provider(results=[{"title": "t", "url": "u"}])
@@ -107,7 +109,7 @@ async def test_web_search_service_search_success() -> None:
 
 
 @pytest.mark.asyncio
-async def test_web_search_service_search_error() -> None:
+async def test_search_fails():
     """search should capture provider errors in metadata."""
 
     provider = _Provider(error=ProviderInvalidResponse("boom"))
@@ -118,7 +120,7 @@ async def test_web_search_service_search_error() -> None:
 
 
 @pytest.mark.asyncio
-async def test_web_search_service_raw_payload() -> None:
+async def test_returns_raw_payload():
     """search should include provider raw payload when available."""
 
     class _RawProvider(_Provider):
@@ -133,7 +135,7 @@ async def test_web_search_service_raw_payload() -> None:
 
 
 @pytest.mark.asyncio
-async def test_web_search_service_fallback_provider() -> None:
+async def test_uses_fallback_provider():
     """Fallback provider should be used when primary fails."""
 
     class _FailingProvider:
@@ -154,7 +156,52 @@ async def test_web_search_service_fallback_provider() -> None:
 
 
 @pytest.mark.asyncio
-async def test_web_search_service_include_content(monkeypatch) -> None:
+async def test_auth_skips_retry():
+    """ProviderAuthError should not be retried."""
+
+    attempts = {"count": 0}
+
+    class _AuthProvider:
+        name = "serper"
+
+        async def search(self, query: str, *, max_results: int) -> list[WebSearchResult]:
+            attempts["count"] += 1
+            raise ProviderAuthError("bad key")
+
+    policy = WebSearchRetryPolicy(max_retries=3, base_delay=0.0, max_delay=0.0)
+    service = WebSearchService(provider=_AuthProvider(), retry_policy=policy)
+    response = await service.search("q", max_results=1)
+
+    assert response.results == []
+    assert attempts["count"] == 1
+    assert response.metadata.error_count == 1
+    assert response.metadata.errors[0]["type"] == "ProviderAuthError"
+
+
+@pytest.mark.asyncio
+async def test_auth_uses_fallback():
+    """Current runtime still allows fallback after a non-retryable auth error."""
+
+    class _AuthProvider:
+        name = "serper"
+
+        async def search(self, query: str, *, max_results: int) -> list[WebSearchResult]:
+            raise ProviderAuthError("bad key")
+
+    success_provider = _Provider(results=[{"title": "t", "url": "u"}])
+    service = WebSearchService(
+        provider=_AuthProvider(),
+        fallback_providers=[success_provider],
+    )
+    response = await service.search("q", max_results=1)
+
+    assert response.results[0].title == "t"
+    assert response.metadata.provider == "tavily"
+    assert response.metadata.errors[0]["type"] == "ProviderAuthError"
+
+
+@pytest.mark.asyncio
+async def test_includes_content(monkeypatch):
     """include_content should populate content when fetcher succeeds."""
 
     provider = _Provider(results=[{"title": "t", "url": "u"}])
@@ -166,9 +213,9 @@ async def test_web_search_service_include_content(monkeypatch) -> None:
         async def fetch(self, urls):
             return {}
 
-    monkeypatch.setattr("houyi.skills.web_search.service.JinaContentFetcher.fetch", _fetch)
+    monkeypatch.setattr(web_search_service_module.JinaContentFetcher, "fetch", _fetch)
     monkeypatch.setattr(
-        "houyi.skills.web_search.service.ReadabilityContentFetcher", lambda: _Readability()
+        web_search_service_module, "ReadabilityContentFetcher", lambda: _Readability()
     )
     service = WebSearchService(provider=provider)
     response = await service.search("q", max_results=1, include_content=True)
@@ -177,7 +224,7 @@ async def test_web_search_service_include_content(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_web_search_service_include_content_error(monkeypatch) -> None:
+async def test_include_content_fails(monkeypatch):
     """include_content should record errors when fetchers fail."""
 
     provider = _Provider(results=[{"title": "t", "url": "u"}])
@@ -189,9 +236,9 @@ async def test_web_search_service_include_content_error(monkeypatch) -> None:
         async def fetch(self, urls):
             raise ContentFetchError("fetch-failed")
 
-    monkeypatch.setattr("houyi.skills.web_search.service.JinaContentFetcher.fetch", _fetch)
+    monkeypatch.setattr(web_search_service_module.JinaContentFetcher, "fetch", _fetch)
     monkeypatch.setattr(
-        "houyi.skills.web_search.service.ReadabilityContentFetcher", lambda: _Readability()
+        web_search_service_module, "ReadabilityContentFetcher", lambda: _Readability()
     )
     service = WebSearchService(provider=provider)
     response = await service.search("q", max_results=1, include_content=True)
@@ -200,7 +247,7 @@ async def test_web_search_service_include_content_error(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_web_search_service_include_content_dependency_missing(monkeypatch) -> None:
+async def test_include_content_dep(monkeypatch):
     """include_content should record DependencyMissingError with provider label when readability deps are missing."""
 
     provider = _Provider(results=[{"title": "t", "url": "u"}])
@@ -213,9 +260,9 @@ async def test_web_search_service_include_content_dependency_missing(monkeypatch
             "Missing optional dependency 'readability-lxml' or 'beautifulsoup4'. Install: pip install 'houyi[websearch-readability]'"
         )
 
-    monkeypatch.setattr("houyi.skills.web_search.service.JinaContentFetcher.fetch", _fetch)
+    monkeypatch.setattr(web_search_service_module.JinaContentFetcher, "fetch", _fetch)
     monkeypatch.setattr(
-        "houyi.skills.web_search.service.ReadabilityContentFetcher", _missing_readability
+        web_search_service_module, "ReadabilityContentFetcher", _missing_readability
     )
     service = WebSearchService(provider=provider)
     response = await service.search("q", max_results=1, include_content=True)
@@ -226,7 +273,7 @@ async def test_web_search_service_include_content_dependency_missing(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_web_search_service_cache_hit() -> None:
+async def test_cache_hits():
     """Cache should return cached responses and mark metadata.cached."""
 
     provider = _Provider(results=[{"title": "t", "url": "u"}])
@@ -241,7 +288,7 @@ async def test_web_search_service_cache_hit() -> None:
 
 
 @pytest.mark.asyncio
-async def test_web_search_service_cache_key_includes_provider() -> None:
+async def test_cache_key_scopes():
     """Switching provider should NOT hit the other provider's cache."""
 
     class _ProviderA(_Provider):
@@ -267,7 +314,7 @@ async def test_web_search_service_cache_key_includes_provider() -> None:
 
 
 @pytest.mark.asyncio
-async def test_web_search_service_use_cache_false_disables_cache() -> None:
+async def test_use_cache_off(monkeypatch):
     """Per-call cache gating should skip cache reads/writes when use_cache is False."""
 
     provider = _Provider(results=[{"title": "t", "url": "u"}])
@@ -284,7 +331,7 @@ async def test_web_search_service_use_cache_false_disables_cache() -> None:
 
 
 @pytest.mark.asyncio
-async def test_web_search_service_cache_hit_preserves_extraction_metadata(monkeypatch) -> None:
+async def test_cache_hit_keeps(monkeypatch):
     provider = _Provider(results=[{"title": "t", "url": "u"}])
 
     async def _fetch(self, urls):
@@ -294,9 +341,9 @@ async def test_web_search_service_cache_hit_preserves_extraction_metadata(monkey
         async def fetch(self, urls):
             return {}
 
-    monkeypatch.setattr("houyi.skills.web_search.service.JinaContentFetcher.fetch", _fetch)
+    monkeypatch.setattr(web_search_service_module.JinaContentFetcher, "fetch", _fetch)
     monkeypatch.setattr(
-        "houyi.skills.web_search.service.ReadabilityContentFetcher", lambda: _Readability()
+        web_search_service_module, "ReadabilityContentFetcher", lambda: _Readability()
     )
 
     cache = LRUCache(max_size=10, default_ttl=60)
@@ -313,7 +360,7 @@ async def test_web_search_service_cache_hit_preserves_extraction_metadata(monkey
 
 
 @pytest.mark.asyncio
-async def test_web_search_service_empty_results_not_cached() -> None:
+async def test_empty_results_skip(monkeypatch):
     """Empty provider results should not be cached (so transient empties don't persist)."""
 
     calls = {"count": 0}
@@ -343,7 +390,7 @@ async def test_web_search_service_empty_results_not_cached() -> None:
 
 
 @pytest.mark.asyncio
-async def test_web_search_service_retries(monkeypatch) -> None:
+async def test_retries(monkeypatch):
     """Retry policy should retry for transient errors."""
 
     attempts = {"count": 0}
@@ -365,7 +412,7 @@ async def test_web_search_service_retries(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_web_search_service_retry_exhausted() -> None:
+async def test_retry_exhausts():
     """Retry policy should surface error after exhaustion."""
 
     class _RetryProvider:
@@ -382,7 +429,7 @@ async def test_web_search_service_retry_exhausted() -> None:
 
 
 @pytest.mark.asyncio
-async def test_query_provider_creates_internal_spans_when_trace_active() -> None:
+async def test_query_creates_spans():
     """_query_provider should create INTERNAL sub-spans when TraceContext has a parent."""
     from houyi.infrastructure.observability import Span, SpanType, TraceContext
 
@@ -406,7 +453,7 @@ async def test_query_provider_creates_internal_spans_when_trace_active() -> None
 
 
 @pytest.mark.asyncio
-async def test_query_provider_no_spans_without_trace_context() -> None:
+async def test_query_skips_spans():
     """No spans should be created when TraceContext has no active parent."""
     from houyi.infrastructure.observability import TraceContext
 
@@ -421,7 +468,7 @@ async def test_query_provider_no_spans_without_trace_context() -> None:
 
 
 @pytest.mark.asyncio
-async def test_query_provider_error_span_on_failure() -> None:
+async def test_query_error_span():
     """Provider failure should create an error span."""
     from houyi.infrastructure.observability import Span, SpanType, TraceContext
 
@@ -443,7 +490,7 @@ async def test_query_provider_error_span_on_failure() -> None:
 
 
 @pytest.mark.asyncio
-async def test_content_fetch_creates_sub_spans(monkeypatch) -> None:
+async def test_content_fetch_spans(monkeypatch):
     """include_content should create content.fetch and fetch.jina sub-spans."""
     from houyi.infrastructure.observability import Span, SpanType, TraceContext
 
@@ -455,7 +502,7 @@ async def test_content_fetch_creates_sub_spans(monkeypatch) -> None:
     async def _fetch(self, urls):
         return {"u": "content text"}
 
-    monkeypatch.setattr("houyi.skills.web_search.service.JinaContentFetcher.fetch", _fetch)
+    monkeypatch.setattr(web_search_service_module.JinaContentFetcher, "fetch", _fetch)
 
     try:
         service = WebSearchService(provider=provider)
@@ -478,7 +525,7 @@ async def test_content_fetch_creates_sub_spans(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_web_search_service_from_env_bocha_provider(monkeypatch) -> None:
+async def test_from_env_bocha(monkeypatch):
     """from_env should create a Bocha provider when BOCHA_API_KEY is set."""
 
     monkeypatch.delenv(ENV_SERPER_API_KEY, raising=False)
@@ -490,7 +537,7 @@ async def test_web_search_service_from_env_bocha_provider(monkeypatch) -> None:
     assert service.provider.name == "bocha"
 
 
-def test_web_search_service_from_env_proxy_disabled_by_default(monkeypatch) -> None:
+def test_env_proxy_off(monkeypatch):
     """Proxy should be disabled by default."""
 
     monkeypatch.delenv(ENV_WEB_SEARCH_PROXY_ENABLED, raising=False)
@@ -499,7 +546,7 @@ def test_web_search_service_from_env_proxy_disabled_by_default(monkeypatch) -> N
     assert getattr(service.provider, "proxy_url", None) is None
 
 
-def test_web_search_service_from_env_proxy_enabled(monkeypatch) -> None:
+def test_from_env_proxy(monkeypatch):
     """When WEB_SEARCH_PROXY_ENABLED=true, proxy should be detected and injected."""
 
     monkeypatch.setenv(ENV_WEB_SEARCH_PROXY_ENABLED, "true")

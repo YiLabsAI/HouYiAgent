@@ -255,3 +255,42 @@ class TestToolCallServiceExecute:
         assert isinstance(node_exec.error, str)
         assert "Tool-calling adapter init failed" in node_exec.error
         assert "ImportError" in node_exec.error
+
+    async def test_skips_real_adapter_without_key(
+        self,
+        monkeypatch,
+    ) -> None:
+        svc = self._make_service(registry=MagicMock())
+
+        skill = SimpleNamespace(name="demo", preprocessors=[])
+        svc._select_skills = lambda tool_names: [skill]
+        svc._tool_bridge = SimpleNamespace(
+            collect_tool_schemas=lambda skill_filter, include_core: [
+                {"type": "function", "function": {"name": "demo"}}
+            ]
+        )
+
+        monkeypatch.delenv("SILICONFLOW_API_KEY", raising=False)
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        monkeypatch.delenv("HOUYI_TOOLCALL_ADAPTER", raising=False)
+
+        execution = SimpleNamespace(metadata={})
+        node_exec = SimpleNamespace(outputs=None, error=None)
+
+        handled = await svc.execute_tool_calls(
+            session_id="s1",
+            execution=execution,
+            node_id="node_1",
+            node_exec=node_exec,
+            prompt="Say hello in one sentence",
+            system_prompt=None,
+            user_prompt="Say hello in one sentence",
+            model="deepseek-ai/DeepSeek-V3",
+            tool_names=["demo"],
+            tool_choice=None,
+            max_tool_calls=1,
+        )
+
+        assert handled is False
+        assert node_exec.error is None
+        assert node_exec.outputs is None

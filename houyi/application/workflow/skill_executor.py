@@ -33,6 +33,26 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
+def _summarize_retry_input(input_data: Any) -> str:
+    if hasattr(input_data, "model_dump"):
+        try:
+            dumped = input_data.model_dump()
+        except Exception:
+            dumped = None
+        if isinstance(dumped, dict):
+            command = dumped.get("command")
+            cwd = dumped.get("cwd")
+            parts: list[str] = []
+            if isinstance(command, str) and command.strip():
+                compact = " ".join(command.strip().split())
+                parts.append(f"command={compact[:160]}")
+            if isinstance(cwd, str) and cwd.strip():
+                parts.append(f"cwd={cwd}")
+            if parts:
+                return " (" + ", ".join(parts) + ")"
+    return ""
+
+
 class SkillExecutor:
     """Executor for skills with validation and error handling."""
 
@@ -69,10 +89,11 @@ class SkillExecutor:
             except Exception as e:
                 last_error = e
                 logger.warning(
-                    "[%s] attempt %d/%d failed: %s: %s",
+                    "[%s] attempt %d/%d failed%s: %s: %s",
                     skill.name,
                     attempt + 1,
                     self.max_retries,
+                    _summarize_retry_input(validated_input),
                     type(e).__name__,
                     e,
                 )

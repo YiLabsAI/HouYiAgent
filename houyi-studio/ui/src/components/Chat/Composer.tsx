@@ -18,6 +18,7 @@ interface ComposerProps {
     toolCallStrategy?: 'conservative' | 'balanced' | 'aggressive';
     enableWebSearch?: boolean;
     enableDeepResearch?: boolean;
+    maxTokens?: number;
     attachments?: File[];
   }) => void;
   onStop: () => void;
@@ -114,6 +115,8 @@ export const Composer: React.FC<ComposerProps> = ({
   const [enableReasoning, setEnableReasoning] = React.useState(false);
   const [enableWebSearch, setEnableWebSearch] = React.useState(false);
   const [enableDeepResearch, setEnableDeepResearch] = React.useState(false);
+  const [showAdvanced, setShowAdvanced] = React.useState(false);
+  const [maxTokensDraft, setMaxTokensDraft] = React.useState<string>('');
   const showToast = useConsoleStore((s) => s.showToast);
   const toolCallsEnabled = useConsoleStore((s) => s.runSettings.enable_tool_calls);
   const toolCallStrategy = useConsoleStore((s) => s.runSettings.tool_call_strategy);
@@ -166,12 +169,15 @@ export const Composer: React.FC<ComposerProps> = ({
   const handleSend = () => {
     const trimmed = text.trim();
     if (!trimmed || disabled || isStreaming) return;
+    const parsedMaxTokens = maxTokensDraft.trim() ? parseInt(maxTokensDraft.trim(), 10) : NaN;
+    const maxTokens = Number.isFinite(parsedMaxTokens) && parsedMaxTokens > 0 ? parsedMaxTokens : undefined;
     onSend(trimmed, {
       enableReasoning: enableReasoning || undefined,
       enableToolCalls: toolCallsEnabled,
       toolCallStrategy,
       enableWebSearch: enableWebSearch || undefined,
       enableDeepResearch: enableDeepResearch || undefined,
+      maxTokens,
       attachments: attachments.length > 0 ? attachments : undefined,
     });
     setText('');
@@ -333,7 +339,45 @@ export const Composer: React.FC<ComposerProps> = ({
             >
               <Search size={14} />
             </button>
+
+            <button
+              onClick={() => setShowAdvanced((v) => !v)}
+              className={`ml-1 px-2 py-0.5 rounded text-[11px] transition-colors ${
+                showAdvanced
+                  ? 'bg-gray-700 text-gray-200 hover:bg-gray-600'
+                  : 'bg-gray-900 text-gray-500 hover:bg-gray-800 hover:text-gray-300'
+              }`}
+              title={showAdvanced ? 'Options open' : 'Message options'}
+              type="button"
+              data-testid="composer-advanced-toggle"
+            >
+              Options
+            </button>
           </div>
+
+          {showAdvanced && (
+            <div className="flex items-center gap-2 px-3 py-2 border-t border-gray-800 text-[11px] text-gray-400">
+              <label className="flex items-center gap-2">
+                <span className="text-gray-500">Max tokens</span>
+                <input
+                  type="number"
+                  min={1}
+                  step={1}
+                  value={maxTokensDraft}
+                  onChange={(e) => setMaxTokensDraft(e.target.value)}
+                  placeholder="(default)"
+                  className="w-[110px] bg-gray-800 border border-gray-700 rounded px-2 py-1 text-[11px] text-gray-200 focus:outline-none focus:border-blue-500"
+                />
+              </label>
+              <button
+                type="button"
+                className="text-gray-500 hover:text-gray-300 underline"
+                onClick={() => setMaxTokensDraft('')}
+              >
+                reset
+              </button>
+            </div>
+          )}
 
           <button
             type="button"

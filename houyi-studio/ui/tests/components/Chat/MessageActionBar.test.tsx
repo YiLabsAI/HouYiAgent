@@ -7,6 +7,7 @@ import type { ChatMessage } from '@/types/chat';
 const mockDeleteMessage = vi.fn();
 const mockRegenerateMessage = vi.fn();
 const mockSendMessage = vi.fn();
+const mockToggleMessageBookmark = vi.fn();
 let mockIsStreaming = false;
 
 vi.mock('@/stores/useChatStore', () => ({
@@ -15,6 +16,7 @@ vi.mock('@/stores/useChatStore', () => ({
       deleteMessage: mockDeleteMessage,
       regenerateMessage: mockRegenerateMessage,
       sendMessage: mockSendMessage,
+      toggleMessageBookmark: mockToggleMessageBookmark,
       streaming: { isStreaming: mockIsStreaming },
     };
     return selector(state);
@@ -25,7 +27,6 @@ vi.mock('@/stores/useChatStore', () => ({
 Object.assign(navigator, {
   clipboard: { writeText: vi.fn().mockResolvedValue(undefined) },
 });
-
 const userMsg: ChatMessage = {
   message_id: 'u1',
   role: 'user',
@@ -75,14 +76,29 @@ describe('MessageActionBar', () => {
     expect(mockSendMessage).toHaveBeenCalledWith('Hello world');
   });
 
-  it('calls deleteMessage on double-click delete (confirmation)', () => {
+  it('calls deleteMessage after confirmation', async () => {
+    mockDeleteMessage.mockResolvedValue(undefined);
     render(<MessageActionBar message={userMsg} />);
-    // First click: enters confirmation state
-    fireEvent.click(screen.getByTitle('Delete'));
-    expect(mockDeleteMessage).not.toHaveBeenCalled();
-    // Second click: confirms deletion
-    fireEvent.click(screen.getByTitle('Click again to confirm delete'));
+    await act(async () => {
+      fireEvent.click(screen.getByTitle('Delete'));
+    });
+    expect(screen.getByText('Delete message')).toBeInTheDocument();
+    expect(screen.getByText('This message will be removed from the conversation.')).toBeInTheDocument();
+    await act(async () => {
+      fireEvent.click(screen.getByText('Delete'));
+    });
     expect(mockDeleteMessage).toHaveBeenCalledWith('u1');
+  });
+
+  it('does not delete when confirmation is canceled', async () => {
+    render(<MessageActionBar message={userMsg} />);
+    await act(async () => {
+      fireEvent.click(screen.getByTitle('Delete'));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByText('Cancel'));
+    });
+    expect(mockDeleteMessage).not.toHaveBeenCalled();
   });
 
   it('calls regenerateMessage on regenerate click', () => {

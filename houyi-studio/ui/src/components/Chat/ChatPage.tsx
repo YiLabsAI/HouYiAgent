@@ -15,6 +15,7 @@ import { useSettingsStore } from '@/stores/useSettingsStore';
 import { ChatTimeline } from './ChatTimeline';
 import { Composer } from './Composer';
 import { TraceDetailPanel } from './TraceDetailPanel';
+import { AgentLoopSummary } from './AgentLoopSummary';
 import { MessageCircle } from 'lucide-react';
 
 export const ChatPage: React.FC = () => {
@@ -22,6 +23,7 @@ export const ChatPage: React.FC = () => {
   const isLoadingConversation = useChatStore((s) => s.isLoadingConversation);
   const streaming = useChatStore((s) => s.streaming);
   const contextUsage = useChatStore((s) => s.contextUsage);
+  const agentLoopSummary = useChatStore((s) => s.agentLoopSummary);
   const error = useChatStore((s) => s.error);
   const sendMessage = useChatStore((s) => s.sendMessage);
   const stopStreaming = useChatStore((s) => s.stopStreaming);
@@ -112,6 +114,15 @@ export const ChatPage: React.FC = () => {
           </button>
         </div>
       )}
+
+      <AgentLoopSummary
+        rounds={agentLoopSummary.rounds}
+        toolCalls={agentLoopSummary.toolCalls}
+        traceId={agentLoopSummary.traceId}
+        usage={agentLoopSummary.usage}
+        metrics={agentLoopSummary.metrics}
+        onOpenTrace={setTracePanelId}
+      />
 
       {/* Message timeline — updated via startTransition to avoid repaint flicker */}
       {/* Only show streaming indicators when the active conversation owns the stream */}

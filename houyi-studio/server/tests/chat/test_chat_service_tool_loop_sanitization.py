@@ -3,6 +3,7 @@ from unittest.mock import MagicMock
 from houyi_studio.server.chat.chat_service import (
     ChatService,
     _coerce_text_content,
+    _looks_like_repo_intent,
     _looks_like_tool_intent,
     _sanitize_tool_loop_messages,
 )
@@ -100,20 +101,28 @@ class TestSanitizeToolLoopMessages:
 
 class TestToolIntentHeuristics:
     def test_detects_explicit_tool_keywords(self):
-        assert _looks_like_tool_intent("请帮我 grep 一下 chat_service.py") is True
+        assert _looks_like_tool_intent("grep chat_service.py") is True
 
     def test_detects_file_path_like_queries(self):
         assert _looks_like_tool_intent("look into ./houyi-studio/server/chat_service.py") is True
 
     def test_skips_general_chitchat(self):
-        assert _looks_like_tool_intent("xx 去哪里了") is False
+        assert _looks_like_tool_intent("where did messi go") is False
+
+
+class TestRepoIntent:
+    def test_detects_github_url(self):
+        assert _looks_like_repo_intent("https://github.com/snap-research/locomo") is True
+
+    def test_skips_local_file(self):
+        assert _looks_like_repo_intent("grep skill.md in ./houyi-studio") is False
 
 
 class TestToolLoopGating:
     def test_disables_tool_loop_for_non_tool_query_by_heuristic(self):
         service = ChatService(json_store=MagicMock())
         decision = service._gate_tool_loop(
-            request=SendMessageRequest(content="xx 去哪里了"),
+            request=SendMessageRequest(content="where did kaka go"),
             resolved_skills=["houyi_grep", "houyi_read_file"],
         )
 
@@ -164,3 +173,22 @@ class TestToolLoopGating:
         assert decision.mode == "disabled_by_gating"
         assert decision.reason == "strategy_conservative_requires_explicit"
         assert decision.enabled_skills == []
+
+    def test_repo_query_uses_search(self):
+        service = ChatService(json_store=MagicMock())
+        decision = service._gate_tool_loop(
+            request=SendMessageRequest(content="https://github.com/snap-research/locomo"),
+            resolved_skills=["houyi_grep", "houyi_shell_exec", "web_search"],
+        )
+
+        assert decision.mode == "enabled"
+        assert decision.reason == "heuristic_repo_intent"
+        assert decision.enabled_skills == ["web_search"]
+
+    def test_repo_query_adds_search(self):
+        service = ChatService(json_store=MagicMock())
+        resolved = service._resolve_enabled_chat_skills(
+            SendMessageRequest(content="readme of github.com/foo/bar")
+        )
+
+        assert "web_search" in resolved

@@ -16,7 +16,7 @@ import asyncio
 import json
 import logging
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -46,6 +46,8 @@ async def stream_chat_sse(
     message_id: str,
     model: str = "",
     context_usage: dict[str, Any] | None = None,
+    finish_reason: str | Callable[[], str | None] | None = None,
+    error_message_builder: Callable[[Exception], str | None] | None = None,
 ) -> AsyncIterator[str]:
     """Convert LLM stream into SSE events.
 
@@ -54,6 +56,7 @@ async def stream_chat_sse(
         message_id: ID of the assistant message being generated.
         model: Model name for metadata.
         context_usage: Optional context usage snapshot to send before streaming.
+        finish_reason: Optional provider-reported finish reason or lazy resolver.
 
     Yields:
         SSE-encoded strings ready for HTTP response.
@@ -93,10 +96,11 @@ async def stream_chat_sse(
             ).encode()
 
         # Send finish event
+        resolved_finish_reason = finish_reason() if callable(finish_reason) else finish_reason
         finish_data: dict[str, Any] = {
             "message_id": message_id,
             "model": model,
-            "finish_reason": "stop",
+            "finish_reason": resolved_finish_reason or "stop",
             "total_chunks": seq,
             "content_length": len(total_content),
             "timestamp": time.time(),
@@ -121,6 +125,18 @@ async def stream_chat_sse(
 
     except Exception as e:
         logger.error("SSE stream error for message %s: %s", message_id, e, exc_info=True)
+        fallback_error_message = error_message_builder(e) if error_message_builder else None
+        if fallback_error_message:
+            seq += 1
+            yield SSEEvent(
+                event="message.delta",
+                data={
+                    "message_id": message_id,
+                    "seq": seq,
+                    "content": fallback_error_message,
+                },
+                event_id=f"{message_id}-{seq}",
+            ).encode()
         yield SSEEvent(
             event="message.error",
             data={

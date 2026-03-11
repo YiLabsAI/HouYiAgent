@@ -10,6 +10,7 @@ import React from 'react';
 import { Copy, Check, Pencil, Trash2, RefreshCw, RotateCcw, Bookmark } from 'lucide-react';
 import type { ChatMessage } from '@/types/chat';
 import { useChatStore } from '@/stores/useChatStore';
+import { ConfirmModal } from '@/components/ConfirmModal';
 
 interface MessageActionBarProps {
   message: ChatMessage;
@@ -18,7 +19,8 @@ interface MessageActionBarProps {
 
 export const MessageActionBar: React.FC<MessageActionBarProps> = ({ message, onStartEdit }) => {
   const [copied, setCopied] = React.useState(false);
-  const [confirmDelete, setConfirmDelete] = React.useState(false);
+  const [isDeleting, setIsDeleting] = React.useState(false);
+  const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = React.useState(false);
   const deleteMessage = useChatStore((s) => s.deleteMessage);
   const regenerateMessage = useChatStore((s) => s.regenerateMessage);
   const sendMessage = useChatStore((s) => s.sendMessage);
@@ -44,14 +46,15 @@ export const MessageActionBar: React.FC<MessageActionBarProps> = ({ message, onS
     regenerateMessage(message.message_id);
   };
 
-  const handleDelete = () => {
-    if (!confirmDelete) {
-      setConfirmDelete(true);
-      setTimeout(() => setConfirmDelete(false), 3000);
-      return;
+  const handleConfirmDelete = async () => {
+    if (isStreaming || isDeleting) return;
+    setIsDeleteConfirmOpen(false);
+    setIsDeleting(true);
+    try {
+      await deleteMessage(message.message_id);
+    } finally {
+      setIsDeleting(false);
     }
-    setConfirmDelete(false);
-    deleteMessage(message.message_id);
   };
 
   return (
@@ -120,17 +123,27 @@ export const MessageActionBar: React.FC<MessageActionBarProps> = ({ message, onS
 
       {/* Delete (with confirmation) */}
       <button
-        onClick={handleDelete}
+        onClick={() => setIsDeleteConfirmOpen(true)}
+        disabled={isStreaming || isDeleting}
         className={`p-1 rounded transition-colors ${
-          confirmDelete
-            ? 'bg-red-600/20 text-red-400 hover:bg-red-600/30'
-            : 'hover:bg-gray-700 text-gray-400 hover:text-red-400'
+          isDeleting
+            ? 'bg-red-600/20 text-red-400 disabled:opacity-60'
+            : 'hover:bg-gray-700 text-gray-400 hover:text-red-400 disabled:opacity-30'
         }`}
-        title={confirmDelete ? 'Click again to confirm delete' : 'Delete'}
+        title={isDeleting ? 'Deleting…' : 'Delete'}
         type="button"
       >
         <Trash2 size={13} />
       </button>
+      <ConfirmModal
+        isOpen={isDeleteConfirmOpen}
+        title="Delete message"
+        description="This message will be removed from the conversation."
+        confirmLabel="Delete"
+        variant="danger"
+        onConfirm={handleConfirmDelete}
+        onCancel={() => setIsDeleteConfirmOpen(false)}
+      />
     </div>
   );
 };

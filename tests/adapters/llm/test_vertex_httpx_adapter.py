@@ -41,7 +41,7 @@ class TestVertexAIAdapterMock:
     """Test VertexAIAdapter mock mode (no project ID or service account)."""
 
     @pytest.mark.asyncio
-    async def test_mock_streaming_no_sa(self):
+    async def test_mock_streams_without_sa(self):
         """No GOOGLE_APPLICATION_CREDENTIALS -> mock mode."""
         with patch.dict(os.environ, {}, clear=False):
             env = os.environ.copy()
@@ -61,7 +61,7 @@ class TestVertexAIAdapterMock:
                 assert len(chunks) > 0
 
     @pytest.mark.asyncio
-    async def test_mock_streaming_via_stream_chat(self):
+    async def test_mock_stream_chat(self):
         """stream_chat also falls back to mock when no SA."""
         with patch.dict(os.environ, {}, clear=False):
             env = os.environ.copy()
@@ -79,7 +79,7 @@ class TestVertexAIAdapterMock:
 class TestVertexAIAdapterServiceAccount:
     """Test VertexAIAdapter service account loading and project_id resolution."""
 
-    def test_loads_project_id_from_sa_file(self, tmp_path):
+    def test_loads_project_id(self, tmp_path):
         """project_id should come from SA file, not env."""
         sa_path, _ = _make_sa_file(tmp_path, "sa-project")
         with patch.dict(
@@ -92,7 +92,7 @@ class TestVertexAIAdapterServiceAccount:
             adapter = VertexAIAdapter()
             assert adapter.project_id == "sa-project"
 
-    def test_falls_back_to_env_project_id(self, tmp_path):
+    def test_uses_env_fallback(self, tmp_path):
         """If SA file has no project_id, fall back to env."""
         sa = {
             "type": "service_account",
@@ -112,7 +112,7 @@ class TestVertexAIAdapterServiceAccount:
             adapter = VertexAIAdapter()
             assert adapter.project_id == "env-project"
 
-    def test_invalid_sa_file_path(self):
+    def test_invalid_sa_path(self):
         """Non-existent SA file -> no SA loaded."""
         with patch.dict(
             os.environ,
@@ -170,7 +170,7 @@ class TestVertexAIAdapterMaxTokensClamp:
     """Test max_tokens clamping for Vertex AI."""
 
     @pytest.mark.asyncio
-    async def test_clamps_large_max_tokens(self, tmp_path):
+    async def test_clamps_max_tokens(self, tmp_path):
         """max_tokens > 65536 should be clamped."""
         sa_path, _ = _make_sa_file(tmp_path)
 
@@ -228,7 +228,7 @@ class TestVertexAIAdapterMaxTokensClamp:
         assert chunks == ["OK"]
 
     @pytest.mark.asyncio
-    async def test_normal_max_tokens_not_clamped(self, tmp_path):
+    async def test_keeps_max_tokens(self, tmp_path):
         """max_tokens within range should pass through unchanged."""
         sa_path, _ = _make_sa_file(tmp_path)
 
@@ -347,7 +347,7 @@ class TestVertexAIAdapterRetry:
         assert chunks == ["OK"]
 
     @pytest.mark.asyncio
-    async def test_no_retry_on_400(self, tmp_path):
+    async def test_400_skips_retry(self, tmp_path):
         """400 should fail immediately without retry."""
         sa_path, _ = _make_sa_file(tmp_path)
         attempt_count = 0
@@ -439,7 +439,7 @@ class TestVertexAIAdapterRetry:
         assert adapter._token_expiry == 0
 
     @pytest.mark.asyncio
-    async def test_exhausts_retries_on_persistent_500(self, tmp_path):
+    async def test_retries_exhaust(self, tmp_path):
         """Persistent 500 should exhaust all retries then raise."""
         sa_path, _ = _make_sa_file(tmp_path)
         attempt_count = 0
@@ -555,7 +555,7 @@ class TestVertexAIAdapterModelFormat:
     """Test model name formatting in request body."""
 
     @pytest.mark.asyncio
-    async def test_model_has_google_prefix(self, tmp_path):
+    async def test_model_uses_prefix(self, tmp_path):
         """Model in request body should have google/ prefix."""
         sa_path, _ = _make_sa_file(tmp_path)
 
@@ -615,7 +615,7 @@ class TestVertexAIAdapterReasoning:
     """Test Gemini reasoning_effort and reasoning_content parsing."""
 
     @pytest.mark.asyncio
-    async def test_enable_reasoning_sends_reasoning_effort(self, tmp_path):
+    async def test_reasoning_sends_effort(self, tmp_path):
         """enable_reasoning=True should add reasoning_effort='high' to request body."""
         sa_path, _ = _make_sa_file(tmp_path)
 
@@ -671,7 +671,7 @@ class TestVertexAIAdapterReasoning:
         assert MockHttpxClient.last_body["reasoning_effort"] == "high"
 
     @pytest.mark.asyncio
-    async def test_no_reasoning_effort_by_default(self, tmp_path):
+    async def test_reasoning_defaults_off(self, tmp_path):
         """Without enable_reasoning, reasoning_effort should NOT be in body."""
         sa_path, _ = _make_sa_file(tmp_path)
 
@@ -726,7 +726,7 @@ class TestVertexAIAdapterReasoning:
         assert "reasoning_effort" not in MockHttpxClient.last_body
 
     @pytest.mark.asyncio
-    async def test_parses_reasoning_content_from_delta(self, tmp_path):
+    async def test_parses_reasoning_delta(self, tmp_path):
         """reasoning_content in SSE delta should be yielded as second tuple element."""
         sa_path, _ = _make_sa_file(tmp_path)
 
@@ -787,7 +787,7 @@ class TestVertexAIAdapterReasoning:
 
 
 class TestVertexAIAdapterHelpers:
-    def test_build_chat_body_includes_tools_and_clamps_max_tokens(self):
+    def test_chat_body_tools(self):
         body = VertexAIAdapter._build_chat_body(
             model="gemini-2.5-pro",
             normalized_messages=[{"role": "user", "content": "hi"}],
@@ -805,7 +805,7 @@ class TestVertexAIAdapterHelpers:
         assert body["tools"] == [{"type": "function", "function": {"name": "search"}}]
         assert body["tool_choice"] == "required"
 
-    def test_build_stream_body_filters_supported_keys_and_sets_reasoning(self):
+    def test_stream_body_reasoning(self):
         body = VertexAIAdapter._build_stream_body(
             model="gemini-2.5-pro",
             normalized_messages=[{"role": "user", "content": "hi"}],
@@ -828,7 +828,7 @@ class TestVertexAIAdapterHelpers:
         assert "unsupported" not in body
         assert body["reasoning_effort"] == "high"
 
-    def test_parse_sse_event_handles_done_invalid_and_non_dict_payloads(self):
+    def test_parse_sse_payloads(self):
         event, done = VertexAIAdapter._parse_sse_event("data: [DONE]")
         assert event is None
         assert done is True
@@ -841,7 +841,7 @@ class TestVertexAIAdapterHelpers:
         assert event is None
         assert done is False
 
-    def test_extract_stream_chunk_and_update_usage(self):
+    def test_extract_chunk_usage(self):
         adapter = VertexAIAdapter.__new__(VertexAIAdapter)
         adapter.last_usage = None
 
@@ -858,7 +858,7 @@ class TestVertexAIAdapterHelpers:
         assert chunk.reasoning_delta == "think"
 
     @pytest.mark.asyncio
-    async def test_retry_or_raise_transport_returns_false_when_not_retryable(self, tmp_path):
+    async def test_retry_transport_false(self, tmp_path):
         sa_path, _ = _make_sa_file(tmp_path)
         with patch.dict(os.environ, {"GOOGLE_APPLICATION_CREDENTIALS": sa_path}):
             adapter = VertexAIAdapter()
@@ -877,7 +877,7 @@ class TestVertexAIAdapterHelpers:
         assert result is False
 
     @pytest.mark.asyncio
-    async def test_chat_returns_error_response_when_authentication_fails(self, tmp_path):
+    async def test_chat_auth_error(self, tmp_path):
         sa_path, _ = _make_sa_file(tmp_path)
         with patch.dict(
             os.environ,
@@ -896,7 +896,7 @@ class TestVertexAIAdapterHelpers:
         assert result.content == ""
 
     @pytest.mark.asyncio
-    async def test_stream_chat_yields_authentication_error_chunk(self, tmp_path):
+    async def test_stream_auth_error(self, tmp_path):
         sa_path, _ = _make_sa_file(tmp_path)
         with patch.dict(
             os.environ,
@@ -914,18 +914,18 @@ class TestVertexAIAdapterHelpers:
 
         assert chunks == ["[Error: Failed to authenticate with Vertex AI]"]
 
-    def test_parse_sse_event_returns_none_for_non_prefixed_line(self):
+    def test_parse_sse_ignores(self):
         event, done = VertexAIAdapter._parse_sse_event("event: ping")
         assert event is None
         assert done is False
 
-    def test_extract_stream_chunk_returns_none_when_no_meaningful_delta(self):
+    def test_extract_chunk_empty(self):
         assert VertexAIAdapter._extract_stream_chunk({"choices": []}) is None
         assert VertexAIAdapter._extract_stream_chunk({"choices": [{"delta": {}}]}) is None
 
 
 class TestVertexAIAdapterJwtAndToken:
-    def test_sign_jwt_with_openssl_returns_compact_token(self, tmp_path):
+    def test_sign_jwt_token(self, tmp_path):
         sa_path, sa = _make_sa_file(tmp_path)
         with patch.dict(os.environ, {"GOOGLE_APPLICATION_CREDENTIALS": sa_path}):
             adapter = VertexAIAdapter()
@@ -937,7 +937,7 @@ class TestVertexAIAdapterJwtAndToken:
         assert token.count(".") == 2
         assert sa["client_email"] not in token
 
-    def test_sign_jwt_with_openssl_raises_when_openssl_fails(self, tmp_path):
+    def test_sign_jwt_fails(self, tmp_path):
         sa_path, _ = _make_sa_file(tmp_path)
         with patch.dict(os.environ, {"GOOGLE_APPLICATION_CREDENTIALS": sa_path}):
             adapter = VertexAIAdapter()
@@ -948,14 +948,14 @@ class TestVertexAIAdapterJwtAndToken:
                 adapter._sign_jwt_with_openssl()
 
     @pytest.mark.asyncio
-    async def test_get_access_token_returns_none_without_service_account(self):
+    async def test_token_needs_sa(self):
         with patch.dict(os.environ, {}, clear=True):
             adapter = VertexAIAdapter()
 
         assert await adapter._get_access_token() is None
 
     @pytest.mark.asyncio
-    async def test_get_access_token_returns_none_on_transport_error_after_retries(self, tmp_path):
+    async def test_token_transport_error(self, tmp_path):
         sa_path, _ = _make_sa_file(tmp_path)
 
         class ConnectBoom(Exception):
@@ -982,7 +982,7 @@ class TestVertexAIAdapterJwtAndToken:
         assert mock_httpx_client.post.await_count == 4
 
     @pytest.mark.asyncio
-    async def test_get_access_token_resets_cached_token_on_401_then_returns_none(self, tmp_path):
+    async def test_token_resets_401(self, tmp_path):
         import time
 
         sa_path, _ = _make_sa_file(tmp_path)
@@ -1014,7 +1014,7 @@ class TestVertexAIAdapterJwtAndToken:
 
 class TestVertexAIAdapterChat:
     @pytest.mark.asyncio
-    async def test_chat_success_updates_last_usage_and_model(self, tmp_path):
+    async def test_chat_updates_usage(self, tmp_path):
         sa_path, _ = _make_sa_file(tmp_path)
         captured = {}
 
@@ -1059,7 +1059,7 @@ class TestVertexAIAdapterChat:
         assert adapter.last_usage == {"prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7}
 
     @pytest.mark.asyncio
-    async def test_chat_retries_once_on_transport_error_then_succeeds(self, tmp_path):
+    async def test_chat_retries_success(self, tmp_path):
         sa_path, _ = _make_sa_file(tmp_path)
 
         class ConnectBoom(Exception):

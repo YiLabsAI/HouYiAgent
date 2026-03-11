@@ -20,7 +20,7 @@ fi
 
 if [ ! -d ".venv" ]; then
     echo -e "${RED}✗ .venv not found.${NC}"
-    echo "Run: uv sync --extra dev --extra studio-server --extra rag-full --extra model-adapters --extra vertex-ai"
+    echo "Run: uv sync --extra dev --extra studio-server --extra rag-full --extra model-adapters --extra vertex-ai --extra websearch-ddg --extra websearch-tavily --extra websearch-readability"
     exit 1
 fi
 
@@ -37,7 +37,7 @@ ensure_integration_deps() {
 
     if [ $need_sync -eq 1 ]; then
         echo -e "${YELLOW}  Installing missing local integration dependencies...${NC}"
-        uv sync --extra dev --extra studio-server --extra rag-full --extra model-adapters --extra vertex-ai --quiet
+        uv sync --extra dev --extra studio-server --extra rag-full --extra model-adapters --extra vertex-ai --extra websearch-ddg --extra websearch-tavily --extra websearch-readability --quiet
     fi
 
     if ! uv run python -c "import houyi_studio" 2>/dev/null; then

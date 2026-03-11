@@ -39,7 +39,7 @@ from houyi.infrastructure.observability.types import SpanType
 
 
 class TestInstrumentationDecorators:
-    def test_instrument_llm_sync_without_parent_returns_original_result(self) -> None:
+    def test_llm_returns_result(self) -> None:
         @instrument_llm(model="gpt-4", provider="openai")
         def call() -> dict[str, Any]:
             return {"usage": {"prompt_tokens": 1, "completion_tokens": 2}}
@@ -50,7 +50,7 @@ class TestInstrumentationDecorators:
         assert TraceContext.current() is None
 
     @pytest.mark.asyncio
-    async def test_instrument_llm_async_records_tokens_cost_and_cache_hit(self) -> None:
+    async def test_llm_records_cost(self) -> None:
         root = Span(name="root", span_type=SpanType.EXECUTION)
 
         @instrument_llm(model="fallback-model", provider="openai")
@@ -81,7 +81,7 @@ class TestInstrumentationDecorators:
         assert llm_span.end_time is not None
 
     @pytest.mark.asyncio
-    async def test_instrument_llm_async_records_error_status(self) -> None:
+    async def test_llm_records_error(self) -> None:
         root = Span(name="root", span_type=SpanType.EXECUTION)
 
         @instrument_llm(provider="openai")
@@ -96,7 +96,7 @@ class TestInstrumentationDecorators:
         assert llm_span.status == "error"
         assert llm_span.attributes["status_description"] == "llm failed"
 
-    def test_instrument_tool_sync_uses_function_name_when_tool_name_missing(self) -> None:
+    def test_tool_uses_name(self) -> None:
         root = Span(name="root", span_type=SpanType.EXECUTION)
 
         @instrument_tool()
@@ -114,7 +114,7 @@ class TestInstrumentationDecorators:
         assert tool_span.attributes["tool.cache_hit"] is True
 
     @pytest.mark.asyncio
-    async def test_instrument_retriever_async_records_docs_count_and_top_k(self) -> None:
+    async def test_retriever_records_docs(self) -> None:
         root = Span(name="root", span_type=SpanType.EXECUTION)
 
         @instrument_retriever(kb_name="kb-main")
@@ -132,7 +132,7 @@ class TestInstrumentationDecorators:
         assert retriever_span.docs_count == 3
         assert retriever_span.attributes["retriever.docs_count"] == 3
 
-    def test_instrument_retriever_sync_without_parent_skips_span_creation(self) -> None:
+    def test_retriever_skips_span(self) -> None:
         @instrument_retriever(kb_name="kb")
         def retrieve(**_kwargs: Any) -> list[dict[str, Any]]:
             return [{"id": 1}]
@@ -145,12 +145,12 @@ class TestInstrumentationDecorators:
 
 class TestManualSpanContexts:
     @pytest.mark.asyncio
-    async def test_llm_span_context_without_parent_returns_none(self) -> None:
+    async def test_span_context_none(self) -> None:
         async with LLMSpanContext(model="gpt-4") as span:
             assert span is None
 
     @pytest.mark.asyncio
-    async def test_llm_span_context_records_ok_status_and_restores_context(self) -> None:
+    async def test_span_context_restores(self) -> None:
         root = Span(name="root", span_type=SpanType.EXECUTION)
 
         with TraceContext.activate(root):
@@ -166,7 +166,7 @@ class TestManualSpanContexts:
         assert llm_span.tokens.total == 6
 
     @pytest.mark.asyncio
-    async def test_tool_span_context_records_error_status(self) -> None:
+    async def test_tool_span_error(self) -> None:
         root = Span(name="root", span_type=SpanType.EXECUTION)
 
         with TraceContext.activate(root):
@@ -182,7 +182,7 @@ class TestManualSpanContexts:
 
 
 class TestCoroutineDetection:
-    def test_asyncio_iscoroutinefunction_detects_wrapped_async_function(self) -> None:
+    def test_detects_wrapped_async(self) -> None:
         async def original() -> str:
             return "ok"
 
@@ -192,7 +192,7 @@ class TestCoroutineDetection:
 
         assert asyncio_iscoroutinefunction(wrapped) is True
 
-    def test_asyncio_iscoroutinefunction_detects_partial_async_function(self) -> None:
+    def test_detects_partial_async(self) -> None:
         async def original(arg: str) -> str:
             return arg
 
@@ -200,7 +200,7 @@ class TestCoroutineDetection:
 
         assert asyncio_iscoroutinefunction(partial_fn) is True
 
-    def test_asyncio_iscoroutinefunction_returns_false_for_sync_function(self) -> None:
+    def test_rejects_sync_function(self) -> None:
         def sync_fn() -> str:
             return "ok"
 
@@ -211,7 +211,7 @@ class TestObservabilityConfigAndApi:
     def teardown_method(self) -> None:
         reset_config()
 
-    def test_observability_config_default_and_development_profiles(self) -> None:
+    def test_config_builds_profiles(self) -> None:
         default = ObservabilityConfig.default()
         development = ObservabilityConfig.development()
 
@@ -222,7 +222,7 @@ class TestObservabilityConfigAndApi:
         assert development.privacy.should_capture_tool_content() is True
         assert development.privacy.capture_retriever_docs is True
 
-    def test_get_set_reset_config_round_trip(self) -> None:
+    def test_config_round_trip(self) -> None:
         config = ObservabilityConfig(
             enabled=False,
             privacy=PrivacyConfig(capture_prompts=True),
@@ -239,9 +239,9 @@ class TestObservabilityConfigAndApi:
         assert reset_value is not config
         assert reset_value.enabled is True
 
-    def test_api_exports_point_to_expected_types(self) -> None:
+    def test_api_exports_types(self) -> None:
         assert ApiSpan is Span
         assert ApiSpanType.LLM == "llm"
         assert SpanStatus.OK == "ok"
-        assert TokenUsage(input=1, output=2).total == 0
+        assert TokenUsage(input=1, output=2, total=3).total == 3
         assert ObservabilityQuery.__name__ == "ObservabilityQuery"

@@ -371,12 +371,14 @@ async def _shell_exec_executor(
     cwd: str | None = None,
     timeout_seconds: int = DEFAULT_SHELL_TIMEOUT_SECONDS,
 ) -> dict[str, Any]:
+    effective_timeout_seconds = int(min(timeout_seconds, MAX_SHELL_TIMEOUT_SECONDS))
     try:
         _validate_command(command)
         working_dir = _resolve_workspace_path(cwd or ".")
     except ValueError as exc:
         return ToolResponse(success=False, message=str(exc)).model_dump()
 
+    started_at = asyncio.get_running_loop().time()
     process = await asyncio.create_subprocess_shell(
         command,
         cwd=str(working_dir),
@@ -387,15 +389,26 @@ async def _shell_exec_executor(
     try:
         stdout_bytes, stderr_bytes = await asyncio.wait_for(
             process.communicate(),
-            timeout=float(min(timeout_seconds, MAX_SHELL_TIMEOUT_SECONDS)),
+            timeout=float(effective_timeout_seconds),
         )
     except TimeoutError:
         process.kill()
         await process.communicate()
+        duration_ms = round((asyncio.get_running_loop().time() - started_at) * 1000, 2)
         return ToolResponse(
-            success=False, message=f"Command timed out after {timeout_seconds}s"
+            success=False,
+            message=f"Command timed out after {effective_timeout_seconds}s",
+            data={
+                "command": command,
+                "cwd": str(working_dir),
+                "timed_out": True,
+                "timeout_seconds": effective_timeout_seconds,
+                "duration_ms": duration_ms,
+                "retry_count": 0,
+            },
         ).model_dump()
 
+    duration_ms = round((asyncio.get_running_loop().time() - started_at) * 1000, 2)
     stdout_text = _trim_text(
         (stdout_bytes or b"").decode(DEFAULT_ENCODING, errors="ignore"), DEFAULT_MAX_OUTPUT_CHARS
     )
@@ -414,6 +427,10 @@ async def _shell_exec_executor(
             "stderr": stderr_text,
             "stdout_truncated": len(stdout_text) >= DEFAULT_MAX_OUTPUT_CHARS,
             "stderr_truncated": len(stderr_text) >= DEFAULT_MAX_OUTPUT_CHARS,
+            "timed_out": False,
+            "timeout_seconds": effective_timeout_seconds,
+            "duration_ms": duration_ms,
+            "retry_count": 0,
         },
     ).model_dump()
 

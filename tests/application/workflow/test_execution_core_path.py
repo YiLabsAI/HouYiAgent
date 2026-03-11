@@ -292,7 +292,7 @@ async def test_plan_execution_loop_failure_sets_failed_and_still_notifies_end() 
 
 
 @pytest.mark.asyncio
-async def test_plan_execution_loop_aborted_stops_and_does_not_mark_completed() -> None:
+async def test_stops_without_marking_completed_when_aborted() -> None:
     plan = _make_plan(
         node_ids=["n1", "n2", "n3"],
         edges=[("n1", "n2"), ("n2", "n3")],
@@ -351,7 +351,7 @@ async def test_plan_execution_loop_aborted_stops_and_does_not_mark_completed() -
 
 
 @pytest.mark.asyncio
-async def test_plan_execution_loop_aborted_while_paused_exits_without_executing() -> None:
+async def test_exits_without_executing_when_aborted_while_paused() -> None:
     plan = _make_plan(
         node_ids=["n1"],
         edges=[],
@@ -410,7 +410,7 @@ async def test_plan_execution_loop_aborted_while_paused_exits_without_executing(
 
 
 @pytest.mark.asyncio
-async def test_plan_execution_loop_treats_skipped_nodes_as_executed() -> None:
+async def test_treats_skipped_nodes_as_executed() -> None:
     plan = _make_plan(
         node_ids=["n1", "n2"],
         edges=[("n1", "n2")],
@@ -469,9 +469,7 @@ async def test_plan_execution_loop_treats_skipped_nodes_as_executed() -> None:
 
 
 @pytest.mark.asyncio
-async def test_plan_execution_loop_aborted_before_start_does_not_execute_and_does_not_mark_completed() -> (
-    None
-):
+async def test_does_not_execute_or_mark_completed_when_aborted_before_start() -> None:
     plan = _make_plan(
         node_ids=["n1"],
         edges=[],
@@ -533,9 +531,7 @@ async def test_plan_execution_loop_aborted_before_start_does_not_execute_and_doe
 
 
 @pytest.mark.asyncio
-async def test_plan_execution_loop_cancellederror_converges_to_aborted_without_completed_at() -> (
-    None
-):
+async def test_converges_to_aborted_without_completed_at_on_cancelled_error() -> None:
     plan = _make_plan(
         node_ids=["n1"],
         edges=[],
@@ -594,7 +590,7 @@ async def test_plan_execution_loop_cancellederror_converges_to_aborted_without_c
 
 
 @pytest.mark.asyncio
-async def test_plan_execution_loop_dynamic_plan_update_executes_newly_added_node() -> None:
+async def test_executes_newly_added_node_after_dynamic_plan_update() -> None:
     base_plan = _make_plan(
         node_ids=["n1", "n2"],
         edges=[("n1", "n2")],
@@ -658,9 +654,7 @@ async def test_plan_execution_loop_dynamic_plan_update_executes_newly_added_node
     assert plans_returned
 
 
-def test_get_execution_order_cycle_and_disconnected_is_deterministic_and_prefers_entry_when_appending_remaining() -> (
-    None
-):
+def test_orders_cycle_and_disconnected_nodes_deterministically() -> None:
     plan = _make_plan(
         node_ids=["a", "b", "c", "d"],
         edges=[("a", "b"), ("b", "a")],

@@ -24,8 +24,7 @@ import type {
   SSEToolCallResult,
   SSEToolCallStart,
 } from '@/types/chat';
-
-// --- API helpers ---
+import { buildVisibleChatError } from '@/utils/chatErrors';
 
 const API_BASE = '/api/chat';
 
@@ -49,7 +48,7 @@ interface StreamingState {
   contentBuffer: string;
   reasoningBuffer: string;
   abortController: AbortController | null;
-  // Which conversation owns this stream.  Used to resume UI when switching back.
+  // Which conversation owns it
   streamConversationId: string | null;
   toolMessageIdsByCallId: Record<string, string>;
 }
@@ -59,6 +58,132 @@ interface AgentLoopSummary {
   toolCalls: number;
   traceId: string | null;
   usage: Record<string, any> | null;
+  metrics: Record<string, any> | null;
+}
+
+function emptyAgentLoopSummary(): AgentLoopSummary {
+  return { rounds: 0, toolCalls: 0, traceId: null, usage: null, metrics: null };
+}
+
+function deriveAgentLoopSummaryFromConversation(conversation: Conversation | null): AgentLoopSummary {
+  if (!conversation) return emptyAgentLoopSummary();
+  const messages = conversation.messages;
+  let anchorAssistantIndex = -1;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index].role === 'assistant') {
+      anchorAssistantIndex = index;
+      break;
+    }
+  }
+  if (anchorAssistantIndex < 0) return emptyAgentLoopSummary();
+
+  const anchorAssistant = messages[anchorAssistantIndex];
+  let rounds = 0;
+  let toolCalls = 0;
+  const seenToolCallIds = new Set<string>();
+  let traceId: string | null =
+    typeof anchorAssistant.metadata?.trace_id === 'string' ? anchorAssistant.metadata.trace_id : null;
+  let usage: Record<string, any> | null = anchorAssistant.metadata?.usage ?? null;
+  let metrics: Record<string, any> | null = null;
+
+  for (let index = anchorAssistantIndex - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message.role === 'tool') {
+      const toolCallId = typeof message.tool_call_id === 'string' && message.tool_call_id
+        ? message.tool_call_id
+        : `tool:${message.message_id}`;
+      if (!seenToolCallIds.has(toolCallId)) {
+        seenToolCallIds.add(toolCallId);
+        toolCalls += 1;
+      }
+      const roundIndex = Number(message.metadata?.round_index || 0);
+      if (Number.isFinite(roundIndex) && roundIndex > rounds) {
+        rounds = roundIndex;
+      }
+      const toolTraceId = typeof message.metadata?.trace_id === 'string' ? message.metadata.trace_id : null;
+      traceId = traceId ?? toolTraceId;
+      continue;
+    }
+    if (message.role === 'assistant' && Array.isArray(message.tool_calls) && message.tool_calls.length > 0) {
+      message.tool_calls.forEach((toolCall, toolCallIndex) => {
+        const toolCallId = toolCall && typeof toolCall === 'object' && typeof (toolCall as Record<string, any>).id === 'string'
+          ? String((toolCall as Record<string, any>).id)
+          : `assistant:${message.message_id}:${toolCallIndex}`;
+        if (!seenToolCallIds.has(toolCallId)) {
+          seenToolCallIds.add(toolCallId);
+          toolCalls += 1;
+        }
+      });
+      const roundIndex = Number(message.metadata?.round_index || 0);
+      if (Number.isFinite(roundIndex) && roundIndex > rounds) {
+        rounds = roundIndex;
+      }
+      const toolTraceId = typeof message.metadata?.trace_id === 'string' ? message.metadata.trace_id : null;
+      traceId = traceId ?? toolTraceId;
+      continue;
+    }
+    break;
+  }
+
+  const meta = anchorAssistant.metadata ?? {};
+  if (
+    meta.usage
+    || meta.first_token_latency_ms
+    || meta.decode_tokens_per_second
+    || meta.end_to_end_tokens_per_second
+    || meta.tokens_per_second
+    || meta.budget
+    || meta.finish_reason
+  ) {
+    metrics = {
+      finish_reason: meta.finish_reason,
+      budget: meta.budget,
+      first_token_latency_ms: meta.first_token_latency_ms,
+      generation_time_ms: meta.generation_time_ms,
+      decode_tokens_per_second: meta.decode_tokens_per_second,
+      end_to_end_tokens_per_second: meta.end_to_end_tokens_per_second,
+      tokens_per_second: meta.tokens_per_second,
+    };
+  }
+
+  return { rounds, toolCalls, traceId, usage, metrics };
+}
+
+function mergeMessagesForRefresh(
+  currentMessages: ChatMessage[],
+  loadedMessages: ChatMessage[],
+): ChatMessage[] {
+  if (currentMessages.length === 0 || loadedMessages.length === 0) return loadedMessages;
+  if (Math.abs(currentMessages.length - loadedMessages.length) > 2) return loadedMessages;
+
+  const merged: ChatMessage[] = [];
+  let currentIndex = 0;
+
+  for (const loadedMessage of loadedMessages) {
+    const currentMessage = currentMessages[currentIndex];
+    if (!currentMessage) {
+      merged.push(loadedMessage);
+      continue;
+    }
+
+    if (currentMessage.role !== loadedMessage.role) {
+      merged.push(loadedMessage);
+      continue;
+    }
+
+    merged.push({
+      ...currentMessage,
+      ...loadedMessage,
+      ui_render_id: currentMessage.ui_render_id || loadedMessage.ui_render_id || loadedMessage.message_id,
+      metadata: {
+        ...currentMessage.metadata,
+        ...loadedMessage.metadata,
+      },
+    });
+    currentIndex += 1;
+  }
+
+  return merged;
 }
 
 interface ChatState {
@@ -88,8 +213,12 @@ interface ChatState {
 
   // Actions
   fetchConversations: () => Promise<void>;
-  createConversation: (req?: CreateConversationRequest) => Promise<string>;
-  loadConversation: (conversationId: string, scrollToMessageId?: string) => Promise<void>;
+  createConversation: (req?: CreateConversationRequest) => Promise<string | undefined>;
+  loadConversation: (
+    conversationId: string,
+    scrollToMessageId?: string,
+    preserveRenderedMessages?: boolean,
+  ) => Promise<void>;
   updateConversation: (conversationId: string, updates: { title?: string; status?: string; model?: string; system_instructions?: string; temperature?: number | null; max_tokens?: number | null; top_p?: number | null; stream?: boolean | null; bookmarked?: boolean }) => Promise<void>;
   deleteConversation: (conversationId: string) => Promise<void>;
   sendMessage: (content: string, options?: Partial<SendMessageRequest>, files?: File[]) => Promise<void>;
@@ -121,7 +250,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     toolMessageIdsByCallId: {},
   },
   contextUsage: null,
-  agentLoopSummary: { rounds: 0, toolCalls: 0, traceId: null, usage: null },
+  agentLoopSummary: emptyAgentLoopSummary(),
   error: null,
   scrollToMessageId: null,
 
@@ -154,7 +283,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
   },
 
-  loadConversation: async (conversationId: string, scrollToMessageId?: string) => {
+  loadConversation: async (
+    conversationId: string,
+    scrollToMessageId?: string,
+    preserveRenderedMessages = false,
+  ) => {
     const isSwitch = get().activeConversationId !== conversationId;
 
     // BUG-041 fix — zero-flicker conversation switch
@@ -197,15 +330,26 @@ export const useChatStore = create<ChatState>((set, get) => ({
       if (
         streaming.isStreaming &&
         streaming.streamConversationId === conversationId &&
-        streaming.contentBuffer
+        (
+          streaming.messageId
+          || streaming.contentBuffer
+          || streaming.reasoningBuffer
+          || Object.keys(streaming.toolMessageIdsByCallId).length > 0
+        )
       ) {
         const messages = [...data.messages];
         const lastMsg = messages[messages.length - 1];
         const isStreamRender = data.stream !== false;
         const displayContent = isStreamRender ? streaming.contentBuffer : '';
         const displayReasoning = isStreamRender ? (streaming.reasoningBuffer || null) : null;
+        const shouldReplaceExistingAssistant = Boolean(
+          lastMsg
+          && lastMsg.role === 'assistant'
+          && streaming.messageId
+          && lastMsg.message_id === streaming.messageId,
+        );
 
-        if (lastMsg && lastMsg.role === 'assistant') {
+        if (shouldReplaceExistingAssistant) {
           messages[messages.length - 1] = {
             ...lastMsg,
             content: displayContent,
@@ -224,11 +368,26 @@ export const useChatStore = create<ChatState>((set, get) => ({
         conversationData = { ...data, messages };
       }
 
+      if (
+        preserveRenderedMessages
+        && !streaming.isStreaming
+        && get().activeConversation?.conversation_id === conversationId
+      ) {
+        const currentConversation = get().activeConversation;
+        if (currentConversation) {
+          conversationData = {
+            ...data,
+            messages: mergeMessagesForRefresh(currentConversation.messages, data.messages),
+          };
+        }
+      }
+
       // Single atomic set — ChatPage renders exactly once with the new data
       set({
         activeConversation: conversationData,
         isLoadingConversation: false,
         contextUsage: usageResult?.usage ?? null,
+        agentLoopSummary: deriveAgentLoopSummaryFromConversation(conversationData),
         scrollToMessageId: scrollToMessageId ?? null,
       });
     } catch (e: any) {
@@ -291,9 +450,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   sendMessage: async (content: string, options?: Partial<SendMessageRequest>, files?: File[]) => {
-    const { activeConversationId, activeConversation } = get();
+    const { activeConversationId, activeConversation, streaming } = get();
     if (!activeConversationId || !activeConversation) {
       set({ error: 'No active conversation' });
+      return;
+    }
+    if (streaming.isStreaming) {
+      set({ error: 'A response is already streaming. Stop it before sending another message.' });
       return;
     }
 
@@ -320,10 +483,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
 
     const abortController = new AbortController();
+    const optimisticUserRenderId = `ui-user-${Date.now()}`;
 
     // Optimistically add user message to UI
     const userMsg: ChatMessage = {
       message_id: `tmp-${Date.now()}`,
+      ui_render_id: optimisticUserRenderId,
       role: 'user',
       content,
       attachments,
@@ -344,7 +509,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         streamConversationId: activeConversationId,
         toolMessageIdsByCallId: {},
       },
-      agentLoopSummary: { rounds: 0, toolCalls: 0, traceId: null, usage: null },
+      agentLoopSummary: emptyAgentLoopSummary(),
       error: null,
     }));
 
@@ -421,13 +586,17 @@ export const useChatStore = create<ChatState>((set, get) => ({
       // Flush any final event without trailing newline
       processEvent();
 
+      set((state) => ({
+        streaming: { ...state.streaming, isStreaming: false, abortController: null, streamConversationId: null },
+      }));
+
       // Reload conversation to get persisted state + refresh sidebar counts.
       // Only reload the UI if the user is still viewing this conversation;
       // otherwise just refresh the sidebar list so message counts update.
       if (get().activeConversationId === streamConversationId) {
-        await get().loadConversation(streamConversationId);
+        void get().loadConversation(streamConversationId, undefined, true);
       }
-      await get().fetchConversations();
+      void get().fetchConversations();
     } catch (e: any) {
       if (e.name === 'AbortError') {
         // User-initiated abort — expected
@@ -513,8 +682,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   regenerateMessage: async (messageId: string) => {
-    const { activeConversationId, activeConversation } = get();
+    const { activeConversationId, activeConversation, streaming } = get();
     if (!activeConversationId || !activeConversation) return;
+    if (streaming.isStreaming) {
+      set({ error: 'A response is already streaming. Stop it before regenerating another message.' });
+      return;
+    }
 
     const abortController = new AbortController();
     set(() => ({
@@ -527,7 +700,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         streamConversationId: activeConversationId,
         toolMessageIdsByCallId: {},
       },
-      agentLoopSummary: { rounds: 0, toolCalls: 0, traceId: null, usage: null },
+      agentLoopSummary: emptyAgentLoopSummary(),
       error: null,
     }));
 
@@ -603,10 +776,19 @@ export const useChatStore = create<ChatState>((set, get) => ({
       // Flush any final event without trailing newline
       processRegenEvent();
 
+      set((state) => ({
+        streaming: {
+          ...state.streaming,
+          isStreaming: false,
+          abortController: null,
+          streamConversationId: null,
+        },
+      }));
+
       if (get().activeConversationId === activeConversationId) {
-        await get().loadConversation(activeConversationId);
+        void get().loadConversation(activeConversationId, undefined, true);
       }
-      await get().fetchConversations();
+      void get().fetchConversations();
     } catch (e: any) {
       if (e.name === 'AbortError') {
         // User-initiated abort
@@ -796,6 +978,7 @@ function handleSSEEvent(
     }
 
     case 'agent.iteration': {
+      if (!isViewingStream) break;
       const evt = data as SSEAgentIteration;
       set((state) => ({
         agentLoopSummary: {
@@ -822,11 +1005,6 @@ function handleSSEEvent(
         if (!isViewingStream || !state.activeConversation) {
           return {
             streaming: { ...state.streaming, toolMessageIdsByCallId: nextToolMap },
-            agentLoopSummary: {
-              ...state.agentLoopSummary,
-              toolCalls: state.agentLoopSummary.toolCalls + 1,
-              traceId: evt.trace_id ?? state.agentLoopSummary.traceId,
-            },
           };
         }
 
@@ -872,23 +1050,13 @@ function handleSSEEvent(
         : (data as SSEToolCallError);
       set((state) => {
         if (!isViewingStream || !state.activeConversation) {
-          return {
-            agentLoopSummary: {
-              ...state.agentLoopSummary,
-              traceId: evt.trace_id ?? state.agentLoopSummary.traceId,
-            },
-          };
+          return {};
         }
 
         const callId = evt.tool_call_id || '';
         const toolMessageId = callId ? state.streaming.toolMessageIdsByCallId[callId] : undefined;
         if (!toolMessageId) {
-          return {
-            agentLoopSummary: {
-              ...state.agentLoopSummary,
-              traceId: evt.trace_id ?? state.agentLoopSummary.traceId,
-            },
-          };
+          return {};
         }
 
         const payload = eventType === 'tool_call.result'
@@ -925,15 +1093,18 @@ function handleSSEEvent(
       set((state) => {
         const traceId = evt.metadata?.trace_id ?? state.agentLoopSummary.traceId;
         const usage = evt.metadata?.usage ?? state.agentLoopSummary.usage;
+        const metrics = {
+          finish_reason: evt.metadata?.finish_reason,
+          budget: evt.metadata?.budget,
+          first_token_latency_ms: evt.metadata?.first_token_latency_ms,
+          generation_time_ms: evt.metadata?.generation_time_ms,
+          decode_tokens_per_second: evt.metadata?.decode_tokens_per_second,
+          end_to_end_tokens_per_second: evt.metadata?.end_to_end_tokens_per_second,
+          tokens_per_second: evt.metadata?.tokens_per_second,
+        };
 
         if (!isViewingStream || !state.activeConversation) {
-          return {
-            agentLoopSummary: {
-              ...state.agentLoopSummary,
-              traceId,
-              usage,
-            },
-          };
+          return {};
         }
 
         const messages = state.activeConversation.messages.map((m) => {
@@ -953,6 +1124,7 @@ function handleSSEEvent(
             ...state.agentLoopSummary,
             traceId,
             usage,
+            metrics,
           },
         };
       });
@@ -964,9 +1136,13 @@ function handleSSEEvent(
       set((state) => {
         // Remove empty assistant placeholder from UI (LLM failed before producing content)
         let updatedConversation = state.activeConversation;
+        let hasVisibleAssistantError = false;
         if (updatedConversation) {
           const messages = updatedConversation.messages;
           const last = messages[messages.length - 1];
+          if (last && last.role === 'assistant' && last.content) {
+            hasVisibleAssistantError = true;
+          }
           if (last && last.role === 'assistant' && !last.content && !last.reasoning_content) {
             updatedConversation = {
               ...updatedConversation,
@@ -976,7 +1152,9 @@ function handleSSEEvent(
         }
         return {
           activeConversation: updatedConversation,
-          error: `LLM Error: ${evt.error}`,
+          error: hasVisibleAssistantError
+            ? null
+            : buildVisibleChatError(String(evt.error || 'Unknown streaming error'), 'gemini'),
           streaming: { ...state.streaming, isStreaming: false },
         };
       });

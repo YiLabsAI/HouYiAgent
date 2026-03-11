@@ -224,7 +224,8 @@ def prepare_tool_loop_messages(
     normalized_messages = [
         _truncate_message_for_budget(msg, max_message_chars) for msg in normalized_messages
     ]
-    return _cap_total_payload_for_budget(normalized_messages, max_total_chars)
+    capped_messages = _cap_total_payload_for_budget(normalized_messages, max_total_chars)
+    return _sanitize_tool_message_structure(capped_messages)
 
 
 def _truncate_middle_for_budget(text: str, max_chars: int) -> str:
@@ -291,6 +292,122 @@ def _cap_total_payload_for_budget(
         len(trimmed),
     )
     return trimmed
+
+
+def _has_assistant_tool_turn(message: dict[str, Any]) -> bool:
+    return (
+        str(message.get("role") or "") == "assistant"
+        and isinstance(message.get("tool_calls"), list)
+        and bool(message.get("tool_calls"))
+    )
+
+
+def _expected_tool_call_ids(message: dict[str, Any]) -> list[str]:
+    tool_calls = message.get("tool_calls")
+    if not isinstance(tool_calls, list) or not tool_calls:
+        return []
+    return [
+        str(call.get("id") or "")
+        for call in tool_calls
+        if isinstance(call, dict) and str(call.get("id") or "")
+    ]
+
+
+def _is_pending_tool_message(
+    message: dict[str, Any],
+    pending_assistant: dict[str, Any] | None,
+    pending_expected_ids: list[str],
+    pending_tool_ids: list[str],
+) -> tuple[bool, str]:
+    tool_call_id = str(message.get("tool_call_id") or "")
+    should_keep = (
+        pending_assistant is not None
+        and bool(tool_call_id)
+        and tool_call_id in pending_expected_ids
+        and tool_call_id not in pending_tool_ids
+    )
+    return should_keep, tool_call_id
+
+
+def _flush_pending_tool_group(
+    sanitized: list[dict[str, Any]],
+    pending_assistant: dict[str, Any] | None,
+    pending_expected_ids: list[str],
+    pending_tool_messages: list[dict[str, Any]],
+    pending_tool_ids: list[str],
+) -> tuple[dict[str, Any] | None, list[str], list[dict[str, Any]], list[str]]:
+    if pending_assistant is None:
+        return None, [], [], []
+    if not pending_tool_messages:
+        sanitized.append(pending_assistant)
+    elif pending_tool_ids == pending_expected_ids:
+        sanitized.append(pending_assistant)
+        sanitized.extend(pending_tool_messages)
+    return None, [], [], []
+
+
+def _sanitize_tool_message_structure(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    has_assistant_tool_turn = any(_has_assistant_tool_turn(message) for message in messages)
+    if not has_assistant_tool_turn:
+        return messages
+
+    sanitized: list[dict[str, Any]] = []
+    pending_assistant: dict[str, Any] | None = None
+    pending_expected_ids: list[str] = []
+    pending_tool_messages: list[dict[str, Any]] = []
+    pending_tool_ids: list[str] = []
+
+    for message in messages:
+        role = str(message.get("role") or "")
+        if role == "assistant":
+            pending_assistant, pending_expected_ids, pending_tool_messages, pending_tool_ids = (
+                _flush_pending_tool_group(
+                    sanitized,
+                    pending_assistant,
+                    pending_expected_ids,
+                    pending_tool_messages,
+                    pending_tool_ids,
+                )
+            )
+            expected_ids = _expected_tool_call_ids(message)
+            if expected_ids:
+                pending_assistant = message
+                pending_expected_ids = expected_ids
+                pending_tool_messages = []
+                pending_tool_ids = []
+                continue
+            sanitized.append(message)
+            continue
+        if role == "tool":
+            should_keep, tool_call_id = _is_pending_tool_message(
+                message,
+                pending_assistant,
+                pending_expected_ids,
+                pending_tool_ids,
+            )
+            if should_keep:
+                pending_tool_messages.append(message)
+                pending_tool_ids.append(tool_call_id)
+            continue
+        pending_assistant, pending_expected_ids, pending_tool_messages, pending_tool_ids = (
+            _flush_pending_tool_group(
+                sanitized,
+                pending_assistant,
+                pending_expected_ids,
+                pending_tool_messages,
+                pending_tool_ids,
+            )
+        )
+        sanitized.append(message)
+
+    _flush_pending_tool_group(
+        sanitized,
+        pending_assistant,
+        pending_expected_ids,
+        pending_tool_messages,
+        pending_tool_ids,
+    )
+    return sanitized
 
 
 def _message_payload_chars(msg: dict[str, Any]) -> int:

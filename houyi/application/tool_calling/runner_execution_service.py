@@ -558,7 +558,7 @@ class _ToolCallExecutionService:
         state = exec_ctx.state
         services = exec_ctx.services
 
-        tool_start = time.perf_counter() if config.tool_loop_enable_timing else 0.0
+        tool_start = time.perf_counter()
         if config.tool_loop_injected_tool_latency_seconds:
             await asyncio.sleep(config.tool_loop_injected_tool_latency_seconds)
 

@@ -26,7 +26,7 @@ class TestSiliconFlowAdapterMockMode:
     """Test SiliconFlowAdapter when no API key is set (mock mode)."""
 
     @pytest.mark.asyncio
-    async def test_mock_streaming_no_api_key(self):
+    async def test_mock_streaming(self):
         with patch.dict(os.environ, {}, clear=False):
             env = os.environ.copy()
             env.pop("SILICONFLOW_API_KEY", None)
@@ -46,7 +46,7 @@ class TestSiliconFlowAdapterMockMode:
                 assert all(r is None for _, r in chunks)
 
     @pytest.mark.asyncio
-    async def test_stream_completion_delegates_to_stream_chat(self):
+    async def test_stream_completion_uses_chat(self):
         """stream_completion should delegate to stream_chat."""
         with patch.dict(os.environ, {}, clear=False):
             env = os.environ.copy()
@@ -64,7 +64,7 @@ class TestSiliconFlowAdapterMockMode:
                 assert "Mock response" in full
 
     @pytest.mark.asyncio
-    async def test_mock_extracts_last_user_content(self):
+    async def test_mock_extracts_user(self):
         """Mock mode should use last user message content."""
         with patch.dict(os.environ, {}, clear=False):
             env = os.environ.copy()
@@ -231,7 +231,7 @@ class TestSiliconFlowAdapterSDKReasoning:
     """Test SDK path with reasoning enabled (covers extra_body and kwargs branches)."""
 
     @pytest.mark.asyncio
-    async def test_sdk_with_reasoning_and_kwargs(self):
+    async def test_sdk_reasoning_kwargs(self):
         """Cover enable_reasoning + thinking_budget + extra kwargs."""
 
         class MockDelta:
@@ -348,7 +348,7 @@ class TestSiliconFlowChatRequestSanitization:
     """Test non-stream chat payload sanitation for strict OpenAI-compatible providers."""
 
     @pytest.mark.asyncio
-    async def test_chat_sanitizes_message_content_and_tool_arguments(self):
+    async def test_chat_sanitizes_messages(self):
         captured: dict[str, object] = {}
 
         class MockResponse:
@@ -420,7 +420,7 @@ class TestSiliconFlowStreamingRequestSanitization:
     """Test stream_chat request payload sanitation for strict providers."""
 
     @pytest.mark.asyncio
-    async def test_stream_chat_sanitizes_message_content_and_tool_arguments(self):
+    async def test_stream_sanitizes_messages(self):
         captured_payload: dict[str, object] = {}
 
         sse_lines = [
@@ -492,7 +492,7 @@ class TestSiliconFlowStreamingRequestSanitization:
 
 
 class TestSiliconFlowAdapterHelpers:
-    def test_build_httpx_chat_body_includes_tools_and_tool_choice(self):
+    def test_build_httpx_chat_body(self):
         adapter = SiliconFlowAdapter(
             api_key="test-key",
             base_url="https://example.invalid/v1",
@@ -518,7 +518,7 @@ class TestSiliconFlowAdapterHelpers:
             "tool_choice": "required",
         }
 
-    def test_build_sdk_stream_kwargs_includes_tool_choice_and_extra_body(self):
+    def test_build_sdk_stream_kwargs(self):
         adapter = SiliconFlowAdapter(
             api_key="test-key",
             base_url="https://example.invalid/v1",
@@ -544,7 +544,7 @@ class TestSiliconFlowAdapterHelpers:
         assert kwargs["extra_body"] == {"thinking_budget": 256}
         assert kwargs["top_p"] == 0.8
 
-    def test_extract_sdk_tool_calls_delta_and_build_chunk(self):
+    def test_extract_sdk_tool_calls(self):
         adapter = SiliconFlowAdapter(
             api_key="test-key",
             base_url="https://example.invalid/v1",
@@ -574,7 +574,7 @@ class TestSiliconFlowAdapterHelpers:
         ]
         assert adapter.last_finish_reason == "tool_calls"
 
-    def test_parse_httpx_sse_line_handles_done_and_invalid_payload(self):
+    def test_parse_httpx_sse_line(self):
         adapter = SiliconFlowAdapter(
             api_key="test-key",
             base_url="https://example.invalid/v1",
@@ -589,7 +589,7 @@ class TestSiliconFlowAdapterHelpers:
         assert event is None
         assert done is False
 
-    def test_build_httpx_stream_chunk_updates_usage_and_yields_reasoning(self):
+    def test_build_httpx_stream_chunk(self):
         adapter = SiliconFlowAdapter(
             api_key="test-key",
             base_url="https://example.invalid/v1",
@@ -613,7 +613,7 @@ class TestSiliconFlowAdapterHelpers:
 
 class TestSiliconFlowAdapterHttpxChatRetry:
     @pytest.mark.asyncio
-    async def test_chat_httpx_retries_on_transport_error(self):
+    async def test_chat_httpx_retries(self):
         class MockResponse:
             status_code = 200
             text = ""
@@ -667,7 +667,7 @@ class TestSiliconFlowAdapterHttpxChatRetry:
         assert adapter.last_usage == {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3}
 
     @pytest.mark.asyncio
-    async def test_chat_httpx_returns_last_retry_error_when_status_retries_exhausted(self):
+    async def test_chat_httpx_retry_exhausts(self):
         class MockResponse:
             status_code = 500
             text = "server error"
@@ -709,7 +709,7 @@ class TestSiliconFlowAdapterHttpxChatRetry:
 
 class TestSiliconFlowAdapterSdkChat:
     @pytest.mark.asyncio
-    async def test_chat_returns_mock_response_without_api_key(self):
+    async def test_chat_returns_mock(self):
         with patch.dict(os.environ, {}, clear=True):
             EnvConfig._reset()
             SiliconFlowAdapter._SDK_AVAILABLE = False
@@ -721,7 +721,7 @@ class TestSiliconFlowAdapterSdkChat:
         assert result.finish_reason == "stop"
 
     @pytest.mark.asyncio
-    async def test_chat_uses_sdk_path_when_available(self):
+    async def test_chat_uses_sdk(self):
         with patch.dict(os.environ, {"SILICONFLOW_API_KEY": "test-key"}):
             EnvConfig._reset()
             SiliconFlowAdapter._SDK_AVAILABLE = True
@@ -735,7 +735,7 @@ class TestSiliconFlowAdapterSdkChat:
         mocked.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_chat_via_sdk_passes_tools_and_updates_usage(self):
+    async def test_chat_sdk_updates_usage(self):
         tool_call = MagicMock()
         tool_call.model_dump.return_value = {
             "id": "call_1",
@@ -787,7 +787,7 @@ class TestSiliconFlowAdapterSdkChat:
 
 class TestSiliconFlowAdapterHttpxStreamHelpers:
     @pytest.mark.asyncio
-    async def test_handle_httpx_stream_error_response_retries_on_retryable_status(self):
+    async def test_stream_error_retries(self):
         adapter = SiliconFlowAdapter(
             api_key="test-key",
             base_url="https://example.invalid/v1",
@@ -813,7 +813,7 @@ class TestSiliconFlowAdapterHttpxStreamHelpers:
             )
 
     @pytest.mark.asyncio
-    async def test_handle_httpx_stream_error_response_raises_on_non_retryable_status(self):
+    async def test_stream_error_raises(self):
         adapter = SiliconFlowAdapter(
             api_key="test-key",
             base_url="https://example.invalid/v1",
@@ -832,7 +832,7 @@ class TestSiliconFlowAdapterHttpxStreamHelpers:
             )
 
     @pytest.mark.asyncio
-    async def test_stream_via_httpx_retries_on_transport_error_then_succeeds(self):
+    async def test_stream_httpx_retries(self):
         sse_lines = [
             "data: " + json.dumps({"choices": [{"delta": {"content": "OK"}}]}),
             "data: [DONE]",
@@ -890,7 +890,7 @@ class TestSiliconFlowAdapterHttpxStreamHelpers:
         assert attempts == 2
         assert chunks == ["OK"]
 
-    def test_build_httpx_stream_payload_keeps_non_none_extra_kwargs(self):
+    def test_build_httpx_stream_payload(self):
         adapter = SiliconFlowAdapter(
             api_key="test-key",
             base_url="https://example.invalid/v1",
@@ -908,7 +908,7 @@ class TestSiliconFlowAdapterHttpxStreamHelpers:
         assert payload["top_p"] == 0.8
         assert "presence_penalty" not in payload
 
-    def test_parse_httpx_sse_line_returns_none_for_non_dict_json(self):
+    def test_parse_httpx_sse_non_dict(self):
         adapter = SiliconFlowAdapter(
             api_key="test-key",
             base_url="https://example.invalid/v1",
@@ -919,7 +919,7 @@ class TestSiliconFlowAdapterHttpxStreamHelpers:
         assert event is None
         assert done is False
 
-    def test_build_httpx_stream_chunk_returns_none_without_content_or_reasoning(self):
+    def test_build_httpx_stream_empty(self):
         adapter = SiliconFlowAdapter(
             api_key="test-key",
             base_url="https://example.invalid/v1",

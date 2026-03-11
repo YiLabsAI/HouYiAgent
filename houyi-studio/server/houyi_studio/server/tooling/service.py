@@ -154,6 +154,13 @@ class ToolCallService:
                 max_tokens = max(1, int(toolcall_max_tokens))
             except ValueError:
                 logger.warning("Invalid HOUYI_TOOLCALL_MAX_TOKENS=%s", toolcall_max_tokens)
+        if toolcall_adapter == "real" and not api_key:
+            logger.warning(
+                "[%s] Tool-calling requested but no runtime API key is configured; "
+                "skipping tool loop and falling back to the normal LLM path",
+                node_id,
+            )
+            return False
         max_parallel_calls: int | None = None
         toolcall_max_parallel_calls = os.getenv(ENV_TOOLCALL_MAX_PARALLEL_CALLS)
         if toolcall_max_parallel_calls:

@@ -1,5 +1,3 @@
-"""Unit tests for houyi.adapters.llm.factory — LLMAdapterFactory."""
-
 from __future__ import annotations
 
 import os
@@ -87,12 +85,12 @@ class TestLLMAdapterFactory:
             adapter = LLMAdapterFactory.create()
             assert hasattr(adapter, "stream_completion")
 
-    def test_google_ai_alias_uses_vertex_path(self):
+    def test_google_routes_vertex(self):
         adapter = LLMAdapterFactory.create(PROVIDER_GOOGLE_AI)
         assert hasattr(adapter, "stream_chat")
 
 
-def test_create_vertex_adapter_falls_back_when_google_sdk_missing(monkeypatch):
+def test_vertex_uses_httpx(monkeypatch):
     fake_env = SimpleNamespace(
         google_project="proj",
         google_api_key=None,
@@ -101,10 +99,7 @@ def test_create_vertex_adapter_falls_back_when_google_sdk_missing(monkeypatch):
         google_project_id="proj",
         google_location="us-central1",
     )
-    monkeypatch.setattr(
-        "houyi.infrastructure.config.env_config.EnvConfig.get",
-        lambda: fake_env,
-    )
+    monkeypatch.setattr(EnvConfig, "get", lambda: fake_env)
 
     original_import = __import__
 
@@ -119,7 +114,7 @@ def test_create_vertex_adapter_falls_back_when_google_sdk_missing(monkeypatch):
     assert adapter.__class__.__name__ == "VertexAIAdapter"
 
 
-def test_create_vertex_adapter_falls_back_when_google_adapter_rejects_env(monkeypatch):
+def test_vertex_rejects_env(monkeypatch):
     class _BadAdapter:
         @staticmethod
         def from_env():
@@ -133,10 +128,7 @@ def test_create_vertex_adapter_falls_back_when_google_adapter_rejects_env(monkey
         google_project_id="proj",
         google_location="us-central1",
     )
-    monkeypatch.setattr(
-        "houyi.infrastructure.config.env_config.EnvConfig.get",
-        lambda: fake_env,
-    )
+    monkeypatch.setattr(EnvConfig, "get", lambda: fake_env)
     fake_module = ModuleType("houyi.adapters.llm.vertex_gemini_adapter")
     fake_module.GoogleVertexGeminiAdapter = _BadAdapter
 
@@ -146,7 +138,51 @@ def test_create_vertex_adapter_falls_back_when_google_adapter_rejects_env(monkey
     assert adapter.__class__.__name__ == "VertexAIAdapter"
 
 
-def test_create_deepseek_adapter_prefers_deepseek_env_over_openai_fallbacks(monkeypatch):
+def test_vertex_forces_httpx(monkeypatch):
+    fake_env = SimpleNamespace(
+        google_project="proj",
+        google_api_key="api-key",
+        gemini_model="gemini-test",
+        google_credentials_path=None,
+        google_project_id="proj",
+        google_location="us-central1",
+    )
+    monkeypatch.setattr(EnvConfig, "get", lambda: fake_env)
+
+    with patch.dict(os.environ, {"HOUYI_VERTEX_ADAPTER": "httpx"}, clear=False):
+        adapter = _create_vertex_adapter()
+
+    assert adapter.__class__.__name__ == "VertexAIAdapter"
+
+
+def test_vertex_forces_genai(monkeypatch):
+    class _FakeGeminiAdapter:
+        @staticmethod
+        def from_env():
+            return "forced-genai"
+
+    fake_env = SimpleNamespace(
+        google_project=None,
+        google_api_key=None,
+        gemini_model="gemini-test",
+        google_credentials_path=None,
+        google_project_id=None,
+        google_location="us-central1",
+    )
+    monkeypatch.setattr(EnvConfig, "get", lambda: fake_env)
+    fake_module = ModuleType("houyi.adapters.llm.vertex_gemini_adapter")
+    fake_module.GoogleVertexGeminiAdapter = _FakeGeminiAdapter
+
+    with (
+        patch.dict(os.environ, {"HOUYI_VERTEX_ADAPTER": "genai"}, clear=False),
+        patch.dict(sys.modules, {"houyi.adapters.llm.vertex_gemini_adapter": fake_module}),
+    ):
+        adapter = _create_vertex_adapter()
+
+    assert adapter == "forced-genai"
+
+
+def test_deepseek_prefers_env(monkeypatch):
     fake_openai = ModuleType("openai")
     fake_openai.AsyncOpenAI = MagicMock()
     with (
@@ -171,7 +207,7 @@ def test_create_deepseek_adapter_prefers_deepseek_env_over_openai_fallbacks(monk
     assert adapter.model == "deepseek-chat"
 
 
-def test_create_deepseek_adapter_uses_openai_and_toolcall_fallbacks(monkeypatch):
+def test_deepseek_uses_openai(monkeypatch):
     fake_openai = ModuleType("openai")
     fake_openai.AsyncOpenAI = MagicMock()
     with (

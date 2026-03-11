@@ -1,5 +1,3 @@
-"""Tests for SkillSpec.is_core field and CoreToolProtectionError."""
-
 from __future__ import annotations
 
 from pathlib import Path
@@ -161,9 +159,7 @@ class TestIsCoreField:
 
 
 class TestCoreConflictRegisteredName:
-    def test_register_from_skill_file_returns_ext_name_on_core_conflict(
-        self, tmp_path: Path
-    ) -> None:
+    def test_returns_ext_name_on_core_conflict(self, tmp_path: Path) -> None:
         registry = SkillRegistry()
         registry.register(_make_skill(name="planning-with-files", is_core=True), overwrite=True)
 

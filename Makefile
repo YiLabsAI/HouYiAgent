@@ -71,7 +71,7 @@ install-studio:
 
 # Full setup: SDK dev + RAG extras + Studio server + UI
 install-all:
-	uv sync --extra dev --extra rag
+	uv sync --extra dev --extra studio-server --extra rag-full --extra model-adapters --extra vertex-ai --extra websearch-ddg --extra websearch-tavily --extra websearch-readability
 	uv pip install -e houyi-studio/server --quiet
 	@cd houyi-studio/ui && pnpm install --frozen-lockfile
 	@echo "✓ All dependencies installed (SDK + RAG + Studio + UI)"

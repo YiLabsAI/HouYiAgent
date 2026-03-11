@@ -98,7 +98,7 @@ class TestDeleteMessage:
         assert len(reloaded.messages) == 3
 
     @pytest.mark.asyncio
-    async def test_delete_assistant_message_cascades_preceding_tool_steps(
+    async def test_delete_assistant_cascades_tools(
         self,
         service: ChatService,
         store: JsonStore,
@@ -120,7 +120,7 @@ class TestDeleteMessage:
         assert remaining_ids == ["u1"]
 
     @pytest.mark.asyncio
-    async def test_delete_assistant_message_removes_tool_call_carrier(
+    async def test_delete_assistant_removes_carrier(
         self,
         service: ChatService,
         store: JsonStore,

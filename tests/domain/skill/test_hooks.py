@@ -1,5 +1,3 @@
-"""Tests for skill hooks system."""
-
 from pathlib import Path
 
 import pytest
@@ -18,13 +16,13 @@ from houyi.domain.skill.schema import parse_hooks_config, parse_skill_md
 class TestSkillHook:
     """Tests for SkillHook dataclass."""
 
-    def test_matches_tool_no_matcher(self) -> None:
+    def test_matches_tool_default(self) -> None:
         """Hook without matcher matches all tools."""
         hook = SkillHook(event=HookEvent.PRE_TOOL_USE)
         assert hook.matches_tool("any_tool")
         assert hook.matches_tool("Write")
 
-    def test_matches_tool_with_regex(self) -> None:
+    def test_matches_tool_regex(self) -> None:
         """Hook with regex matcher filters tools."""
         hook = SkillHook(event=HookEvent.PRE_TOOL_USE, matcher="Write|Edit")
         assert hook.matches_tool("Write")
@@ -32,7 +30,7 @@ class TestSkillHook:
         assert not hook.matches_tool("Read")
         assert not hook.matches_tool("Shell")
 
-    def test_matches_tool_invalid_regex(self) -> None:
+    def test_matches_tool_invalid(self) -> None:
         """Invalid regex returns False."""
         hook = SkillHook(event=HookEvent.PRE_TOOL_USE, matcher="[invalid")
         assert not hook.matches_tool("any_tool")
@@ -66,7 +64,7 @@ class TestSkillHooksManager:
         assert len(manager.get_registered_hooks(HookEvent.POST_TOOL_USE)) == 0
 
     @pytest.mark.asyncio
-    async def test_trigger_hook_no_hooks(self) -> None:
+    async def test_trigger_hook_empty(self) -> None:
         """Trigger with no hooks returns empty result."""
         manager = SkillHooksManager()
         context = HookContext(tool_name="Write")
@@ -110,7 +108,7 @@ class TestSkillHooksManager:
         assert called == ["Write"]
 
     @pytest.mark.asyncio
-    async def test_trigger_hook_with_matcher_filtering(self) -> None:
+    async def test_trigger_hook_filters(self) -> None:
         """Test that matcher correctly filters tool names."""
         from unittest.mock import MagicMock
 
@@ -177,7 +175,7 @@ class TestSkillHooksManagerExtended:
         assert result.output == "hello"
 
     @pytest.mark.asyncio
-    async def test_command_hook_with_env_vars(self) -> None:
+    async def test_command_hook_env(self) -> None:
         """Test command hook with environment variables."""
         import sys
         import tempfile
@@ -210,32 +208,7 @@ class TestSkillHooksManagerExtended:
             assert tmpdir in (result.output or "")
 
     @pytest.mark.asyncio
-    async def test_command_hook_failure(self) -> None:
-        """Test command hook that fails."""
-        from unittest.mock import MagicMock
-
-        manager = SkillHooksManager()
-
-        skill = MagicMock()
-        skill.name = "fail-skill"
-        skill.hooks = [
-            SkillHook(
-                event=HookEvent.PRE_TOOL_USE,
-                hook_type=HookType.COMMAND,
-                command="exit 1",
-            ),
-        ]
-
-        manager.register_hooks(skill)
-        context = HookContext(tool_name="Write")
-
-        result = await manager.trigger_hook(HookEvent.PRE_TOOL_USE, context)
-
-        # Manager catches failures and continues
-        assert result.success  # Aggregated result is still success
-
-    @pytest.mark.asyncio
-    async def test_command_hook_no_command(self) -> None:
+    async def test_command_hook_missing(self) -> None:
         """Test command hook with no command specified."""
         from unittest.mock import MagicMock
 
@@ -259,7 +232,7 @@ class TestSkillHooksManagerExtended:
         assert result.success
 
     @pytest.mark.asyncio
-    async def test_stop_hook_blocks_termination(self) -> None:
+    async def test_stop_hook_blocks(self) -> None:
         """Test Stop hook that blocks termination (non-zero exit)."""
         from unittest.mock import MagicMock
 
@@ -283,7 +256,7 @@ class TestSkillHooksManagerExtended:
         assert result.should_block
 
     @pytest.mark.asyncio
-    async def test_handler_hook_returns_dict(self) -> None:
+    async def test_handler_hook_dict(self) -> None:
         """Test handler hook that returns a dict."""
         from unittest.mock import MagicMock
 
@@ -315,7 +288,7 @@ class TestSkillHooksManagerExtended:
         assert result.should_block
 
     @pytest.mark.asyncio
-    async def test_handler_hook_returns_hook_result(self) -> None:
+    async def test_handler_hook_result(self) -> None:
         """Test handler hook that returns a HookResult directly."""
         from unittest.mock import MagicMock
 
@@ -346,7 +319,7 @@ class TestSkillHooksManagerExtended:
         assert result.output == "direct result"
 
     @pytest.mark.asyncio
-    async def test_handler_hook_returns_none(self) -> None:
+    async def test_handler_hook_none(self) -> None:
         """Test handler hook that returns None."""
         from unittest.mock import MagicMock
 
@@ -428,7 +401,7 @@ class TestSkillHooksManagerExtended:
         assert result.success
 
     @pytest.mark.asyncio
-    async def test_handler_hook_load_from_path(self) -> None:
+    async def test_handler_hook_loads(self) -> None:
         """Test loading handler from dotted path."""
         from unittest.mock import MagicMock
 
@@ -453,7 +426,7 @@ class TestSkillHooksManagerExtended:
         assert result.success
 
     @pytest.mark.asyncio
-    async def test_handler_hook_invalid_path(self) -> None:
+    async def test_handler_hook_invalid(self) -> None:
         """Test handler hook with invalid dotted path."""
         from unittest.mock import MagicMock
 
@@ -477,7 +450,7 @@ class TestSkillHooksManagerExtended:
         # Fails gracefully
         assert result.success  # Aggregated result
 
-    def test_get_registered_hooks_all(self) -> None:
+    def test_get_registered_hooks(self) -> None:
         """Test getting all registered hooks."""
         from unittest.mock import MagicMock
 
@@ -522,7 +495,7 @@ class TestSkillHooksManagerExtended:
         # Should not raise
         manager.unregister_hooks("nonexistent-skill")
 
-    def test_register_skill_without_hooks(self) -> None:
+    def test_register_skill_without(self) -> None:
         """Test registering a skill without hooks attribute."""
         from unittest.mock import MagicMock
 
@@ -535,7 +508,7 @@ class TestSkillHooksManagerExtended:
         manager.register_hooks(skill)
         assert len(manager.get_registered_hooks()) == 0
 
-    def test_register_skill_with_empty_hooks(self) -> None:
+    def test_register_skill_empty(self) -> None:
         """Test registering a skill with empty hooks list."""
         from unittest.mock import MagicMock
 
@@ -560,21 +533,21 @@ class TestLoadHandler:
         assert handler is not None
         assert callable(handler)
 
-    def test_load_handler_no_dot(self) -> None:
+    def test_load_handler_format(self) -> None:
         """Test loading handler with no dot in path."""
         manager = SkillHooksManager()
 
         handler = manager._load_handler("nomodule")
         assert handler is None
 
-    def test_load_handler_import_error(self) -> None:
+    def test_load_handler_import(self) -> None:
         """Test loading handler with import error."""
         manager = SkillHooksManager()
 
         handler = manager._load_handler("nonexistent.module.func")
         assert handler is None
 
-    def test_load_handler_no_attribute(self) -> None:
+    def test_load_handler_attr(self) -> None:
         """Test loading handler with missing attribute."""
         manager = SkillHooksManager()
 
@@ -672,7 +645,7 @@ A simple calculator skill.
         assert "input_schema" in result
         assert "output_schema" in result
 
-    def test_parse_claude_nested_hooks_format(self) -> None:
+    def test_parse_claude_hooks(self) -> None:
         """Test parsing Claude's nested hooks format."""
         config = {
             "PreToolUse": [

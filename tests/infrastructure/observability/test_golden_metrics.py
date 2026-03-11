@@ -58,7 +58,7 @@ class TestCollectionOverhead:
     MIN_NODE_LATENCY_MS = 50.0
     MAX_OVERHEAD_PERCENT = 2.0
 
-    def test_span_overhead_below_2_percent_of_min_node_latency(self) -> None:
+    def test_keeps_span_overhead_below_2_percent(self) -> None:
         """Core golden metric: span creation < 2% of minimum node latency."""
         # Warm up
         _measure_span_overhead_absolute(100)

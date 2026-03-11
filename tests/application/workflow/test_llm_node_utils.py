@@ -3,7 +3,7 @@ from __future__ import annotations
 from houyi.application.workflow.llm_node_utils import build_llm_node_inputs
 
 
-def test_build_llm_node_inputs_converts_max_tokens_string_and_uses_resolved_tool_settings() -> None:
+def test_converts_max_tokens_and_uses_resolved_tool_settings() -> None:
     resolved_called: dict[str, int] = {"count": 0}
 
     def resolve_tool_settings(config: dict) -> dict:
@@ -31,9 +31,7 @@ def test_build_llm_node_inputs_converts_max_tokens_string_and_uses_resolved_tool
     assert inputs["prompt_cache_key"] == "k1"
 
 
-def test_build_llm_node_inputs_uses_run_settings_without_calling_resolver_and_handles_invalid_max_tokens() -> (
-    None
-):
+def test_uses_run_settings_without_calling_resolver_and_handles_invalid_max_tokens() -> None:
     def resolve_tool_settings(_config: dict) -> dict:
         raise AssertionError("resolver should not be called when run_settings is provided")
 

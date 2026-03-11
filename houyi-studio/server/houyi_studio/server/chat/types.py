@@ -7,6 +7,7 @@ where needed but own the storage schema (JSON Store format).
 from __future__ import annotations
 
 import base64
+import json
 import logging
 import time
 import uuid
@@ -283,6 +284,88 @@ class Conversation(BaseModel):
     # Schema version for forward compatibility
     schema_version: int = 1
 
+    @staticmethod
+    def _sanitize_assistant_tool_markers(raw: str) -> str:
+        has_tool_marker = any(
+            marker in raw
+            for marker in (
+                "<tool_call",
+                "</tool_call>",
+                "<|tool_",
+                "<arg_",
+                "<think>",
+                "</think>",
+            )
+        )
+        if not has_tool_marker:
+            return raw
+
+        stripped = raw
+        replacements = (
+            (r"<tool_call[^>]*>[\s\S]*?</tool_call>", " "),
+            (r"<tool_call[^>]*>", " "),
+            (r"</tool_call>", " "),
+            (r"<arg_[^>]+>[\s\S]*?</arg_[^>]+>", " "),
+            (r"</?think>", " "),
+            (r"<\|tool_calls_section_begin\|>", " "),
+            (r"<\|tool_calls_section_end\|>", " "),
+            (r"<\|tool_call_begin\|>", " "),
+            (r"<\|tool_call_end\|>", " "),
+            (r"<\|tool_call_argument_begin\|>", " "),
+            (r"<\|tool_call_argument_end\|>", " "),
+            (r"<\|tool_[^|]+\|>", " "),
+        )
+        import re
+
+        for pattern, replacement in replacements:
+            stripped = re.sub(pattern, replacement, stripped, flags=re.IGNORECASE)
+        stripped = re.sub(r"[ \t]{2,}", " ", stripped)
+        stripped = re.sub(r"\n{3,}", "\n\n", stripped).strip()
+        if stripped:
+            return stripped
+
+        fallback = raw
+        fallback_replacements = (
+            (r"<tool_call[^>]*>", " "),
+            (r"</tool_call>", " "),
+            (r"<arg_[^>]+>", " "),
+            (r"</arg_[^>]+>", " "),
+            (r"</?think>", " "),
+            (r"<\|tool_calls_section_begin\|>", " "),
+            (r"<\|tool_calls_section_end\|>", " "),
+            (r"<\|tool_call_begin\|>", " "),
+            (r"<\|tool_call_end\|>", " "),
+            (r"<\|tool_call_argument_begin\|>", " "),
+            (r"<\|tool_call_argument_end\|>", " "),
+            (r"<\|tool_[^|]+\|>", " "),
+        )
+        for pattern, replacement in fallback_replacements:
+            fallback = re.sub(pattern, replacement, fallback, flags=re.IGNORECASE)
+        fallback = re.sub(r"[ \t]{2,}", " ", fallback)
+        return re.sub(r"\n{3,}", "\n\n", fallback).strip()
+
+    @classmethod
+    def _is_invisible_assistant_placeholder(
+        cls,
+        message: Message,
+        tool_steps: list[Message],
+    ) -> bool:
+        if message.role != MessageRole.ASSISTANT:
+            return False
+        normalized_content = cls._sanitize_assistant_tool_markers(message.content or "")
+        normalized_reasoning = cls._sanitize_assistant_tool_markers(message.reasoning_content or "")
+        return (
+            not normalized_content.strip()
+            and not normalized_reasoning.strip()
+            and not message.attachments
+            and not tool_steps
+            and not message.tool_calls
+        )
+
+    @staticmethod
+    def _collapse_assistant_tool_carrier(message: Message) -> Message:
+        return message.model_copy(update={"content": ""})
+
     @property
     def message_count(self) -> int:
         """Number of messages in this conversation."""
@@ -291,10 +374,110 @@ class Conversation(BaseModel):
     @property
     def visible_message_count(self) -> int:
         """Message count aligned with the chat timeline's primary visible items."""
+        items: list[tuple[Message, list[Message]]] = []
+        pending_tool_steps: list[Message] = []
+        latest_assistant_carrier: Message | None = None
+        latest_carrier_has_tool_calls = False
+
+        def append_pending_tool_step(step: Message) -> None:
+            incoming_call_id = step.tool_call_id if isinstance(step.tool_call_id, str) else None
+            for index, pending in enumerate(pending_tool_steps):
+                pending_call_id = (
+                    pending.tool_call_id if isinstance(pending.tool_call_id, str) else None
+                )
+                if incoming_call_id and pending_call_id and pending_call_id == incoming_call_id:
+                    pending_tool_steps[index] = step
+                    return
+                if pending.message_id == step.message_id:
+                    pending_tool_steps[index] = step
+                    return
+            pending_tool_steps.append(step)
+
+        for message in self.messages:
+            if message.role == MessageRole.SYSTEM:
+                continue
+
+            if message.role == MessageRole.ASSISTANT and message.tool_calls:
+                latest_assistant_carrier = message
+                latest_carrier_has_tool_calls = True
+                for index, tool_call in enumerate(message.tool_calls):
+                    call_payload = tool_call if isinstance(tool_call, dict) else {}
+                    function_payload = (
+                        call_payload.get("function")
+                        if isinstance(call_payload.get("function"), dict)
+                        else {}
+                    )
+                    raw_args = function_payload.get("arguments")
+                    args_text = (
+                        raw_args
+                        if isinstance(raw_args, str)
+                        else json.dumps(raw_args, ensure_ascii=False)
+                        if raw_args is not None
+                        else ""
+                    )
+                    append_pending_tool_step(
+                        Message(
+                            message_id=f"{message.message_id}-tool-call-{index}",
+                            role=MessageRole.TOOL,
+                            content=args_text,
+                            name=function_payload.get("name")
+                            if isinstance(function_payload.get("name"), str)
+                            else "tool",
+                            tool_call_id=call_payload.get("id")
+                            if isinstance(call_payload.get("id"), str)
+                            else None,
+                            metadata={
+                                "tool_status": "ok",
+                                "round_index": int(message.metadata.get("round_index") or 0)
+                                or None,
+                            },
+                            created_at=message.created_at,
+                        )
+                    )
+                continue
+
+            if message.role == MessageRole.TOOL:
+                append_pending_tool_step(message)
+                continue
+
+            if message.role == MessageRole.ASSISTANT:
+                items.append((message, pending_tool_steps))
+                latest_assistant_carrier = message
+                latest_carrier_has_tool_calls = False
+                pending_tool_steps = []
+                continue
+
+            if pending_tool_steps:
+                for step in pending_tool_steps:
+                    items.append((step, []))
+                pending_tool_steps = []
+
+            items.append((message, []))
+
+        if pending_tool_steps:
+            if latest_assistant_carrier and latest_carrier_has_tool_calls:
+                if items and items[-1][0].message_id == latest_assistant_carrier.message_id:
+                    last_message, last_steps = items[-1]
+                    items[-1] = (
+                        self._collapse_assistant_tool_carrier(last_message),
+                        [*last_steps, *pending_tool_steps],
+                    )
+                else:
+                    items.append(
+                        (
+                            self._collapse_assistant_tool_carrier(latest_assistant_carrier),
+                            pending_tool_steps,
+                        )
+                    )
+            else:
+                for step in pending_tool_steps:
+                    items.append((step, []))
+
         return sum(
             1
-            for message in self.messages
-            if message.role not in {MessageRole.SYSTEM, MessageRole.TOOL}
+            for message, tool_steps in items
+            if message.role != MessageRole.TOOL
+            and not self._is_invisible_assistant_placeholder(message, tool_steps)
         )
 
     @property

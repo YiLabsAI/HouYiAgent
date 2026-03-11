@@ -138,6 +138,25 @@ class TestStreamChatSSE:
         assert error_evt["data"]["chunks_sent"] == 1
 
     @pytest.mark.asyncio
+    async def test_stream_error_can_emit_visible_fallback_text(self):
+        async def mock_llm():
+            raise RuntimeError("LLM connection failed")
+            yield
+
+        events = []
+        async for chunk in stream_chat_sse(
+            mock_llm(),
+            message_id="msg004b",
+            error_message_builder=lambda exc: f"visible: {exc}",
+        ):
+            events.append(chunk)
+
+        parsed = _parse_sse_events(events)
+        assert parsed[0]["event"] == "message.delta"
+        assert parsed[0]["data"]["content"] == "visible: LLM connection failed"
+        assert parsed[1]["event"] == "message.error"
+
+    @pytest.mark.asyncio
     async def test_stream_abort(self):
         """CancelledError → message.aborted event."""
 
@@ -175,6 +194,47 @@ class TestStreamChatSSE:
         assert len(parsed) == 1
         assert parsed[0]["event"] == "message.finish"
         assert parsed[0]["data"]["total_chunks"] == 0
+
+    @pytest.mark.asyncio
+    async def test_finish_reason_can_be_provided_explicitly(self):
+        """Finish event uses explicit provider finish reason when supplied."""
+
+        async def mock_llm():
+            yield ("cut", None)
+
+        events = []
+        async for chunk in stream_chat_sse(
+            mock_llm(),
+            message_id="msg007",
+            finish_reason="length",
+        ):
+            events.append(chunk)
+
+        parsed = _parse_sse_events(events)
+        finish = next(e for e in parsed if e["event"] == "message.finish")
+        assert finish["data"]["finish_reason"] == "length"
+
+    @pytest.mark.asyncio
+    async def test_finish_reason_can_be_resolved_lazily(self):
+        """Finish event resolves finish reason after the stream completes."""
+
+        state = {"finish_reason": None}
+
+        async def mock_llm():
+            yield ("partial", None)
+            state["finish_reason"] = "tool_calls"
+
+        events = []
+        async for chunk in stream_chat_sse(
+            mock_llm(),
+            message_id="msg008",
+            finish_reason=lambda: state["finish_reason"],
+        ):
+            events.append(chunk)
+
+        parsed = _parse_sse_events(events)
+        finish = next(e for e in parsed if e["event"] == "message.finish")
+        assert finish["data"]["finish_reason"] == "tool_calls"
 
     @pytest.mark.asyncio
     async def test_event_ids_include_message_id(self):

@@ -125,7 +125,7 @@ def _build_execution(*, execution_id: str, plan_id: str, session_id: str) -> Exe
     )
 
 
-def test_create_checkpoint_persists_and_returns_payload() -> None:
+def test_checkpoint_creates_payload() -> None:
     checkpoint_store = _CheckpointStore()
     execution_store = _ExecutionStore()
     plan_store = _PlanStore()
@@ -171,7 +171,7 @@ def test_create_checkpoint_persists_and_returns_payload() -> None:
     assert payload.session_id == "s1"
 
 
-def test_restore_checkpoint_returns_failure_when_not_found() -> None:
+def test_checkpoint_restore_fails() -> None:
     checkpoint_store = _CheckpointStore()
     execution_store = _ExecutionStore()
     plan_store = _PlanStore()
@@ -199,7 +199,7 @@ def test_restore_checkpoint_returns_failure_when_not_found() -> None:
     assert outcome.execution is None
 
 
-def test_restore_checkpoint_forks_execution_resets_nodes_and_copies_checkpoints() -> None:
+def test_checkpoint_restore_forks() -> None:
     checkpoint_store = _CheckpointStore()
     execution_store = _ExecutionStore()
     plan_store = _PlanStore()
@@ -296,7 +296,7 @@ def test_restore_checkpoint_forks_execution_resets_nodes_and_copies_checkpoints(
     assert getattr(llm_call_logs[forked.execution_id][0], "call_id", None) == "llm_0_n1"
 
 
-def test_restore_terminal_checkpoint_replays_all_nodes() -> None:
+def test_terminal_replays_all() -> None:
     """Restoring from the last checkpoint (trigger_node is the last node)
     should reset ALL nodes (replay-all semantics) instead of failing."""
     checkpoint_store = _CheckpointStore()

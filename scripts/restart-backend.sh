@@ -11,7 +11,7 @@ if ! command -v uv &> /dev/null; then
 fi
 
 if [ ! -d "${ROOT_DIR}/.venv" ]; then
-    echo "❌ .venv not found. Run: uv sync --extra dev --extra studio-server --extra rag-full --extra model-adapters"
+    echo "❌ .venv not found. Run: uv sync --extra dev --extra studio-server --extra rag-full --extra model-adapters --extra vertex-ai --extra websearch-ddg --extra websearch-tavily --extra websearch-readability"
     exit 1
 fi
 
@@ -34,7 +34,7 @@ cd "$ROOT_DIR"
 
 # Sync backend runtime dependencies from the root project extras
 echo "🔄 Syncing backend dependencies..."
-uv sync --extra dev --extra studio-server --extra rag-full --extra model-adapters --extra websearch-ddg --extra websearch-tavily --extra websearch-readability --quiet
+uv sync --extra dev --extra studio-server --extra rag-full --extra model-adapters --extra vertex-ai --extra websearch-ddg --extra websearch-tavily --extra websearch-readability --quiet
 
 # Ensure the local houyi_studio package is linked into the venv after sync
 if ! uv run python -c "import houyi_studio" 2>/dev/null; then
@@ -58,6 +58,6 @@ WEB_SEARCH_CACHE_ENABLED=${WEB_SEARCH_CACHE_ENABLED:-1}
 WEB_SEARCH_CACHE_TTL=${WEB_SEARCH_CACHE_TTL:-600}
 WEB_SEARCH_CACHE_MAX_SIZE=${WEB_SEARCH_CACHE_MAX_SIZE:-256}
 WEB_SEARCH_CACHE_LOG_HITS=${WEB_SEARCH_CACHE_LOG_HITS:-1}
-WEB_SEARCH_PROVIDER=${WEB_SEARCH_PROVIDER:-ddg}
+# WEB_SEARCH_PROVIDER=${WEB_SEARCH_PROVIDER:-ddg}
 
-env FASTEMBED_CACHE_PATH=${FASTEMBED_CACHE_PATH} WEB_SEARCH_CACHE_ENABLED=${WEB_SEARCH_CACHE_ENABLED} WEB_SEARCH_CACHE_TTL=${WEB_SEARCH_CACHE_TTL} WEB_SEARCH_CACHE_MAX_SIZE=${WEB_SEARCH_CACHE_MAX_SIZE} WEB_SEARCH_CACHE_LOG_HITS=${WEB_SEARCH_CACHE_LOG_HITS} WEB_SEARCH_PROVIDER=${WEB_SEARCH_PROVIDER} uv run python -m houyi_studio.server
+env FASTEMBED_CACHE_PATH=${FASTEMBED_CACHE_PATH} WEB_SEARCH_CACHE_ENABLED=${WEB_SEARCH_CACHE_ENABLED} WEB_SEARCH_CACHE_TTL=${WEB_SEARCH_CACHE_TTL} WEB_SEARCH_CACHE_MAX_SIZE=${WEB_SEARCH_CACHE_MAX_SIZE} WEB_SEARCH_CACHE_LOG_HITS=${WEB_SEARCH_CACHE_LOG_HITS} uv run python -m houyi_studio.server

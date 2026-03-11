@@ -22,6 +22,7 @@ Proxy handling:
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import os
@@ -68,6 +69,144 @@ def _build_proxy_http_options(proxy_url: str) -> HttpOptionsDict:
             ),
         },
     )
+
+
+def _parse_json_object(raw_value: Any, fallback_key: str) -> dict[str, Any]:
+    if isinstance(raw_value, dict):
+        return raw_value
+    try:
+        parsed = json.loads(str(raw_value or ""))
+    except (TypeError, json.JSONDecodeError):
+        parsed = None
+    if isinstance(parsed, dict):
+        return parsed
+    return {fallback_key: str(raw_value or "")} if fallback_key else {}
+
+
+def _fallback_tool_call_id(*, function_name: Any, index: int) -> str:
+    normalized_name = str(function_name or "tool").strip() or "tool"
+    return f"gemini_call_{index}_{normalized_name}"
+
+
+def _reset_pending_tool_state() -> tuple[list[Any], list[str], list[str]]:
+    return [], [], []
+
+
+def _collect_active_tool_call_ids(
+    message: dict[str, Any],
+    tool_name_by_call_id: dict[str, str],
+) -> list[str]:
+    active_tool_call_ids: list[str] = []
+    for tool_call in message.get("tool_calls") or []:
+        if not isinstance(tool_call, dict):
+            continue
+        tool_call_id = str(tool_call.get("id") or "")
+        function_payload = tool_call.get("function")
+        if not tool_call_id or not isinstance(function_payload, dict):
+            continue
+        tool_name = str(function_payload.get("name") or "")
+        if tool_name:
+            tool_name_by_call_id[tool_call_id] = tool_name
+        active_tool_call_ids.append(tool_call_id)
+    return active_tool_call_ids
+
+
+def _append_content_turn(types: Any, contents: list[Any], *, role: str, parts: list[Any]) -> None:
+    contents.append(types.Content(role=role, parts=parts))
+
+
+def _is_thought_part(part: Any) -> bool:
+    thought = getattr(part, "thought", None)
+    if isinstance(thought, bool):
+        return thought
+    is_thought = getattr(part, "is_thought", None)
+    if isinstance(is_thought, bool):
+        return is_thought
+    return False
+
+
+def _extract_text_and_reasoning_from_parts(parts: list[Any]) -> tuple[str, str]:
+    content_parts: list[str] = []
+    reasoning_parts: list[str] = []
+    for part in parts:
+        text = getattr(part, "text", None)
+        if text:
+            text_value = str(text)
+            if _is_thought_part(part):
+                reasoning_parts.append(text_value)
+            else:
+                content_parts.append(text_value)
+            continue
+
+        code_execution_result = getattr(part, "code_execution_result", None)
+        code_output = getattr(code_execution_result, "output", None)
+        if isinstance(code_output, str) and code_output:
+            content_parts.append(code_output)
+            continue
+
+        executable_code = getattr(part, "executable_code", None)
+        code = getattr(executable_code, "code", None)
+        if isinstance(code, str) and code:
+            content_parts.append(code)
+    return "".join(content_parts), "".join(reasoning_parts)
+
+
+def _collect_unknown_part_fields(part: Any) -> list[str]:
+    names: list[str] = []
+    raw_dict = getattr(part, "__dict__", None)
+    if isinstance(raw_dict, dict):
+        for key, value in raw_dict.items():
+            if value is None:
+                continue
+            if key in {
+                "text",
+                "function_call",
+                "thought",
+                "is_thought",
+                "thought_signature",
+                "thoughtSignature",
+            }:
+                continue
+            names.append(str(key))
+    payload = getattr(part, "payload", None)
+    if isinstance(payload, dict):
+        for key, value in payload.items():
+            if value is None:
+                continue
+            if key in {"text", "function_call", "thought_signature"}:
+                continue
+            names.append(str(key))
+    return sorted(set(names))
+
+
+def _summarize_unknown_parts(parts: list[Any]) -> list[list[str]]:
+    summaries: list[list[str]] = []
+    for part in parts:
+        names = _collect_unknown_part_fields(part)
+        if names:
+            summaries.append(names)
+    return summaries
+
+
+def _extract_stream_finish_reason(candidate: Any) -> str | None:
+    finish_reason = getattr(candidate, "finish_reason", None)
+    if isinstance(finish_reason, str) and finish_reason:
+        return finish_reason.lower()
+    if finish_reason is None:
+        return None
+    normalized = str(finish_reason).strip()
+    return normalized.lower() if normalized else None
+
+
+def _extract_chunk_candidate(chunk: Any) -> tuple[Any, list[Any]]:
+    candidate = (getattr(chunk, "candidates", None) or [None])[0]
+    candidate_content = getattr(candidate, "content", None)
+    parts = getattr(candidate_content, "parts", None) or []
+    return candidate, parts
+
+
+def _has_function_call_parts(parts: list[Any]) -> bool:
+    return any(getattr(part, "function_call", None) is not None for part in parts)
 
 
 class GoogleVertexGeminiAdapter(LLMAdapter):
@@ -182,23 +321,217 @@ class GoogleVertexGeminiAdapter(LLMAdapter):
 
     # ── Non-streaming (tool calling) ──────────────────────────────
 
+    def _build_function_call_part(
+        self,
+        types: Any,
+        function_payload: dict[str, Any],
+        tool_call_id: str | None = None,
+    ) -> Any | None:
+        tool_name = function_payload.get("name")
+        if not tool_name:
+            return None
+        tool_args = _parse_json_object(function_payload.get("arguments"), "")
+        thought_signature = function_payload.get("thought_signature")
+        function_call = types.FunctionCall(
+            id=str(tool_call_id or ""),
+            name=str(tool_name),
+            args=tool_args,
+        )
+        if thought_signature:
+            signature_bytes = self._decode_thought_signature(thought_signature)
+            if signature_bytes:
+                return types.Part(
+                    function_call=function_call,
+                    thought_signature=signature_bytes,
+                )
+        return types.Part(function_call=function_call)
+
+    def _resolve_tool_call_id(
+        self,
+        *,
+        raw_id: Any,
+        function_name: Any,
+        index: int,
+    ) -> str:
+        resolved = str(raw_id or "").strip()
+        if resolved:
+            return resolved
+        return _fallback_tool_call_id(function_name=function_name, index=index)
+
+    def _build_assistant_tool_call_parts(self, types: Any, message: dict[str, Any]) -> list[Any]:
+        parts: list[Any] = []
+        for tool_call in message.get("tool_calls") or []:
+            if not isinstance(tool_call, dict):
+                continue
+            function_payload = tool_call.get("function")
+            if not isinstance(function_payload, dict):
+                continue
+            function_part = self._build_function_call_part(
+                types,
+                function_payload,
+                str(tool_call.get("id") or ""),
+            )
+            if function_part is not None:
+                parts.append(function_part)
+        return parts
+
+    def _build_tool_response_part(
+        self,
+        types: Any,
+        message: dict[str, Any],
+        tool_name_by_call_id: dict[str, str] | None = None,
+    ) -> Any | None:
+        tool_name = str(message.get("name") or "")
+        if not tool_name:
+            tool_call_id = str(message.get("tool_call_id") or "")
+            if tool_call_id and tool_name_by_call_id:
+                tool_name = str(tool_name_by_call_id.get(tool_call_id) or "")
+        if not tool_name:
+            return None
+        tool_response = _parse_json_object(message.get("content", ""), "response")
+        return types.Part(
+            function_response=types.FunctionResponse(
+                id=str(message.get("tool_call_id") or ""),
+                name=tool_name,
+                response=tool_response,
+            )
+        )
+
+    def _build_content_parts(self, types: Any, message: dict[str, Any]) -> list[Any]:
+        parts: list[Any] = []
+        content_text = str(message.get("content", "") or "")
+        if content_text:
+            parts.append(types.Part.from_text(text=content_text))
+        if message["role"] == "assistant":
+            parts.extend(self._build_assistant_tool_call_parts(types, message))
+        return parts or [types.Part.from_text(text="")]
+
+    def _flush_pending_tool_responses(
+        self,
+        *,
+        types: Any,
+        contents: list[Any],
+        pending_parts: list[Any],
+        active_tool_call_ids: list[str],
+        pending_tool_response_ids: list[str],
+    ) -> tuple[list[Any], list[str], list[str]]:
+        if not pending_parts:
+            return _reset_pending_tool_state()
+        if active_tool_call_ids and pending_tool_response_ids != active_tool_call_ids:
+            logger.warning(
+                "Gemini: dropping incomplete tool response turn (expected=%s, got=%s)",
+                active_tool_call_ids,
+                pending_tool_response_ids,
+            )
+            return _reset_pending_tool_state()
+        contents.append(types.Content(role="user", parts=pending_parts))
+        return _reset_pending_tool_state()
+
+    def _queue_tool_response_part(
+        self,
+        *,
+        types: Any,
+        message: dict[str, Any],
+        active_tool_call_ids: list[str],
+        pending_tool_response_parts: list[Any],
+        pending_tool_response_ids: list[str],
+        tool_name_by_call_id: dict[str, str],
+    ) -> tuple[list[Any], list[str]]:
+        tool_call_id = str(message.get("tool_call_id") or "")
+        if not active_tool_call_ids or not tool_call_id or tool_call_id not in active_tool_call_ids:
+            logger.warning(
+                "Gemini: dropping orphan tool response (tool_call_id=%s, active_ids=%s)",
+                tool_call_id or "missing",
+                active_tool_call_ids,
+            )
+            return pending_tool_response_parts, pending_tool_response_ids
+        if tool_call_id in pending_tool_response_ids:
+            logger.warning(
+                "Gemini: dropping duplicate tool response (tool_call_id=%s)",
+                tool_call_id,
+            )
+            return pending_tool_response_parts, pending_tool_response_ids
+        tool_response_part = self._build_tool_response_part(
+            types,
+            message,
+            tool_name_by_call_id,
+        )
+        if tool_response_part is None:
+            return pending_tool_response_parts, pending_tool_response_ids
+        return (
+            [*pending_tool_response_parts, tool_response_part],
+            [*pending_tool_response_ids, tool_call_id],
+        )
+
     def _prepare_contents_and_system(
         self, types: Any, messages: list[LLMMessage | dict]
     ) -> tuple[str | None, list[Any]]:
         normalized_messages = self._normalize_messages(messages)
         system_instruction = None
         contents: list[Any] = []
+        pending_tool_response_parts: list[Any] = []
+        tool_name_by_call_id: dict[str, str] = {}
+        active_tool_call_ids: list[str] = []
+        pending_tool_response_ids: list[str] = []
+
         for message in normalized_messages:
-            if message["role"] == "system":
+            role = message["role"]
+            if role == "system":
                 system_instruction = message["content"]
                 continue
-            role = "user" if message["role"] == "user" else "model"
-            contents.append(
-                types.Content(
-                    role=role,
-                    parts=[types.Part.from_text(text=message.get("content", ""))],
+            if role == "assistant":
+                (
+                    pending_tool_response_parts,
+                    pending_tool_response_ids,
+                    active_tool_call_ids,
+                ) = self._flush_pending_tool_responses(
+                    types=types,
+                    contents=contents,
+                    pending_parts=pending_tool_response_parts,
+                    active_tool_call_ids=active_tool_call_ids,
+                    pending_tool_response_ids=pending_tool_response_ids,
                 )
+                active_tool_call_ids = _collect_active_tool_call_ids(
+                    message,
+                    tool_name_by_call_id,
+                )
+                parts = self._build_content_parts(types, message)
+                _append_content_turn(types, contents, role="model", parts=parts)
+                continue
+            if role == "tool":
+                pending_tool_response_parts, pending_tool_response_ids = (
+                    self._queue_tool_response_part(
+                        types=types,
+                        message=message,
+                        active_tool_call_ids=active_tool_call_ids,
+                        pending_tool_response_parts=pending_tool_response_parts,
+                        pending_tool_response_ids=pending_tool_response_ids,
+                        tool_name_by_call_id=tool_name_by_call_id,
+                    )
+                )
+                continue
+
+            (
+                pending_tool_response_parts,
+                pending_tool_response_ids,
+                active_tool_call_ids,
+            ) = self._flush_pending_tool_responses(
+                types=types,
+                contents=contents,
+                pending_parts=pending_tool_response_parts,
+                active_tool_call_ids=active_tool_call_ids,
+                pending_tool_response_ids=pending_tool_response_ids,
             )
+            normalized_role = "user" if role == "user" else "model"
+            parts = self._build_content_parts(types, message)
+            _append_content_turn(types, contents, role=normalized_role, parts=parts)
+        self._flush_pending_tool_responses(
+            types=types,
+            contents=contents,
+            pending_parts=pending_tool_response_parts,
+            active_tool_call_ids=active_tool_call_ids,
+            pending_tool_response_ids=pending_tool_response_ids,
+        )
         return system_instruction, contents
 
     def _build_generate_config(
@@ -218,13 +551,108 @@ class GoogleVertexGeminiAdapter(LLMAdapter):
             config_kwargs["system_instruction"] = system_instruction
         if tools:
             config_kwargs["tools"] = self._convert_tools(tools)
+        enable_reasoning = bool(extra_kwargs.pop("enable_reasoning", False))
+        thinking_budget = extra_kwargs.pop("thinking_budget", None)
+        if enable_reasoning or thinking_budget is not None:
+            thinking_config_kwargs: dict[str, Any] = {}
+            if enable_reasoning:
+                thinking_config_kwargs["include_thoughts"] = True
+            if thinking_budget is not None:
+                thinking_config_kwargs["thinking_budget"] = thinking_budget
+            config_kwargs["thinking_config"] = types.ThinkingConfig(**thinking_config_kwargs)
+        extra_kwargs.pop("model", None)
+        extra_kwargs.pop("parallel_tool_calls", None)
+        extra_kwargs.pop("max_parallel_calls", None)
+        extra_kwargs.pop("prompt_cache_key", None)
         tool_choice = extra_kwargs.pop("tool_choice", None)
         if tool_choice:
             config_kwargs["tool_config"] = self._convert_tool_choice(tool_choice)
+        elif not tools:
+            config_kwargs["tool_config"] = self._convert_tool_choice("none")
         config_kwargs.update(
             {key: value for key, value in extra_kwargs.items() if value is not None}
         )
         return types.GenerateContentConfig(**config_kwargs)
+
+    @staticmethod
+    def _extract_text_from_parts(parts: list[Any]) -> str:
+        return "".join(
+            str(getattr(part, "text", "") or "") for part in parts if getattr(part, "text", None)
+        )
+
+    def _update_stream_usage(self, chunk: Any) -> None:
+        usage_metadata = getattr(chunk, "usage_metadata", None)
+        if not usage_metadata:
+            return
+        self.last_usage = {
+            "prompt_tokens": usage_metadata.prompt_token_count or 0,
+            "completion_tokens": usage_metadata.candidates_token_count or 0,
+            "total_tokens": usage_metadata.total_token_count or 0,
+        }
+
+    def _resolve_stream_text(
+        self,
+        *,
+        chunk: Any,
+        candidate: Any,
+        parts: list[Any],
+        request_model: str,
+    ) -> tuple[str, str]:
+        text, reasoning = _extract_text_and_reasoning_from_parts(parts)
+        has_function_call_parts = _has_function_call_parts(parts)
+        if not text and candidate is not None:
+            candidate_text = getattr(candidate, "text", None)
+            if isinstance(candidate_text, str) and candidate_text:
+                text = candidate_text
+        if not text and not reasoning and not has_function_call_parts and candidate is not None:
+            finish_message = getattr(candidate, "finish_message", None)
+            if isinstance(finish_message, str) and finish_message:
+                text = finish_message
+        if not text and not has_function_call_parts:
+            chunk_text = getattr(chunk, "text", None)
+            if isinstance(chunk_text, str) and chunk_text:
+                text = chunk_text
+        if not text and not reasoning and not has_function_call_parts and parts:
+            unknown_part_fields = _summarize_unknown_parts(parts)
+            if unknown_part_fields:
+                logger.warning(
+                    "Gemini stream chunk had no visible text/function_call but included unmapped parts: model=%s fields=%s",
+                    request_model,
+                    unknown_part_fields,
+                )
+        return text, reasoning
+
+    def _build_stream_tool_calls_delta(self, parts: list[Any]) -> list[dict[str, Any]]:
+        tool_calls_delta: list[dict[str, Any]] = []
+        for index, part in enumerate(parts):
+            function_call = getattr(part, "function_call", None)
+            if not function_call:
+                continue
+            function_name = getattr(function_call, "name", "")
+            tool_call_id = self._resolve_tool_call_id(
+                raw_id=getattr(function_call, "id", ""),
+                function_name=function_name,
+                index=index,
+            )
+            args = getattr(function_call, "args", None)
+            if isinstance(args, dict):
+                args = json.dumps(args)
+            function_payload: dict[str, Any] = {
+                "name": function_name,
+                "arguments": args if isinstance(args, str) else str(args or ""),
+            }
+            thought_signature = self._extract_thought_signature(part)
+            if thought_signature:
+                function_payload["thought_signature"] = thought_signature
+            tool_calls_delta.append(
+                {
+                    "index": index,
+                    "id": tool_call_id,
+                    "type": "function",
+                    "function": function_payload,
+                }
+            )
+        return tool_calls_delta
 
     async def chat(
         self,
@@ -242,6 +670,7 @@ class GoogleVertexGeminiAdapter(LLMAdapter):
             ) from exc
 
         system_instruction, contents = self._prepare_contents_and_system(types, messages)
+        request_model = kwargs.pop("model", None) or self.model
         config = self._build_generate_config(
             types,
             temperature=temperature,
@@ -253,7 +682,7 @@ class GoogleVertexGeminiAdapter(LLMAdapter):
 
         try:
             response = await self._client.aio.models.generate_content(
-                model=self.model,
+                model=request_model,
                 contents=contents,
                 config=config,
             )
@@ -286,6 +715,7 @@ class GoogleVertexGeminiAdapter(LLMAdapter):
             ) from exc
 
         system_instruction, contents = self._prepare_contents_and_system(types, messages)
+        request_model = kwargs.pop("model", None) or self.model
         config = self._build_generate_config(
             types,
             temperature=temperature,
@@ -300,58 +730,99 @@ class GoogleVertexGeminiAdapter(LLMAdapter):
 
         try:
             stream = await self._client.aio.models.generate_content_stream(
-                model=self.model,
+                model=request_model,
                 contents=contents,
                 config=config,
             )
             async for chunk in stream:
-                usage_metadata = getattr(chunk, "usage_metadata", None)
-                if usage_metadata:
-                    self.last_usage = {
-                        "prompt_tokens": usage_metadata.prompt_token_count or 0,
-                        "completion_tokens": usage_metadata.candidates_token_count or 0,
-                        "total_tokens": usage_metadata.total_token_count or 0,
-                    }
-
-                text = getattr(chunk, "text", None)
+                self._update_stream_usage(chunk)
+                candidate, parts = _extract_chunk_candidate(chunk)
+                finish_reason = _extract_stream_finish_reason(candidate)
+                if finish_reason:
+                    self.last_finish_reason = finish_reason
+                text, reasoning = self._resolve_stream_text(
+                    chunk=chunk,
+                    candidate=candidate,
+                    parts=parts,
+                    request_model=request_model,
+                )
                 if text:
                     yield StreamChunk(content_delta=text)
+                if reasoning:
+                    yield StreamChunk(reasoning_delta=reasoning)
+                tool_calls_delta = self._build_stream_tool_calls_delta(parts)
+                if tool_calls_delta:
+                    yield StreamChunk(tool_calls_delta=tool_calls_delta)
 
-            self.last_finish_reason = "stop"
+            self.last_finish_reason = self.last_finish_reason or "stop"
         except Exception as exc:
             raise self._wrap_sdk_error(exc) from exc
 
     # ── Response normalization ────────────────────────────────────
 
+    def _extract_candidate_tool_calls(self, parts: list[Any]) -> list[dict[str, Any]]:
+        tool_calls: list[dict[str, Any]] = []
+        for part in parts:
+            function_call = getattr(part, "function_call", None)
+            if not function_call:
+                continue
+            function_name = getattr(function_call, "name", "")
+            tool_call_id = self._resolve_tool_call_id(
+                raw_id=getattr(function_call, "id", ""),
+                function_name=function_name,
+                index=len(tool_calls),
+            )
+            args = getattr(function_call, "args", None)
+            if isinstance(args, dict):
+                args = json.dumps(args)
+            function_payload: dict[str, Any] = {
+                "name": function_name,
+                "arguments": args,
+            }
+            thought_signature = self._extract_thought_signature(part)
+            if thought_signature:
+                function_payload["thought_signature"] = thought_signature
+            tool_calls.append(
+                {
+                    "id": tool_call_id,
+                    "type": "function",
+                    "function": function_payload,
+                }
+            )
+        return tool_calls
+
+    def _extract_candidate_response_data(
+        self,
+        *,
+        candidate: Any,
+        content: str,
+    ) -> tuple[str, str, list[dict[str, Any]], str]:
+        finish_reason = _extract_stream_finish_reason(candidate) or "stop"
+        candidate_content = getattr(candidate, "content", None)
+        parts = getattr(candidate_content, "parts", None) or []
+        part_text, part_reasoning = _extract_text_and_reasoning_from_parts(parts)
+        if not content:
+            content = self._extract_candidate_content(candidate) or part_text
+        return (
+            content,
+            part_reasoning or "",
+            self._extract_candidate_tool_calls(parts),
+            finish_reason,
+        )
+
     def _normalize_response(self, response: Any) -> LLMResponse:
         content = self._extract_response_content(response)
         tool_calls: list[dict[str, Any]] = []
+        reasoning_content = ""
+        finish_reason = "stop"
 
         if response.candidates:
-            candidate = response.candidates[0]
-            candidate_content = getattr(candidate, "content", None)
-            parts = getattr(candidate_content, "parts", None) or []
-            part_text = "".join(part.text for part in parts if getattr(part, "text", None))
-            if not content:
-                content = self._extract_candidate_content(candidate) or part_text
-            for part in parts:
-                if part.text and not content:
-                    content += part.text
-                if part.function_call:
-                    fc = part.function_call
-                    args = fc.args
-                    if isinstance(args, dict):
-                        args = json.dumps(args)
-                    tool_calls.append(
-                        {
-                            "id": f"call_{fc.name}",
-                            "type": "function",
-                            "function": {
-                                "name": fc.name,
-                                "arguments": args,
-                            },
-                        }
-                    )
+            content, reasoning_content, tool_calls, finish_reason = (
+                self._extract_candidate_response_data(
+                    candidate=response.candidates[0],
+                    content=content,
+                )
+            )
 
         usage_metadata = getattr(response, "usage_metadata", None)
         usage = _sanitize_usage(
@@ -364,12 +835,17 @@ class GoogleVertexGeminiAdapter(LLMAdapter):
 
         self.last_usage = usage
 
+        metadata: dict[str, Any] = {}
+        if reasoning_content:
+            metadata["reasoning_content"] = reasoning_content
+
         return LLMResponse(
             content=content,
             tool_calls=tool_calls,
-            finish_reason="stop",
+            finish_reason=finish_reason,
             usage=usage,
             model=self.model,
+            metadata=metadata,
         )
 
     def _extract_response_content(self, response: Any) -> str:
@@ -378,16 +854,45 @@ class GoogleVertexGeminiAdapter(LLMAdapter):
             if isinstance(parsed, str):
                 return parsed
             return json.dumps(parsed, ensure_ascii=False)
+        if getattr(response, "candidates", None):
+            return ""
         return str(getattr(response, "text", "") or "")
 
     def _extract_candidate_content(self, candidate: Any) -> str:
         candidate_text = getattr(candidate, "text", None)
         if candidate_text:
             return str(candidate_text)
+        finish_message = getattr(candidate, "finish_message", None)
+        if finish_message:
+            return str(finish_message)
         candidate_content = getattr(candidate, "content", None)
         parts = getattr(candidate_content, "parts", None) or []
-        text_parts = [part.text for part in parts if getattr(part, "text", None)]
-        return "".join(text_parts)
+        text_parts, _ = _extract_text_and_reasoning_from_parts(parts)
+        return text_parts
+
+    @staticmethod
+    def _extract_thought_signature(part: Any) -> str | None:
+        raw_signature = getattr(part, "thought_signature", None)
+        if raw_signature is None:
+            raw_signature = getattr(part, "thoughtSignature", None)
+        if not raw_signature:
+            return None
+        if isinstance(raw_signature, bytes):
+            return base64.b64encode(raw_signature).decode("ascii")
+        if isinstance(raw_signature, str):
+            return raw_signature
+        return None
+
+    @staticmethod
+    def _decode_thought_signature(raw_signature: Any) -> bytes | None:
+        if isinstance(raw_signature, bytes):
+            return raw_signature
+        if not isinstance(raw_signature, str) or not raw_signature:
+            return None
+        try:
+            return base64.b64decode(raw_signature)
+        except Exception:
+            return raw_signature.encode("utf-8")
 
     def _convert_tools(self, tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Convert OpenAI tool schema to Vertex function declarations."""

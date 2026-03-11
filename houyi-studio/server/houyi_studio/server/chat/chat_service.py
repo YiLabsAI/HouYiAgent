@@ -50,6 +50,7 @@ from houyi.infrastructure.observability import (
 
 from ..skill.service import get_skill_service
 from .json_store import JsonStore
+from .provider_service import _is_vertex_provider
 from .sse_adapter import SSEEvent, stream_chat_sse
 from .types import EditMessageRequest, Message, MessageRole, SendMessageRequest
 
@@ -101,11 +102,77 @@ def _build_generation_metadata(
     if isinstance(usage_payload, dict):
         completion_tokens = int(usage_payload.get("completion_tokens", 0) or 0)
     if generation_time_ms and generation_time_ms > 0 and completion_tokens > 0:
-        metadata["tokens_per_second"] = round(
-            completion_tokens / (generation_time_ms / 1000),
-            2,
-        )
+        end_to_end_tps = completion_tokens / (generation_time_ms / 1000)
+        metadata["end_to_end_tokens_per_second"] = round(end_to_end_tps, 2)
+        metadata["tokens_per_second"] = round(end_to_end_tps, 2)
+        if first_token_ms is not None and 0 <= first_token_ms < generation_time_ms:
+            decode_window_ms = generation_time_ms - first_token_ms
+            if decode_window_ms > 0:
+                metadata["decode_tokens_per_second"] = round(
+                    completion_tokens / (decode_window_ms / 1000),
+                    2,
+                )
     return metadata
+
+
+def _normalize_usage_payload(usage_payload: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(usage_payload, dict) or not usage_payload:
+        return None
+
+    normalized = dict(usage_payload)
+
+    prompt_tokens = int(normalized.get("prompt_tokens", normalized.get("input_tokens", 0)) or 0)
+    completion_tokens = int(normalized.get("completion_tokens", 0) or 0)
+    reasoning_tokens = int(normalized.get("reasoning_tokens", 0) or 0)
+    cached_prompt_tokens = int(normalized.get("cached_prompt_tokens", 0) or 0)
+
+    answer_tokens_raw = normalized.get("answer_tokens")
+    if answer_tokens_raw is None:
+        answer_tokens = max(0, completion_tokens - reasoning_tokens)
+    else:
+        answer_tokens = int(answer_tokens_raw or 0)
+
+    normalized["prompt_tokens"] = prompt_tokens
+    normalized["input_tokens"] = int(normalized.get("input_tokens", prompt_tokens) or prompt_tokens)
+    normalized["completion_tokens"] = completion_tokens
+    normalized["reasoning_tokens"] = reasoning_tokens
+    normalized["answer_tokens"] = answer_tokens
+    normalized["cached_prompt_tokens"] = cached_prompt_tokens
+    normalized["total_tokens"] = int(
+        normalized.get("total_tokens", prompt_tokens + completion_tokens) or 0
+    )
+    normalized["usage_confidence"] = str(normalized.get("usage_confidence") or "reported")
+    return normalized
+
+
+def _apply_reasoning_budget_guardrail(llm_kwargs: dict[str, Any]) -> dict[str, Any] | None:
+    if not llm_kwargs.get("enable_reasoning"):
+        return None
+
+    explicit_max_tokens = llm_kwargs.get("max_tokens")
+    if explicit_max_tokens is None:
+        return {
+            "reasoning_enabled": True,
+            "max_tokens_guardrail_applied": False,
+            "answer_reserve": _REASONING_MIN_ANSWER_RESERVE,
+            "max_tokens_effective": None,
+            "max_tokens_source": "provider_default",
+        }
+
+    effective_max_tokens = int(explicit_max_tokens or 0)
+    guardrail_applied = False
+    if effective_max_tokens < _REASONING_MIN_ANSWER_RESERVE:
+        effective_max_tokens = _REASONING_MIN_ANSWER_RESERVE
+        llm_kwargs["max_tokens"] = effective_max_tokens
+        guardrail_applied = True
+
+    return {
+        "reasoning_enabled": True,
+        "max_tokens_guardrail_applied": guardrail_applied,
+        "answer_reserve": _REASONING_MIN_ANSWER_RESERVE,
+        "max_tokens_effective": effective_max_tokens,
+        "max_tokens_source": "request_or_conversation",
+    }
 
 
 def is_vision_model(model: str | None) -> bool:
@@ -137,6 +204,7 @@ _TOOL_LOOP_MAX_TOTAL_CHARS = _read_positive_int_env(
     ENV_CHAT_TOOL_LOOP_MAX_TOTAL_CHARS,
     160_000,
 )
+_REASONING_MIN_ANSWER_RESERVE = 512
 _CHAT_BUILTIN_TOOL_NAMES = frozenset(
     {
         "houyi_read_file",
@@ -164,15 +232,11 @@ _TOOL_INTENT_KEYWORDS = (
     "codebase",
     "path",
     "folder",
-    "目录",
-    "文件",
-    "查找",
-    "搜索",
-    "读取",
-    "写入",
-    "命令",
-    "执行",
-    "代码库",
+    "directory",
+    "file",
+    "lookup",
+    "open",
+    "save",
 )
 _TOOL_INTENT_REGEXES = (
     re.compile(r"`[^`]+`"),
@@ -181,6 +245,18 @@ _TOOL_INTENT_REGEXES = (
     re.compile(r"(?:^|\s)\.{2}/[\w./-]+"),
     re.compile(r"\b[a-zA-Z0-9_./-]+\.(?:py|ts|tsx|js|jsx|md|json|yaml|yml|toml|sql|sh|txt)\b"),
 )
+_REPO_INTENT_KEYWORDS = (
+    "github",
+    "repo",
+    "repository",
+    "readme",
+    "read me",
+)
+_REPO_INTENT_REGEXES = (
+    re.compile(r"https?://(?:www\.)?github\.com/[^\s]+", re.IGNORECASE),
+    re.compile(r"\bgithub\.com/[^\s]+\b", re.IGNORECASE),
+)
+_REPO_TOOL_SKILLS = frozenset({_WEB_SEARCH_SKILL_NAME})
 
 
 @dataclass
@@ -190,6 +266,7 @@ class _PreparedSendContext:
     llm_messages: list[dict[str, Any]]
     context_usage: dict[str, Any]
     llm_kwargs: dict[str, Any]
+    budget_metadata: dict[str, Any] | None = None
 
 
 @dataclass
@@ -199,6 +276,7 @@ class _ToolLoopOutcome:
     persisted_tool_messages: list[Message] = field(default_factory=list)
     replay_response: Any | None = None
     usage_payload: dict[str, Any] | None = None
+    finish_reason: str | None = None
     convergence_reason: str | None = None
 
 
@@ -229,6 +307,33 @@ def _coerce_text_content(value: Any) -> str:
     return LLMAdapter._coerce_message_content_to_text(value)
 
 
+def _extract_finish_reason(*sources: Any) -> str | None:
+    for source in sources:
+        if source is None:
+            continue
+        if isinstance(source, str) and source:
+            return source
+        if isinstance(source, dict):
+            reason = source.get("finish_reason")
+            if isinstance(reason, str) and reason:
+                return reason
+            metadata = source.get("metadata")
+            if isinstance(metadata, dict):
+                nested = metadata.get("finish_reason")
+                if isinstance(nested, str) and nested:
+                    return nested
+            continue
+        reason = getattr(source, "finish_reason", None)
+        if isinstance(reason, str) and reason:
+            return reason
+        metadata = getattr(source, "metadata", None)
+        if isinstance(metadata, dict):
+            nested = metadata.get("finish_reason")
+            if isinstance(nested, str) and nested:
+                return nested
+    return None
+
+
 def _looks_like_tool_intent(user_content: str) -> bool:
     lowered = user_content.lower()
     if any(keyword in lowered for keyword in _TOOL_INTENT_KEYWORDS):
@@ -236,6 +341,13 @@ def _looks_like_tool_intent(user_content: str) -> bool:
     if "```" in user_content:
         return True
     return any(regex.search(user_content) for regex in _TOOL_INTENT_REGEXES)
+
+
+def _looks_like_repo_intent(user_content: str) -> bool:
+    lowered = user_content.lower()
+    if any(regex.search(user_content) for regex in _REPO_INTENT_REGEXES):
+        return True
+    return any(keyword in lowered for keyword in _REPO_INTENT_KEYWORDS)
 
 
 def _truncate_middle(text: str, max_chars: int) -> str:
@@ -285,6 +397,76 @@ def _truncate_tool_call_arguments(message: dict[str, Any], max_chars: int) -> di
     return message
 
 
+def _sanitize_tool_loop_structure(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    has_assistant_tool_turn = any(
+        str(message.get("role") or "") == MessageRole.ASSISTANT.value
+        and isinstance(message.get("tool_calls"), list)
+        and bool(message.get("tool_calls"))
+        for message in messages
+    )
+    if not has_assistant_tool_turn:
+        return messages
+
+    sanitized: list[dict[str, Any]] = []
+    pending_assistant: dict[str, Any] | None = None
+    pending_expected_ids: list[str] = []
+    pending_tool_messages: list[dict[str, Any]] = []
+    pending_tool_ids: list[str] = []
+
+    def flush_pending_group() -> None:
+        nonlocal pending_assistant, pending_expected_ids, pending_tool_messages, pending_tool_ids
+        if pending_assistant is None:
+            pending_expected_ids = []
+            pending_tool_messages = []
+            pending_tool_ids = []
+            return
+        if not pending_tool_messages:
+            sanitized.append(pending_assistant)
+        elif pending_expected_ids and pending_tool_ids == pending_expected_ids:
+            sanitized.append(pending_assistant)
+            sanitized.extend(pending_tool_messages)
+        pending_assistant = None
+        pending_expected_ids = []
+        pending_tool_messages = []
+        pending_tool_ids = []
+
+    for message in messages:
+        role = str(message.get("role") or "")
+        if role == MessageRole.ASSISTANT.value:
+            flush_pending_group()
+            tool_calls = message.get("tool_calls")
+            if isinstance(tool_calls, list) and tool_calls:
+                expected_ids = [
+                    str(call.get("id") or "")
+                    for call in tool_calls
+                    if isinstance(call, dict) and str(call.get("id") or "")
+                ]
+                if expected_ids:
+                    pending_assistant = message
+                    pending_expected_ids = expected_ids
+                    pending_tool_messages = []
+                    pending_tool_ids = []
+                    continue
+            sanitized.append(message)
+            continue
+        if role == MessageRole.TOOL.value:
+            tool_call_id = str(message.get("tool_call_id") or "")
+            if (
+                pending_assistant is not None
+                and tool_call_id
+                and tool_call_id in pending_expected_ids
+                and tool_call_id not in pending_tool_ids
+            ):
+                pending_tool_messages.append(message)
+                pending_tool_ids.append(tool_call_id)
+            continue
+        flush_pending_group()
+        sanitized.append(message)
+
+    flush_pending_group()
+    return sanitized
+
+
 def _cap_total_payload_chars(
     items: list[dict[str, Any]], max_total_chars: int
 ) -> list[dict[str, Any]]:
@@ -329,7 +511,8 @@ def _sanitize_tool_loop_messages(messages: list[dict[str, Any]]) -> list[dict[st
         )
         normalized = _truncate_tool_call_arguments(normalized, _TOOL_LOOP_MAX_MESSAGE_CHARS)
         sanitized.append(normalized)
-    return _cap_total_payload_chars(sanitized, _TOOL_LOOP_MAX_TOTAL_CHARS)
+    capped = _cap_total_payload_chars(sanitized, _TOOL_LOOP_MAX_TOTAL_CHARS)
+    return _sanitize_tool_loop_structure(capped)
 
 
 def _flatten_span_tree(root: Span) -> list[Span]:
@@ -341,6 +524,17 @@ def _flatten_span_tree(root: Span) -> list[Span]:
         if current.children:
             stack.extend(reversed(current.children))
     return ordered
+
+
+def _build_stream_error_content(error: Exception) -> str:
+    message = str(error).strip()
+    if "429" in message or "RESOURCE_EXHAUSTED" in message:
+        return "The model is temporarily rate limited by Vertex AI. Please retry in a moment."
+    return f"Request failed: {message or type(error).__name__}"
+
+
+def _build_empty_stream_content() -> str:
+    return "The model returned an empty final response. Please retry."
 
 
 def _persist_trace_tree(root: Span) -> None:
@@ -471,7 +665,9 @@ class ChatService:
         if request.enable_tool_calls is False:
             return []
         resolved: set[str] = set(_CHAT_BUILTIN_TOOL_NAMES)
-        if request.enable_web_search:
+        user_content = str(request.content or "").strip()
+        auto_repo_search = _looks_like_repo_intent(user_content)
+        if request.enable_web_search or auto_repo_search:
             resolved.add(_WEB_SEARCH_SKILL_NAME)
         if request.enable_skills:
             for skill_name in request.enable_skills:
@@ -519,6 +715,12 @@ class ChatService:
             )
 
         user_content = str(request.content or "").strip()
+        if _looks_like_repo_intent(user_content):
+            repo_skills = [
+                skill_name for skill_name in resolved_skills if skill_name in _REPO_TOOL_SKILLS
+            ]
+            if repo_skills:
+                return _ToolLoopGateDecision(repo_skills, "enabled", "heuristic_repo_intent")
         if _looks_like_tool_intent(user_content):
             return _ToolLoopGateDecision(resolved_skills, "enabled", "heuristic_tool_intent")
 
@@ -542,18 +744,12 @@ class ChatService:
                 if cache_key in self._adapter_cache:
                     return self._adapter_cache[cache_key]
 
-                # Detect if this is a Vertex AI / Gemini provider
                 provider_url = (provider.base_url or "").rstrip("/")
-                is_vertex = (
-                    "aiplatform.googleapis.com" in provider_url
-                    or "vertex" in provider.name.lower()
-                    or provider.id.startswith("vertex")
+                is_vertex = _is_vertex_provider(provider.id, provider_url) or _is_vertex_provider(
+                    provider.name.lower(), provider_url
                 )
                 if is_vertex:
                     adapter = create_vertex_adapter()
-                    logger.info(
-                        "Model '%s' routed to Gemini adapter (provider='%s')", model, provider.name
-                    )
                 elif provider_url and "/v1" in provider_url:
                     adapter = SiliconFlowAdapter(
                         api_key=provider.api_key or None,
@@ -583,7 +779,7 @@ class ChatService:
         self,
         request: SendMessageRequest,
         conversation: Any,
-    ) -> dict[str, Any]:
+    ) -> tuple[dict[str, Any], dict[str, Any] | None]:
         llm_kwargs: dict[str, Any] = {}
         if request.temperature is not None:
             llm_kwargs["temperature"] = request.temperature
@@ -597,7 +793,7 @@ class ChatService:
             llm_kwargs["top_p"] = conversation.top_p
         if request.enable_reasoning:
             llm_kwargs["enable_reasoning"] = True
-        return llm_kwargs
+        return llm_kwargs, _apply_reasoning_budget_guardrail(llm_kwargs)
 
     def _build_context_messages(
         self,
@@ -625,6 +821,7 @@ class ChatService:
             for m in conversation.messages
             if m.role != MessageRole.SYSTEM
         ]
+        history_messages = _sanitize_tool_loop_structure(history_messages)
 
         plan = planner.plan(
             messages=history_messages,
@@ -682,11 +879,17 @@ class ChatService:
             conversation.messages.append(user_msg)
             conversation.updated_at = time.time()
             self.json_store.update(conversation)
-            llm_kwargs = self._resolve_llm_kwargs(request=request, conversation=conversation)
+            llm_kwargs, budget_metadata = self._resolve_llm_kwargs(
+                request=request,
+                conversation=conversation,
+            )
             conversation_snapshot = conversation.model_copy(deep=True)
 
         if conversation_snapshot is None:
             raise RuntimeError(f"Conversation snapshot unavailable: {conversation_id}")
+
+        if _looks_like_repo_intent(str(request.content or "").strip()):
+            conversation_snapshot.messages = conversation_snapshot.messages[-6:]
 
         llm_messages, context_usage = self._build_context_messages(
             conversation=conversation_snapshot,
@@ -701,6 +904,7 @@ class ChatService:
             llm_messages=llm_messages,
             context_usage=context_usage,
             llm_kwargs=llm_kwargs,
+            budget_metadata=budget_metadata,
         )
 
     def _collect_persisted_tool_messages(
@@ -916,17 +1120,25 @@ class ChatService:
 
         usage_payload: dict[str, Any] | None = None
         if isinstance(getattr(tool_loop_response, "usage", None), dict):
-            usage_payload = _json_safe(tool_loop_response.usage)
+            usage_payload = _normalize_usage_payload(_json_safe(tool_loop_response.usage))
 
         replay_response: Any | None = None
         convergence_reason: str | None = None
+        replay_content = str(getattr(tool_loop_response, "content", "") or "")
+        replay_reasoning = None
+        replay_metadata = getattr(tool_loop_response, "metadata", None)
+        if (
+            isinstance(replay_metadata, dict)
+            and replay_metadata.get("reasoning_content") is not None
+        ):
+            replay_reasoning = str(replay_metadata.get("reasoning_content") or "")
         if (
             tool_loop_response
             and not list(getattr(tool_loop_response, "tool_calls", []) or [])
-            and str(getattr(tool_loop_response, "content", "") or "")
+            and (replay_content or replay_reasoning)
         ):
             replay_response = tool_loop_response
-            convergence_reason = "no_tool_calls_with_content"
+            convergence_reason = "no_tool_calls_with_replay_payload"
 
         return _ToolLoopOutcome(
             llm_messages=tool_loop_messages,
@@ -934,6 +1146,7 @@ class ChatService:
             persisted_tool_messages=persisted_tool_messages,
             replay_response=replay_response,
             usage_payload=usage_payload,
+            finish_reason=_extract_finish_reason(tool_loop_response, replay_response),
             convergence_reason=convergence_reason,
         )
 
@@ -983,6 +1196,7 @@ class ChatService:
         assistant_message_id: str,
         model: str,
         context_usage: dict[str, Any],
+        finish_reason: str | None,
     ) -> tuple[list[str], list[str], list[str]]:
         replay_content = str(getattr(replay_response, "content", "") or "")
         replay_reasoning: str | None = None
@@ -1003,6 +1217,7 @@ class ChatService:
                 message_id=assistant_message_id,
                 model=model,
                 context_usage=context_usage,
+                finish_reason=finish_reason,
             )
         ]
         return sse_chunks, content_parts, reasoning_parts
@@ -1063,7 +1278,9 @@ class ChatService:
             )
         ]
 
-        usage_payload = _json_safe(getattr(llm_adapter, "last_usage", None))
+        usage_payload = _normalize_usage_payload(
+            _json_safe(getattr(llm_adapter, "last_usage", None))
+        )
         llm_span.set_attribute(
             "chat.stream_total_ms",
             round((time.perf_counter() - stream_started_at) * 1000, 2),
@@ -1095,6 +1312,8 @@ class ChatService:
         reasoning_parts: list[str],
         persisted_tool_messages: list[Message],
         usage_payload: dict[str, Any] | None,
+        finish_reason: str | None,
+        budget_metadata: dict[str, Any] | None,
         generation_metadata: dict[str, Any],
         chat_span: Span,
     ) -> bool:
@@ -1114,6 +1333,10 @@ class ChatService:
         async with conv_lock:
             if isinstance(usage_payload, dict) and usage_payload:
                 assistant_msg.metadata["usage"] = usage_payload
+            if isinstance(finish_reason, str) and finish_reason:
+                assistant_msg.metadata["finish_reason"] = finish_reason
+            if isinstance(budget_metadata, dict) and budget_metadata:
+                assistant_msg.metadata["budget"] = budget_metadata
             assistant_msg.metadata.update(generation_metadata)
             assistant_msg.metadata["trace_id"] = chat_span.trace_id
 
@@ -1216,17 +1439,64 @@ class ChatService:
                     or _TOOL_CALL_STRATEGY_BALANCED,
                 },
             ) as tool_loop_span:
-                tool_outcome = await self._run_tool_loop(
-                    llm_adapter=llm_adapter,
-                    model=prepared.model,
-                    llm_messages=llm_messages,
-                    llm_kwargs=prepared.llm_kwargs,
-                    request=request,
-                    assistant_message_id=assistant_msg.message_id,
-                    trace_id=chat_span.trace_id,
-                    enabled_chat_skills=enabled_chat_skills,
-                    parent_span=tool_loop_span,
-                )
+                try:
+                    tool_outcome = await self._run_tool_loop(
+                        llm_adapter=llm_adapter,
+                        model=prepared.model,
+                        llm_messages=llm_messages,
+                        llm_kwargs=prepared.llm_kwargs,
+                        request=request,
+                        assistant_message_id=assistant_msg.message_id,
+                        trace_id=chat_span.trace_id,
+                        enabled_chat_skills=enabled_chat_skills,
+                        parent_span=tool_loop_span,
+                    )
+                except Exception as exc:
+                    visible_error = _build_stream_error_content(exc)
+                    if visible_error:
+                        yield SSEEvent(
+                            event="message.delta",
+                            data={
+                                "message_id": assistant_msg.message_id,
+                                "seq": 1,
+                                "content": visible_error,
+                            },
+                            event_id=f"{assistant_msg.message_id}-1",
+                        ).encode()
+                    yield SSEEvent(
+                        event="message.error",
+                        data={
+                            "message_id": assistant_msg.message_id,
+                            "error": str(exc),
+                            "error_type": type(exc).__name__,
+                            "chunks_sent": 1 if visible_error else 0,
+                            "timestamp": time.time(),
+                        },
+                    ).encode()
+                    yield SSEEvent(
+                        event="message.complete",
+                        data={
+                            "message_id": assistant_msg.message_id,
+                            "metadata": {
+                                "trace_id": chat_span.trace_id,
+                                "finish_reason": "error",
+                            },
+                        },
+                    ).encode()
+                    await self._persist_assistant_message(
+                        conversation_id=conversation_id,
+                        conv_lock=prepared.conv_lock,
+                        assistant_msg=assistant_msg,
+                        content_parts=[visible_error] if visible_error else [],
+                        reasoning_parts=[],
+                        persisted_tool_messages=[],
+                        usage_payload=None,
+                        finish_reason="error",
+                        budget_metadata=prepared.budget_metadata,
+                        generation_metadata={},
+                        chat_span=chat_span,
+                    )
+                    return
                 final_stream_skipped = tool_outcome.replay_response is not None
                 tool_loop_span.set_attribute(
                     "chat.tool_loop.final_stream_skipped", final_stream_skipped
@@ -1245,6 +1515,7 @@ class ChatService:
             content_parts: list[str] = []
             reasoning_parts: list[str] = []
             usage_payload: dict[str, Any] | None = None
+            finish_reason: str | None = tool_outcome.finish_reason
             if tool_outcome.replay_response is not None:
                 with _stage_span(chat_span, "chat.stream.replay"):
                     (
@@ -1256,6 +1527,7 @@ class ChatService:
                         assistant_message_id=assistant_msg.message_id,
                         model=prepared.model,
                         context_usage=context_usage,
+                        finish_reason=finish_reason,
                     )
                     for sse_chunk in replay_chunks:
                         yield sse_chunk
@@ -1264,6 +1536,8 @@ class ChatService:
                 usage_payload = tool_outcome.usage_payload
             else:
                 with _stage_span(chat_span, "chat.stream.llm"):
+                    final_stream_kwargs = dict(prepared.llm_kwargs)
+                    final_stream_kwargs["parallel_tool_calls"] = False
                     llm_span = Span(
                         name="llm.call",
                         parent=chat_span,
@@ -1277,10 +1551,12 @@ class ChatService:
                     stream_started_at = time.perf_counter()
                     first_token_ms: float | None = None
                     llm_chunk_count = 0
+                    stream_error_content: str | None = None
                     llm_stream = llm_adapter.stream_chat(
                         messages=cast(list[LLMMessage | dict[str, Any]], llm_messages),
                         model=prepared.model,
-                        **prepared.llm_kwargs,
+                        tools=None,
+                        **final_stream_kwargs,
                     )
 
                     async def accumulating_stream() -> AsyncIterator[tuple[str, str | None]]:
@@ -1299,16 +1575,32 @@ class ChatService:
                                 reasoning_parts.append(reasoning_delta)
                             yield content_delta, reasoning_delta
 
+                    def _capture_stream_error(exc: Exception) -> str:
+                        nonlocal stream_error_content
+                        stream_error_content = _build_stream_error_content(exc)
+                        if stream_error_content:
+                            content_parts.append(stream_error_content)
+                        return stream_error_content or ""
+
                     async for sse_chunk in stream_chat_sse(
                         llm_stream=accumulating_stream(),
                         message_id=assistant_msg.message_id,
                         model=prepared.model,
                         context_usage=context_usage,
+                        finish_reason=lambda: _extract_finish_reason(
+                            getattr(llm_adapter, "last_finish_reason", None)
+                        ),
+                        error_message_builder=_capture_stream_error,
                     ):
                         llm_chunk_count += 1
                         yield sse_chunk
 
-                    usage_payload = _json_safe(getattr(llm_adapter, "last_usage", None))
+                    usage_payload = _normalize_usage_payload(
+                        _json_safe(getattr(llm_adapter, "last_usage", None))
+                    )
+                    finish_reason = _extract_finish_reason(
+                        getattr(llm_adapter, "last_finish_reason", None)
+                    )
                     generation_time_ms = (time.perf_counter() - stream_started_at) * 1000
                     llm_span.set_attribute(
                         "chat.stream_total_ms",
@@ -1329,10 +1621,34 @@ class ChatService:
                         first_token_ms=first_token_ms,
                         generation_time_ms=generation_time_ms,
                     )
-
+                    if stream_error_content and not finish_reason:
+                        finish_reason = "error"
+                    if not content_parts and not reasoning_parts:
+                        empty_stream_content = _build_empty_stream_content()
+                        content_parts.append(empty_stream_content)
+                        finish_reason = finish_reason or "error"
+                        logger.warning(
+                            "Chat final stream returned no visible deltas: conversation=%s, message=%s, model=%s",
+                            conversation_id,
+                            assistant_msg.message_id,
+                            prepared.model,
+                        )
+                        yield SSEEvent(
+                            event="message.delta",
+                            data={
+                                "message_id": assistant_msg.message_id,
+                                "seq": llm_chunk_count + 1,
+                                "content": empty_stream_content,
+                            },
+                            event_id=f"{assistant_msg.message_id}-{llm_chunk_count + 1}",
+                        ).encode()
             completion_metadata: dict[str, Any] = {"trace_id": chat_span.trace_id}
             if isinstance(usage_payload, dict) and usage_payload:
                 completion_metadata["usage"] = usage_payload
+            if isinstance(finish_reason, str) and finish_reason:
+                completion_metadata["finish_reason"] = finish_reason
+            if isinstance(prepared.budget_metadata, dict) and prepared.budget_metadata:
+                completion_metadata["budget"] = prepared.budget_metadata
             completion_metadata.update(generation_metadata)
             yield SSEEvent(
                 event="message.complete",
@@ -1351,6 +1667,8 @@ class ChatService:
                     reasoning_parts=reasoning_parts,
                     persisted_tool_messages=persisted_tool_messages,
                     usage_payload=usage_payload,
+                    finish_reason=finish_reason,
+                    budget_metadata=prepared.budget_metadata,
                     generation_metadata=generation_metadata,
                     chat_span=chat_span,
                 )

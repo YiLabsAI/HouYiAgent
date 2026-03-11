@@ -17,7 +17,7 @@ if ! command -v uv &> /dev/null; then
 fi
 
 if [ ! -d "${ROOT_DIR}/.venv" ]; then
-    echo "❌ .venv not found. Run: uv sync --extra dev --extra rag-full --extra model-adapters"
+    echo "❌ .venv not found. Run: uv sync --extra dev --extra studio-server --extra rag-full --extra model-adapters --extra vertex-ai --extra websearch-ddg --extra websearch-tavily --extra websearch-readability"
     exit 1
 fi
 
@@ -44,7 +44,7 @@ WEB_SEARCH_CACHE_ENABLED=${WEB_SEARCH_CACHE_ENABLED:-1}
 WEB_SEARCH_CACHE_TTL=${WEB_SEARCH_CACHE_TTL:-600}
 WEB_SEARCH_CACHE_MAX_SIZE=${WEB_SEARCH_CACHE_MAX_SIZE:-256}
 WEB_SEARCH_CACHE_LOG_HITS=${WEB_SEARCH_CACHE_LOG_HITS:-1}
-WEB_SEARCH_PROVIDER=${WEB_SEARCH_PROVIDER:-ddg}
+# WEB_SEARCH_PROVIDER=${WEB_SEARCH_PROVIDER:-ddg}
 FASTEMBED_CACHE_PATH=${FASTEMBED_CACHE_PATH:-${HOME}/.cache/fastembed}
 EMBED_WARMUP_TIMEOUT_SECONDS=${EMBED_WARMUP_TIMEOUT_SECONDS:-30}
 
@@ -54,7 +54,7 @@ HOUYI_UI_PORT=${HOUYI_UI_PORT:-3000}
 VITE_WS_HOST=${VITE_WS_HOST:-localhost:${HOUYI_PORT}}
 
 # Create a new session and run backend
-tmux new-session -d -s $SESSION_NAME -n "backend" "cd ${ROOT_DIR} && env FASTEMBED_CACHE_PATH=${FASTEMBED_CACHE_PATH} EMBED_WARMUP_TIMEOUT_SECONDS=${EMBED_WARMUP_TIMEOUT_SECONDS} WEB_SEARCH_CACHE_ENABLED=${WEB_SEARCH_CACHE_ENABLED} WEB_SEARCH_CACHE_TTL=${WEB_SEARCH_CACHE_TTL} WEB_SEARCH_CACHE_MAX_SIZE=${WEB_SEARCH_CACHE_MAX_SIZE} WEB_SEARCH_CACHE_LOG_HITS=${WEB_SEARCH_CACHE_LOG_HITS} WEB_SEARCH_PROVIDER=${WEB_SEARCH_PROVIDER} HOUYI_PORT=${HOUYI_PORT} ./scripts/restart-backend.sh"
+tmux new-session -d -s $SESSION_NAME -n "backend" "cd ${ROOT_DIR} && env FASTEMBED_CACHE_PATH=${FASTEMBED_CACHE_PATH} EMBED_WARMUP_TIMEOUT_SECONDS=${EMBED_WARMUP_TIMEOUT_SECONDS} WEB_SEARCH_CACHE_ENABLED=${WEB_SEARCH_CACHE_ENABLED} WEB_SEARCH_CACHE_TTL=${WEB_SEARCH_CACHE_TTL} WEB_SEARCH_CACHE_MAX_SIZE=${WEB_SEARCH_CACHE_MAX_SIZE} WEB_SEARCH_CACHE_LOG_HITS=${WEB_SEARCH_CACHE_LOG_HITS} HOUYI_PORT=${HOUYI_PORT} ./scripts/restart-backend.sh"
 
 # Create a new window for frontend
 tmux new-window -t $SESSION_NAME -n "frontend" "cd ${ROOT_DIR} && env VITE_WS_HOST=${VITE_WS_HOST} HOUYI_UI_PORT=${HOUYI_UI_PORT} ./scripts/restart-frontend.sh"

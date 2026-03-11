@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import builtins
 import sys
 from types import SimpleNamespace
 
@@ -84,7 +85,7 @@ class TestLocalEmbedder:
                 raise ImportError("missing fastembed")
             return real_import(name, *args, **kwargs)
 
-        monkeypatch.setattr("builtins.__import__", fake_import)
+        monkeypatch.setattr(builtins, "__import__", fake_import)
         embedder = LocalEmbedder(model="BAAI/bge-small-en-v1.5", dimension=2)
 
         with pytest.raises(ImportError, match="fastembed package required for local embedding"):

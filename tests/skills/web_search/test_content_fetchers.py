@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 import urllib.error
+import urllib.request
 
 import pytest
 
@@ -57,7 +58,7 @@ async def test_readability_fetcher_success(monkeypatch) -> None:
     def _fake_open(*_args, **_kwargs):
         return _Response(b"<html></html>")
 
-    monkeypatch.setattr("urllib.request.urlopen", _fake_open)
+    monkeypatch.setattr(urllib.request, "urlopen", _fake_open)
     fetcher = ReadabilityContentFetcher()
     result = await fetcher.fetch(["https://example.com"])
     assert result["https://example.com"] == "Hello"
@@ -73,7 +74,7 @@ async def test_readability_fetcher_error(monkeypatch) -> None:
     def _fail(*_args, **_kwargs):
         raise urllib.error.URLError("boom")
 
-    monkeypatch.setattr("urllib.request.urlopen", _fail)
+    monkeypatch.setattr(urllib.request, "urlopen", _fail)
     fetcher = ReadabilityContentFetcher()
     with pytest.raises(ContentFetchError):
         await fetcher.fetch(["https://example.com"])
@@ -99,7 +100,7 @@ async def test_jina_fetcher_reads_content(monkeypatch) -> None:
     def _fake_open(*_args, **_kwargs):
         return _Response(b"content")
 
-    monkeypatch.setattr("urllib.request.urlopen", _fake_open)
+    monkeypatch.setattr(urllib.request, "urlopen", _fake_open)
     fetcher = JinaContentFetcher()
     result = await fetcher.fetch(["example.com"])
     assert result["example.com"] == "content"
@@ -112,7 +113,7 @@ async def test_jina_fetcher_error(monkeypatch) -> None:
     def _fail(*_args, **_kwargs):
         raise urllib.error.URLError("boom")
 
-    monkeypatch.setattr("urllib.request.urlopen", _fail)
+    monkeypatch.setattr(urllib.request, "urlopen", _fail)
     fetcher = JinaContentFetcher()
     with pytest.raises(ContentFetchError):
         await fetcher.fetch(["example.com"])

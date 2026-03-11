@@ -17,19 +17,33 @@ describe('AgentLoopSummary', () => {
         toolCalls={3}
         traceId="trace-123"
         usage={{ prompt_tokens: 34, completion_tokens: 54, total_tokens: 88 }}
+        metrics={{
+          decode_tokens_per_second: 26.5,
+          end_to_end_tokens_per_second: 22.25,
+          finish_reason: 'stop',
+          budget: { max_tokens_guardrail_applied: true },
+        }}
       />,
     );
 
     expect(screen.getByText('Agent Loop')).toBeInTheDocument();
     expect(screen.getByText(/2 rounds/)).toBeInTheDocument();
-    expect(screen.getByText('In 34')).toBeInTheDocument();
-    expect(screen.getByText('Out 54')).toBeInTheDocument();
-    expect(screen.getByText('Total 88')).toBeInTheDocument();
+    expect(screen.getByText(/3 tool calls/)).toBeInTheDocument();
+    expect(screen.getByText('Trace')).toBeInTheDocument();
+    expect(screen.queryByText('In 34')).not.toBeInTheDocument();
+    expect(screen.queryByText('Out 54')).not.toBeInTheDocument();
+    expect(screen.queryByText('Total 88')).not.toBeInTheDocument();
+    expect(screen.queryByText('Decode 27/s')).not.toBeInTheDocument();
+    expect(screen.queryByText('E2E 22/s')).not.toBeInTheDocument();
+    expect(screen.queryByText('Guardrail')).not.toBeInTheDocument();
     expect(screen.queryByText(/Iterations:/)).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button'));
     expect(screen.getByText(/Iterations: 2/)).toBeInTheDocument();
     expect(screen.getByText(/Tool calls: 3/)).toBeInTheDocument();
+    expect(screen.getByText(/Total tokens 88/)).toBeInTheDocument();
+    expect(screen.getByText(/Finish:/)).toBeInTheDocument();
+    expect(screen.getByText('stop')).toBeInTheDocument();
     expect(screen.getByText('trace-123')).toBeInTheDocument();
   });
 

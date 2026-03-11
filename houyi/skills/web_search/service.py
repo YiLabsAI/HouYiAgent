@@ -233,8 +233,6 @@ class WebSearchService:
             return "tavily"
         if os.getenv(ENV_BOCHA_API_KEY):
             return "bocha"
-        if os.getenv(ENV_SEARXNG_BASE_URL):
-            return "searxng"
         return "ddg"
 
     @staticmethod
@@ -278,7 +276,7 @@ class WebSearchService:
             return []
 
         fallbacks: list[WebSearchProvider] = []
-        for name in ["serper", "tavily", "bocha", "ddg", "searxng"]:
+        for name in ["serper", "tavily", "bocha", "ddg"]:
             if name == provider_name:
                 continue
             try:

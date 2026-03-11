@@ -17,6 +17,13 @@ import { ImageLightbox } from './ImageLightbox';
 import { ToolCallBubble } from './ToolCallBubble';
 import { useTypewriter } from '@/hooks/useTypewriter';
 
+const formatDurationMs = (durationMs: number | null): string | null => {
+  if (!Number.isFinite(durationMs) || !durationMs || durationMs <= 0) return null;
+  return durationMs >= 1000
+    ? `${(durationMs / 1000).toFixed(durationMs >= 10_000 ? 0 : 1)}s`
+    : `${Math.round(durationMs)} ms`;
+};
+
 const sanitizeAssistantToolMarkers = (raw: string): string => {
   const hasToolMarker = /<\|tool_[^|]+\|>|<tool_call\b|<\/tool_call>|<arg_[^>]+>|<\/?think>/i.test(raw);
   if (!hasToolMarker) return raw;
@@ -38,7 +45,62 @@ const sanitizeAssistantToolMarkers = (raw: string): string => {
     .replace(/\n{3,}/g, '\n\n')
     .trim();
 
-  return stripped;
+  if (stripped) return stripped;
+
+  return raw
+    .replace(/<tool_call[^>]*>/gi, ' ')
+    .replace(/<\/tool_call>/gi, ' ')
+    .replace(/<arg_[^>]+>/gi, ' ')
+    .replace(/<\/arg_[^>]+>/gi, ' ')
+    .replace(/<\/?think>/gi, ' ')
+    .replace(/<\|tool_calls_section_begin\|>/gi, ' ')
+    .replace(/<\|tool_calls_section_end\|>/gi, ' ')
+    .replace(/<\|tool_call_begin\|>/gi, ' ')
+    .replace(/<\|tool_call_end\|>/gi, ' ')
+    .replace(/<\|tool_call_argument_begin\|>/gi, ' ')
+    .replace(/<\|tool_call_argument_end\|>/gi, ' ')
+    .replace(/<\|tool_[^|]+\|>/gi, ' ')
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+};
+
+const looksLikePlainTextToolCommandReplay = (
+  raw: string,
+  toolSteps: ChatMessage[],
+  hasAssistantToolCalls: boolean,
+): boolean => {
+  const text = raw.trim();
+  if (!text) return false;
+  if (!hasAssistantToolCalls && toolSteps.length === 0) return false;
+
+  const lines = text
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (lines.length === 0 || lines.length > 3) return false;
+
+  const toolNames = new Set<string>();
+  toolSteps.forEach((step) => {
+    if (typeof step.name === 'string' && step.name.trim()) {
+      toolNames.add(step.name.trim());
+    }
+  });
+
+  const isCommandLine = (line: string): boolean => {
+    const firstToken = line.split(/\s+/)[0] || '';
+    const normalizedToolName = firstToken.replace(/^functions\./, '');
+    const matchesKnownTool = toolNames.has(firstToken) || toolNames.has(normalizedToolName);
+    const matchesHouyiTool = /^houyi_[a-z0-9_]+$/i.test(normalizedToolName);
+    if (!matchesKnownTool && !matchesHouyiTool) return false;
+    if (/[.!?。；;]\s*$/.test(line)) return false;
+    if (/(^|\s)(let me|i will|next|then|because|looks like|让我|我来|看起来)/i.test(line)) {
+      return false;
+    }
+    return line.split(/\s+/).length >= 2;
+  };
+
+  return lines.every(isCommandLine);
 };
 
 interface MessageBubbleProps {
@@ -72,15 +134,22 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
   const isAssistant = message.role === 'assistant';
   const isTool = message.role === 'tool';
   const [showToolSteps, setShowToolSteps] = React.useState(false);
-  const prevIsStreamingRef = React.useRef(isStreaming);
   const rawContent = typeof message.content === 'string' ? message.content : String(message.content ?? '');
   const rawReasoning = typeof message.reasoning_content === 'string'
     ? message.reasoning_content
     : String(message.reasoning_content ?? '');
   const hasAssistantToolCalls = Array.isArray(message.tool_calls) && message.tool_calls.length > 0;
-  const normalizedAssistantContent = isAssistant
+  const markerSanitizedAssistantContent = isAssistant
     ? sanitizeAssistantToolMarkers(rawContent)
     : rawContent;
+  const normalizedAssistantContent = isAssistant
+    && looksLikePlainTextToolCommandReplay(
+      markerSanitizedAssistantContent,
+      toolSteps,
+      hasAssistantToolCalls,
+    )
+    ? ''
+    : markerSanitizedAssistantContent;
   const normalizedAssistantReasoning = isAssistant
     ? sanitizeAssistantToolMarkers(rawReasoning)
     : rawReasoning;
@@ -96,9 +165,14 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
   const usageCompletionTokens = Number(message.metadata?.usage?.completion_tokens || 0);
   const usageTotalTokens = Number(message.metadata?.usage?.total_tokens || 0);
   const usageInputTokens = Number(message.metadata?.usage?.input_tokens || 0);
+  const budget = message.metadata?.budget as Record<string, any> | undefined;
+  const budgetGuardrailApplied = Boolean(budget?.max_tokens_guardrail_applied);
   const firstTokenLatencyMs = Number(message.metadata?.first_token_latency_ms || 0);
   const tokensPerSecond = Number(message.metadata?.tokens_per_second || 0);
+  const decodeTokensPerSecond = Number(message.metadata?.decode_tokens_per_second || 0);
+  const endToEndTokensPerSecond = Number(message.metadata?.end_to_end_tokens_per_second || 0);
   const hasToolSummary = toolSteps.length > 0;
+  const canRevealToolSteps = hasToolSummary;
   const assistantMetricCount = [
     usageTotalTokens > 0,
     usagePromptTokens > 0,
@@ -107,12 +181,37 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
     tokensPerSecond > 0,
   ].filter(Boolean).length;
   const shouldShowMetaPanel = isAssistant
-    && (traceId || assistantMetricCount > 0 || (hasToolSummary && !isStreaming));
+    && (traceId || assistantMetricCount > 0 || canRevealToolSteps);
   const shouldShowUserMetaPanel = isUser && usageInputTokens > 0;
   const roundCount = toolSteps.length > 0
     ? new Set(toolSteps.map((step) => Number(step.metadata?.round_index || 0)).filter((v) => Number.isFinite(v) && v > 0)).size
     : 0;
-  const hoverMetricCount = [firstTokenLatencyMs > 0, tokensPerSecond > 0].filter(Boolean).length;
+  const hoverMetricCount = [
+    firstTokenLatencyMs > 0,
+    tokensPerSecond > 0,
+    decodeTokensPerSecond > 0,
+    endToEndTokensPerSecond > 0,
+  ].filter(Boolean).length;
+  const toolStatusCounts = toolSteps.reduce<Record<string, number>>((acc, step) => {
+    const rawStatus = String(step.metadata?.tool_status || '').trim().toLowerCase();
+    const status = rawStatus || 'ok';
+    acc[status] = (acc[status] || 0) + 1;
+    return acc;
+  }, {});
+  const hasErroredTool = Object.keys(toolStatusCounts).some((status) => status === 'error' || status === 'failed');
+  const hasRunningTool = Object.keys(toolStatusCounts).some((status) => status === 'running' || status === 'pending');
+  const toolActivityStatus = hasErroredTool ? 'error' : hasRunningTool ? 'running' : 'done';
+  const toolActivityStatusClass = toolActivityStatus === 'error'
+    ? 'text-red-300 border-red-500/30 bg-red-500/10'
+    : toolActivityStatus === 'running'
+      ? 'text-amber-300 border-amber-500/30 bg-amber-500/10'
+      : 'text-emerald-300 border-emerald-500/30 bg-emerald-500/10';
+  const totalToolDurationMs = toolSteps.reduce((sum, step) => {
+    const durationMs = Number(step.metadata?.duration_ms);
+    return Number.isFinite(durationMs) && durationMs > 0 ? sum + durationMs : sum;
+  }, 0);
+  const formattedToolDuration = formatDurationMs(totalToolDurationMs || null);
+  const toolActivityLabel = `${toolSteps.length} tool${toolSteps.length > 1 ? 's' : ''}`;
   const isEmptyAssistantPlaceholder =
     isAssistant
     && !isStreaming
@@ -124,13 +223,6 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
 
   // Keep hook order stable across placeholder/non-placeholder transitions.
   const displayContent = useTypewriter(normalizedAssistantContent, isStreaming && isAssistant);
-
-  React.useEffect(() => {
-    if (isAssistant && isLastMessage && prevIsStreamingRef.current && !isStreaming) {
-      setShowToolSteps(false);
-    }
-    prevIsStreamingRef.current = isStreaming;
-  }, [isAssistant, isLastMessage, isStreaming, toolSteps.length]);
 
   React.useLayoutEffect(() => {
     if (!isStreaming || !(showReasoning || shouldAutoExpandReasoning)) return;
@@ -301,6 +393,42 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
           </div>
         ) : null}
 
+        {isAssistant && hasToolSummary && (
+          <div className="mt-2 w-full rounded-lg border border-cyan-500/20 bg-gray-900/60 px-2.5 py-2">
+            <button
+              type="button"
+              className="flex w-full items-center justify-between gap-2 text-left"
+              onClick={() => setShowToolSteps((v) => !v)}
+              aria-expanded={showToolSteps}
+              aria-label={`Tool activity ${toolSteps.length}`}
+            >
+              <span className="min-w-0 flex items-center gap-2">
+                <span className="text-[12px] font-medium text-gray-200">Tool activity</span>
+                <span className="text-[11px] text-gray-400">{toolActivityLabel}</span>
+                <span className={`rounded border px-1.5 py-0.5 text-[10px] uppercase tracking-wide ${toolActivityStatusClass}`}>
+                  {toolActivityStatus}
+                </span>
+                {hasRunningTool && (
+                  <span className="inline-block h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse" />
+                )}
+              </span>
+              {showToolSteps ? <ChevronDown size={14} className="text-gray-500" /> : <ChevronRight size={14} className="text-gray-500" />}
+            </button>
+            <div className="mt-1 flex flex-wrap items-center gap-2 text-[10px] text-gray-500">
+              <span>{toolActivityLabel}</span>
+              {formattedToolDuration && <span>{`Duration ${formattedToolDuration}`}</span>}
+              {roundCount > 0 && <span>{`Rounds ${roundCount}`}</span>}
+            </div>
+            {showToolSteps && canRevealToolSteps && (
+              <div className="mt-2 space-y-1.5 rounded-md border border-gray-700/80 bg-gray-900/50 p-1.5">
+                {toolSteps.map((step) => (
+                  <ToolCallBubble key={step.message_id} message={step} />
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
         {shouldShowUserMetaPanel && (
           <div className="mt-1.5 flex items-center gap-1.5 text-[10px] text-gray-300">
             <span className="text-[11px] text-gray-500 tabular-nums">
@@ -323,22 +451,25 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
                   <div className={`pointer-events-none absolute ${isUser ? 'right-0' : 'left-0'} ${isLastMessage ? 'top-full mt-1' : 'bottom-full mb-1'} z-10 hidden whitespace-nowrap rounded-2xl bg-white px-4 py-3 text-[12px] text-gray-800 shadow-lg ring-1 ring-black/5 group-hover:block`}>
                     <div className="flex items-center gap-1">
                       {firstTokenLatencyMs > 0 && <span>{`First token ${Math.round(firstTokenLatencyMs)} ms`}</span>}
-                      {firstTokenLatencyMs > 0 && tokensPerSecond > 0 && <span>|</span>}
-                      {tokensPerSecond > 0 && <span>{`${Math.round(tokensPerSecond)} tokens/s`}</span>}
+                      {firstTokenLatencyMs > 0 && (tokensPerSecond > 0 || decodeTokensPerSecond > 0 || endToEndTokensPerSecond > 0) && <span>|</span>}
+                      {decodeTokensPerSecond > 0 && <span>{`Decode ${Math.round(decodeTokensPerSecond)} tokens/s`}</span>}
+                      {decodeTokensPerSecond > 0 && endToEndTokensPerSecond > 0 && <span>|</span>}
+                      {endToEndTokensPerSecond > 0 && <span>{`E2E ${Math.round(endToEndTokensPerSecond)} tokens/s`}</span>}
+                      {endToEndTokensPerSecond === 0 && tokensPerSecond > 0 && <span>{`${Math.round(tokensPerSecond)} tokens/s`}</span>}
                     </div>
                     <div className={`absolute ${isLastMessage ? '-top-1.5' : '-bottom-1.5'} h-3 w-3 rotate-45 bg-white ring-1 ring-black/5 ${isUser ? 'right-5' : 'left-5'}`} />
                   </div>
                 )}
               </div>
             )}
-            {hasToolSummary && (
-              <span className="rounded-md border border-cyan-500/30 bg-cyan-500/10 px-1.5 py-0.5 text-cyan-200">
-                Tool calls {toolSteps.length}
+            {roundCount > 0 && (
+              <span className="rounded-md border border-violet-500/30 bg-violet-500/10 px-1.5 py-0.5 text-violet-200">
+                Rounds {roundCount}
               </span>
             )}
-            {roundCount > 0 && (
-              <span className="rounded-md border border-gray-600 bg-gray-800/80 px-1.5 py-0.5 text-gray-300">
-                Rounds {roundCount}
+            {budgetGuardrailApplied && (
+              <span className="rounded-md border border-rose-500/30 bg-rose-500/10 px-1.5 py-0.5 text-rose-200">
+                Guardrail
               </span>
             )}
             {traceId && onOpenTrace && (
@@ -349,22 +480,6 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
               >
                 View trace
               </button>
-            )}
-            {hasToolSummary && (
-              <button
-                type="button"
-                className="rounded-md border border-gray-600 bg-gray-800/80 px-1.5 py-0.5 text-gray-300 hover:bg-gray-700"
-                onClick={() => setShowToolSteps((v) => !v)}
-              >
-                {showToolSteps ? 'Hide steps' : 'Show steps'}
-              </button>
-            )}
-            {showToolSteps && toolSteps.length > 0 && (
-              <div className="mt-1.5 w-full space-y-1.5 rounded-md border border-gray-700/80 bg-gray-900/50 p-1.5">
-                {toolSteps.map((step) => (
-                  <ToolCallBubble key={step.message_id} message={step} />
-                ))}
-              </div>
             )}
           </div>
         )}

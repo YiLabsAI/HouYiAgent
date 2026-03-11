@@ -2,6 +2,7 @@
 
 import time
 import urllib.error
+import urllib.request
 from unittest.mock import Mock
 
 import pytest
@@ -358,7 +359,7 @@ class TestExporters:
         def raise_url_error(*_args, **_kwargs):
             raise urllib.error.URLError("offline")
 
-        monkeypatch.setattr("urllib.request.urlopen", raise_url_error)
+        monkeypatch.setattr(urllib.request, "urlopen", raise_url_error)
 
         exporter.flush()
 
@@ -408,7 +409,7 @@ class TestExporters:
         def raise_runtime_error(*_args, **_kwargs):
             raise RuntimeError("boom")
 
-        monkeypatch.setattr("urllib.request.urlopen", raise_runtime_error)
+        monkeypatch.setattr(urllib.request, "urlopen", raise_runtime_error)
 
         exporter.flush()
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import builtins
 import sys
 from types import SimpleNamespace
 
@@ -93,7 +94,7 @@ class TestAPIEmbedder:
                 raise ImportError("missing openai")
             return real_import(name, *args, **kwargs)
 
-        monkeypatch.setattr("builtins.__import__", fake_import)
+        monkeypatch.setattr(builtins, "__import__", fake_import)
         embedder = APIEmbedder(provider="openai", model="text-embedding-3-small", dimension=3)
 
         with pytest.raises(ImportError, match="openai package required for API embedding"):
@@ -110,7 +111,7 @@ class TestAPIEmbedder:
                 raise ImportError("missing openai")
             return real_import(name, *args, **kwargs)
 
-        monkeypatch.setattr("builtins.__import__", fake_import)
+        monkeypatch.setattr(builtins, "__import__", fake_import)
         embedder = APIEmbedder(provider="openai", model="text-embedding-3-small", dimension=3)
 
         with pytest.raises(ImportError, match="openai package required for API embedding"):

@@ -123,7 +123,7 @@ export const ConversationRail: React.FC<ConversationRailProps> = ({
               <div className="flex-1 min-w-0">
                 <div className="text-[12px] truncate">{conv.title}</div>
                 <div className="text-[10px] text-gray-500">
-                  {conv.message_count} messages
+                  {(conv.visible_message_count ?? conv.message_count)} messages
                 </div>
               </div>
               <div className="relative shrink-0">

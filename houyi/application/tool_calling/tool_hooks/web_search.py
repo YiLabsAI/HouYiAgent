@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+_ALLOWED_WEB_SEARCH_PROVIDERS = {"ddg", "serper", "tavily", "bocha"}
+
 
 @dataclass(frozen=True)
 class WebSearchProviderHook:
@@ -14,9 +16,18 @@ class WebSearchProviderHook:
         args = tool_call.get("args")
         if not isinstance(args, dict):
             return None
-        if "provider" in args:
+        requested_provider = args.get("provider", self.provider)
+        normalized_provider = str(requested_provider or "").strip().lower()
+        if not normalized_provider:
             return None
-        return {"args": {**args, "provider": self.provider}}
+        if normalized_provider not in _ALLOWED_WEB_SEARCH_PROVIDERS:
+            raise ValueError(
+                "Unsupported web_search provider "
+                f"'{normalized_provider}'. Allowed providers: ddg, serper, tavily, bocha"
+            )
+        if args.get("provider") == normalized_provider:
+            return None
+        return {"args": {**args, "provider": normalized_provider}}
 
 
 @dataclass(frozen=True)

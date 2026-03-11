@@ -178,6 +178,22 @@ describe('Composer', () => {
     }));
   });
 
+  it('passes maxTokens in onSend options when advanced max tokens is set', () => {
+    render(<Composer onSend={onSend} onStop={onStop} isStreaming={false} />);
+    const textarea = screen.getByPlaceholderText(/Type a message/);
+
+    fireEvent.click(screen.getByTestId('composer-advanced-toggle'));
+    const maxTokensInput = screen.getByPlaceholderText('(default)');
+    fireEvent.change(maxTokensInput, { target: { value: '32' } });
+
+    fireEvent.change(textarea, { target: { value: 'hello' } });
+    fireEvent.keyDown(textarea, { key: 'Enter', shiftKey: false });
+
+    expect(onSend).toHaveBeenCalledWith('hello', expect.objectContaining({
+      maxTokens: 32,
+    }));
+  });
+
   it('clears text after sending', () => {
     render(<Composer onSend={onSend} onStop={onStop} isStreaming={false} />);
     const textarea = screen.getByPlaceholderText(/Type a message/) as HTMLTextAreaElement;

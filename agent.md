@@ -506,18 +506,26 @@ ruff check houyi/ --fix
 ### Test Function Naming
 
 - Test function names SHOULD follow `test_<subject>_<behavior>[_<condition>]`.
-- Prefer concise behavior-oriented names over implementation-heavy sentences.
-- Avoid repeating file or module context that is already clear from the test file path.
+- Prefer concise subject + behavior names over implementation-heavy sentences.
+- Use `_when_<condition>` only when the condition is essential to understand the scenario.
+- Use `_with_<input_variant>` or `_without_<dependency>` only for clear setup variants.
+- Keep test names short. Prefer **2-3 semantic segments after `test_`**. Treat **more than 3 underscore-separated semantic segments after `test_`** as a smell that should usually be refactored into the test class, fixture, or docstring.
+- Keep test names readable. Prefer **about 35 characters or fewer**, and treat **45 characters** as a hard limit unless there is a strong reason.
+- Avoid repeating file or module context that is already clear from the test file path or test class.
+- Prefer contract-visible behavior over implementation-detail phrasing.
 - Do not encode execution tier into function names; use `pytest.mark` or CI/workflow selection instead.
 
 ✅ **Correct**:
 - `test_write_file_creates_parents()`
-- `test_find_files_iterative_exact_match()`
-- `test_find_files_default_contains_mode()`
+- `test_find_files_uses_contains()`
+- `test_vertex_uses_httpx()`
+- `test_gemini_emits_reasoning()`
 
 ❌ **Incorrect**:
-- `test_write_file_executor_creates_parents()` (repeats file-local implementation context)
+- `test_write_file_executor_creates_parents()` (repeats implementation context)
 - `test_find_files_executor_iterative_subdirs_exact_match()` (too implementation-heavy)
+- `test_create_vertex_adapter_falls_back_when_google_sdk_missing()` (too long and over-specifies implementation)
+- `test_vertex_gemini_build_generate_config_ignores_parallel_tool_calls()` (too long and carries too many underscore segments)
 - `test_smoke_find_files()` (execution tier in function name)
 
 ### Test Structure

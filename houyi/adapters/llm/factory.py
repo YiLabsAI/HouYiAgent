@@ -27,6 +27,7 @@ from houyi.adapters.llm.models import (
 logger = logging.getLogger(__name__)
 
 _VERTEX_ALIASES = frozenset({PROVIDER_VERTEX, PROVIDER_GOOGLE_AI})
+_ENV_VERTEX_ADAPTER = "HOUYI_VERTEX_ADAPTER"
 
 
 class LLMAdapterFactory:
@@ -94,6 +95,18 @@ def _create_vertex_adapter() -> LLMAdapter:
     from houyi.infrastructure.config.env_config import EnvConfig
 
     env = EnvConfig.get()
+    route_mode = str(os.getenv(_ENV_VERTEX_ADAPTER, "auto") or "auto").strip().lower()
+
+    if route_mode == "httpx":
+        logger.info("Using VertexAIAdapter (httpx JWT mode, forced by %s)", _ENV_VERTEX_ADAPTER)
+        from houyi.adapters.llm.vertex_httpx_adapter import VertexAIAdapter
+
+        return VertexAIAdapter()
+
+    if route_mode == "genai":
+        from houyi.adapters.llm.vertex_gemini_adapter import GoogleVertexGeminiAdapter
+
+        return GoogleVertexGeminiAdapter.from_env()
 
     if env.google_project or env.google_api_key:
         try:

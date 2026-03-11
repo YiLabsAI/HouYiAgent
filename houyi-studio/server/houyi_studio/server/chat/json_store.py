@@ -159,6 +159,7 @@ class JsonStore:
         Returns:
             List of conversation summary dicts, sorted by updated_at desc.
         """
+        self._refresh_index_from_conversation_files()
         summaries = list(self._index.values())
 
         if status:
@@ -352,6 +353,31 @@ class JsonStore:
         self._index[conversation.conversation_id] = conversation.to_summary()
         self._write_index()
 
+    def _refresh_index_from_conversation_files(self) -> None:
+        """Recompute summaries from conversation files to avoid stale index counts."""
+        refreshed: dict[str, dict[str, Any]] = {}
+        changed = False
+        for file_path in self._data_dir.glob("*.json"):
+            if file_path.name == "index.json":
+                continue
+            try:
+                data = json.loads(file_path.read_text(encoding="utf-8"))
+                conv = Conversation(**data)
+                summary = conv.to_summary()
+                refreshed[conv.conversation_id] = summary
+                if self._index.get(conv.conversation_id) != summary:
+                    changed = True
+            except Exception as e:
+                logger.warning("Failed to refresh summary from %s: %s", file_path.name, e)
+
+        stale_ids = set(self._index.keys()) - set(refreshed.keys())
+        if stale_ids:
+            changed = True
+
+        if changed or len(refreshed) != len(self._index):
+            self._index = refreshed
+            self._write_index()
+
     def _write_index(self) -> None:
         """Write index file atomically."""
         index_path = self._data_dir / "index.json"
@@ -390,6 +416,7 @@ class JsonStore:
                     )
                 else:
                     logger.info("Loaded %d conversations from index", len(self._index))
+                    self._refresh_index_from_conversation_files()
                     return
             except Exception as e:
                 logger.warning("Failed to load index, rebuilding: %s", e)
@@ -406,6 +433,8 @@ class JsonStore:
                 count += 1
             except Exception as e:
                 logger.warning("Failed to load %s: %s", file_path.name, e)
+
+        self._write_index()
 
         if count > 0:
             self._write_index()

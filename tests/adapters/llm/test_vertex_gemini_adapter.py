@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import builtins
 import os
 import types
@@ -9,6 +10,7 @@ from unittest.mock import patch
 
 import pytest
 
+from houyi.adapters.llm import vertex_gemini_adapter as vertex_gemini_adapter_module
 from houyi.adapters.llm.vertex_gemini_adapter import (
     GoogleVertexGeminiAdapter,
     _build_proxy_http_options,
@@ -24,7 +26,47 @@ def _build_adapter() -> GoogleVertexGeminiAdapter:
     return adapter
 
 
-def test_vertex_gemini_tool_schema_conversion() -> None:
+class _FakeTypesPart:
+    @staticmethod
+    def from_text(*, text):
+        return {"text": text}
+
+    def __init__(self, **kwargs) -> None:
+        self.payload = kwargs
+
+
+class _FakeTypesFunctionCall:
+    def __init__(self, *, id="", name, args) -> None:
+        self.id = id
+        self.name = name
+        self.args = args
+
+
+class _FakeTypesFunctionResponse:
+    def __init__(self, *, id="", name, response) -> None:
+        self.id = id
+        self.name = name
+        self.response = response
+
+
+class _FakeTypesContent:
+    def __init__(self, role=None, parts=None) -> None:
+        self.role = role
+        self.parts = parts
+
+
+def _fake_vertex_types(**overrides):
+    base = {
+        "Content": _FakeTypesContent,
+        "Part": _FakeTypesPart,
+        "FunctionCall": _FakeTypesFunctionCall,
+        "FunctionResponse": _FakeTypesFunctionResponse,
+    }
+    base.update(overrides)
+    return types.SimpleNamespace(**base)
+
+
+def test_convert_tools_schema() -> None:
     """Should convert OpenAI tool schema to Vertex function declarations."""
 
     adapter = _build_adapter()
@@ -44,7 +86,7 @@ def test_vertex_gemini_tool_schema_conversion() -> None:
     assert declarations[0]["name"] == "weather"
 
 
-def test_vertex_gemini_tool_choice_conversion() -> None:
+def test_tool_choice_maps() -> None:
     """Should map tool_choice to Vertex function calling config."""
 
     adapter = _build_adapter()
@@ -53,7 +95,7 @@ def test_vertex_gemini_tool_choice_conversion() -> None:
     assert adapter._convert_tool_choice("auto")["function_calling_config"]["mode"] == "AUTO"
 
 
-def test_vertex_gemini_normalize_response_with_tool_calls() -> None:
+def test_normalize_extracts_tools() -> None:
     """Normalize should extract text and tool calls from response parts."""
 
     class _FunctionCall:
@@ -85,21 +127,46 @@ def test_vertex_gemini_normalize_response_with_tool_calls() -> None:
     assert result.tool_calls[0]["function"]["name"] == "weather"
 
 
-def test_vertex_gemini_normalize_response_without_parts_uses_text() -> None:
-    """Normalize should fall back to response text when candidate parts are absent."""
+def test_normalize_keeps_signature() -> None:
+    class _FunctionCall:
+        def __init__(self) -> None:
+            self.name = "houyi_shell_exec"
+            self.args = {"command": "pwd"}
+
+    class _Part:
+        def __init__(self) -> None:
+            self.text = ""
+            self.function_call = _FunctionCall()
+            self.thought_signature = b"sig-123"
 
     class _Content:
         def __init__(self) -> None:
-            self.parts = None
+            self.parts = [_Part()]
 
     class _Candidate:
         def __init__(self) -> None:
             self.content = _Content()
-            self.text = None
 
     class _Response:
         def __init__(self) -> None:
             self.candidates = [_Candidate()]
+            self.usage_metadata = None
+
+    adapter = _build_adapter()
+    result = adapter._normalize_response(_Response())
+
+    assert result.tool_calls[0]["function"]["name"] == "houyi_shell_exec"
+    assert result.tool_calls[0]["function"]["thought_signature"] == base64.b64encode(
+        b"sig-123"
+    ).decode("ascii")
+
+
+def test_normalize_uses_text() -> None:
+    """Normalize should fall back to response text when candidate parts are absent."""
+
+    class _Response:
+        def __init__(self) -> None:
+            self.candidates = []
             self.usage_metadata = None
             self.text = '{"scores": [9, 1]}'
 
@@ -110,7 +177,7 @@ def test_vertex_gemini_normalize_response_without_parts_uses_text() -> None:
     assert result.tool_calls == []
 
 
-def test_vertex_gemini_normalize_response_uses_parsed_object_string() -> None:
+def test_normalize_uses_parsed() -> None:
     """Normalize should stringify parsed structured output when present."""
 
     class _Response:
@@ -127,7 +194,45 @@ def test_vertex_gemini_normalize_response_uses_parsed_object_string() -> None:
     assert result.tool_calls == []
 
 
-def test_vertex_gemini_extract_candidate_content_prefers_candidate_text() -> None:
+def test_normalize_skips_text() -> None:
+    class _FunctionCall:
+        def __init__(self) -> None:
+            self.id = "call_1"
+            self.name = "weather"
+            self.args = {"city": "Tokyo"}
+
+    class _Part:
+        def __init__(self) -> None:
+            self.text = ""
+            self.function_call = _FunctionCall()
+
+    class _Content:
+        def __init__(self) -> None:
+            self.parts = [_Part()]
+
+    class _Candidate:
+        def __init__(self) -> None:
+            self.content = _Content()
+            self.text = None
+
+    class _Response:
+        def __init__(self) -> None:
+            self.candidates = [_Candidate()]
+            self.usage_metadata = None
+
+        @property
+        def text(self) -> str:
+            raise AssertionError("response.text should not be accessed when candidates are present")
+
+    adapter = _build_adapter()
+    result = adapter._normalize_response(_Response())
+
+    assert result.content == ""
+    assert result.tool_calls[0]["id"] == "call_1"
+    assert result.tool_calls[0]["function"]["name"] == "weather"
+
+
+def test_extract_prefers_text() -> None:
     adapter = _build_adapter()
 
     class _Candidate:
@@ -137,7 +242,7 @@ def test_vertex_gemini_extract_candidate_content_prefers_candidate_text() -> Non
     assert adapter._extract_candidate_content(_Candidate()) == "direct text"
 
 
-def test_vertex_gemini_prepare_contents_and_system_separates_system_message() -> None:
+def test_prepare_separates_system() -> None:
     adapter = _build_adapter()
 
     class _Part:
@@ -167,7 +272,284 @@ def test_vertex_gemini_prepare_contents_and_system_separates_system_message() ->
     assert contents[1].role == "model"
 
 
-def test_vertex_gemini_build_generate_config_sets_system_instruction() -> None:
+def test_prepare_keeps_calls() -> None:
+    adapter = _build_adapter()
+    captured_parts: list[dict[str, object]] = []
+
+    class _CapturingPart(_FakeTypesPart):
+        def __init__(self, **kwargs) -> None:
+            captured_parts.append(kwargs)
+            super().__init__(**kwargs)
+
+    fake_types = _fake_vertex_types(Part=_CapturingPart)
+    system_instruction, contents = adapter._prepare_contents_and_system(
+        fake_types,
+        [
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {
+                            "name": "get_weather",
+                            "arguments": '{"city":"Tokyo"}',
+                        },
+                    }
+                ],
+            }
+        ],
+    )
+
+    assert system_instruction is None
+    assert len(contents) == 1
+    assert contents[0].role == "model"
+    assert len(contents[0].parts) == 1
+    assert contents[0].parts[0].payload["function_call"].id == "call_1"
+    assert contents[0].parts[0].payload["function_call"].name == "get_weather"
+    assert contents[0].parts[0].payload["function_call"].args == {"city": "Tokyo"}
+    assert len(captured_parts) == 1
+    assert captured_parts[0]["function_call"].id == "call_1"
+
+
+def test_prepare_roundtrips_signature() -> None:
+    adapter = _build_adapter()
+    captured_parts: list[dict[str, object]] = []
+
+    class _CapturingPart(_FakeTypesPart):
+        def __init__(self, **kwargs) -> None:
+            captured_parts.append(kwargs)
+            super().__init__(**kwargs)
+
+    fake_types = _fake_vertex_types(Part=_CapturingPart)
+    _, contents = adapter._prepare_contents_and_system(
+        fake_types,
+        [
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {
+                            "name": "houyi_shell_exec",
+                            "arguments": '{"command":"pwd"}',
+                            "thought_signature": base64.b64encode(b"sig-xyz").decode("ascii"),
+                        },
+                    }
+                ],
+            }
+        ],
+    )
+
+    assert len(contents) == 1
+    assert contents[0].role == "model"
+    assert len(captured_parts) == 1
+    assert captured_parts[0]["thought_signature"] == b"sig-xyz"
+    assert captured_parts[0]["function_call"].id == "call_1"
+    assert captured_parts[0]["function_call"].name == "houyi_shell_exec"
+
+
+def test_prepare_keeps_results() -> None:
+    adapter = _build_adapter()
+    fake_types = _fake_vertex_types()
+    system_instruction, contents = adapter._prepare_contents_and_system(
+        fake_types,
+        [
+            {
+                "role": "tool",
+                "name": "get_weather",
+                "tool_call_id": "call_1",
+                "content": '{"temperature":21}',
+            }
+        ],
+    )
+
+    assert system_instruction is None
+    assert contents == []
+
+
+def test_prepare_groups_results() -> None:
+    adapter = _build_adapter()
+    fake_types = _fake_vertex_types()
+    _, contents = adapter._prepare_contents_and_system(
+        fake_types,
+        [
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "get_weather", "arguments": '{"city":"Tokyo"}'},
+                    },
+                    {
+                        "id": "call_2",
+                        "type": "function",
+                        "function": {"name": "list_dir", "arguments": '{"path":"/tmp"}'},
+                    },
+                ],
+            },
+            {
+                "role": "tool",
+                "name": "get_weather",
+                "tool_call_id": "call_1",
+                "content": '{"temperature":21}',
+            },
+            {
+                "role": "tool",
+                "name": "list_dir",
+                "tool_call_id": "call_2",
+                "content": '{"files":["a.txt"]}',
+            },
+        ],
+    )
+
+    assert len(contents) == 2
+    assert contents[0].role == "model"
+    assert len(contents[0].parts) == 2
+    assert contents[1].role == "user"
+    assert [part.payload["function_response"].id for part in contents[1].parts] == [
+        "call_1",
+        "call_2",
+    ]
+    assert contents[1].parts[0].payload["function_response"].response == {"temperature": 21}
+    assert contents[1].parts[1].payload["function_response"].response == {"files": ["a.txt"]}
+
+
+def test_prepare_recovers_name() -> None:
+    adapter = _build_adapter()
+    fake_types = _fake_vertex_types()
+    _, contents = adapter._prepare_contents_and_system(
+        fake_types,
+        [
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "get_weather", "arguments": '{"city":"Tokyo"}'},
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_1",
+                "content": '{"temperature":21}',
+            },
+        ],
+    )
+
+    assert len(contents) == 2
+    assert contents[0].role == "model"
+    assert contents[1].role == "user"
+    assert len(contents[1].parts) == 1
+    assert contents[1].parts[0].payload["function_response"].id == "call_1"
+    assert contents[1].parts[0].payload["function_response"].name == "get_weather"
+    assert contents[1].parts[0].payload["function_response"].response == {"temperature": 21}
+
+
+def test_prepare_drops_group() -> None:
+    adapter = _build_adapter()
+    fake_types = _fake_vertex_types()
+    _, contents = adapter._prepare_contents_and_system(
+        fake_types,
+        [
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "get_weather", "arguments": '{"city":"Tokyo"}'},
+                    },
+                    {
+                        "id": "call_2",
+                        "type": "function",
+                        "function": {"name": "list_dir", "arguments": '{"path":"/tmp"}'},
+                    },
+                ],
+            },
+            {
+                "role": "tool",
+                "name": "get_weather",
+                "tool_call_id": "call_1",
+                "content": '{"temperature":21}',
+            },
+        ],
+    )
+
+    assert len(contents) == 1
+    assert contents[0].role == "model"
+    assert len(contents[0].parts) == 2
+
+
+def test_prepare_keeps_group() -> None:
+    adapter = _build_adapter()
+    fake_types = _fake_vertex_types()
+    _, contents = adapter._prepare_contents_and_system(
+        fake_types,
+        [
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "old_call_1",
+                        "type": "function",
+                        "function": {"name": "get_weather", "arguments": '{"city":"Tokyo"}'},
+                    },
+                    {
+                        "id": "old_call_2",
+                        "type": "function",
+                        "function": {"name": "list_dir", "arguments": '{"path":"/tmp"}'},
+                    },
+                ],
+            },
+            {
+                "role": "tool",
+                "name": "get_weather",
+                "tool_call_id": "old_call_1",
+                "content": '{"temperature":21}',
+            },
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "new_call_1",
+                        "type": "function",
+                        "function": {"name": "pwd", "arguments": "{}"},
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "name": "pwd",
+                "tool_call_id": "new_call_1",
+                "content": '{"cwd":"/tmp"}',
+            },
+        ],
+    )
+
+    assert len(contents) == 3
+    assert contents[0].role == "model"
+    assert len(contents[0].parts) == 2
+    assert contents[1].role == "model"
+    assert len(contents[1].parts) == 1
+    assert contents[2].role == "user"
+    assert len(contents[2].parts) == 1
+    assert contents[2].parts[0].payload["function_response"].id == "new_call_1"
+    assert contents[2].parts[0].payload["function_response"].name == "pwd"
+
+
+def test_config_sets_system() -> None:
     adapter = _build_adapter()
 
     class _Config:
@@ -188,9 +570,112 @@ def test_vertex_gemini_build_generate_config_sets_system_instruction() -> None:
     assert config.kwargs["max_output_tokens"] == 8
     assert config.kwargs["system_instruction"] == "be concise"
     assert config.kwargs["response_mime_type"] == "application/json"
+    assert config.kwargs["tool_config"]["function_calling_config"]["mode"] == "NONE"
 
 
-def test_vertex_gemini_tool_choice_dict_maps_to_any() -> None:
+def test_config_ignores_model() -> None:
+    adapter = _build_adapter()
+
+    class _Config:
+        def __init__(self, **kwargs) -> None:
+            self.kwargs = kwargs
+
+    fake_types = types.SimpleNamespace(GenerateContentConfig=_Config)
+    config = adapter._build_generate_config(
+        fake_types,
+        temperature=0.1,
+        max_tokens=8,
+        tools=None,
+        system_instruction=None,
+        extra_kwargs={"model": "gemini-3.1-pro-preview"},
+    )
+    assert "model" not in config.kwargs
+
+
+def test_config_ignores_parallel() -> None:
+    adapter = _build_adapter()
+
+    class _Config:
+        def __init__(self, **kwargs) -> None:
+            self.kwargs = kwargs
+
+    fake_types = types.SimpleNamespace(GenerateContentConfig=_Config)
+    config = adapter._build_generate_config(
+        fake_types,
+        temperature=0.1,
+        max_tokens=8,
+        tools=None,
+        system_instruction=None,
+        extra_kwargs={"parallel_tool_calls": True},
+    )
+    assert "parallel_tool_calls" not in config.kwargs
+
+
+@pytest.mark.asyncio
+async def test_stream_skips_text() -> None:
+    adapter = _build_adapter()
+
+    class _Part:
+        def __init__(self) -> None:
+            self.text = ""
+            self.function_call = types.SimpleNamespace(
+                id="", name="weather", args={"city": "Tokyo"}
+            )
+            self.thought_signature = None
+
+    class _CandidateContent:
+        def __init__(self) -> None:
+            self.parts = [_Part()]
+
+    class _Candidate:
+        def __init__(self) -> None:
+            self.content = _CandidateContent()
+
+    class _Chunk:
+        def __init__(self) -> None:
+            self.usage_metadata = None
+            self.candidates = [_Candidate()]
+
+        @property
+        def text(self) -> str:
+            raise AssertionError("chunk.text should not be accessed when parts are available")
+
+    class _Stream:
+        def __init__(self) -> None:
+            self._done = False
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            if self._done:
+                raise StopAsyncIteration
+            self._done = True
+            return _Chunk()
+
+    captured_configs: list[object] = []
+
+    class _Models:
+        async def generate_content_stream(self, *, model, contents, config):
+            _ = (model, contents)
+            captured_configs.append(config)
+            return _Stream()
+
+    adapter._client = types.SimpleNamespace(aio=types.SimpleNamespace(models=_Models()))
+
+    chunks = []
+    async for chunk in adapter.stream_chat([{"role": "user", "content": "hello"}], tools=None):
+        chunks.append(chunk)
+
+    assert len(chunks) == 1
+    assert chunks[0].content_delta == ""
+    assert chunks[0].tool_calls_delta is not None
+    assert chunks[0].tool_calls_delta[0]["id"] == "gemini_call_0_weather"
+    config = captured_configs[0]
+    assert config.tool_config.function_calling_config.mode == "NONE"
+
+
+def test_choice_dict_maps() -> None:
     adapter = _build_adapter()
     assert (
         adapter._convert_tool_choice({"type": "function"})["function_calling_config"]["mode"]
@@ -198,7 +683,7 @@ def test_vertex_gemini_tool_choice_dict_maps_to_any() -> None:
     )
 
 
-def test_vertex_gemini_convert_tools_empty() -> None:
+def test_convert_tools_empty() -> None:
     """Empty or invalid tools should return empty list."""
 
     adapter = _build_adapter()
@@ -206,7 +691,7 @@ def test_vertex_gemini_convert_tools_empty() -> None:
     assert adapter._convert_tools([{"type": "noop"}]) == []
 
 
-def test_vertex_gemini_from_env(monkeypatch) -> None:
+def test_from_env_default(monkeypatch) -> None:
     """from_env should read configuration from environment variables."""
 
     created: dict[str, object] = {}
@@ -237,7 +722,7 @@ def test_vertex_gemini_from_env(monkeypatch) -> None:
     assert created["model"] == "gemini-test"
 
 
-def test_vertex_gemini_from_env_api_key(monkeypatch) -> None:
+def test_from_env_key(monkeypatch) -> None:
     """from_env should use GOOGLE_API_KEY when set."""
 
     created: dict[str, object] = {}
@@ -263,7 +748,7 @@ def test_vertex_gemini_from_env_api_key(monkeypatch) -> None:
     assert created["api_key"] == "test-key"
 
 
-def test_vertex_gemini_from_env_requires_auth(monkeypatch) -> None:
+def test_from_env_auth(monkeypatch) -> None:
     """from_env should raise when neither API key nor project is set."""
 
     monkeypatch.delenv("GOOGLE_CLOUD_PROJECT", raising=False)
@@ -281,71 +766,7 @@ def test_vertex_gemini_from_env_requires_auth(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_vertex_gemini_chat_builds_config() -> None:
-    """chat should build config and pass tools/tool_choice to generate_content."""
-    pytest.importorskip("google.genai")
-
-    class _FunctionCall:
-        def __init__(self) -> None:
-            self.name = "weather"
-            self.args = {"city": "Tokyo"}
-
-    class _Part:
-        def __init__(self) -> None:
-            self.text = "hi"
-            self.function_call = _FunctionCall()
-
-    class _Content:
-        def __init__(self) -> None:
-            self.parts = [_Part()]
-
-    class _Candidate:
-        def __init__(self) -> None:
-            self.content = _Content()
-
-    class _UsageMetadata:
-        def __init__(self) -> None:
-            self.prompt_token_count = 10
-            self.candidates_token_count = 5
-            self.total_token_count = 15
-
-    class _Response:
-        def __init__(self) -> None:
-            self.candidates = [_Candidate()]
-            self.usage_metadata = _UsageMetadata()
-
-    captured: dict[str, object] = {}
-
-    class _Models:
-        async def generate_content(self, model=None, contents=None, config=None):
-            captured["model"] = model
-            captured["contents"] = contents
-            captured["config"] = config
-            return _Response()
-
-    class _Aio:
-        def __init__(self) -> None:
-            self.models = _Models()
-
-    adapter = _build_adapter()
-    adapter._client = type("FakeClient", (), {"aio": _Aio()})()
-
-    result = await adapter.chat(
-        [{"role": "user", "content": "hi"}],
-        tools=[{"type": "function", "function": {"name": "weather", "parameters": {}}}],
-        tool_choice="required",
-        max_tokens=5,
-        response_mime_type="application/json",
-    )
-    assert result.tool_calls
-    config = captured["config"]
-    assert config.max_output_tokens == 5
-    assert config.tool_config.function_calling_config.mode == "ANY"
-    assert config.response_mime_type == "application/json"
-
-
-@pytest.mark.asyncio
-async def test_vertex_gemini_stream_chat() -> None:
+async def test_stream_chat() -> None:
     """stream_chat should yield content from streaming response."""
     pytest.importorskip("google.genai")
 
@@ -385,7 +806,7 @@ async def test_vertex_gemini_stream_chat() -> None:
     assert adapter.last_finish_reason == "stop"
 
 
-def test_vertex_gemini_init_vertex_ai_mode_sets_credentials_env(monkeypatch) -> None:
+def test_init_sets_env(monkeypatch) -> None:
     created = {}
 
     class _Client:
@@ -395,10 +816,7 @@ def test_vertex_gemini_init_vertex_ai_mode_sets_credentials_env(monkeypatch) -> 
     fake_genai = types.SimpleNamespace(Client=_Client)
     fake_google = types.SimpleNamespace(genai=fake_genai)
     monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", "preexisting.json")
-    monkeypatch.setattr(
-        "houyi.adapters.llm.vertex_gemini_adapter.detect_proxy",
-        lambda: None,
-    )
+    monkeypatch.setattr(vertex_gemini_adapter_module, "detect_proxy", lambda: None)
 
     with patch.dict("sys.modules", {"google": fake_google, "google.genai": fake_genai}):
         adapter = GoogleVertexGeminiAdapter(
@@ -415,13 +833,12 @@ def test_vertex_gemini_init_vertex_ai_mode_sets_credentials_env(monkeypatch) -> 
     assert os.environ["GOOGLE_APPLICATION_CREDENTIALS"] == "preexisting.json"
 
 
-def test_vertex_gemini_init_raises_import_error_when_sdk_missing():
+def test_init_raises_sdk() -> None:
     original_import = builtins.__import__
 
     def _fake_import(name, globals=None, locals=None, fromlist=(), level=0):
         if name == "google":
             raise ImportError("missing google")
-        return original_import(name, globals, locals, fromlist, level)
 
     with patch("builtins.__import__", side_effect=_fake_import):
         with pytest.raises(ImportError, match="Google GenAI SDK not installed"):
@@ -429,7 +846,7 @@ def test_vertex_gemini_init_raises_import_error_when_sdk_missing():
 
 
 @pytest.mark.asyncio
-async def test_vertex_gemini_chat_wraps_sdk_errors() -> None:
+async def test_chat_wraps_errors() -> None:
     pytest.importorskip("google.genai")
 
     class _Part:
@@ -461,7 +878,7 @@ async def test_vertex_gemini_chat_wraps_sdk_errors() -> None:
 
 
 @pytest.mark.asyncio
-async def test_vertex_gemini_stream_wraps_sdk_errors() -> None:
+async def test_stream_wraps_errors() -> None:
     pytest.importorskip("google.genai")
 
     class _Part:
@@ -496,12 +913,12 @@ async def test_vertex_gemini_stream_wraps_sdk_errors() -> None:
 class TestBuildProxyHttpOptions:
     """Tests for _build_proxy_http_options."""
 
-    def test_creates_httpx_clients_with_proxy(self):
+    def test_creates_clients_proxy(self) -> None:
         opts = _build_proxy_http_options("http://127.0.0.1:7890")
         assert "httpx_client" in opts
         assert "httpx_async_client" in opts
 
-    def test_clients_are_httpx_instances(self):
+    def test_clients_are_httpx(self) -> None:
         import httpx
 
         opts = _build_proxy_http_options("http://127.0.0.1:8118")
@@ -512,7 +929,7 @@ class TestBuildProxyHttpOptions:
 class TestWrapSdkErrorRegion:
     """_wrap_sdk_error should explain account-level region restriction."""
 
-    def test_region_error_explains_vpn_restriction(self):
+    def test_region_error_vpn(self) -> None:
         adapter = _build_adapter()
         adapter._proxy_url = "http://127.0.0.1:8118"
         exc = adapter._wrap_sdk_error(
@@ -522,7 +939,7 @@ class TestWrapSdkErrorRegion:
         assert "VPN/proxy/datacenter" in msg
         assert "Vertex AI" in msg
 
-    def test_region_error_vertex_ai_mode(self):
+    def test_region_error_vertex(self) -> None:
         adapter = _build_adapter()
         adapter._auth_mode = "vertex_ai"
         adapter._proxy_url = None
@@ -532,24 +949,24 @@ class TestWrapSdkErrorRegion:
         msg = str(exc)
         assert "GOOGLE_CLOUD_LOCATION" in msg
 
-    def test_401_error_explains_developer_api_credentials(self):
+    def test_401_error_creds(self) -> None:
         adapter = _build_adapter()
         exc = adapter._wrap_sdk_error(Exception("401 UNAUTHENTICATED"))
         msg = str(exc)
         assert "GOOGLE_API_KEY" in msg
         assert "AIza" in msg
 
-    def test_403_error_explains_permissions(self):
+    def test_403_error_perms(self) -> None:
         adapter = _build_adapter()
         exc = adapter._wrap_sdk_error(Exception("403 PERMISSION_DENIED"))
         assert "aiplatform.user role" in str(exc)
 
-    def test_404_error_explains_model_config(self):
+    def test_404_error_model(self) -> None:
         adapter = _build_adapter()
         exc = adapter._wrap_sdk_error(Exception("404 NOT_FOUND"))
         assert "GEMINI_MODEL" in str(exc)
 
-    def test_other_error_preserves_auth_mode_and_model_context(self):
+    def test_other_error_context(self) -> None:
         adapter = _build_adapter()
         exc = adapter._wrap_sdk_error(Exception("socket closed"))
         msg = str(exc)

@@ -148,6 +148,12 @@ class TestSmokeFullLifecycle:
         assert conv.messages[0].content == "Hello, assistant!"
         assert conv.messages[1].role.value == "assistant"
         assert conv.messages[1].content == "Hello from the assistant!"
+        assert conv.messages[1].metadata["usage"]["prompt_tokens"] == 20
+        assert conv.messages[1].metadata["usage"]["completion_tokens"] == 10
+        assert conv.messages[1].metadata["usage"]["reasoning_tokens"] == 0
+        assert conv.messages[1].metadata["usage"]["answer_tokens"] == 10
+        assert conv.messages[1].metadata["usage"]["cached_prompt_tokens"] == 0
+        assert conv.messages[1].metadata["usage"]["usage_confidence"] == "reported"
 
         # 8. Send second message (multi-turn)
         resp = client.post(
@@ -208,7 +214,7 @@ class TestContextBurst:
     def test_message_truncation_preserves_newest_messages(self, smoke_env):
         """Send enough messages to trigger truncation and preserve the newest context."""
         client, store = smoke_env
-        burst_turns = 30
+        burst_turns = 40
         payload = "Padding text to consume more tokens and trigger truncation faster. " * 8
 
         # Create conversation
