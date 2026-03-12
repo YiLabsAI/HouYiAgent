@@ -655,6 +655,22 @@ async def test_stream_skips_text() -> None:
 
     captured_configs: list[object] = []
 
+    class _GenerateContentConfig:
+        def __init__(self, **kwargs) -> None:
+            self.tool_config = types.SimpleNamespace(
+                function_calling_config=types.SimpleNamespace(
+                    mode=kwargs.get("tool_config", {})
+                    .get("function_calling_config", {})
+                    .get("mode")
+                )
+            )
+
+    fake_types = types.SimpleNamespace(
+        Content=_FakeTypesContent,
+        Part=_FakeTypesPart,
+        GenerateContentConfig=_GenerateContentConfig,
+    )
+
     class _Models:
         async def generate_content_stream(self, *, model, contents, config):
             _ = (model, contents)
@@ -664,8 +680,9 @@ async def test_stream_skips_text() -> None:
     adapter._client = types.SimpleNamespace(aio=types.SimpleNamespace(models=_Models()))
 
     chunks = []
-    async for chunk in adapter.stream_chat([{"role": "user", "content": "hello"}], tools=None):
-        chunks.append(chunk)
+    with patch.dict("sys.modules", {"google.genai": types.SimpleNamespace(types=fake_types)}):
+        async for chunk in adapter.stream_chat([{"role": "user", "content": "hello"}], tools=None):
+            chunks.append(chunk)
 
     assert len(chunks) == 1
     assert chunks[0].content_delta == ""
