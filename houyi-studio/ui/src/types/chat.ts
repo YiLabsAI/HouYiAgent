@@ -69,6 +69,27 @@ export interface ContextUsage {
   timestamp: number;
 }
 
+export interface CompactionMetrics {
+  messages_compacted: number;
+  tokens_before: number;
+  tokens_after: number;
+  compression_ratio?: number;
+  entity_retention_ratio?: number;
+  pin_violation_count?: number;
+}
+
+export interface CompactionRecord {
+  compaction_id: string;
+  trigger: string;
+  summary: string;
+  source_message_ids: string[];
+  pinned_message_ids: string[];
+  retained_refs: string[];
+  metrics: CompactionMetrics;
+  created_at: number;
+  metadata: Record<string, any>;
+}
+
 // SSE event types
 export interface SSEMessageDelta {
   message_id: string;
@@ -98,6 +119,11 @@ export interface SSEMessageError {
 export interface SSEContextUsage {
   message_id: string;
   usage: ContextUsage;
+}
+
+export interface SSEContextCompacted {
+  message_id: string;
+  compaction: CompactionRecord;
 }
 
 export interface SSEAgentIteration {

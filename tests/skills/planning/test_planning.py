@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+from houyi.domain.skill.policy import ModelAutoInvoke
 from houyi.skills.planning import (
     PlanningSkill,
     create_plan,
@@ -387,6 +388,7 @@ class TestPlanningSkill:
         assert spec.user_invocable is True
         assert len(spec.hooks) > 0
         assert callable(spec.executor)
+        assert spec.invocation_policy.model_auto_invoke == ModelAutoInvoke.ALLOW_WITH_CONSENT
         assert props.get("action", {}).get("enum") == ["create", "update", "complete", "status"]
         assert props.get("subtask_index", {}).get("minimum") == 0
         assert props.get("completed", {}).get("type") == "boolean"

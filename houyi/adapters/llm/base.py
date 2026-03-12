@@ -76,7 +76,7 @@ class LLMResponse(BaseModel):
     content: str = Field(..., description="Response content")
     tool_calls: list[dict] = Field(default_factory=list, description="Tool calls if any")
     finish_reason: str = Field(..., description="Finish reason (stop, tool_calls, length, etc.)")
-    usage: dict[str, int] = Field(default_factory=dict, description="Token usage")
+    usage: dict[str, Any] = Field(default_factory=dict, description="Token usage")
     model: str = Field(..., description="Model used")
     metadata: dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
 
@@ -90,11 +90,7 @@ class LLMResponse(BaseModel):
             content=message.content or "",
             tool_calls=[tc.model_dump() for tc in (message.tool_calls or [])],
             finish_reason=choice.finish_reason,
-            usage={
-                "prompt_tokens": response.usage.prompt_tokens,
-                "completion_tokens": response.usage.completion_tokens,
-                "total_tokens": response.usage.total_tokens,
-            },
+            usage=_normalize_usage(response.usage),
             model=response.model,
         )
 
@@ -144,7 +140,7 @@ class LLMResponse(BaseModel):
                 content="",
                 tool_calls=[],
                 finish_reason="error",
-                usage=_sanitize_usage(data.get("usage", {})),
+                usage=_normalize_usage(data.get("usage", {})),
                 model=data.get("model", model_fallback),
             )
 
@@ -163,7 +159,7 @@ class LLMResponse(BaseModel):
             content=content,
             tool_calls=tool_calls,
             finish_reason=choices[0].get("finish_reason", "stop"),
-            usage=_sanitize_usage(data.get("usage", {})),
+            usage=_normalize_usage(data.get("usage", {})),
             model=data.get("model", model_fallback),
             metadata=metadata,
         )
@@ -197,7 +193,7 @@ class StreamResponse:
     def __init__(self, inner: AsyncIterator[StreamChunk]) -> None:
         self._inner = inner
         self.tool_calls: list[dict] = []
-        self.usage: dict[str, int] = {}
+        self.usage: dict[str, Any] = {}
         self.finish_reason: str | None = None
         self.model: str | None = None
         self._content_parts: list[str] = []
@@ -474,16 +470,98 @@ class LLMAdapter(ABC):
 # ---------------------------------------------------------------------------
 
 
-def _sanitize_usage(raw: dict | None) -> dict[str, int]:
-    """Filter usage dict to int-only values.
+def _normalize_usage(raw: Any) -> dict[str, Any]:
+    """Normalize provider usage payloads into a JSON-safe nested dict."""
+    source = _extract_usage_source(raw)
+    normalized = _normalize_usage_value(source)
+    return normalized if isinstance(normalized, dict) else {}
 
-    Some providers (Vertex AI) include nested objects in usage
-    (e.g. ``completion_tokens_details``). ``LLMResponse.usage`` expects
-    ``dict[str, int]``, so we filter out non-int values.
-    """
-    if not raw:
+
+def _normalize_usage_value(value: Any) -> Any:
+    scalar = _normalize_usage_scalar(value)
+    if scalar is not None:
+        return scalar
+    if isinstance(value, dict):
+        return _normalize_usage_dict(value)
+
+    nested_source = _extract_nested_usage_source(value)
+    if nested_source:
+        return _normalize_usage_dict(nested_source)
+
+    dumped = _maybe_dump_usage_object(value)
+    if isinstance(dumped, dict):
+        return _normalize_usage_dict(dumped)
+    return None
+
+
+def _extract_usage_source(raw: Any) -> dict[str, Any]:
+    if raw is None:
         return {}
-    return {k: v for k, v in raw.items() if isinstance(v, int)}
+    if isinstance(raw, dict):
+        return raw
+
+    source = _extract_known_usage_fields(raw)
+    if source:
+        return source
+
+    dumped = _maybe_dump_usage_object(raw)
+    return dumped if isinstance(dumped, dict) else {}
+
+
+def _extract_known_usage_fields(raw: Any) -> dict[str, Any]:
+    source: dict[str, Any] = {}
+    for key in (
+        "prompt_tokens",
+        "completion_tokens",
+        "total_tokens",
+        "completion_tokens_details",
+        "prompt_tokens_details",
+        "prompt_cache_hit_tokens",
+        "prompt_cache_miss_tokens",
+    ):
+        value = getattr(raw, key, None)
+        if value is not None:
+            source[key] = value
+    return source
+
+
+def _normalize_usage_scalar(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    return None
+
+
+def _normalize_usage_dict(value: dict[Any, Any]) -> dict[str, Any]:
+    normalized: dict[str, Any] = {}
+    for key, item in value.items():
+        normalized_item = _normalize_usage_value(item)
+        if normalized_item is not None:
+            normalized[str(key)] = normalized_item
+    return normalized
+
+
+def _extract_nested_usage_source(value: Any) -> dict[str, int]:
+    nested_source: dict[str, int] = {}
+    for key in ("reasoning_tokens", "cached_tokens"):
+        nested_value = getattr(value, key, None)
+        normalized_value = _normalize_usage_scalar(nested_value)
+        if normalized_value is not None:
+            nested_source[key] = normalized_value
+    return nested_source
+
+
+def _maybe_dump_usage_object(value: Any) -> dict[str, Any] | None:
+    for attr in ("model_dump", "dict"):
+        dumper = getattr(value, attr, None)
+        if callable(dumper):
+            dumped = dumper(exclude_none=True)
+            if isinstance(dumped, dict):
+                return dumped
+    return None
 
 
 def _parse_tool_calls(raw_tool_calls: list[dict]) -> list[dict]:

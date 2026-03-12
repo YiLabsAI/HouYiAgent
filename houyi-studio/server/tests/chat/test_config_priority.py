@@ -205,6 +205,11 @@ class TestEnableReasoningPassthrough:
 
             call_kwargs = mock_adapter.stream_chat.call_args
             assert call_kwargs.kwargs.get("enable_reasoning") is True
+            persisted = store.get(conv.conversation_id)
+            assert persisted is not None
+            budget = persisted.messages[-1].metadata.get("budget", {})
+            assert call_kwargs.kwargs.get("thinking_budget") == budget.get("reasoning_budget")
+            assert call_kwargs.kwargs.get("thinking_budget", 0) > 0
 
     @pytest.mark.asyncio
     async def test_raises_reasoning_max_tokens(self, store: JsonStore):
@@ -261,6 +266,27 @@ class TestEnableReasoningPassthrough:
             assert '"max_tokens_source": "provider_default"' in complete_chunks[-1]
 
     @pytest.mark.asyncio
+    async def test_reports_budget_decision(self, store: JsonStore):
+        conv = _make_conversation(store)
+        service = ChatService(
+            json_store=store,
+            default_model=GLOBAL_MODEL,
+        )
+        mock_adapter = _mock_llm_adapter()
+
+        with _patch_adapter(service, mock_adapter):
+            request = SendMessageRequest(content="test", max_tokens=256)
+            chunks = []
+            async for chunk in service.send_message(conv.conversation_id, request):
+                chunks.append(chunk)
+
+            complete_chunks = [chunk for chunk in chunks if "event: message.complete" in chunk]
+            assert complete_chunks
+            assert '"output_budget": 256' in complete_chunks[-1]
+            assert '"input_budget": ' in complete_chunks[-1]
+            assert '"max_tokens_to_send": 256' in complete_chunks[-1]
+
+    @pytest.mark.asyncio
     async def test_skips_enable_reasoning(self, store: JsonStore):
         conv = _make_conversation(store)
         service = ChatService(
@@ -276,6 +302,92 @@ class TestEnableReasoningPassthrough:
 
             call_kwargs = mock_adapter.stream_chat.call_args
             assert "enable_reasoning" not in (call_kwargs.kwargs or {})
+
+
+class TestRepoIntentIsolation:
+    @pytest.mark.asyncio
+    async def test_repo_intent_trims_older_history_before_llm_context_build(self, store: JsonStore):
+        conv = Conversation(title="Repo Intent Isolation", model="", system_instructions="")
+        conv.messages = [
+            Message(message_id=f"m{i}", role=MessageRole.USER, content=f"older message {i}")
+            for i in range(1, 8)
+        ]
+        conv = store.create(conv)
+        service = ChatService(
+            json_store=store,
+            default_model=GLOBAL_MODEL,
+            default_system_instructions=GLOBAL_SYSTEM,
+        )
+        mock_adapter = _mock_llm_adapter()
+
+        with _patch_adapter(service, mock_adapter):
+            request = SendMessageRequest(content="Read README from https://github.com/foo/bar")
+            async for _ in service.send_message(conv.conversation_id, request):
+                pass
+
+            call_args = mock_adapter.stream_chat.call_args
+            messages = call_args.kwargs.get("messages") or call_args[0][0]
+            non_system_messages = [m for m in messages if m.get("role") != "system"]
+            contents = [str(m.get("content") or "") for m in non_system_messages]
+
+            assert "older message 1" not in contents
+            assert "older message 2" not in contents
+            assert contents == [
+                "older message 3",
+                "older message 4",
+                "older message 5",
+                "older message 6",
+                "older message 7",
+                "Read README from https://github.com/foo/bar",
+            ]
+
+    @pytest.mark.asyncio
+    async def test_repo_intent_drops_incomplete_tool_group(self, store: JsonStore):
+        conv = Conversation(title="Repo Intent Tool Isolation", model="", system_instructions="")
+        conv.messages = [
+            Message(message_id="u1", role=MessageRole.USER, content="older user 1"),
+            Message(message_id="u2", role=MessageRole.USER, content="older user 2"),
+            Message(message_id="u3", role=MessageRole.USER, content="older user 3"),
+            Message(
+                message_id="a-tool",
+                role=MessageRole.ASSISTANT,
+                content="",
+                tool_calls=[
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "demo", "arguments": '{"path":"README.md"}'},
+                    }
+                ],
+            ),
+            Message(message_id="u4", role=MessageRole.USER, content="older user 4"),
+            Message(message_id="u5", role=MessageRole.USER, content="older user 5"),
+        ]
+        conv = store.create(conv)
+        service = ChatService(
+            json_store=store,
+            default_model=GLOBAL_MODEL,
+            default_system_instructions=GLOBAL_SYSTEM,
+        )
+        mock_adapter = _mock_llm_adapter()
+
+        with _patch_adapter(service, mock_adapter):
+            request = SendMessageRequest(content="Read README from https://github.com/foo/bar")
+            async for _ in service.send_message(conv.conversation_id, request):
+                pass
+
+            call_args = mock_adapter.stream_chat.call_args
+            messages = call_args.kwargs.get("messages") or call_args[0][0]
+            non_system_messages = [m for m in messages if m.get("role") != "system"]
+
+            assert all(not m.get("tool_calls") for m in non_system_messages)
+            assert [str(m.get("content") or "") for m in non_system_messages] == [
+                "older user 2",
+                "older user 3",
+                "older user 4",
+                "older user 5",
+                "Read README from https://github.com/foo/bar",
+            ]
 
 
 class TestProviderRouting:

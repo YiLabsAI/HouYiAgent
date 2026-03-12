@@ -21,7 +21,7 @@ class TestCoerceTextContent:
         ]
         assert _coerce_text_content(content) == "search file skill.md"
 
-    def test_serializes_non_string_payload(self):
+    def test_serializes_mapping_payload(self):
         content = {"query": "skill.md", "source": "tool"}
         coerced = _coerce_text_content(content)
         assert isinstance(coerced, str)
@@ -57,7 +57,13 @@ class TestSanitizeToolLoopMessages:
                         },
                     }
                 ],
-            }
+            },
+            {
+                "role": "tool",
+                "content": '{"matches":["README.md"]}',
+                "tool_call_id": "call-1",
+                "name": "houyi_grep",
+            },
         ]
 
         sanitized = _sanitize_tool_loop_messages(messages)

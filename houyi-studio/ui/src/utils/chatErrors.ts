@@ -21,6 +21,8 @@ export const CHAT_ERROR_MESSAGES = {
     'Gemini is temporarily rate limited. Please retry in a moment, reduce request frequency, or switch to another model if the issue persists.',
   geminiAuth:
     'Gemini request failed due to authentication or permission issues. Check the configured Vertex AI credentials and project access.',
+  unknown:
+    'The model request failed. Please retry in a moment.',
 } as const;
 
 export type ChatErrorCategory = 'rate_limit' | 'auth' | 'permission' | 'timeout' | 'network' | 'unknown';
@@ -69,7 +71,7 @@ export function formatChatErrorMessage(
     case 'network':
       return CHAT_ERROR_MESSAGES.network;
     default:
-      return message;
+      return CHAT_ERROR_MESSAGES.unknown;
   }
 }
 
@@ -77,6 +79,5 @@ export function buildVisibleChatError(
   raw: string,
   provider: ChatErrorProvider = 'generic',
 ): string {
-  const formatted = formatChatErrorMessage(raw, provider);
-  return formatted === raw ? `LLM Error: ${raw}` : `${formatted} (${raw})`;
+  return formatChatErrorMessage(raw, provider);
 }

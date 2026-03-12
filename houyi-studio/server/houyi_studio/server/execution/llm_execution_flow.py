@@ -22,6 +22,7 @@ from houyi.adapters.llm.replay import (
 from houyi.adapters.llm.replay import (
     record_llm_call as replay_record_llm_call,
 )
+from houyi.application.context.usage_normalizer import UsageNormalizer
 from houyi.infrastructure.observability import Span, SpanType, TokenUsage, TraceContext
 from houyi.interface.protocol.ir import ExecutionIR, NodeExecutionIR
 from houyi.interface.protocol.ir.checkpoint_ir import LLMCallLog
@@ -32,6 +33,7 @@ from ..tooling.service import ToolCallService
 from .observation_service import ObservationService
 
 logger = logging.getLogger(__name__)
+_USAGE_NORMALIZER = UsageNormalizer()
 
 AdapterFactory = Callable[[], Any]
 SleepFunc = Callable[[float], Awaitable[None]]
@@ -90,6 +92,17 @@ class LLMExecutionFlow:
                 "llm.replay_mode": replay_mode,
             },
         )
+
+    @staticmethod
+    def _normalize_adapter_usage(adapter_usage: Any) -> dict[str, int] | None:
+        payload = _USAGE_NORMALIZER.normalize_payload(usage=adapter_usage)
+        if not isinstance(payload, dict):
+            return None
+        return {
+            "prompt_tokens": int(payload.get("prompt_tokens", 0) or 0),
+            "completion_tokens": int(payload.get("completion_tokens", 0) or 0),
+            "total_tokens": int(payload.get("total_tokens", 0) or 0),
+        }
 
     async def execute_llm_real(
         self,
@@ -511,7 +524,7 @@ class LLMExecutionFlow:
                 node_exec.outputs["metadata"] = metadata_payload
 
             # Populate token usage from adapter if available
-            adapter_usage = getattr(llm_adapter, "last_usage", None)
+            adapter_usage = self._normalize_adapter_usage(getattr(llm_adapter, "last_usage", None))
             if llm_span and isinstance(adapter_usage, dict):
                 llm_span.tokens = TokenUsage(
                     input=adapter_usage.get("prompt_tokens", 0),

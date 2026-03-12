@@ -7,7 +7,13 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 
 from houyi.domain.skill.hooks import HookEvent, HookType, SkillHook
-from houyi.domain.skill.policy import ExecutionMode
+from houyi.domain.skill.policy import (
+    ExecutionMode,
+    FilesystemPerm,
+    InvocationPolicy,
+    Permissions,
+    SideEffect,
+)
 from houyi.domain.skill.spec import SkillSpec
 from houyi.rag.config import _default_knowledge_dir
 from houyi.rag.skills._rag_runtime import build_skill_rag
@@ -133,6 +139,8 @@ Use when user wants to "add documents to knowledge base" or "build index".""",
     execution_mode=ExecutionMode.PLUGIN,
     version="1.0.0",
     user_invocable=True,
+    invocation_policy=InvocationPolicy.default_for_side_effect(SideEffect.FILESYSTEM),
+    permissions=Permissions(filesystem=FilesystemPerm(read=True, write=True)),
     allowed_tools=["Read", "Write", "Glob"],
     hooks=_kb_ingest_hooks,
     metadata={

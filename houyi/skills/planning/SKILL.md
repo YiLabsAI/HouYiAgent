@@ -30,7 +30,7 @@ hooks:
       handler: houyi.skills.planning.hooks:stop_hook
 
 invocationPolicy:
-  modelAutoInvoke: allow
+  modelAutoInvoke: allow_with_consent
   userInvocable: true
   sideEffect: filesystem
 

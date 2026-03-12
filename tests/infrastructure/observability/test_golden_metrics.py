@@ -54,17 +54,13 @@ class TestCollectionOverhead:
     The 2% target means: span overhead < 1ms for a 50ms fast-path node.
     """
 
-    # Minimum realistic node execution time (fast tool with cache hit)
     MIN_NODE_LATENCY_MS = 50.0
     MAX_OVERHEAD_PERCENT = 2.0
 
-    def test_keeps_span_overhead_below_2_percent(self) -> None:
+    def test_span_overhead_under_budget(self) -> None:
         """Core golden metric: span creation < 2% of minimum node latency."""
-        # Warm up
         _measure_span_overhead_absolute(100)
 
-        # Measure: create 4 spans (execution root + node + llm + tool)
-        # This matches a typical single-node execution.
         iterations = 2000
         t0 = time.perf_counter()
         for _ in range(iterations):
@@ -100,9 +96,8 @@ class TestCollectionOverhead:
             f"{self.MAX_OVERHEAD_PERCENT}% of {self.MIN_NODE_LATENCY_MS}ms min node latency"
         )
 
-    def test_absolute_span_creation_cost_under_500us(self) -> None:
+    def test_span_creation_cost_under_500us(self) -> None:
         """Span pair (root+child) creation must be < 500μs."""
-        # Warm up
         _measure_span_overhead_absolute(100)
         avg_us = _measure_span_overhead_absolute(5000)
 
@@ -113,35 +108,44 @@ class TestCollectionOverhead:
         """TraceContext push/current/pop should be microsecond-level.
 
         This is a micro-benchmark and is sensitive to CPU scheduling and Python
-        version differences (e.g. GitHub runners, Python 3.13). We therefore run
-        multiple rounds and assert a high percentile bound.
+        version differences (e.g. GitHub runners, Python 3.13). We therefore warm
+        up first, collect multiple rounds with nanosecond resolution, and keep the
+        assertion in low double-digit microseconds to tolerate scheduler noise
+        while still catching real regressions.
         """
         root = Span(name="root", span_type=SpanType.EXECUTION)
 
         iterations = 20_000
-        rounds = 7
+        warmup_rounds = 2
+        measured_rounds = 9
         samples_ns: list[float] = []
 
-        for _ in range(rounds):
-            t0 = time.perf_counter()
+        for _ in range(warmup_rounds):
             for _ in range(iterations):
                 token = TraceContext.push(root)
                 _ = TraceContext.current()
                 TraceContext.pop(token)
-            elapsed = time.perf_counter() - t0
-            samples_ns.append((elapsed / iterations) * 1e9)
+
+        for _ in range(measured_rounds):
+            t0_ns = time.perf_counter_ns()
+            for _ in range(iterations):
+                token = TraceContext.push(root)
+                _ = TraceContext.current()
+                TraceContext.pop(token)
+            elapsed_ns = time.perf_counter_ns() - t0_ns
+            samples_ns.append(elapsed_ns / iterations)
 
         samples_ns_sorted = sorted(samples_ns)
-        p95_ns = samples_ns_sorted[int(len(samples_ns_sorted) * 0.95)]
+        p95_ns = samples_ns_sorted[int((len(samples_ns_sorted) - 1) * 0.95)]
         median_ns = samples_ns_sorted[len(samples_ns_sorted) // 2]
 
         print(
             "\n  TraceContext push/current/pop ns per cycle "
-            f"(median/p95 over {rounds} rounds): {median_ns:.0f}/{p95_ns:.0f} ns"
+            f"(median/p95 over {measured_rounds} rounds): {median_ns:.0f}/{p95_ns:.0f} ns"
         )
 
-        # Keep this in single-digit microseconds even on noisier CI / Python 3.13 runners.
-        assert p95_ns < 10000, f"Context propagation too slow: p95={p95_ns:.0f} ns"
+        assert median_ns < 10000, f"Context propagation median too slow: {median_ns:.0f} ns"
+        assert p95_ns < 15000, f"Context propagation too slow: p95={p95_ns:.0f} ns"
 
 
 # ---------------------------------------------------------------------------
@@ -167,7 +171,6 @@ def _build_span_tree() -> list[Span]:
         node_token = TraceContext.push(node)
         spans.append(node)
 
-        # LLM child
         llm = Span(
             name="llm.completion",
             span_type=SpanType.LLM,
@@ -179,7 +182,6 @@ def _build_span_tree() -> list[Span]:
         llm.end()
         spans.append(llm)
 
-        # Tool child
         tool = Span(
             name="tool.web_search",
             span_type=SpanType.TOOL,
@@ -204,7 +206,7 @@ def _build_span_tree() -> list[Span]:
 class TestDataCorrectness:
     """Verify ≥99.9% temporal validity of span data."""
 
-    def test_all_spans_have_valid_start_end_times(self) -> None:
+    def test_span_times_stay_ordered(self) -> None:
         """Every span must have start_time ≤ end_time."""
         spans = _build_span_tree()
         invalid = [s for s in spans if s.end_time is not None and s.start_time > s.end_time]
@@ -214,7 +216,7 @@ class TestDataCorrectness:
         assert validity >= 99.9, f"Temporal validity {validity:.1f}% < 99.9%"
         assert len(invalid) == 0, f"Found {len(invalid)} spans with start > end"
 
-    def test_parent_starts_before_or_equal_to_child(self) -> None:
+    def test_parent_starts_before_child(self) -> None:
         """Parent span start_time must be ≤ child span start_time."""
         spans = _build_span_tree()
         span_map = {s.span_id: s for s in spans}
@@ -234,7 +236,7 @@ class TestDataCorrectness:
         )
         assert validity >= 99.9, f"Parent-child validity {validity:.1f}% < 99.9%"
 
-    def test_parent_ends_after_or_equal_to_child(self) -> None:
+    def test_parent_ends_after_child(self) -> None:
         """Parent span end_time must be ≥ child span end_time."""
         spans = _build_span_tree()
         span_map = {s.span_id: s for s in spans}
@@ -270,7 +272,7 @@ class TestDataCorrectness:
         assert len(root_spans) == 1, f"Expected 1 root span, got {len(root_spans)}"
         assert len(orphans) == 0, f"Found {len(orphans)} orphan spans"
 
-    def test_large_scale_temporal_validity(self) -> None:
+    def test_temporal_validity_at_scale(self) -> None:
         """Generate many span trees and verify ≥99.9% validity across all."""
         all_spans: list[Span] = []
         for _ in range(100):

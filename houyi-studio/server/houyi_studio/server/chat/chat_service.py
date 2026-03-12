@@ -27,9 +27,19 @@ from houyi.adapters.llm import (
     create_vertex_adapter,
 )
 from houyi.adapters.memory import MemoryStore
+from houyi.application.context.compaction_evaluator import CompactionEvaluator
 from houyi.application.context.context_planner import ContextPlanner
 from houyi.application.context.context_renderer import ContextRenderer
+from houyi.application.context.token_budget_policy import TokenBudgetPolicy
 from houyi.application.context.token_estimator import TokenEstimator
+from houyi.application.context.types import (
+    ContextBlockType,
+    ContextCandidate,
+    ContextSelectionPolicy,
+    ContextSourceKind,
+    TaskBoundary,
+)
+from houyi.application.context.usage_normalizer import UsageNormalizer
 from houyi.application.tool_calling.runner import ToolCallRunner
 from houyi.application.tool_calling.runtime_options import build_chat_kwargs
 from houyi.application.tool_calling.tool_bridge import ToolBridge
@@ -55,6 +65,8 @@ from .sse_adapter import SSEEvent, stream_chat_sse
 from .types import EditMessageRequest, Message, MessageRole, SendMessageRequest
 
 logger = logging.getLogger(__name__)
+_USAGE_NORMALIZER = UsageNormalizer()
+_TOKEN_BUDGET_POLICY = TokenBudgetPolicy(default_answer_reserve=512)
 
 # Vision-capable model patterns.
 # Models matching these patterns support image_url in content arrays.
@@ -98,51 +110,78 @@ def _build_generation_metadata(
         metadata["first_token_latency_ms"] = round(first_token_ms, 2)
     if generation_time_ms is not None:
         metadata["generation_time_ms"] = round(generation_time_ms, 2)
-    completion_tokens = 0
     if isinstance(usage_payload, dict):
-        completion_tokens = int(usage_payload.get("completion_tokens", 0) or 0)
-    if generation_time_ms and generation_time_ms > 0 and completion_tokens > 0:
-        end_to_end_tps = completion_tokens / (generation_time_ms / 1000)
-        metadata["end_to_end_tokens_per_second"] = round(end_to_end_tps, 2)
-        metadata["tokens_per_second"] = round(end_to_end_tps, 2)
-        if first_token_ms is not None and 0 <= first_token_ms < generation_time_ms:
-            decode_window_ms = generation_time_ms - first_token_ms
-            if decode_window_ms > 0:
-                metadata["decode_tokens_per_second"] = round(
-                    completion_tokens / (decode_window_ms / 1000),
-                    2,
-                )
+        if usage_payload.get("first_token_ms") is not None:
+            metadata["first_token_ms"] = usage_payload.get("first_token_ms")
+        if usage_payload.get("end_to_end_tokens_per_second") is not None:
+            end_to_end_tps = float(usage_payload["end_to_end_tokens_per_second"])
+            metadata["end_to_end_tokens_per_second"] = round(end_to_end_tps, 2)
+            metadata["tokens_per_second"] = round(end_to_end_tps, 2)
+        if usage_payload.get("decode_tokens_per_second") is not None:
+            metadata["decode_tokens_per_second"] = round(
+                float(usage_payload["decode_tokens_per_second"]), 2
+            )
     return metadata
 
 
-def _normalize_usage_payload(usage_payload: dict[str, Any] | None) -> dict[str, Any] | None:
-    if not isinstance(usage_payload, dict) or not usage_payload:
-        return None
-
-    normalized = dict(usage_payload)
-
-    prompt_tokens = int(normalized.get("prompt_tokens", normalized.get("input_tokens", 0)) or 0)
-    completion_tokens = int(normalized.get("completion_tokens", 0) or 0)
-    reasoning_tokens = int(normalized.get("reasoning_tokens", 0) or 0)
-    cached_prompt_tokens = int(normalized.get("cached_prompt_tokens", 0) or 0)
-
-    answer_tokens_raw = normalized.get("answer_tokens")
-    if answer_tokens_raw is None:
-        answer_tokens = max(0, completion_tokens - reasoning_tokens)
-    else:
-        answer_tokens = int(answer_tokens_raw or 0)
-
-    normalized["prompt_tokens"] = prompt_tokens
-    normalized["input_tokens"] = int(normalized.get("input_tokens", prompt_tokens) or prompt_tokens)
-    normalized["completion_tokens"] = completion_tokens
-    normalized["reasoning_tokens"] = reasoning_tokens
-    normalized["answer_tokens"] = answer_tokens
-    normalized["cached_prompt_tokens"] = cached_prompt_tokens
-    normalized["total_tokens"] = int(
-        normalized.get("total_tokens", prompt_tokens + completion_tokens) or 0
+def _normalize_usage_payload(
+    usage_payload: dict[str, Any] | None,
+    *,
+    first_token_ms: float | None = None,
+    generation_time_ms: float | None = None,
+) -> dict[str, Any] | None:
+    timings: dict[str, float | int | None] | None = None
+    if first_token_ms is not None or generation_time_ms is not None:
+        decode_duration_ms: float | None = None
+        if generation_time_ms is not None and first_token_ms is not None:
+            decode_duration_ms = max(0.0, generation_time_ms - first_token_ms)
+        timings = {
+            "first_token_ms": first_token_ms,
+            "decode_duration_ms": decode_duration_ms,
+            "end_to_end_ms": generation_time_ms,
+        }
+    return _USAGE_NORMALIZER.normalize_payload(
+        usage=usage_payload,
+        timings=timings,
+        include_input_tokens=True,
     )
-    normalized["usage_confidence"] = str(normalized.get("usage_confidence") or "reported")
-    return normalized
+
+
+def _finalize_stream_result(
+    *,
+    llm_adapter: Any,
+    llm_span: Span,
+    first_token_ms: float | None,
+    generation_time_ms: float,
+    chunk_count: int,
+    finish_reason_sources: tuple[Any, ...] = (),
+) -> tuple[dict[str, Any] | None, str | None, dict[str, Any]]:
+    usage_payload = _normalize_usage_payload(
+        _json_safe(getattr(llm_adapter, "last_usage", None)),
+        first_token_ms=first_token_ms,
+        generation_time_ms=generation_time_ms,
+    )
+    finish_reason = _extract_finish_reason(
+        getattr(llm_adapter, "last_finish_reason", None),
+        *finish_reason_sources,
+    )
+    llm_span.set_attribute("chat.stream_total_ms", round(generation_time_ms, 2))
+    llm_span.set_attribute("chat.stream_chunk_count", chunk_count)
+    if first_token_ms is None:
+        llm_span.set_attribute("chat.first_token_ms", None)
+    if isinstance(usage_payload, dict) and usage_payload:
+        llm_span.set_tokens(
+            input_tokens=int(usage_payload.get("prompt_tokens", 0) or 0),
+            output_tokens=int(usage_payload.get("completion_tokens", 0) or 0),
+        )
+    llm_span.set_status("ok")
+    llm_span.end()
+    generation_metadata = _build_generation_metadata(
+        usage_payload=usage_payload,
+        first_token_ms=first_token_ms,
+        generation_time_ms=generation_time_ms,
+    )
+    return usage_payload, finish_reason, generation_metadata
 
 
 def _apply_reasoning_budget_guardrail(llm_kwargs: dict[str, Any]) -> dict[str, Any] | None:
@@ -173,6 +212,61 @@ def _apply_reasoning_budget_guardrail(llm_kwargs: dict[str, Any]) -> dict[str, A
         "max_tokens_effective": effective_max_tokens,
         "max_tokens_source": "request_or_conversation",
     }
+
+
+def _apply_budget_policy(
+    *,
+    model: str,
+    request: SendMessageRequest,
+    conversation: Any,
+    llm_kwargs: dict[str, Any],
+) -> dict[str, Any] | None:
+    estimator = TokenEstimator(model=model)
+    requested_max_tokens = llm_kwargs.get("max_tokens")
+    decision = _TOKEN_BUDGET_POLICY.decide(
+        context_window=estimator.context_window,
+        enable_reasoning=bool(llm_kwargs.get("enable_reasoning")),
+        requested_max_tokens=(
+            int(requested_max_tokens) if requested_max_tokens is not None else None
+        ),
+    )
+
+    max_tokens_guardrail_applied = False
+    max_tokens_effective = decision.max_tokens_to_send
+    max_tokens_source = decision.max_tokens_source
+    if llm_kwargs.get("enable_reasoning"):
+        if max_tokens_effective is None:
+            max_tokens_source = "provider_default"
+        elif max_tokens_effective < _REASONING_MIN_ANSWER_RESERVE:
+            max_tokens_effective = _REASONING_MIN_ANSWER_RESERVE
+            max_tokens_guardrail_applied = True
+            max_tokens_source = "request_or_conversation"
+            decision.output_budget = max_tokens_effective
+            decision.input_budget = max(
+                0,
+                decision.context_window - decision.output_budget - decision.tool_reserve,
+            )
+            decision.answer_reserve = _REASONING_MIN_ANSWER_RESERVE
+            decision.reasoning_budget = 0
+            decision.max_tokens_to_send = max_tokens_effective
+
+    if decision.should_set_max_tokens and max_tokens_effective is not None:
+        llm_kwargs["max_tokens"] = max_tokens_effective
+    else:
+        llm_kwargs.pop("max_tokens", None)
+
+    budget_metadata = decision.model_dump(mode="json")
+    if llm_kwargs.get("enable_reasoning"):
+        budget_metadata.update(
+            {
+                "reasoning_enabled": True,
+                "max_tokens_guardrail_applied": max_tokens_guardrail_applied,
+                "answer_reserve": _REASONING_MIN_ANSWER_RESERVE,
+                "max_tokens_effective": max_tokens_effective,
+                "max_tokens_source": max_tokens_source,
+            }
+        )
+    return budget_metadata
 
 
 def is_vision_model(model: str | None) -> bool:
@@ -267,6 +361,7 @@ class _PreparedSendContext:
     context_usage: dict[str, Any]
     llm_kwargs: dict[str, Any]
     budget_metadata: dict[str, Any] | None = None
+    compaction_event: dict[str, Any] | None = None
 
 
 @dataclass
@@ -334,6 +429,81 @@ def _extract_finish_reason(*sources: Any) -> str | None:
     return None
 
 
+def _build_chat_context_selection_policy() -> ContextSelectionPolicy:
+    return ContextSelectionPolicy(
+        policy_name="chat_default",
+        allow_memory=True,
+        allow_tool_summaries=True,
+        allow_pinned=True,
+    )
+
+
+def _build_chat_context_candidates(
+    *,
+    messages: list[dict[str, Any]],
+    system_instructions: str,
+    memory_context: str | None,
+    task_boundary: TaskBoundary | None = None,
+) -> list[ContextCandidate]:
+    boundary_metadata: dict[str, Any] = {}
+    if task_boundary is not None:
+        boundary_metadata = {
+            "task_kind": task_boundary.task_kind,
+            "scope": task_boundary.scope,
+            "boundary_id": task_boundary.boundary_id,
+        }
+    candidates: list[ContextCandidate] = []
+    if system_instructions:
+        candidates.append(
+            ContextCandidate(
+                source=ContextSourceKind.SYSTEM,
+                block_type=ContextBlockType.SYSTEM,
+                content=system_instructions,
+                pinned=True,
+                priority=0,
+            )
+        )
+    if memory_context:
+        candidates.append(
+            ContextCandidate(
+                source=ContextSourceKind.MEMORY,
+                block_type=ContextBlockType.MEMORY,
+                content=memory_context,
+                priority=50,
+            )
+        )
+    if messages:
+        latest = messages[-1:]
+        earlier_recent = messages[:-1]
+        candidates.append(
+            ContextCandidate(
+                source=ContextSourceKind.CURRENT_TURN,
+                block_type=ContextBlockType.RECENT,
+                content=latest,
+                pinned=True,
+                priority=10,
+                metadata={
+                    "message_count": len(latest),
+                    **boundary_metadata,
+                },
+            )
+        )
+        if earlier_recent:
+            candidates.append(
+                ContextCandidate(
+                    source=ContextSourceKind.RECENT,
+                    block_type=ContextBlockType.RECENT,
+                    content=earlier_recent,
+                    priority=100,
+                    metadata={
+                        "message_count": len(earlier_recent),
+                        **boundary_metadata,
+                    },
+                )
+            )
+    return candidates
+
+
 def _looks_like_tool_intent(user_content: str) -> bool:
     lowered = user_content.lower()
     if any(keyword in lowered for keyword in _TOOL_INTENT_KEYWORDS):
@@ -352,10 +522,24 @@ def _looks_like_repo_intent(user_content: str) -> bool:
 
 def _truncate_middle(text: str, max_chars: int) -> str:
     if len(text) <= max_chars:
-        return text
-    head = max_chars // 2
-    tail = max_chars - head
-    return f"{text[:head]}\n...[truncated]...\n{text[-tail:]}"
+        return text.strip()
+    if max_chars <= len("\n...[truncated]...\n"):
+        return text[:max_chars].strip()
+    half = max(1, (max_chars - len("\n...[truncated]...\n")) // 2)
+    return f"{text[:half].rstrip()}\n...[truncated]...\n{text[-half:].lstrip()}".strip()
+
+
+def _build_compaction_summary(messages: list[Message]) -> str:
+    snippets: list[str] = []
+    for message in messages[:3]:
+        role = message.role.value if isinstance(message.role, MessageRole) else str(message.role)
+        content = str(message.content or "").strip()
+        if message.tool_calls and not content:
+            content = "[tool loop turn]"
+        if not content:
+            content = "[empty]"
+        snippets.append(f"{role}: {content[:120]}")
+    return "\n".join(snippets)
 
 
 def _message_budget_chars(message: dict[str, Any]) -> int:
@@ -420,9 +604,7 @@ def _sanitize_tool_loop_structure(messages: list[dict[str, Any]]) -> list[dict[s
             pending_tool_messages = []
             pending_tool_ids = []
             return
-        if not pending_tool_messages:
-            sanitized.append(pending_assistant)
-        elif pending_expected_ids and pending_tool_ids == pending_expected_ids:
+        if pending_expected_ids and pending_tool_ids == pending_expected_ids:
             sanitized.append(pending_assistant)
             sanitized.extend(pending_tool_messages)
         pending_assistant = None
@@ -528,9 +710,50 @@ def _flatten_span_tree(root: Span) -> list[Span]:
 
 def _build_stream_error_content(error: Exception) -> str:
     message = str(error).strip()
-    if "429" in message or "RESOURCE_EXHAUSTED" in message:
+    upper_message = message.upper()
+    if "429" in message or "RESOURCE_EXHAUSTED" in upper_message:
         return "The model is temporarily rate limited by Vertex AI. Please retry in a moment."
-    return f"Request failed: {message or type(error).__name__}"
+    if "401" in message or "UNAUTHENTICATED" in upper_message:
+        return "The model request could not be authenticated. Check the configured credentials and retry."
+    if "403" in message or "PERMISSION_DENIED" in upper_message or "FORBIDDEN" in upper_message:
+        return "The model request was blocked due to missing permissions. Check the configured credentials and project access before retrying."
+    if (
+        "TIMEOUT" in upper_message
+        or "TIMED OUT" in upper_message
+        or "DEADLINE_EXCEEDED" in upper_message
+    ):
+        return "The model request timed out before the response completed. Please retry or reduce the request size."
+    if (
+        "UNEXPECTED EOF" in upper_message
+        or "ECONNRESET" in upper_message
+        or "NETWORK ERROR" in upper_message
+    ):
+        return "The connection to the model was interrupted. Please retry in a moment."
+    return "The model request failed. Please retry in a moment."
+
+
+def _build_public_stream_error_message(error: Exception) -> str:
+    message = str(error).strip()
+    upper_message = message.upper()
+    if "429" in message or "RESOURCE_EXHAUSTED" in upper_message:
+        return "The model is temporarily rate limited. Please retry in a moment."
+    if "401" in message or "UNAUTHENTICATED" in upper_message:
+        return "The request failed due to authentication issues. Check the configured credentials before retrying."
+    if "403" in message or "PERMISSION_DENIED" in upper_message or "FORBIDDEN" in upper_message:
+        return "The request failed due to missing permissions. Check the configured credentials and project access before retrying."
+    if (
+        "TIMEOUT" in upper_message
+        or "TIMED OUT" in upper_message
+        or "DEADLINE_EXCEEDED" in upper_message
+    ):
+        return "The request timed out before the model finished responding. Please retry or reduce the request size."
+    if (
+        "UNEXPECTED EOF" in upper_message
+        or "ECONNRESET" in upper_message
+        or "NETWORK ERROR" in upper_message
+    ):
+        return "The connection to the model was interrupted. Please retry in a moment."
+    return "The model request failed. Please retry in a moment."
 
 
 def _build_empty_stream_content() -> str:
@@ -777,6 +1000,7 @@ class ChatService:
 
     def _resolve_llm_kwargs(
         self,
+        model: str,
         request: SendMessageRequest,
         conversation: Any,
     ) -> tuple[dict[str, Any], dict[str, Any] | None]:
@@ -793,7 +1017,20 @@ class ChatService:
             llm_kwargs["top_p"] = conversation.top_p
         if request.enable_reasoning:
             llm_kwargs["enable_reasoning"] = True
-        return llm_kwargs, _apply_reasoning_budget_guardrail(llm_kwargs)
+        budget_metadata = _apply_budget_policy(
+            model=model,
+            request=request,
+            conversation=conversation,
+            llm_kwargs=llm_kwargs,
+        )
+        reasoning_budget = None
+        if isinstance(budget_metadata, dict):
+            candidate = budget_metadata.get("reasoning_budget")
+            if isinstance(candidate, int) and candidate > 0:
+                reasoning_budget = candidate
+        if request.enable_reasoning and reasoning_budget is not None:
+            llm_kwargs["thinking_budget"] = reasoning_budget
+        return llm_kwargs, budget_metadata
 
     def _build_context_messages(
         self,
@@ -801,6 +1038,7 @@ class ChatService:
         model: str,
         sys_instructions: str,
         chat_span: Span,
+        input_budget: int | None = None,
     ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         estimator = TokenEstimator(model=model)
         planner = ContextPlanner(
@@ -823,23 +1061,91 @@ class ChatService:
         ]
         history_messages = _sanitize_tool_loop_structure(history_messages)
 
+        if input_budget is not None and input_budget <= 0 and history_messages:
+            llm_messages = [history_messages[-1]]
+            used_tokens = estimator.count_messages(llm_messages)
+            context_usage = {
+                "model": estimator.model,
+                "max_context_tokens": estimator.context_window,
+                "used_tokens": used_tokens,
+                "reserved_output_tokens": estimator.context_window,
+                "available_tokens": 0,
+                "planned_prompt_tokens": used_tokens,
+                "available_input_tokens": 0,
+                "block_breakdown": {"recent": used_tokens},
+                "dropped_blocks": [],
+                "drop_reasons": {},
+            }
+            chat_span.set_attribute("chat.context_tokens_used", used_tokens)
+            chat_span.set_attribute("chat.context_tokens_max", estimator.context_window)
+            chat_span.set_attribute("chat.llm_messages_count", len(llm_messages))
+            logger.info(
+                "Chat context: %d messages, %d tokens used / %d max (%s)",
+                len(llm_messages),
+                used_tokens,
+                estimator.context_window,
+                model,
+            )
+            logger.warning(
+                "Context input budget is zero; using latest message fallback: model=%s requested_input_budget=%d",
+                model,
+                input_budget,
+            )
+            return llm_messages, context_usage
+
+        task_boundary = TaskBoundary(task_kind="chat", scope="conversation")
+
+        selection_policy = _build_chat_context_selection_policy()
+        candidates = _build_chat_context_candidates(
+            messages=history_messages,
+            system_instructions=sys_instructions,
+            memory_context=memory_text if memory_text else None,
+            task_boundary=task_boundary,
+        )
         plan = planner.plan(
             messages=history_messages,
             system_instructions=sys_instructions,
             memory_context=memory_text if memory_text else None,
+            input_budget=input_budget,
+            candidates=candidates,
+            selection_policy=selection_policy,
+            task_boundary=task_boundary,
         )
 
         llm_messages = renderer.render(plan)
-        context_usage = plan.usage.model_dump(mode="json")
-        chat_span.set_attribute("chat.context_tokens_used", plan.usage.used_tokens)
-        chat_span.set_attribute("chat.context_tokens_max", plan.usage.max_context_tokens)
+        if not llm_messages and history_messages:
+            llm_messages = [history_messages[-1]]
+            used_tokens = estimator.count_messages(llm_messages)
+            context_usage = plan.usage.model_copy(
+                update={
+                    "used_tokens": used_tokens,
+                    "planned_prompt_tokens": used_tokens,
+                    "available_tokens": max(0, plan.usage.available_tokens - used_tokens),
+                    "available_input_tokens": max(
+                        0, plan.usage.available_input_tokens - used_tokens
+                    ),
+                    "block_breakdown": {"recent": used_tokens},
+                }
+            ).model_dump(mode="json")
+            logger.warning(
+                "Context rendering returned empty messages; falling back to latest message: model=%s role=%s",
+                model,
+                history_messages[-1].get("role"),
+            )
+        else:
+            context_usage = plan.usage.model_dump(mode="json")
+        chat_span.set_attribute("chat.context_tokens_used", context_usage.get("used_tokens", 0))
+        chat_span.set_attribute(
+            "chat.context_tokens_max",
+            context_usage.get("max_context_tokens", estimator.context_window),
+        )
         chat_span.set_attribute("chat.llm_messages_count", len(llm_messages))
 
         logger.info(
             "Chat context: %d messages, %d tokens used / %d max (%s)",
             len(llm_messages),
-            plan.usage.used_tokens,
-            plan.usage.max_context_tokens,
+            context_usage.get("used_tokens", 0),
+            context_usage.get("max_context_tokens", estimator.context_window),
             model,
         )
         return llm_messages, context_usage
@@ -880,6 +1186,7 @@ class ChatService:
             conversation.updated_at = time.time()
             self.json_store.update(conversation)
             llm_kwargs, budget_metadata = self._resolve_llm_kwargs(
+                model=model,
                 request=request,
                 conversation=conversation,
             )
@@ -888,14 +1195,70 @@ class ChatService:
         if conversation_snapshot is None:
             raise RuntimeError(f"Conversation snapshot unavailable: {conversation_id}")
 
+        compaction_event: dict[str, Any] | None = None
         if _looks_like_repo_intent(str(request.content or "").strip()):
+            original_messages = list(conversation_snapshot.messages)
             conversation_snapshot.messages = conversation_snapshot.messages[-6:]
+            dropped_messages = original_messages[: max(0, len(original_messages) - 6)]
+            if dropped_messages:
+                estimator = TokenEstimator(model=model)
+                evaluator = CompactionEvaluator(estimator)
+                before_messages = [
+                    m.to_llm_message(vision=is_vision_model(model)) for m in dropped_messages
+                ]
+                record = evaluator.evaluate(
+                    before_messages=before_messages,
+                    summary=_build_compaction_summary(dropped_messages),
+                    source_message_ids=[
+                        m.message_id for m in dropped_messages if isinstance(m.message_id, str)
+                    ],
+                    trigger="repo_intent_trim",
+                    metadata={
+                        "kind": "history_trim",
+                        "reason": "repo_intent_recent_window",
+                        "kept_recent_messages": len(conversation_snapshot.messages),
+                        "dropped_messages": len(dropped_messages),
+                    },
+                )
+                compaction_event = {
+                    "compaction": record.model_dump(mode="json"),
+                }
+                async with conv_lock:
+                    conversation = self.json_store.get(conversation_id)
+                    if conversation is not None:
+                        history = conversation.metadata.get("compaction_history")
+                        if not isinstance(history, list):
+                            history = []
+                        history.append(record.model_dump(mode="json"))
+                        conversation.metadata["compaction_history"] = history[-20:]
+                        conversation.updated_at = time.time()
+                        self.json_store.update(conversation)
+                chat_span.set_attribute("chat.compaction.triggered", True)
+                chat_span.set_attribute("chat.compaction.trigger", record.trigger)
+                chat_span.set_attribute(
+                    "chat.compaction.messages_compacted",
+                    record.metrics.messages_compacted,
+                )
+                chat_span.set_attribute(
+                    "chat.compaction.tokens_before",
+                    record.metrics.tokens_before,
+                )
+                chat_span.set_attribute(
+                    "chat.compaction.tokens_after",
+                    record.metrics.tokens_after,
+                )
 
         llm_messages, context_usage = self._build_context_messages(
             conversation=conversation_snapshot,
             model=model,
             sys_instructions=sys_instructions,
             chat_span=chat_span,
+            input_budget=(
+                int(budget_metadata["input_budget"])
+                if isinstance(budget_metadata, dict)
+                and budget_metadata.get("input_budget") is not None
+                else None
+            ),
         )
 
         return _PreparedSendContext(
@@ -905,6 +1268,7 @@ class ChatService:
             context_usage=context_usage,
             llm_kwargs=llm_kwargs,
             budget_metadata=budget_metadata,
+            compaction_event=compaction_event,
         )
 
     def _collect_persisted_tool_messages(
@@ -1275,6 +1639,9 @@ class ChatService:
                 message_id=assistant_message_id,
                 model=model,
                 context_usage=context_usage,
+                usage=lambda: _normalize_usage_payload(
+                    _json_safe(getattr(llm_adapter, "last_usage", None))
+                ),
             )
         ]
 
@@ -1409,6 +1776,15 @@ class ChatService:
             llm_adapter = self._get_adapter_for_model(prepared.model)
             generation_metadata: dict[str, Any] = {}
 
+            if isinstance(prepared.compaction_event, dict) and prepared.compaction_event:
+                yield SSEEvent(
+                    event="context.compacted",
+                    data={
+                        "message_id": assistant_msg.message_id,
+                        **prepared.compaction_event,
+                    },
+                ).encode()
+
             resolved_chat_skills = self._resolve_enabled_chat_skills(request)
             tool_gate = self._gate_tool_loop(
                 request=request,
@@ -1453,6 +1829,7 @@ class ChatService:
                     )
                 except Exception as exc:
                     visible_error = _build_stream_error_content(exc)
+                    public_error = _build_public_stream_error_message(exc)
                     if visible_error:
                         yield SSEEvent(
                             event="message.delta",
@@ -1467,7 +1844,7 @@ class ChatService:
                         event="message.error",
                         data={
                             "message_id": assistant_msg.message_id,
-                            "error": str(exc),
+                            "error": public_error,
                             "error_type": type(exc).__name__,
                             "chunks_sent": 1 if visible_error else 0,
                             "timestamp": time.time(),
@@ -1509,8 +1886,20 @@ class ChatService:
                 )
             for event_chunk in tool_outcome.event_chunks:
                 yield event_chunk
-            llm_messages = tool_outcome.llm_messages
             persisted_tool_messages = tool_outcome.persisted_tool_messages
+            llm_messages = tool_outcome.llm_messages
+            if not llm_messages:
+                reconstructed_messages = list(prepared.llm_messages)
+                reconstructed_messages.extend(
+                    message.to_llm_message() for message in persisted_tool_messages
+                )
+                llm_messages = reconstructed_messages
+                logger.warning(
+                    "Tool loop returned empty final-stream messages; reconstructed from prepared context: conversation=%s, message=%s, persisted_tool_messages=%d",
+                    conversation_id,
+                    assistant_msg.message_id,
+                    len(persisted_tool_messages),
+                )
 
             content_parts: list[str] = []
             reasoning_parts: list[str] = []
@@ -1587,39 +1976,26 @@ class ChatService:
                         message_id=assistant_msg.message_id,
                         model=prepared.model,
                         context_usage=context_usage,
+                        usage=lambda: _normalize_usage_payload(
+                            _json_safe(getattr(llm_adapter, "last_usage", None)),
+                            first_token_ms=first_token_ms,
+                            generation_time_ms=(time.perf_counter() - stream_started_at) * 1000,
+                        ),
                         finish_reason=lambda: _extract_finish_reason(
                             getattr(llm_adapter, "last_finish_reason", None)
                         ),
                         error_message_builder=_capture_stream_error,
+                        public_error_builder=_build_public_stream_error_message,
                     ):
                         llm_chunk_count += 1
                         yield sse_chunk
-
-                    usage_payload = _normalize_usage_payload(
-                        _json_safe(getattr(llm_adapter, "last_usage", None))
-                    )
-                    finish_reason = _extract_finish_reason(
-                        getattr(llm_adapter, "last_finish_reason", None)
-                    )
                     generation_time_ms = (time.perf_counter() - stream_started_at) * 1000
-                    llm_span.set_attribute(
-                        "chat.stream_total_ms",
-                        round(generation_time_ms, 2),
-                    )
-                    llm_span.set_attribute("chat.stream_chunk_count", llm_chunk_count)
-                    if first_token_ms is None:
-                        llm_span.set_attribute("chat.first_token_ms", None)
-                    if isinstance(usage_payload, dict) and usage_payload:
-                        llm_span.set_tokens(
-                            input_tokens=int(usage_payload.get("prompt_tokens", 0) or 0),
-                            output_tokens=int(usage_payload.get("completion_tokens", 0) or 0),
-                        )
-                    llm_span.set_status("ok")
-                    llm_span.end()
-                    generation_metadata = _build_generation_metadata(
-                        usage_payload=usage_payload,
+                    usage_payload, finish_reason, generation_metadata = _finalize_stream_result(
+                        llm_adapter=llm_adapter,
+                        llm_span=llm_span,
                         first_token_ms=first_token_ms,
                         generation_time_ms=generation_time_ms,
+                        chunk_count=llm_chunk_count,
                     )
                     if stream_error_content and not finish_reason:
                         finish_reason = "error"

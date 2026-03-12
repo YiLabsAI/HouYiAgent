@@ -1,9 +1,10 @@
-"""Covers SiliconFlow adapter mock fallback, SDK/httpx paths, retries, and stream parsing."""
+"""Covers SiliconFlow adapter mock fallback, client/httpx paths, retries, and stream parsing."""
 
 from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from types import ModuleType
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -31,7 +32,7 @@ class TestSiliconFlowAdapterMockMode:
             env = os.environ.copy()
             env.pop("SILICONFLOW_API_KEY", None)
             with patch.dict(os.environ, env, clear=True):
-                SiliconFlowAdapter._SDK_AVAILABLE = None
+                SiliconFlowAdapter._OPENAI_READY = None
                 adapter = SiliconFlowAdapter()
                 assert adapter.api_key is None
 
@@ -46,13 +47,13 @@ class TestSiliconFlowAdapterMockMode:
                 assert all(r is None for _, r in chunks)
 
     @pytest.mark.asyncio
-    async def test_stream_completion_uses_chat(self):
+    async def test_stream_completion(self):
         """stream_completion should delegate to stream_chat."""
         with patch.dict(os.environ, {}, clear=False):
             env = os.environ.copy()
             env.pop("SILICONFLOW_API_KEY", None)
             with patch.dict(os.environ, env, clear=True):
-                SiliconFlowAdapter._SDK_AVAILABLE = None
+                SiliconFlowAdapter._OPENAI_READY = None
                 adapter = SiliconFlowAdapter()
 
                 chunks = []
@@ -70,7 +71,7 @@ class TestSiliconFlowAdapterMockMode:
             env = os.environ.copy()
             env.pop("SILICONFLOW_API_KEY", None)
             with patch.dict(os.environ, env, clear=True):
-                SiliconFlowAdapter._SDK_AVAILABLE = None
+                SiliconFlowAdapter._OPENAI_READY = None
                 adapter = SiliconFlowAdapter()
 
                 messages = [
@@ -85,53 +86,29 @@ class TestSiliconFlowAdapterMockMode:
                 assert "Tell me about Python" in full
 
 
-class TestSiliconFlowAdapterSDKPath:
-    """Test SiliconFlowAdapter SDK path with mocked openai client."""
+class TestSiliconFlowAdapterRoutePath:
+    """Test SiliconFlowAdapter route selection with mocked openai client."""
 
     @pytest.mark.asyncio
-    async def test_sdk_stream_chat(self):
-        """Mock the openai SDK path to verify stream_chat behavior."""
-
-        class MockDelta:
-            def __init__(self, content=None, reasoning_content=None):
-                self.content = content
-                self.reasoning_content = reasoning_content
-                self.tool_calls = None
-
-        class MockChoice:
-            def __init__(self, delta, finish_reason=None):
-                self.delta = delta
-                self.finish_reason = finish_reason
-
-        class MockChunk:
-            def __init__(self, choices=None, usage=None):
-                self.choices = choices or []
-                self.usage = usage
-
-        class MockUsage:
-            prompt_tokens = 10
-            completion_tokens = 5
-            total_tokens = 15
-
-        async def mock_stream():
-            yield MockChunk(choices=[MockChoice(MockDelta(content="Hello"))])
-            yield MockChunk(choices=[MockChoice(MockDelta(content=" world"))])
-            yield MockChunk(choices=[MockChoice(MockDelta(reasoning_content="thinking"))])
-            yield MockChunk(choices=[], usage=MockUsage())
-
-        mock_client = AsyncMock()
-        mock_client.chat.completions.create = AsyncMock(return_value=mock_stream())
-        mock_client.close = AsyncMock()
-
-        fake_openai = ModuleType("openai")
-        fake_openai.AsyncOpenAI = MagicMock(return_value=mock_client)
+    async def test_stream_prefers_httpx_route(self):
+        """stream_chat should route through httpx even if client support is available."""
 
         with patch.dict(os.environ, {"SILICONFLOW_API_KEY": "test-key"}):
             EnvConfig._reset()
-            SiliconFlowAdapter._SDK_AVAILABLE = True
+            SiliconFlowAdapter._OPENAI_READY = True
             adapter = SiliconFlowAdapter()
 
-            with patch.dict(sys.modules, {"openai": fake_openai}):
+            async def _fake_httpx_stream(*args, **kwargs):
+                yield type("Chunk", (), {"content_delta": "Hello", "reasoning_delta": None})()
+                yield type("Chunk", (), {"content_delta": " world", "reasoning_delta": None})()
+                yield type("Chunk", (), {"content_delta": "", "reasoning_delta": "thinking"})()
+
+            with (
+                patch.object(adapter, "_stream_request", AsyncMock()) as direct_stream,
+                patch.object(
+                    adapter, "_stream_request_httpx", side_effect=_fake_httpx_stream
+                ) as httpx_stream,
+            ):
                 chunks = []
                 async for chunk in adapter.stream_chat([{"role": "user", "content": "Hi"}]):
                     chunks.append((chunk.content_delta, chunk.reasoning_delta))
@@ -140,18 +117,39 @@ class TestSiliconFlowAdapterSDKPath:
         assert chunks[0] == ("Hello", None)
         assert chunks[1] == (" world", None)
         assert chunks[2] == ("", "thinking")
-        assert adapter.last_usage == {
-            "prompt_tokens": 10,
-            "completion_tokens": 5,
-            "total_tokens": 15,
-        }
+        direct_stream.assert_not_called()
+        httpx_stream.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_stream_prefers_httpx(self):
+        with patch.dict(os.environ, {"SILICONFLOW_API_KEY": "test-key"}):
+            EnvConfig._reset()
+            SiliconFlowAdapter._OPENAI_READY = True
+            adapter = SiliconFlowAdapter()
+
+        async def _fake_httpx_stream(*args, **kwargs):
+            yield type("Chunk", (), {"content_delta": "ok", "reasoning_delta": None})()
+
+        with (
+            patch.object(adapter, "_stream_request", AsyncMock()) as direct_stream,
+            patch.object(
+                adapter, "_stream_request_httpx", side_effect=_fake_httpx_stream
+            ) as httpx_stream,
+        ):
+            chunks = []
+            async for chunk in adapter.stream_chat([{"role": "user", "content": "Hi"}]):
+                chunks.append((chunk.content_delta, chunk.reasoning_delta))
+
+        assert chunks == [("ok", None)]
+        direct_stream.assert_not_called()
+        httpx_stream.assert_called_once()
 
 
 class TestSiliconFlowAdapterHttpxPath:
     """Test SiliconFlowAdapter httpx fallback path."""
 
     @pytest.mark.asyncio
-    async def test_httpx_stream_chat(self):
+    async def test_stream_httpx_path(self):
         """Mock the httpx path to verify stream_chat behavior."""
 
         sse_lines = [
@@ -208,7 +206,7 @@ class TestSiliconFlowAdapterHttpxPath:
 
         with patch.dict(os.environ, {"SILICONFLOW_API_KEY": "test-key"}):
             EnvConfig._reset()
-            SiliconFlowAdapter._SDK_AVAILABLE = False
+            SiliconFlowAdapter._OPENAI_READY = False
             adapter = SiliconFlowAdapter()
 
             with patch("httpx.AsyncClient", return_value=MockHttpxClient()):
@@ -227,57 +225,46 @@ class TestSiliconFlowAdapterHttpxPath:
         }
 
 
-class TestSiliconFlowAdapterSDKReasoning:
-    """Test SDK path with reasoning enabled (covers extra_body and kwargs branches)."""
+class TestSiliconFlowAdapterReasoning:
+    """Test client path with reasoning enabled (covers extra_body and kwargs branches)."""
 
     @pytest.mark.asyncio
-    async def test_sdk_reasoning_kwargs(self):
-        """Cover enable_reasoning + thinking_budget + extra kwargs."""
-
-        class MockDelta:
-            def __init__(self, content=None, reasoning_content=None):
-                self.content = content
-                self.reasoning_content = reasoning_content
-                self.tool_calls = None
-
-        class MockChoice:
-            def __init__(self, delta, finish_reason=None):
-                self.delta = delta
-                self.finish_reason = finish_reason
-
-        class MockChunk:
-            def __init__(self, choices=None, usage=None):
-                self.choices = choices or []
-                self.usage = usage
-
-        async def mock_stream():
-            yield MockChunk(choices=[MockChoice(MockDelta(content="A"))])
-
-        mock_client = AsyncMock()
-        mock_client.chat.completions.create = AsyncMock(return_value=mock_stream())
-        mock_client.close = AsyncMock()
-
-        fake_openai = ModuleType("openai")
-        fake_openai.AsyncOpenAI = MagicMock(return_value=mock_client)
+    async def test_stream_reasoning_kwargs(self):
+        """stream_chat should pass reasoning kwargs through the httpx path."""
 
         with patch.dict(os.environ, {"SILICONFLOW_API_KEY": "test-key"}):
             EnvConfig._reset()
-            SiliconFlowAdapter._SDK_AVAILABLE = True
+            SiliconFlowAdapter._OPENAI_READY = True
             adapter = SiliconFlowAdapter()
 
-            with patch.dict(sys.modules, {"openai": fake_openai}):
+            async def _fake_httpx_stream(*args, **kwargs):
+                yield type("Chunk", (), {"content_delta": "A", "reasoning_delta": None})()
+
+            with (
+                patch.object(adapter, "_stream_request", AsyncMock()) as direct_stream,
+                patch.object(
+                    adapter, "_stream_request_httpx", side_effect=_fake_httpx_stream
+                ) as httpx_stream,
+            ):
                 chunks = []
                 async for chunk in adapter.stream_chat(
                     [{"role": "user", "content": "Hi"}],
-                    enable_reasoning=True,
+                    model="deepseek-chat",
+                    enable_thinking=True,
                     thinking_budget=1024,
                     temperature=0.7,
                 ):
                     chunks.append((chunk.content_delta, chunk.reasoning_delta))
 
         assert chunks == [("A", None)]
-        call_kwargs = mock_client.chat.completions.create.call_args[1]
-        assert call_kwargs["extra_body"] == {"thinking_budget": 1024}
+        direct_stream.assert_not_called()
+        httpx_stream.assert_called_once()
+        call_args = httpx_stream.call_args
+        request = call_args.args[0]
+        assert request.model == "deepseek-chat"
+        assert request.enable_thinking is True
+        assert request.thinking_budget == 1024
+        assert request.temperature == 0.7
 
 
 class TestSiliconFlowHttpxEdgeCases:
@@ -327,14 +314,14 @@ class TestSiliconFlowHttpxEdgeCases:
 
         with patch.dict(os.environ, {"SILICONFLOW_API_KEY": "test-key"}):
             EnvConfig._reset()
-            SiliconFlowAdapter._SDK_AVAILABLE = False
+            SiliconFlowAdapter._OPENAI_READY = False
             adapter = SiliconFlowAdapter()
 
             with patch("httpx.AsyncClient", return_value=MockHttpxClient()):
                 chunks = []
                 async for chunk in adapter.stream_chat(
                     [{"role": "user", "content": "Hi"}],
-                    enable_reasoning=True,
+                    enable_thinking=True,
                     thinking_budget=512,
                 ):
                     chunks.append((chunk.content_delta, chunk.reasoning_delta))
@@ -381,7 +368,7 @@ class TestSiliconFlowChatRequestSanitization:
 
         with patch.dict(os.environ, {"SILICONFLOW_API_KEY": "test-key"}):
             EnvConfig._reset()
-            SiliconFlowAdapter._SDK_AVAILABLE = False
+            SiliconFlowAdapter._OPENAI_READY = False
             adapter = SiliconFlowAdapter()
 
             messages = [
@@ -414,6 +401,104 @@ class TestSiliconFlowChatRequestSanitization:
         assert isinstance(args, str)
         assert "skill.md" in args
         assert payload_messages[1]["reasoning_content"] == ""
+
+    @pytest.mark.asyncio
+    async def test_chat_preserves_extra_body_for_reasoning(self):
+        captured: dict[str, object] = {}
+
+        class MockResponse:
+            status_code = 200
+
+            @staticmethod
+            def json():
+                return {
+                    "model": "deepseek-reasoner",
+                    "choices": [
+                        {"message": {"content": "ok", "tool_calls": []}, "finish_reason": "stop"}
+                    ],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+                }
+
+            text = ""
+
+        class MockHttpxClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                pass
+
+            async def post(self, url, json=None, headers=None):
+                captured["url"] = url
+                captured["body"] = json
+                captured["headers"] = headers
+                return MockResponse()
+
+        with patch.dict(os.environ, {"SILICONFLOW_API_KEY": "test-key"}):
+            EnvConfig._reset()
+            SiliconFlowAdapter._OPENAI_READY = False
+            adapter = SiliconFlowAdapter()
+
+            with patch("httpx.AsyncClient", return_value=MockHttpxClient()):
+                await adapter.chat(
+                    messages=[{"role": "user", "content": "Hi"}],
+                    model="deepseek-reasoner",
+                    enable_thinking=True,
+                    thinking_budget=256,
+                )
+
+        body = captured["body"]
+        assert isinstance(body, dict)
+        assert body["extra_body"] == {"thinking_budget": 256}
+        assert "thinking_budget" not in body
+
+    @pytest.mark.asyncio
+    async def test_chat_keeps_sampling(self):
+        captured: dict[str, object] = {}
+
+        class MockResponse:
+            status_code = 200
+
+            @staticmethod
+            def json():
+                return {
+                    "model": "test-model",
+                    "choices": [
+                        {"message": {"content": "ok", "tool_calls": []}, "finish_reason": "stop"}
+                    ],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+                }
+
+            text = ""
+
+        class MockHttpxClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                pass
+
+            async def post(self, url, json=None, headers=None):
+                captured["body"] = json
+                return MockResponse()
+
+        with patch.dict(os.environ, {"SILICONFLOW_API_KEY": "test-key"}):
+            EnvConfig._reset()
+            SiliconFlowAdapter._OPENAI_READY = False
+            adapter = SiliconFlowAdapter()
+
+            with patch("httpx.AsyncClient", return_value=MockHttpxClient()):
+                await adapter.chat(
+                    messages=[{"role": "user", "content": "Hi"}],
+                    model="test-model",
+                    top_k=16,
+                    frequency_penalty=0.5,
+                )
+
+        body = captured["body"]
+        assert isinstance(body, dict)
+        assert body["top_k"] == 16
+        assert body["frequency_penalty"] == 0.5
 
 
 class TestSiliconFlowStreamingRequestSanitization:
@@ -454,7 +539,7 @@ class TestSiliconFlowStreamingRequestSanitization:
 
         with patch.dict(os.environ, {"SILICONFLOW_API_KEY": "test-key"}):
             EnvConfig._reset()
-            SiliconFlowAdapter._SDK_AVAILABLE = False
+            SiliconFlowAdapter._OPENAI_READY = False
             adapter = SiliconFlowAdapter()
 
             messages = [
@@ -492,21 +577,101 @@ class TestSiliconFlowStreamingRequestSanitization:
 
 
 class TestSiliconFlowAdapterHelpers:
-    def test_build_httpx_chat_body(self):
+    def test_build_request(self):
         adapter = SiliconFlowAdapter(
             api_key="test-key",
             base_url="https://example.invalid/v1",
             default_model="deepseek-chat",
         )
 
-        body = adapter._build_httpx_chat_body(
-            messages=[{"role": "user", "content": "hi"}],
-            model="deepseek-chat",
+        request = adapter._build_request(
+            messages=[
+                {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "hello"}],
+                    "tool_calls": [
+                        {
+                            "id": "call-1",
+                            "type": "function",
+                            "function": {"name": "search", "arguments": {"q": "hi"}},
+                        }
+                    ],
+                }
+            ],
             tools=[{"type": "function", "function": {"name": "search"}}],
             temperature=0.2,
             max_tokens=64,
-            extra_kwargs={"tool_choice": "required"},
+            enable_streaming=True,
+            kwargs={
+                "model": "deepseek-reasoner",
+                "tool_choice": "required",
+                "top_p": 0.8,
+                "thinking_budget": 256,
+            },
         )
+
+        assert request.model == "deepseek-reasoner"
+        assert request.enable_streaming is True
+        assert request.top_p == 0.8
+        assert request.tool_choice == "required"
+        assert request.thinking_budget == 256
+        assert request.messages[0]["content"] == "hello"
+        assert request.messages[0]["reasoning_content"] == ""
+        assert isinstance(request.messages[0]["tool_calls"][0]["function"]["arguments"], str)
+
+    def test_resolve_transport(self, monkeypatch):
+        adapter = SiliconFlowAdapter(
+            api_key="test-key",
+            base_url="https://example.invalid/v1",
+            default_model="deepseek-chat",
+        )
+        SiliconFlowAdapter._OPENAI_READY = True
+
+        chat_request = adapter._build_request(
+            messages=[{"role": "user", "content": "hi"}],
+            tools=None,
+            temperature=0.2,
+            max_tokens=None,
+            enable_streaming=False,
+            kwargs={},
+        )
+        stream_request = adapter._build_request(
+            messages=[{"role": "user", "content": "hi"}],
+            tools=None,
+            temperature=0.2,
+            max_tokens=None,
+            enable_streaming=True,
+            kwargs={},
+        )
+
+        monkeypatch.setenv("HOUYI_OPENAI_COMPAT_TRANSPORT", "auto")
+        assert adapter._resolve_transport(chat_request) == "sdk"
+        assert adapter._resolve_transport(stream_request) == "httpx"
+
+        monkeypatch.setenv("HOUYI_OPENAI_COMPAT_TRANSPORT", "httpx")
+        assert adapter._resolve_transport(chat_request) == "httpx"
+        assert adapter._resolve_transport(stream_request) == "httpx"
+
+        monkeypatch.setenv("HOUYI_OPENAI_COMPAT_TRANSPORT", "sdk")
+        assert adapter._resolve_transport(chat_request) == "sdk"
+        assert adapter._resolve_transport(stream_request) == "sdk"
+
+    def test_encode_chat_request_for_httpx(self):
+        adapter = SiliconFlowAdapter(
+            api_key="test-key",
+            base_url="https://example.invalid/v1",
+            default_model="deepseek-chat",
+        )
+
+        request = adapter._build_request(
+            messages=[{"role": "user", "content": "hi"}],
+            tools=[{"type": "function", "function": {"name": "search"}}],
+            temperature=0.2,
+            max_tokens=64,
+            enable_streaming=False,
+            kwargs={"model": "deepseek-chat", "tool_choice": "required"},
+        )
+        body = adapter._encode_chat_request_for_httpx(request)
 
         assert body == {
             "model": "deepseek-chat",
@@ -518,24 +683,28 @@ class TestSiliconFlowAdapterHelpers:
             "tool_choice": "required",
         }
 
-    def test_build_sdk_stream_kwargs(self):
+    def test_encode_stream_request(self):
         adapter = SiliconFlowAdapter(
             api_key="test-key",
             base_url="https://example.invalid/v1",
             default_model="deepseek-chat",
         )
 
-        kwargs = adapter._build_sdk_stream_kwargs(
+        request = adapter._build_request(
             messages=[{"role": "user", "content": "hi"}],
-            model="deepseek-chat",
-            enable_reasoning=True,
-            thinking_budget=256,
-            extra_kwargs={
-                "tools": [{"type": "function", "function": {"name": "search"}}],
+            tools=[{"type": "function", "function": {"name": "search"}}],
+            temperature=0.2,
+            max_tokens=None,
+            enable_streaming=True,
+            kwargs={
+                "model": "deepseek-chat",
+                "enable_thinking": True,
+                "thinking_budget": 256,
                 "tool_choice": "required",
                 "top_p": 0.8,
             },
         )
+        kwargs = adapter._encode_stream_request(request)
 
         assert kwargs["stream"] is True
         assert kwargs["stream_options"] == {"include_usage": True}
@@ -544,7 +713,64 @@ class TestSiliconFlowAdapterHelpers:
         assert kwargs["extra_body"] == {"thinking_budget": 256}
         assert kwargs["top_p"] == 0.8
 
-    def test_extract_sdk_tool_calls(self):
+    def test_encode_stream_request_for_httpx(self):
+        adapter = SiliconFlowAdapter(
+            api_key="test-key",
+            base_url="https://example.invalid/v1",
+            default_model="deepseek-chat",
+        )
+
+        request = adapter._build_request(
+            messages=[{"role": "user", "content": "hi"}],
+            tools=None,
+            temperature=0.2,
+            max_tokens=None,
+            enable_streaming=True,
+            kwargs={
+                "model": "deepseek-chat",
+                "enable_thinking": False,
+                "thinking_budget": None,
+                "top_p": 0.8,
+                "presence_penalty": None,
+            },
+        )
+        payload = adapter._encode_stream_request_for_httpx(request)
+
+        assert payload["top_p"] == 0.8
+        assert "presence_penalty" not in payload
+
+    def test_encode_chat_request(self):
+        adapter = SiliconFlowAdapter(
+            api_key="test-key",
+            base_url="https://example.invalid/v1",
+            default_model="deepseek-chat",
+        )
+
+        request = adapter._build_request(
+            messages=[{"role": "user", "content": "hi"}],
+            tools=[{"type": "function", "function": {"name": "search"}}],
+            temperature=0.2,
+            max_tokens=64,
+            enable_streaming=False,
+            kwargs={
+                "model": "deepseek-chat",
+                "enable_thinking": True,
+                "thinking_budget": 128,
+                "tool_choice": "required",
+                "top_p": 0.8,
+            },
+        )
+        kwargs = adapter._encode_chat_request(request)
+
+        assert kwargs["model"] == "deepseek-chat"
+        assert kwargs["temperature"] == 0.2
+        assert kwargs["max_tokens"] == 64
+        assert kwargs["tools"] == [{"type": "function", "function": {"name": "search"}}]
+        assert kwargs["tool_choice"] == "required"
+        assert kwargs["top_p"] == 0.8
+        assert kwargs["extra_body"] == {"thinking_budget": 128}
+
+    def test_extract_tool_calls(self):
         adapter = SiliconFlowAdapter(
             api_key="test-key",
             base_url="https://example.invalid/v1",
@@ -560,7 +786,7 @@ class TestSiliconFlowAdapterHelpers:
         )()
         choice = type("Choice", (), {"delta": delta, "finish_reason": "tool_calls"})()
 
-        chunk, content_inc, reasoning_inc = adapter._build_sdk_stream_chunk(choice=choice)
+        chunk, content_inc, reasoning_inc = adapter._build_stream_chunk(choice=choice)
 
         assert chunk is not None
         assert content_inc == 0
@@ -649,7 +875,7 @@ class TestSiliconFlowAdapterHttpxChatRetry:
 
         with patch.dict(os.environ, {"SILICONFLOW_API_KEY": "test-key"}):
             EnvConfig._reset()
-            SiliconFlowAdapter._SDK_AVAILABLE = False
+            SiliconFlowAdapter._OPENAI_READY = False
             adapter = SiliconFlowAdapter()
 
             with (
@@ -693,26 +919,31 @@ class TestSiliconFlowAdapterHttpxChatRetry:
 
         with patch.dict(os.environ, {"SILICONFLOW_API_KEY": "test-key"}):
             EnvConfig._reset()
-            SiliconFlowAdapter._SDK_AVAILABLE = False
+            SiliconFlowAdapter._OPENAI_READY = False
             adapter = SiliconFlowAdapter()
 
             with (
                 patch("httpx.AsyncClient", return_value=MockHttpxClient()),
                 patch("houyi.adapters.llm.siliconflow_adapter.asyncio.sleep", new=AsyncMock()),
                 patch("houyi.infrastructure.net.proxy.detect_proxy", return_value=None),
-                pytest.raises(RuntimeError, match="SiliconFlow HTTP 500: server error"),
+                pytest.raises(
+                    RuntimeError,
+                    match=re.escape(
+                        "SiliconFlow is temporarily unavailable. Please retry in a moment."
+                    ),
+                ),
             ):
                 await adapter.chat([{"role": "user", "content": "hi"}], model="deepseek-chat")
 
         assert attempts == 4
 
 
-class TestSiliconFlowAdapterSdkChat:
+class TestSiliconFlowAdapterChatPath:
     @pytest.mark.asyncio
     async def test_chat_returns_mock(self):
         with patch.dict(os.environ, {}, clear=True):
             EnvConfig._reset()
-            SiliconFlowAdapter._SDK_AVAILABLE = False
+            SiliconFlowAdapter._OPENAI_READY = False
             adapter = SiliconFlowAdapter()
 
         result = await adapter.chat([{"role": "user", "content": "hi"}], model="deepseek-chat")
@@ -721,21 +952,21 @@ class TestSiliconFlowAdapterSdkChat:
         assert result.finish_reason == "stop"
 
     @pytest.mark.asyncio
-    async def test_chat_uses_sdk(self):
+    async def test_chat_uses_client(self):
         with patch.dict(os.environ, {"SILICONFLOW_API_KEY": "test-key"}):
             EnvConfig._reset()
-            SiliconFlowAdapter._SDK_AVAILABLE = True
+            SiliconFlowAdapter._OPENAI_READY = True
             adapter = SiliconFlowAdapter()
 
-        expected = MagicMock(content="sdk")
-        with patch.object(adapter, "_chat_via_sdk", AsyncMock(return_value=expected)) as mocked:
+        expected = MagicMock(content="client")
+        with patch.object(adapter, "_chat_request", AsyncMock(return_value=expected)) as mocked:
             result = await adapter.chat([{"role": "user", "content": "hi"}], model="deepseek-chat")
 
         assert result is expected
         mocked.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_chat_sdk_updates_usage(self):
+    async def test_chat_updates_usage(self):
         tool_call = MagicMock()
         tool_call.model_dump.return_value = {
             "id": "call_1",
@@ -761,19 +992,19 @@ class TestSiliconFlowAdapterSdkChat:
 
         with patch.dict(os.environ, {"SILICONFLOW_API_KEY": "test-key"}):
             EnvConfig._reset()
-            SiliconFlowAdapter._SDK_AVAILABLE = True
+            SiliconFlowAdapter._OPENAI_READY = True
             adapter = SiliconFlowAdapter()
 
             with patch.dict(sys.modules, {"openai": fake_openai}):
-                result = await adapter._chat_via_sdk(
-                    [{"role": "user", "content": "hi"}],
-                    "deepseek-chat",
+                request = adapter._build_request(
+                    messages=[{"role": "user", "content": "hi"}],
                     tools=[{"type": "function", "function": {"name": "search"}}],
                     temperature=0.2,
                     max_tokens=64,
-                    tool_choice="required",
-                    top_p=0.8,
+                    enable_streaming=False,
+                    kwargs={"model": "deepseek-chat", "tool_choice": "required", "top_p": 0.8},
                 )
+                result = await adapter._chat_request(request)
 
         call_kwargs = mock_client.chat.completions.create.call_args.kwargs
         assert call_kwargs["tools"] == [{"type": "function", "function": {"name": "search"}}]
@@ -805,7 +1036,7 @@ class TestSiliconFlowAdapterHttpxStreamHelpers:
 
         with patch("houyi.adapters.llm.siliconflow_adapter.asyncio.sleep", new=AsyncMock()):
             assert (
-                await adapter._handle_httpx_stream_error_response(
+                await adapter._stream_status(
                     response=response,
                     retry_controller=retry_controller,
                 )
@@ -825,14 +1056,19 @@ class TestSiliconFlowAdapterHttpxStreamHelpers:
         retry_controller = MagicMock()
         retry_controller.policy.status_forcelist = {500}
 
-        with pytest.raises(RuntimeError, match="400 bad request"):
-            await adapter._handle_httpx_stream_error_response(
+        with pytest.raises(
+            RuntimeError,
+            match=re.escape(
+                "SiliconFlow rejected the request as invalid. Please retry or adjust the request payload."
+            ),
+        ):
+            await adapter._stream_status(
                 response=response,
                 retry_controller=retry_controller,
             )
 
     @pytest.mark.asyncio
-    async def test_stream_httpx_retries(self):
+    async def test_stream_httpx_retry(self):
         sse_lines = [
             "data: " + json.dumps({"choices": [{"delta": {"content": "OK"}}]}),
             "data: [DONE]",
@@ -871,7 +1107,7 @@ class TestSiliconFlowAdapterHttpxStreamHelpers:
 
         with patch.dict(os.environ, {"SILICONFLOW_API_KEY": "test-key"}):
             EnvConfig._reset()
-            SiliconFlowAdapter._SDK_AVAILABLE = False
+            SiliconFlowAdapter._OPENAI_READY = False
             adapter = SiliconFlowAdapter()
 
         with (
@@ -881,32 +1117,19 @@ class TestSiliconFlowAdapterHttpxStreamHelpers:
             patch("houyi.infrastructure.net.proxy.detect_proxy", return_value=None),
         ):
             chunks = []
-            async for chunk in adapter._stream_via_httpx(
-                [{"role": "user", "content": "hi"}],
-                "deepseek-chat",
-            ):
+            request = adapter._build_request(
+                messages=[{"role": "user", "content": "hi"}],
+                tools=None,
+                temperature=0.7,
+                max_tokens=None,
+                enable_streaming=True,
+                kwargs={"model": "deepseek-chat"},
+            )
+            async for chunk in adapter._stream_request_httpx(request):
                 chunks.append(chunk.content_delta)
 
         assert attempts == 2
         assert chunks == ["OK"]
-
-    def test_build_httpx_stream_payload(self):
-        adapter = SiliconFlowAdapter(
-            api_key="test-key",
-            base_url="https://example.invalid/v1",
-            default_model="deepseek-chat",
-        )
-
-        payload = adapter._build_httpx_stream_payload(
-            messages=[{"role": "user", "content": "hi"}],
-            model="deepseek-chat",
-            enable_reasoning=False,
-            thinking_budget=None,
-            extra_kwargs={"top_p": 0.8, "presence_penalty": None},
-        )
-
-        assert payload["top_p"] == 0.8
-        assert "presence_penalty" not in payload
 
     def test_parse_httpx_sse_non_dict(self):
         adapter = SiliconFlowAdapter(
@@ -933,3 +1156,202 @@ class TestSiliconFlowAdapterHttpxStreamHelpers:
         assert chunk is None
         assert content_inc == 0
         assert reasoning_inc == 0
+
+
+class TestSiliconFlowAdapterAdditionalCoverage:
+    def test_parse_httpx_chat_response_raises(self):
+        adapter = SiliconFlowAdapter(
+            api_key="test-key",
+            base_url="https://example.invalid/v1",
+            default_model="deepseek-chat",
+        )
+        response = type(
+            "Resp", (), {"status_code": 500, "text": "boom", "json": staticmethod(lambda: {})}
+        )()
+
+        with pytest.raises(
+            RuntimeError,
+            match=re.escape("SiliconFlow is temporarily unavailable. Please retry in a moment."),
+        ):
+            adapter._parse_httpx_chat_response(response)
+
+    def test_build_stream_chunk_returns_content(self):
+        adapter = SiliconFlowAdapter(
+            api_key="test-key",
+            base_url="https://example.invalid/v1",
+            default_model="deepseek-chat",
+        )
+        delta = type(
+            "Delta", (), {"content": "hello", "reasoning_content": None, "tool_calls": None}
+        )()
+        choice = type("Choice", (), {"delta": delta, "finish_reason": "stop"})()
+
+        chunk, content_inc, reasoning_inc = adapter._build_stream_chunk(choice=choice)
+
+        assert chunk is not None
+        assert chunk.content_delta == "hello"
+        assert chunk.reasoning_delta is None
+        assert content_inc == 1
+        assert reasoning_inc == 0
+        assert adapter.last_finish_reason == "stop"
+
+    def test_build_stream_chunk_returns_none_when_empty(self):
+        adapter = SiliconFlowAdapter(
+            api_key="test-key",
+            base_url="https://example.invalid/v1",
+            default_model="deepseek-chat",
+        )
+        delta = type("Delta", (), {"content": "", "reasoning_content": "", "tool_calls": None})()
+        choice = type("Choice", (), {"delta": delta, "finish_reason": None})()
+
+        chunk, content_inc, reasoning_inc = adapter._build_stream_chunk(choice=choice)
+
+        assert chunk is None
+        assert content_inc == 0
+        assert reasoning_inc == 0
+
+    def test_build_httpx_stream_chunk_uses_message_fallbacks(self):
+        adapter = SiliconFlowAdapter(
+            api_key="test-key",
+            base_url="https://example.invalid/v1",
+            default_model="deepseek-chat",
+        )
+
+        chunk, content_inc, reasoning_inc = adapter._build_httpx_stream_chunk(
+            {
+                "choices": [
+                    {
+                        "message": {"content": "fallback", "reasoning_content": "reason"},
+                        "delta": {},
+                        "finish_reason": "stop",
+                    }
+                ]
+            }
+        )
+
+        assert chunk is not None
+        assert chunk.content_delta == "fallback"
+        assert chunk.reasoning_delta == "reason"
+        assert content_inc == 1
+        assert reasoning_inc == 1
+
+    def test_stream_fills_tool_call(self):
+        adapter = SiliconFlowAdapter(
+            api_key="test-key",
+            base_url="https://example.invalid/v1",
+            default_model="deepseek-chat",
+        )
+        request = adapter._build_request(
+            messages=[
+                {"role": "system", "content": "Be helpful"},
+                {"role": "user", "content": "Find README"},
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {"name": "houyi_grep", "arguments": {"query": "README"}},
+                        }
+                    ],
+                },
+                {
+                    "role": "tool",
+                    "content": '{"matches":["README.md"]}',
+                    "tool_call_id": "call_1",
+                    "name": "houyi_grep",
+                },
+            ],
+            tools=None,
+            temperature=0.2,
+            max_tokens=None,
+            enable_streaming=True,
+            kwargs={"model": "deepseek-chat"},
+        )
+
+        payload = adapter._encode_stream_request_for_httpx(request)
+
+        assert payload["messages"][0] == {"role": "system", "content": "Be helpful"}
+        assert payload["messages"][1] == {"role": "user", "content": "Find README"}
+        assert payload["messages"][2]["role"] == "assistant"
+        assert payload["messages"][2]["content"] == "[tool call]"
+        assert payload["messages"][2]["tool_calls"][0]["function"]["name"] == "houyi_grep"
+        assert payload["messages"][3]["role"] == "tool"
+        assert payload["messages"][3]["tool_call_id"] == "call_1"
+
+    def test_chat_keeps_tool_calls(self):
+        adapter = SiliconFlowAdapter(
+            api_key="test-key",
+            base_url="https://example.invalid/v1",
+            default_model="deepseek-chat",
+        )
+        request = adapter._build_request(
+            messages=[
+                {"role": "user", "content": "Find README"},
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {"name": "houyi_grep", "arguments": {"query": "README"}},
+                        }
+                    ],
+                },
+            ],
+            tools=[{"type": "function", "function": {"name": "houyi_grep"}}],
+            temperature=0.2,
+            max_tokens=None,
+            enable_streaming=False,
+            kwargs={"model": "deepseek-chat"},
+        )
+
+        payload = adapter._encode_chat_request_for_httpx(request)
+
+        assert payload["messages"][1]["role"] == "assistant"
+        assert payload["messages"][1]["content"] == ""
+        assert payload["messages"][1]["tool_calls"][0]["function"]["name"] == "houyi_grep"
+
+    @pytest.mark.asyncio
+    async def test_chat_transport_false(self):
+        adapter = SiliconFlowAdapter(
+            api_key="test-key",
+            base_url="https://example.invalid/v1",
+            default_model="deepseek-chat",
+        )
+        retry_controller = MagicMock()
+        retry_controller.on_transport_exception.return_value = type(
+            "Decision", (), {"retry": False, "bucket": "connect", "delay_seconds": 0.0}
+        )()
+
+        should_retry, delay = adapter._chat_transport(
+            exc=RuntimeError("boom"),
+            retry_controller=retry_controller,
+        )
+
+        assert should_retry is False
+        assert delay == 0.0
+
+    @pytest.mark.asyncio
+    async def test_chat_status_none(self):
+        adapter = SiliconFlowAdapter(
+            api_key="test-key",
+            base_url="https://example.invalid/v1",
+            default_model="deepseek-chat",
+        )
+        retry_controller = MagicMock()
+        retry_controller.policy.status_forcelist = {500}
+        retry_controller.on_status_code.return_value = type(
+            "Decision", (), {"retry": False, "bucket": "status", "delay_seconds": 0.0}
+        )()
+        response = type("Resp", (), {"status_code": 500, "headers": {}, "text": "server error"})()
+
+        should_retry, error = await adapter._chat_status(
+            response=response,
+            retry_controller=retry_controller,
+        )
+
+        assert should_retry is False
+        assert error is None

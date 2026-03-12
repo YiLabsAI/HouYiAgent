@@ -23,6 +23,7 @@ export const ChatPage: React.FC = () => {
   const isLoadingConversation = useChatStore((s) => s.isLoadingConversation);
   const streaming = useChatStore((s) => s.streaming);
   const contextUsage = useChatStore((s) => s.contextUsage);
+  const latestCompaction = useChatStore((s) => s.latestCompaction);
   const agentLoopSummary = useChatStore((s) => s.agentLoopSummary);
   const error = useChatStore((s) => s.error);
   const sendMessage = useChatStore((s) => s.sendMessage);
@@ -101,6 +102,25 @@ export const ChatPage: React.FC = () => {
         </div>
       )}
 
+      {latestCompaction && (
+        <div
+          className="shrink-0 px-4 py-2 border-b border-gray-800/80 bg-amber-950/20 flex items-center justify-between gap-3"
+          data-testid="compaction-notice"
+        >
+          <div className="min-w-0">
+            <div className="text-[11px] text-amber-300">
+              Context compacted via {latestCompaction.trigger}
+            </div>
+            <div className="text-[11px] text-gray-400 truncate">
+              {latestCompaction.summary}
+            </div>
+          </div>
+          <div className="text-[10px] text-gray-500 shrink-0 tabular-nums">
+            {latestCompaction.metrics.messages_compacted} msgs
+          </div>
+        </div>
+      )}
+
       {/* Error banner */}
       {error && (
         <div className="shrink-0 px-4 py-2 bg-red-900/30 border-b border-red-800/50 flex items-center justify-between">
@@ -140,6 +160,7 @@ export const ChatPage: React.FC = () => {
 
             {/* Composer */}
             <Composer
+              conversationId={activeConversation?.conversation_id ?? null}
               onSend={(content, options) => {
                 const enableSkills: string[] = [];
                 if (options?.enableWebSearch) enableSkills.push('web_search');

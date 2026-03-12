@@ -390,6 +390,90 @@ class TestSendMessage:
         assert conv is not None
         assert conv.messages[-1].metadata["finish_reason"] == "length"
 
+    def test_send_message_finish_usage(self, app_and_client, monkeypatch):
+        _, client, _ = app_and_client
+        create_resp = client.post("/api/chat/conversations", json={"title": "Finish Usage"})
+        conv_id = create_resp.json()["conversation_id"]
+
+        from houyi_studio.server.chat import chat_api
+
+        service = chat_api._chat_service
+        assert service is not None
+
+        class _AdapterWithUsage:
+            last_usage = {"input_tokens": 12, "completion_tokens": 8, "reasoning_tokens": 3}
+            last_finish_reason = "stop"
+
+            async def stream_chat(self, *args, **kwargs):
+                _ = (args, kwargs)
+                yield StreamChunk(content_delta="Done")
+
+        monkeypatch.setattr(service, "_default_adapter", _AdapterWithUsage())
+
+        resp = client.post(
+            f"/api/chat/conversations/{conv_id}/messages",
+            json={"content": "hello"},
+        )
+        assert resp.status_code == 200
+
+        events = _parse_sse_response(resp.text)
+        finish = next(e for e in events if e["event"] == "message.finish")
+        complete = next(e for e in events if e["event"] == "message.complete")
+
+        assert finish["data"]["usage"]["prompt_tokens"] == 12
+        assert finish["data"]["usage"]["answer_tokens"] == 5
+        assert complete["data"]["metadata"]["usage"]["prompt_tokens"] == 12
+        assert complete["data"]["metadata"]["usage"]["total_tokens"] == 20
+
+    def test_send_message_emits_context_compacted_and_persists_history_for_repo_intent(
+        self, app_and_client
+    ):
+        _, client, store = app_and_client
+        create_resp = client.post("/api/chat/conversations", json={"title": "Compaction Event"})
+        conv_id = create_resp.json()["conversation_id"]
+
+        conv = store.get(conv_id)
+        assert conv is not None
+        conv.messages = [
+            chat_service_module.Message(
+                message_id=f"u{i}",
+                role=chat_service_module.MessageRole.USER,
+                content=f"older message {i}",
+            )
+            for i in range(1, 8)
+        ]
+        store.update(conv)
+
+        resp = client.post(
+            f"/api/chat/conversations/{conv_id}/messages",
+            json={
+                "content": "Read README from https://github.com/foo/bar",
+                "enable_tool_calls": False,
+            },
+        )
+        assert resp.status_code == 200
+
+        events = _parse_sse_response(resp.text)
+        event_types = [e["event"] for e in events]
+
+        assert "context.compacted" in event_types
+        compacted = next(e for e in events if e["event"] == "context.compacted")
+        compaction = compacted["data"]["compaction"]
+        assert compaction["trigger"] == "repo_intent_trim"
+        assert compaction["metadata"]["reason"] == "repo_intent_recent_window"
+        assert event_types.index("context.compacted") < event_types.index("message.delta")
+        assert compaction["metadata"]["dropped_messages"] == 2
+        assert compaction["metrics"]["messages_compacted"] == 2
+        assert compaction["source_message_ids"] == ["u1", "u2"]
+
+        persisted = store.get(conv_id)
+        assert persisted is not None
+        history = persisted.metadata.get("compaction_history")
+        assert isinstance(history, list)
+        assert history
+        assert history[-1]["trigger"] == "repo_intent_trim"
+        assert history[-1]["metadata"]["dropped_messages"] == 2
+
     def test_send_message_persists(self, app_and_client, monkeypatch):
         _, client, store = app_and_client
         create_resp = client.post("/api/chat/conversations", json={"title": "No Usage Stream"})
@@ -436,7 +520,7 @@ class TestSendMessage:
         assert conv.messages[-1].metadata["generation_time_ms"] >= 0
 
     def test_streams_tool_loop(self, app_and_client, monkeypatch):
-        _, client, _ = app_and_client
+        _, client, store = app_and_client
         create_resp = client.post("/api/chat/conversations", json={"title": "Tool Loop Replay"})
         conv_id = create_resp.json()["conversation_id"]
 
@@ -468,7 +552,7 @@ class TestSendMessage:
                         content="Answer from tool loop",
                         tool_calls=[],
                         usage={"prompt_tokens": 11, "completion_tokens": 7, "total_tokens": 18},
-                        metadata={},
+                        metadata={"finish_reason": "stop"},
                     ),
                     [],
                 )
@@ -500,12 +584,19 @@ class TestSendMessage:
         assert "".join(e["data"].get("content", "") for e in deltas) == "Answer from tool loop"
         assert adapter.stream_calls == 0
 
+        finish = next(e for e in events if e["event"] == "message.finish")
         complete = next(e for e in events if e["event"] == "message.complete")
+        assert finish["data"]["finish_reason"] == "stop"
+        assert complete["data"]["metadata"]["finish_reason"] == "stop"
         assert complete["data"]["metadata"]["usage"]["total_tokens"] == 18
         assert complete["data"]["metadata"]["usage"]["reasoning_tokens"] == 0
         assert complete["data"]["metadata"]["usage"]["answer_tokens"] == 7
         assert complete["data"]["metadata"]["usage"]["cached_prompt_tokens"] == 0
         assert complete["data"]["metadata"]["usage"]["usage_confidence"] == "reported"
+
+        conv = store.get(conv_id)
+        assert conv is not None
+        assert conv.messages[-1].metadata["finish_reason"] == "stop"
 
     def test_tool_loop_shows_error(self, app_and_client, monkeypatch):
         _, client, store = app_and_client

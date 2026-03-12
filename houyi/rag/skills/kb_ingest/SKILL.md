@@ -27,7 +27,7 @@ hooks:
       handler: houyi.rag.skills.kb_ingest.hooks:stop_hook
 
 invocationPolicy:
-  modelAutoInvoke: allow
+  modelAutoInvoke: allow_with_consent
   userInvocable: true
   sideEffect: filesystem
 

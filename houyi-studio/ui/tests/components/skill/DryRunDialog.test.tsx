@@ -353,7 +353,7 @@ describe('DryRunDialog', () => {
     const provider = screen.getByTestId('dry-run-input-provider') as HTMLSelectElement;
     const mode = screen.getByTestId('dry-run-input-mode') as HTMLSelectElement;
 
-    expect(Array.from(provider.options).map((o) => o.value)).toEqual(['', 'ddg', 'serper', 'tavily', 'bocha', 'searxng']);
+    expect(Array.from(provider.options).map((o) => o.value)).toEqual(['', 'ddg', 'serper', 'tavily', 'bocha']);
     expect(Array.from(mode.options).map((o) => o.value)).toEqual(['', 'search', 'browse']);
 
     fireEvent.change(screen.getByTestId('dry-run-input-query'), { target: { value: 'houyi' } });

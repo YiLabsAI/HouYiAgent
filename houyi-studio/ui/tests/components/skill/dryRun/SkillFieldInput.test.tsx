@@ -225,7 +225,6 @@ describe('SkillFieldInput', () => {
       'serper',
       'tavily',
       'bocha',
-      'searxng',
     ]);
     expect(Array.from(mode.options).map((o) => o.value)).toEqual(['', 'search', 'browse']);
   });

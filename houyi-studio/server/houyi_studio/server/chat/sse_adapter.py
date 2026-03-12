@@ -46,8 +46,10 @@ async def stream_chat_sse(
     message_id: str,
     model: str = "",
     context_usage: dict[str, Any] | None = None,
+    usage: dict[str, Any] | Callable[[], dict[str, Any] | None] | None = None,
     finish_reason: str | Callable[[], str | None] | None = None,
     error_message_builder: Callable[[Exception], str | None] | None = None,
+    public_error_builder: Callable[[Exception], str] | None = None,
 ) -> AsyncIterator[str]:
     """Convert LLM stream into SSE events.
 
@@ -97,6 +99,7 @@ async def stream_chat_sse(
 
         # Send finish event
         resolved_finish_reason = finish_reason() if callable(finish_reason) else finish_reason
+        resolved_usage = usage() if callable(usage) else usage
         finish_data: dict[str, Any] = {
             "message_id": message_id,
             "model": model,
@@ -107,6 +110,8 @@ async def stream_chat_sse(
         }
         if total_reasoning:
             finish_data["reasoning_length"] = len(total_reasoning)
+        if isinstance(resolved_usage, dict) and resolved_usage:
+            finish_data["usage"] = resolved_usage
 
         yield SSEEvent(event="message.finish", data=finish_data).encode()
 
@@ -126,6 +131,11 @@ async def stream_chat_sse(
     except Exception as e:
         logger.error("SSE stream error for message %s: %s", message_id, e, exc_info=True)
         fallback_error_message = error_message_builder(e) if error_message_builder else None
+        public_error_message = (
+            public_error_builder(e)
+            if public_error_builder
+            else (fallback_error_message or "The model request failed. Please retry in a moment.")
+        )
         if fallback_error_message:
             seq += 1
             yield SSEEvent(
@@ -141,7 +151,7 @@ async def stream_chat_sse(
             event="message.error",
             data={
                 "message_id": message_id,
-                "error": str(e),
+                "error": public_error_message,
                 "error_type": type(e).__name__,
                 "chunks_sent": seq,
                 "timestamp": time.time(),

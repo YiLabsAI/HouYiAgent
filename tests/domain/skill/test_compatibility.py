@@ -80,7 +80,7 @@ class TestInternalSkillMdLoading:
 
         # Invocation policy
         assert isinstance(spec.invocation_policy, InvocationPolicy)
-        assert spec.invocation_policy.model_auto_invoke == ModelAutoInvoke.ALLOW
+        assert spec.invocation_policy.model_auto_invoke == ModelAutoInvoke.ALLOW_WITH_CONSENT
         assert spec.invocation_policy.side_effect == SideEffect.FILESYSTEM
 
         # Permissions
@@ -112,6 +112,8 @@ class TestInternalSkillMdLoading:
         spec = self._load_skill("houyi/rag/skills/kb_ingest/SKILL.md")
 
         assert spec.name == "kb-ingest"
+        assert spec.invocation_policy is not None
+        assert spec.invocation_policy.model_auto_invoke == ModelAutoInvoke.ALLOW_WITH_CONSENT
         assert isinstance(spec.permissions, Permissions)
         assert spec.permissions.filesystem.write is True
         assert spec.invocation_policy.side_effect == SideEffect.FILESYSTEM

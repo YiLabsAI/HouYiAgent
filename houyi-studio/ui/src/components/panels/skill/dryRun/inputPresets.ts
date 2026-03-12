@@ -47,7 +47,7 @@ export const LOCATION_CITY_OPTIONS = [
   'San Francisco',
 ];
 
-export const WEB_SEARCH_PROVIDER_OPTIONS = ['ddg', 'serper', 'tavily', 'bocha', 'searxng'] as const;
+export const WEB_SEARCH_PROVIDER_OPTIONS = ['ddg', 'serper', 'tavily', 'bocha'] as const;
 
 export const WEB_SEARCH_MODE_OPTIONS = ['search', 'browse'] as const;
 

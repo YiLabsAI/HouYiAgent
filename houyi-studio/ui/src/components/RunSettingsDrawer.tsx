@@ -235,7 +235,6 @@ export const RunSettingsDrawer: React.FC = () => {
                 >
                   <option value="auto">Auto (default)</option>
                   <option value="ddg">DDG</option>
-                  <option value="searxng">SearxNG</option>
                   <option value="serper">Serper</option>
                   <option value="tavily">Tavily</option>
                 </select>

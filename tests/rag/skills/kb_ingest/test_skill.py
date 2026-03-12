@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 import houyi.rag.skills.kb_ingest.skill as kb_ingest_module
+from houyi.domain.skill.policy import ModelAutoInvoke
 from houyi.rag.skills.kb_ingest.skill import (
     KBIngestInput,
     KBIngestOutput,
@@ -159,6 +160,9 @@ class TestKBIngestSkill:
         assert kb_ingest_skill.executor == execute_kb_ingest
         assert kb_ingest_skill.version == "1.0.0"
         assert kb_ingest_skill.user_invocable is True
+        assert kb_ingest_skill.invocation_policy.model_auto_invoke == (
+            ModelAutoInvoke.ALLOW_WITH_CONSENT
+        )
         assert "Read" in kb_ingest_skill.allowed_tools
         assert "Write" in kb_ingest_skill.allowed_tools
         assert "Glob" in kb_ingest_skill.allowed_tools

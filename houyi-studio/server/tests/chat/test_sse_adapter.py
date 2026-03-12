@@ -133,7 +133,7 @@ class TestStreamChatSSE:
         assert "message.error" in types
 
         error_evt = next(e for e in parsed if e["event"] == "message.error")
-        assert "LLM connection failed" in error_evt["data"]["error"]
+        assert error_evt["data"]["error"] == "The model request failed. Please retry in a moment."
         assert error_evt["data"]["error_type"] == "RuntimeError"
         assert error_evt["data"]["chunks_sent"] == 1
 

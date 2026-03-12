@@ -7,7 +7,13 @@ import pytest
 from houyi.adapters.llm.models import DEFAULT_MODEL
 from houyi.application.context.context_planner import ContextPlanner
 from houyi.application.context.token_estimator import TokenEstimator
-from houyi.application.context.types import ContextBlockType
+from houyi.application.context.types import (
+    ContextBlockType,
+    ContextCandidate,
+    ContextSelectionPolicy,
+    ContextSourceKind,
+    TaskBoundary,
+)
 
 
 @pytest.fixture
@@ -52,8 +58,10 @@ class TestContextPlannerBasic:
         ]
         plan = planner.plan(messages=messages)
         recent = plan.get_blocks_by_type(ContextBlockType.RECENT)
-        assert len(recent) == 1
-        assert len(recent[0].content) == 3
+        assert len(recent) == 2
+        assert len(recent[0].content) == 2
+        assert len(recent[1].content) == 1
+        assert recent[1].content[0]["content"] == "How are you?"
 
     def test_system_instructions_override(self, planner):
         plan = planner.plan(
@@ -99,10 +107,9 @@ class TestContextPlannerTruncation:
         plan = planner.plan(messages=messages)
         recent = plan.get_blocks_by_type(ContextBlockType.RECENT)
         if recent:
-            # Should include fewer than all 20 messages
-            assert len(recent[0].content) < 20
-            # Last message should be the newest
-            last_included = recent[0].content[-1]
+            included = [msg for block in recent for msg in block.content]
+            assert len(included) < 20
+            last_included = included[-1]
             assert "Message 19" in last_included["content"]
 
 
@@ -135,3 +142,113 @@ class TestContextPlannerUsage:
         assert "system" in breakdown
         assert "recent" in breakdown
         assert "memory" in breakdown
+
+    def test_input_budget(self, planner):
+        plan = planner.plan(
+            messages=[{"role": "user", "content": "Hello"}],
+            input_budget=100,
+        )
+        usage = plan.usage
+        assert usage.reserved_output_tokens == 9900
+        assert usage.available_input_tokens <= 100
+        assert usage.planned_prompt_tokens == usage.used_tokens
+
+    def test_policy_can_exclude_memory(self, planner):
+        plan = planner.plan(
+            messages=[{"role": "user", "content": "Hello"}],
+            memory_context="Some memory",
+            selection_policy=ContextSelectionPolicy(allow_memory=False),
+        )
+        assert plan.get_blocks_by_type(ContextBlockType.MEMORY) == []
+        assert plan.usage.drop_reasons
+
+    def test_structured_candidates_priority(self, planner):
+        candidates = [
+            ContextCandidate(
+                source=ContextSourceKind.RECENT,
+                block_type=ContextBlockType.RECENT,
+                content=[{"role": "assistant", "content": "Older reply"}],
+                priority=100,
+            ),
+            ContextCandidate(
+                source=ContextSourceKind.PINNED,
+                block_type=ContextBlockType.PINNED,
+                content="Pinned fact",
+                pinned=True,
+                priority=20,
+            ),
+            ContextCandidate(
+                source=ContextSourceKind.CURRENT_TURN,
+                block_type=ContextBlockType.RECENT,
+                content=[{"role": "user", "content": "Current ask"}],
+                pinned=True,
+                priority=10,
+            ),
+        ]
+        plan = planner.plan(messages=[], candidates=candidates)
+        assert [block.block_type for block in plan.blocks] == [
+            ContextBlockType.PINNED,
+            ContextBlockType.RECENT,
+            ContextBlockType.RECENT,
+        ]
+
+    def test_excludes_older_recent_when_current_turn_cannot_fit(self):
+        est = TokenEstimator(context_window_override=120, output_reserve=20)
+        planner = ContextPlanner(token_estimator=est, system_instructions="Sys")
+        current_turn = {"role": "user", "content": "current " + ("x" * 400)}
+        older_recent = {"role": "assistant", "content": "older " + ("y" * 20)}
+
+        plan = planner.plan(
+            messages=[older_recent, current_turn],
+            input_budget=40,
+        )
+
+        recent = plan.get_blocks_by_type(ContextBlockType.RECENT)
+        assert recent == []
+        assert plan.usage.dropped_blocks
+        assert "excluded_without_current_turn" in plan.usage.drop_reasons.values()
+
+    def test_excludes_recent_candidates_from_different_task_boundary(self, planner):
+        current_boundary = TaskBoundary(
+            boundary_id="boundary-current",
+            task_kind="chat",
+            scope="conversation",
+        )
+        candidates = [
+            ContextCandidate(
+                source=ContextSourceKind.CURRENT_TURN,
+                block_type=ContextBlockType.RECENT,
+                content=[{"role": "user", "content": "Current ask"}],
+                pinned=True,
+                priority=10,
+                metadata={
+                    "message_count": 1,
+                    "boundary_id": "boundary-current",
+                    "task_kind": "chat",
+                    "scope": "conversation",
+                },
+            ),
+            ContextCandidate(
+                source=ContextSourceKind.RECENT,
+                block_type=ContextBlockType.RECENT,
+                content=[{"role": "assistant", "content": "Leaked older context"}],
+                priority=100,
+                metadata={
+                    "message_count": 1,
+                    "boundary_id": "boundary-previous",
+                    "task_kind": "chat",
+                    "scope": "conversation",
+                },
+            ),
+        ]
+
+        plan = planner.plan(
+            messages=[],
+            candidates=candidates,
+            task_boundary=current_boundary,
+        )
+
+        recent = plan.get_blocks_by_type(ContextBlockType.RECENT)
+        assert len(recent) == 1
+        assert recent[0].content == [{"role": "user", "content": "Current ask"}]
+        assert "boundary_excluded" in plan.usage.drop_reasons.values()

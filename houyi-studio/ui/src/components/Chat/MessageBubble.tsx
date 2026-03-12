@@ -120,10 +120,12 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
 }) => {
   const [showReasoning, setShowReasoning] = React.useState(false);
   const [isHovered, setIsHovered] = React.useState(false);
+  const [showMetricsTooltip, setShowMetricsTooltip] = React.useState(false);
   const [isEditing, setIsEditing] = React.useState(false);
   const [editText, setEditText] = React.useState('');
   const editRef = React.useRef<HTMLTextAreaElement>(null);
   const reasoningContentRef = React.useRef<HTMLDivElement>(null);
+  const metricsTooltipTimerRef = React.useRef<number | null>(null);
   const editMessage = useChatStore((s) => s.editMessage);
   const sendMessage = useChatStore((s) => s.sendMessage);
   const streamingReasoning = useChatStore((s) =>
@@ -231,6 +233,14 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
     panel.scrollTop = panel.scrollHeight;
   }, [isStreaming, showReasoning, shouldAutoExpandReasoning, normalizedStreamingReasoning, normalizedAssistantReasoning]);
 
+  React.useEffect(() => {
+    return () => {
+      if (metricsTooltipTimerRef.current !== null) {
+        window.clearTimeout(metricsTooltipTimerRef.current);
+      }
+    };
+  }, []);
+
   if (isEmptyAssistantPlaceholder) {
     return null;
   }
@@ -261,6 +271,26 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
 
   const handleCancelEdit = () => {
     setIsEditing(false);
+  };
+
+  const handleMetricsEnter = () => {
+    if (metricsTooltipTimerRef.current !== null) {
+      window.clearTimeout(metricsTooltipTimerRef.current);
+    }
+    metricsTooltipTimerRef.current = window.setTimeout(() => {
+      setShowMetricsTooltip(true);
+      metricsTooltipTimerRef.current = null;
+    }, 90);
+  };
+
+  const handleMetricsLeave = () => {
+    if (metricsTooltipTimerRef.current !== null) {
+      window.clearTimeout(metricsTooltipTimerRef.current);
+    }
+    metricsTooltipTimerRef.current = window.setTimeout(() => {
+      setShowMetricsTooltip(false);
+      metricsTooltipTimerRef.current = null;
+    }, 120);
   };
 
   return (
@@ -441,14 +471,18 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
         {shouldShowMetaPanel && (
           <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[10px] text-gray-300">
             {usageTotalTokens > 0 && (
-              <div className="group relative">
+              <div
+                className="relative"
+                onMouseEnter={handleMetricsEnter}
+                onMouseLeave={handleMetricsLeave}
+              >
                 <span className="text-[11px] text-gray-500 tabular-nums">
                   {`Tokens: ${usageTotalTokens}`}
                   {usagePromptTokens > 0 && ` ↑${usagePromptTokens}`}
                   {usageCompletionTokens > 0 && ` ↓${usageCompletionTokens}`}
                 </span>
-                {hoverMetricCount > 0 && (
-                  <div className={`pointer-events-none absolute ${isUser ? 'right-0' : 'left-0'} ${isLastMessage ? 'top-full mt-1' : 'bottom-full mb-1'} z-10 hidden whitespace-nowrap rounded-2xl bg-white px-4 py-3 text-[12px] text-gray-800 shadow-lg ring-1 ring-black/5 group-hover:block`}>
+                {hoverMetricCount > 0 && showMetricsTooltip && (
+                  <div className={`pointer-events-none absolute ${isUser ? 'right-0' : 'left-0'} ${isLastMessage ? 'top-full mt-1' : 'bottom-full mb-1'} z-10 whitespace-nowrap rounded-2xl bg-white px-4 py-3 text-[12px] text-gray-800 shadow-lg ring-1 ring-black/5`}>
                     <div className="flex items-center gap-1">
                       {firstTokenLatencyMs > 0 && <span>{`First token ${Math.round(firstTokenLatencyMs)} ms`}</span>}
                       {firstTokenLatencyMs > 0 && (tokensPerSecond > 0 || decodeTokensPerSecond > 0 || endToEndTokensPerSecond > 0) && <span>|</span>}

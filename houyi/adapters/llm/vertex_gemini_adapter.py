@@ -35,7 +35,7 @@ from houyi.adapters.llm.base import (
     LLMMessage,
     LLMResponse,
     StreamChunk,
-    _sanitize_usage,
+    _normalize_usage,
 )
 from houyi.infrastructure.config.env_config import _DEFAULT_GOOGLE_LOCATION
 from houyi.infrastructure.net.proxy import detect_proxy
@@ -239,7 +239,7 @@ class GoogleVertexGeminiAdapter(LLMAdapter):
         self.project = project
         self.location = location
         self.credentials_path = credentials_path
-        self.last_usage: dict[str, int] | None = None
+        self.last_usage: dict[str, Any] | None = None
 
         try:
             from google import genai
@@ -825,7 +825,7 @@ class GoogleVertexGeminiAdapter(LLMAdapter):
             )
 
         usage_metadata = getattr(response, "usage_metadata", None)
-        usage = _sanitize_usage(
+        usage = _normalize_usage(
             {
                 "prompt_tokens": getattr(usage_metadata, "prompt_token_count", None),
                 "completion_tokens": getattr(usage_metadata, "candidates_token_count", None),

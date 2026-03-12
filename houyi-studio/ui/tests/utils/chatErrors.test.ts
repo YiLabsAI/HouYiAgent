@@ -38,7 +38,13 @@ describe('chatErrors', () => {
 
   it('builds visible fallback errors for unknown messages', () => {
     expect(buildVisibleChatError('something custom failed')).toBe(
-      'LLM Error: something custom failed',
+      'The model request failed. Please retry in a moment.',
+    );
+  });
+
+  it('does not append raw backend details for known errors', () => {
+    expect(buildVisibleChatError('429 RESOURCE_EXHAUSTED')).toBe(
+      'The model is temporarily rate limited. Please retry in a moment, reduce request frequency, or switch to another model if the issue persists.',
     );
   });
 });

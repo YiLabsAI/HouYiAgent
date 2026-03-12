@@ -12,9 +12,11 @@ import type {
   ConversationSummary,
   ChatMessage,
   ContextUsage,
+  CompactionRecord,
   CreateConversationRequest,
   SendMessageRequest,
   SSEAgentIteration,
+  SSEContextCompacted,
   SSEMessageDelta,
   SSEMessageFinish,
   SSEMessageComplete,
@@ -59,6 +61,24 @@ interface AgentLoopSummary {
   traceId: string | null;
   usage: Record<string, any> | null;
   metrics: Record<string, any> | null;
+}
+
+interface ComposerUiState {
+  enableReasoning: boolean;
+  enableWebSearch: boolean;
+  enableDeepResearch: boolean;
+  showAdvanced: boolean;
+  maxTokensDraft: string;
+}
+
+function emptyComposerUiState(): ComposerUiState {
+  return {
+    enableReasoning: false,
+    enableWebSearch: false,
+    enableDeepResearch: false,
+    showAdvanced: false,
+    maxTokensDraft: '',
+  };
 }
 
 function emptyAgentLoopSummary(): AgentLoopSummary {
@@ -149,6 +169,13 @@ function deriveAgentLoopSummaryFromConversation(conversation: Conversation | nul
   return { rounds, toolCalls, traceId, usage, metrics };
 }
 
+function deriveLatestCompaction(conversation: Conversation | null): CompactionRecord | null {
+  const history = conversation?.metadata?.compaction_history;
+  if (!Array.isArray(history) || history.length === 0) return null;
+  const latest = history[history.length - 1];
+  return latest && typeof latest === 'object' ? (latest as CompactionRecord) : null;
+}
+
 function mergeMessagesForRefresh(
   currentMessages: ChatMessage[],
   loadedMessages: ChatMessage[],
@@ -202,6 +229,8 @@ interface ChatState {
   // Context usage (latest)
   contextUsage: ContextUsage | null;
 
+  latestCompaction: CompactionRecord | null;
+
   // Agent loop summary for current/last streamed assistant response
   agentLoopSummary: AgentLoopSummary;
 
@@ -210,6 +239,7 @@ interface ChatState {
 
   // Search navigation: scroll to a specific message after loading
   scrollToMessageId: string | null;
+  composerUiByConversation: Record<string, ComposerUiState>;
 
   // Actions
   fetchConversations: () => Promise<void>;
@@ -225,6 +255,7 @@ interface ChatState {
   stopStreaming: () => void;
   clearError: () => void;
   clearScrollTarget: () => void;
+  setComposerUiState: (conversationId: string, ui: Partial<ComposerUiState>) => void;
 
   // Message operations
   editMessage: (messageId: string, content: string) => Promise<void>;
@@ -250,9 +281,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
     toolMessageIdsByCallId: {},
   },
   contextUsage: null,
+  latestCompaction: null,
   agentLoopSummary: emptyAgentLoopSummary(),
   error: null,
   scrollToMessageId: null,
+  composerUiByConversation: {},
 
   // --- Actions ---
 
@@ -387,6 +420,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         activeConversation: conversationData,
         isLoadingConversation: false,
         contextUsage: usageResult?.usage ?? null,
+        latestCompaction: deriveLatestCompaction(conversationData),
         agentLoopSummary: deriveAgentLoopSummaryFromConversation(conversationData),
         scrollToMessageId: scrollToMessageId ?? null,
       });
@@ -509,6 +543,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         streamConversationId: activeConversationId,
         toolMessageIdsByCallId: {},
       },
+      latestCompaction: null,
       agentLoopSummary: emptyAgentLoopSummary(),
       error: null,
     }));
@@ -638,6 +673,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   clearScrollTarget: () => set({ scrollToMessageId: null }),
 
+  setComposerUiState: (conversationId, ui) => set((state) => ({
+    composerUiByConversation: {
+      ...state.composerUiByConversation,
+      [conversationId]: {
+        ...(state.composerUiByConversation[conversationId] ?? emptyComposerUiState()),
+        ...ui,
+      },
+    },
+  })),
+
   // --- Message operations ---
 
   editMessage: async (messageId: string, content: string) => {
@@ -700,6 +745,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         streamConversationId: activeConversationId,
         toolMessageIdsByCallId: {},
       },
+      latestCompaction: null,
       agentLoopSummary: emptyAgentLoopSummary(),
       error: null,
     }));
@@ -879,6 +925,13 @@ function handleSSEEvent(
       if (!isViewingStream) break; // Skip UI update if viewing another conversation
       const evt = data as SSEContextUsage;
       set(() => ({ contextUsage: evt.usage }));
+      break;
+    }
+
+    case 'context.compacted': {
+      if (!isViewingStream) break;
+      const evt = data as SSEContextCompacted;
+      set(() => ({ latestCompaction: evt.compaction }));
       break;
     }
 

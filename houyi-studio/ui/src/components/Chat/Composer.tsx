@@ -10,8 +10,10 @@
 import React from 'react';
 import { Send, Square, Paperclip, BrainCircuit, Globe, Search } from 'lucide-react';
 import { useConsoleStore } from '@/stores/useConsoleStore';
+import { useChatStore } from '@/stores/useChatStore';
 
 interface ComposerProps {
+  conversationId?: string | null;
   onSend: (content: string, options?: {
     enableReasoning?: boolean;
     enableToolCalls?: boolean;
@@ -106,17 +108,17 @@ function validateFiles(files: File[], existing: File[]): { accepted: File[]; err
 }
 
 export const Composer: React.FC<ComposerProps> = ({
+  conversationId,
   onSend,
   onStop,
   isStreaming,
   disabled = false,
 }) => {
+  const composerUiState = useChatStore((s) =>
+    conversationId ? s.composerUiByConversation[conversationId] : undefined,
+  );
+  const setComposerUiState = useChatStore((s) => s.setComposerUiState);
   const [text, setText] = React.useState('');
-  const [enableReasoning, setEnableReasoning] = React.useState(false);
-  const [enableWebSearch, setEnableWebSearch] = React.useState(false);
-  const [enableDeepResearch, setEnableDeepResearch] = React.useState(false);
-  const [showAdvanced, setShowAdvanced] = React.useState(false);
-  const [maxTokensDraft, setMaxTokensDraft] = React.useState<string>('');
   const showToast = useConsoleStore((s) => s.showToast);
   const toolCallsEnabled = useConsoleStore((s) => s.runSettings.enable_tool_calls);
   const toolCallStrategy = useConsoleStore((s) => s.runSettings.tool_call_strategy);
@@ -158,6 +160,16 @@ export const Composer: React.FC<ComposerProps> = ({
       stopResizeDrag();
     };
   }, [handleResizeMove, stopResizeDrag]);
+
+  React.useEffect(() => {
+    setAttachments([]);
+  }, [conversationId]);
+
+  const enableReasoning = composerUiState?.enableReasoning ?? false;
+  const enableWebSearch = composerUiState?.enableWebSearch ?? false;
+  const enableDeepResearch = composerUiState?.enableDeepResearch ?? false;
+  const showAdvanced = composerUiState?.showAdvanced ?? false;
+  const maxTokensDraft = composerUiState?.maxTokensDraft ?? '';
 
   const startResizeDrag = (e: React.PointerEvent<HTMLButtonElement>) => {
     e.preventDefault();
@@ -299,7 +311,10 @@ export const Composer: React.FC<ComposerProps> = ({
 
             {/* Thinking mode */}
             <button
-              onClick={() => setEnableReasoning((v) => !v)}
+              onClick={() => {
+                if (!conversationId) return;
+                setComposerUiState(conversationId, { enableReasoning: !enableReasoning });
+              }}
               className={`p-1 rounded transition-colors ${
                 enableReasoning
                   ? 'bg-purple-600/20 text-purple-400 hover:bg-purple-600/30'
@@ -313,7 +328,10 @@ export const Composer: React.FC<ComposerProps> = ({
 
             {/* Web search */}
             <button
-              onClick={() => setEnableWebSearch((v) => !v)}
+              onClick={() => {
+                if (!conversationId) return;
+                setComposerUiState(conversationId, { enableWebSearch: !enableWebSearch });
+              }}
               className={`p-1 rounded transition-colors ${
                 enableWebSearch
                   ? 'bg-blue-600/20 text-blue-400 hover:bg-blue-600/30'
@@ -327,7 +345,10 @@ export const Composer: React.FC<ComposerProps> = ({
 
             {/* Deep Research mode toggle */}
             <button
-              onClick={() => setEnableDeepResearch((v) => !v)}
+              onClick={() => {
+                if (!conversationId) return;
+                setComposerUiState(conversationId, { enableDeepResearch: !enableDeepResearch });
+              }}
               className={`p-1 rounded transition-colors ${
                 enableDeepResearch
                   ? 'bg-green-600/20 text-green-400 hover:bg-green-600/30'
@@ -341,7 +362,10 @@ export const Composer: React.FC<ComposerProps> = ({
             </button>
 
             <button
-              onClick={() => setShowAdvanced((v) => !v)}
+              onClick={() => {
+                if (!conversationId) return;
+                setComposerUiState(conversationId, { showAdvanced: !showAdvanced });
+              }}
               className={`ml-1 px-2 py-0.5 rounded text-[11px] transition-colors ${
                 showAdvanced
                   ? 'bg-gray-700 text-gray-200 hover:bg-gray-600'
@@ -364,7 +388,10 @@ export const Composer: React.FC<ComposerProps> = ({
                   min={1}
                   step={1}
                   value={maxTokensDraft}
-                  onChange={(e) => setMaxTokensDraft(e.target.value)}
+                  onChange={(e) => {
+                    if (!conversationId) return;
+                    setComposerUiState(conversationId, { maxTokensDraft: e.target.value });
+                  }}
                   placeholder="(default)"
                   className="w-[110px] bg-gray-800 border border-gray-700 rounded px-2 py-1 text-[11px] text-gray-200 focus:outline-none focus:border-blue-500"
                 />
@@ -372,7 +399,10 @@ export const Composer: React.FC<ComposerProps> = ({
               <button
                 type="button"
                 className="text-gray-500 hover:text-gray-300 underline"
-                onClick={() => setMaxTokensDraft('')}
+                onClick={() => {
+                  if (!conversationId) return;
+                  setComposerUiState(conversationId, { maxTokensDraft: '' });
+                }}
               >
                 reset
               </button>
