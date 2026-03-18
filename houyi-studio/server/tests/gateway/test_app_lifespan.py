@@ -41,7 +41,7 @@ def _stub_startup_dependencies(app_module, monkeypatch, tmp_path) -> None:
     return captured
 
 
-def test_lifespan_fail_fast_for_explicit_local_embedding(monkeypatch, tmp_path) -> None:
+def test_lifespan_local_failfast(monkeypatch, tmp_path) -> None:
     from houyi_studio.server.gateway import app as app_module
 
     _stub_startup_dependencies(app_module, monkeypatch, tmp_path)
@@ -67,7 +67,7 @@ def test_lifespan_fail_fast_for_explicit_local_embedding(monkeypatch, tmp_path) 
     assert called["strict"] is True
 
 
-def test_lifespan_allows_auto_embedding_when_no_provider(monkeypatch, tmp_path) -> None:
+def test_lifespan_auto_embedding(monkeypatch, tmp_path) -> None:
     from houyi_studio.server.gateway import app as app_module
 
     _stub_startup_dependencies(app_module, monkeypatch, tmp_path)
@@ -88,7 +88,7 @@ def test_lifespan_allows_auto_embedding_when_no_provider(monkeypatch, tmp_path) 
     assert called["strict"] is False
 
 
-def test_lifespan_real_resolver_fail_fast_for_explicit_local(monkeypatch, tmp_path, caplog) -> None:
+def test_lifespan_resolver_failfast(monkeypatch, tmp_path, caplog) -> None:
     from houyi_studio.server.gateway import app as app_module
 
     _stub_startup_dependencies(app_module, monkeypatch, tmp_path)
@@ -123,7 +123,7 @@ def test_lifespan_real_resolver_fail_fast_for_explicit_local(monkeypatch, tmp_pa
     )
 
 
-def test_lifespan_real_resolver_auto_mode_warns_no_provider(monkeypatch, tmp_path, caplog) -> None:
+def test_lifespan_warns_provider(monkeypatch, tmp_path, caplog) -> None:
     from houyi_studio.server.gateway import app as app_module
 
     _stub_startup_dependencies(app_module, monkeypatch, tmp_path)
@@ -159,9 +159,7 @@ def test_lifespan_real_resolver_auto_mode_warns_no_provider(monkeypatch, tmp_pat
     assert "No embedding provider detected at startup" in caplog.text
 
 
-def test_lifespan_embedding_resolution_timeout_degrades_startup(
-    monkeypatch, tmp_path, caplog
-) -> None:
+def test_lifespan_timeout_degrades(monkeypatch, tmp_path, caplog) -> None:
     from houyi_studio.server.gateway import app as app_module
 
     _stub_startup_dependencies(app_module, monkeypatch, tmp_path)
@@ -183,7 +181,7 @@ def test_lifespan_embedding_resolution_timeout_degrades_startup(
     assert "No embedding provider detected at startup" in caplog.text
 
 
-def test_lifespan_resolves_default_chat_data_dir_from_project_root(monkeypatch, tmp_path) -> None:
+def test_lifespan_default_chat_dir(monkeypatch, tmp_path) -> None:
     from houyi_studio.server.gateway import app as app_module
 
     captured = _stub_startup_dependencies(app_module, monkeypatch, tmp_path)
@@ -198,7 +196,7 @@ def test_lifespan_resolves_default_chat_data_dir_from_project_root(monkeypatch, 
     assert captured["chat_data_dir"] == expected
 
 
-def test_lifespan_resolves_relative_chat_data_dir_from_project_root(monkeypatch, tmp_path) -> None:
+def test_lifespan_relative_chat_dir(monkeypatch, tmp_path) -> None:
     from houyi_studio.server.gateway import app as app_module
 
     captured = _stub_startup_dependencies(app_module, monkeypatch, tmp_path)
@@ -213,7 +211,7 @@ def test_lifespan_resolves_relative_chat_data_dir_from_project_root(monkeypatch,
     assert captured["chat_data_dir"] == expected
 
 
-def test_lifespan_keeps_absolute_chat_data_dir(monkeypatch, tmp_path) -> None:
+def test_lifespan_absolute_chat_dir(monkeypatch, tmp_path) -> None:
     from houyi_studio.server.gateway import app as app_module
 
     captured = _stub_startup_dependencies(app_module, monkeypatch, tmp_path)

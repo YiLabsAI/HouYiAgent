@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Any
 
 _ALLOWED_WEB_SEARCH_PROVIDERS = {"ddg", "serper", "tavily", "bocha"}
+_WEB_SEARCH_TOOL_NAMES = frozenset({"web_search", "houyi_web_search"})
 
 
 @dataclass(frozen=True)
@@ -11,7 +12,7 @@ class WebSearchProviderHook:
     provider: str
 
     async def before_tool_call(self, tool_call: dict[str, Any]) -> dict[str, Any] | None:
-        if tool_call.get("tool_name") != "web_search":
+        if tool_call.get("tool_name") not in _WEB_SEARCH_TOOL_NAMES:
             return None
         args = tool_call.get("args")
         if not isinstance(args, dict):
@@ -35,7 +36,7 @@ class WebSearchCachePolicyHook:
     use_cache: bool
 
     async def before_tool_call(self, tool_call: dict[str, Any]) -> dict[str, Any] | None:
-        if tool_call.get("tool_name") != "web_search":
+        if tool_call.get("tool_name") not in _WEB_SEARCH_TOOL_NAMES:
             return None
         args = tool_call.get("args")
         if not isinstance(args, dict):

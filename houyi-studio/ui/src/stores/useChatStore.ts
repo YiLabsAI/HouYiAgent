@@ -13,6 +13,7 @@ import type {
   ChatMessage,
   ContextUsage,
   CompactionRecord,
+  CompactionHistoryItem,
   CreateConversationRequest,
   SendMessageRequest,
   SSEAgentIteration,
@@ -25,10 +26,18 @@ import type {
   SSEToolCallError,
   SSEToolCallResult,
   SSEToolCallStart,
+  PinnedContextRecord,
+  PinStatus,
 } from '@/types/chat';
 import { buildVisibleChatError } from '@/utils/chatErrors';
 
 const API_BASE = '/api/chat';
+
+function chatErrorProvider(model: string | null | undefined): 'generic' | 'gemini' {
+  const value = String(model || '').toLowerCase();
+  if (value.includes('gemini') || value.includes('vertex')) return 'gemini';
+  return 'generic';
+}
 
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
@@ -36,8 +45,22 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
     ...init,
   });
   if (!res.ok) {
-    const detail = await res.text().catch(() => res.statusText);
-    throw new Error(`API ${res.status}: ${detail}`);
+    const raw = await res.text().catch(() => res.statusText);
+    let detail: unknown = raw;
+    try {
+      detail = raw ? JSON.parse(raw) : raw;
+    } catch {
+    }
+    const visibleError = buildVisibleChatError(
+      typeof detail === 'object' && detail
+        ? (detail as Record<string, unknown>)
+        : {
+            error: String(raw || res.statusText),
+            status_code: res.status,
+          },
+      'generic',
+    );
+    throw new Error(visibleError);
   }
   return res.json();
 }
@@ -53,7 +76,10 @@ interface StreamingState {
   // Which conversation owns it
   streamConversationId: string | null;
   toolMessageIdsByCallId: Record<string, string>;
+  suppressVisibleErrors: boolean;
 }
+
+type AgentLoopStatus = 'idle' | 'tool_loop' | 'finalizing' | 'done';
 
 interface AgentLoopSummary {
   rounds: number;
@@ -61,6 +87,14 @@ interface AgentLoopSummary {
   traceId: string | null;
   usage: Record<string, any> | null;
   metrics: Record<string, any> | null;
+  status: AgentLoopStatus;
+}
+
+interface RestoreNotice {
+  message: string;
+  undoBackupId: string | null;
+  kind?: 'restore_applied' | 'restore_undone';
+  conversationId?: string | null;
 }
 
 interface ComposerUiState {
@@ -69,6 +103,37 @@ interface ComposerUiState {
   enableDeepResearch: boolean;
   showAdvanced: boolean;
   maxTokensDraft: string;
+}
+
+function buildResendRequestOptions(
+  conversation: Conversation,
+  composerUi: ComposerUiState | undefined,
+  options?: Partial<SendMessageRequest>,
+): Partial<SendMessageRequest> {
+  const parsedMaxTokens = composerUi?.maxTokensDraft?.trim()
+    ? parseInt(composerUi.maxTokensDraft.trim(), 10)
+    : NaN;
+  const composerMaxTokens = Number.isFinite(parsedMaxTokens) && parsedMaxTokens > 0
+    ? parsedMaxTokens
+    : undefined;
+  const enableSkills = new Set<string>(options?.enable_skills ?? []);
+  if (options?.enable_web_search ?? composerUi?.enableWebSearch) {
+    enableSkills.add('houyi_web_search');
+  }
+  if (options?.enable_deep_research ?? composerUi?.enableDeepResearch) {
+    enableSkills.add('deep_research');
+  }
+  return {
+    enable_reasoning: options?.enable_reasoning ?? (composerUi?.enableReasoning || undefined),
+    enable_web_search: options?.enable_web_search ?? (composerUi?.enableWebSearch || undefined),
+    enable_deep_research: options?.enable_deep_research ?? (composerUi?.enableDeepResearch || undefined),
+    enable_skills: enableSkills.size > 0 ? Array.from(enableSkills) : undefined,
+    max_tokens: options?.max_tokens ?? composerMaxTokens ?? conversation.max_tokens ?? undefined,
+    stream: options?.stream ?? conversation.stream ?? undefined,
+    enable_tool_calls: options?.enable_tool_calls,
+    tool_call_strategy: options?.tool_call_strategy,
+    max_tool_iterations: options?.max_tool_iterations,
+  };
 }
 
 function emptyComposerUiState(): ComposerUiState {
@@ -82,7 +147,7 @@ function emptyComposerUiState(): ComposerUiState {
 }
 
 function emptyAgentLoopSummary(): AgentLoopSummary {
-  return { rounds: 0, toolCalls: 0, traceId: null, usage: null, metrics: null };
+  return { rounds: 0, toolCalls: 0, traceId: null, usage: null, metrics: null, status: 'idle' };
 }
 
 function deriveAgentLoopSummaryFromConversation(conversation: Conversation | null): AgentLoopSummary {
@@ -103,7 +168,7 @@ function deriveAgentLoopSummaryFromConversation(conversation: Conversation | nul
   const seenToolCallIds = new Set<string>();
   let traceId: string | null =
     typeof anchorAssistant.metadata?.trace_id === 'string' ? anchorAssistant.metadata.trace_id : null;
-  let usage: Record<string, any> | null = anchorAssistant.metadata?.usage ?? null;
+  const usage: Record<string, any> | null = anchorAssistant.metadata?.usage ?? null;
   let metrics: Record<string, any> | null = null;
 
   for (let index = anchorAssistantIndex - 1; index >= 0; index -= 1) {
@@ -149,6 +214,7 @@ function deriveAgentLoopSummaryFromConversation(conversation: Conversation | nul
   if (
     meta.usage
     || meta.first_token_latency_ms
+    || meta.first_token_ms
     || meta.decode_tokens_per_second
     || meta.end_to_end_tokens_per_second
     || meta.tokens_per_second
@@ -159,6 +225,7 @@ function deriveAgentLoopSummaryFromConversation(conversation: Conversation | nul
       finish_reason: meta.finish_reason,
       budget: meta.budget,
       first_token_latency_ms: meta.first_token_latency_ms,
+      first_token_ms: meta.first_token_ms,
       generation_time_ms: meta.generation_time_ms,
       decode_tokens_per_second: meta.decode_tokens_per_second,
       end_to_end_tokens_per_second: meta.end_to_end_tokens_per_second,
@@ -166,7 +233,14 @@ function deriveAgentLoopSummaryFromConversation(conversation: Conversation | nul
     };
   }
 
-  return { rounds, toolCalls, traceId, usage, metrics };
+  return {
+    rounds,
+    toolCalls,
+    traceId,
+    usage,
+    metrics,
+    status: rounds > 0 || toolCalls > 0 || traceId ? 'done' : 'idle',
+  };
 }
 
 function deriveLatestCompaction(conversation: Conversation | null): CompactionRecord | null {
@@ -174,6 +248,17 @@ function deriveLatestCompaction(conversation: Conversation | null): CompactionRe
   if (!Array.isArray(history) || history.length === 0) return null;
   const latest = history[history.length - 1];
   return latest && typeof latest === 'object' ? (latest as CompactionRecord) : null;
+}
+
+function deriveActivePins(conversation: Conversation | null): PinnedContextRecord[] {
+  const pins = conversation?.metadata?.pinned_contexts;
+  if (!Array.isArray(pins)) return [];
+  return pins.filter((pin): pin is PinnedContextRecord => (
+    !!pin
+    && typeof pin === 'object'
+    && typeof (pin as PinnedContextRecord).pin_id === 'string'
+    && (pin as PinnedContextRecord).status === 'active'
+  ));
 }
 
 function mergeMessagesForRefresh(
@@ -213,6 +298,20 @@ function mergeMessagesForRefresh(
   return merged;
 }
 
+function scheduleConversationRefresh(
+  conversationId: string,
+  get: () => ChatState,
+  preserveRenderedMessages = false,
+  delayMs = 250,
+) {
+  setTimeout(() => {
+    const state = get();
+    if (state.activeConversationId !== conversationId) return;
+    if (state.streaming.isStreaming) return;
+    void state.loadConversation(conversationId, undefined, preserveRenderedMessages);
+  }, delayMs);
+}
+
 interface ChatState {
   // Conversation list
   conversations: ConversationSummary[];
@@ -230,6 +329,12 @@ interface ChatState {
   contextUsage: ContextUsage | null;
 
   latestCompaction: CompactionRecord | null;
+  compactionHistory: CompactionHistoryItem[];
+  isLoadingCompactions: boolean;
+  restoringCompactionId: string | null;
+  restoringBackupId: string | null;
+  activePins: PinnedContextRecord[];
+  restoreNotice: RestoreNotice | null;
 
   // Agent loop summary for current/last streamed assistant response
   agentLoopSummary: AgentLoopSummary;
@@ -252,6 +357,8 @@ interface ChatState {
   updateConversation: (conversationId: string, updates: { title?: string; status?: string; model?: string; system_instructions?: string; temperature?: number | null; max_tokens?: number | null; top_p?: number | null; stream?: boolean | null; bookmarked?: boolean }) => Promise<void>;
   deleteConversation: (conversationId: string) => Promise<void>;
   sendMessage: (content: string, options?: Partial<SendMessageRequest>, files?: File[]) => Promise<void>;
+  resendMessage: (content: string, options?: Partial<SendMessageRequest>) => Promise<void>;
+  regenerateMessage: (messageId: string) => Promise<void>;
   stopStreaming: () => void;
   clearError: () => void;
   clearScrollTarget: () => void;
@@ -260,8 +367,13 @@ interface ChatState {
   // Message operations
   editMessage: (messageId: string, content: string) => Promise<void>;
   deleteMessage: (messageId: string) => Promise<void>;
-  regenerateMessage: (messageId: string) => Promise<void>;
   toggleMessageBookmark: (messageId: string) => Promise<void>;
+  pinMessageToContext: (messageId: string, options?: { replacePinId?: string; title?: string }) => Promise<void>;
+  updatePinnedContextStatus: (pinId: string, status: PinStatus) => Promise<void>;
+  fetchCompactions: (conversationId?: string) => Promise<void>;
+  restoreCompaction: (compactionId: string) => Promise<void>;
+  restoreBackup: (backupId: string) => Promise<void>;
+  clearRestoreNotice: () => void;
 }
 
 export const useChatStore = create<ChatState>((set, get) => ({
@@ -279,9 +391,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
     abortController: null,
     streamConversationId: null,
     toolMessageIdsByCallId: {},
+    suppressVisibleErrors: false,
   },
   contextUsage: null,
   latestCompaction: null,
+  compactionHistory: [],
+  isLoadingCompactions: false,
+  restoringCompactionId: null,
+  restoringBackupId: null,
+  activePins: [],
+  restoreNotice: null,
   agentLoopSummary: emptyAgentLoopSummary(),
   error: null,
   scrollToMessageId: null,
@@ -347,18 +466,37 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
     try {
       // Parallel fetch: conversation + context-usage
-      const [data, usageResult] = await Promise.all([
+      const [data, usageResult, compactionsResult] = await Promise.all([
         apiFetch<Conversation>(`/conversations/${conversationId}`),
         apiFetch<{ usage: any }>(`/conversations/${conversationId}/context-usage`).catch(() => null),
+        apiFetch<{ items: CompactionHistoryItem[] }>(`/conversations/${conversationId}/compactions`).catch(() => null),
       ]);
 
       // Stale-response guard: user clicked another conversation while fetching
       if (get().activeConversationId !== conversationId) return;
 
-      // If the SSE stream is still running for this conversation, inject the
-      // in-progress assistant message from the buffer so the user sees the
-      // partial content immediately when switching back.
-      const { streaming } = get();
+      const currentStreaming = get().streaming;
+      const shouldAdoptServerStreamingState = Boolean(
+        data.active_streaming_state
+        && (!currentStreaming.isStreaming || currentStreaming.streamConversationId === conversationId),
+      );
+      const streaming = shouldAdoptServerStreamingState
+        ? {
+            ...currentStreaming,
+            isStreaming: true,
+            messageId: data.active_streaming_state?.message_id ?? currentStreaming.messageId,
+            streamConversationId: conversationId,
+            abortController:
+              currentStreaming.streamConversationId === conversationId
+                ? currentStreaming.abortController
+                : null,
+            toolMessageIdsByCallId:
+              currentStreaming.streamConversationId === conversationId
+                ? currentStreaming.toolMessageIdsByCallId
+                : {},
+          }
+        : currentStreaming;
+
       let conversationData = data;
       if (
         streaming.isStreaming &&
@@ -419,14 +557,31 @@ export const useChatStore = create<ChatState>((set, get) => ({
       set({
         activeConversation: conversationData,
         isLoadingConversation: false,
+        streaming,
         contextUsage: usageResult?.usage ?? null,
         latestCompaction: deriveLatestCompaction(conversationData),
+        compactionHistory: compactionsResult?.items ?? [],
+        isLoadingCompactions: false,
+        restoringCompactionId: null,
+        restoringBackupId: null,
+        activePins: deriveActivePins(conversationData),
         agentLoopSummary: deriveAgentLoopSummaryFromConversation(conversationData),
         scrollToMessageId: scrollToMessageId ?? null,
+        error: null,
+        restoreNotice: get().restoreNotice?.conversationId === conversationId
+          ? get().restoreNotice
+          : null,
       });
     } catch (e: any) {
       if (get().activeConversationId !== conversationId) return;
-      set({ error: e.message, isLoadingConversation: false, activeConversation: null });
+      set({
+        error: e.message,
+        isLoadingConversation: false,
+        isLoadingCompactions: false,
+        restoringCompactionId: null,
+        restoringBackupId: null,
+        activeConversation: null,
+      });
     }
   },
 
@@ -534,6 +689,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       activeConversation: state.activeConversation
         ? { ...state.activeConversation, messages: [...state.activeConversation.messages, userMsg] }
         : null,
+      activePins: deriveActivePins(state.activeConversation),
       streaming: {
         isStreaming: true,
         messageId: null,
@@ -542,11 +698,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
         abortController,
         streamConversationId: activeConversationId,
         toolMessageIdsByCallId: {},
+        suppressVisibleErrors: false,
       },
       latestCompaction: null,
       agentLoopSummary: emptyAgentLoopSummary(),
       error: null,
     }));
+
+    let sawTerminalEvent = false;
 
     try {
       const response = await fetch(
@@ -578,6 +737,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
           try {
             const data = JSON.parse(eventData);
             handleSSEEvent(eventType, data, set, get, streamConversationId);
+            if (eventType === 'message.complete' || eventType === 'message.error' || eventType === 'message.aborted') {
+              sawTerminalEvent = true;
+            }
           } catch {
             // Skip malformed events
           }
@@ -586,9 +748,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
         eventData = '';
       };
 
-      while (true) {
+      let streamDone = false;
+      while (!streamDone) {
         const { done, value } = await reader.read();
-        if (done) break;
+        if (done) {
+          streamDone = true;
+          break;
+        }
 
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split('\n');
@@ -630,11 +796,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
       // otherwise just refresh the sidebar list so message counts update.
       if (get().activeConversationId === streamConversationId) {
         void get().loadConversation(streamConversationId, undefined, true);
+        scheduleConversationRefresh(streamConversationId, get, true);
       }
       void get().fetchConversations();
     } catch (e: any) {
       if (e.name === 'AbortError') {
         // User-initiated abort — expected
+      } else if (sawTerminalEvent) {
+        // The backend already produced a terminal SSE event for this turn.
+        // Ignore transport noise after completion so stale timeout/network
+        // messages do not overwrite a successful response.
       } else {
         // Only show error if user is still on this conversation
         if (get().activeConversationId === activeConversationId) {
@@ -665,8 +836,172 @@ export const useChatStore = create<ChatState>((set, get) => ({
         abortController: null,
         streamConversationId: null,
         toolMessageIdsByCallId: {},
+        suppressVisibleErrors: false,
       },
     }));
+  },
+
+  resendMessage: async (content: string, options?: Partial<SendMessageRequest>) => {
+    const { activeConversationId, activeConversation, streaming, composerUiByConversation } = get();
+    if (!activeConversationId || !activeConversation) {
+      set({ error: 'No active conversation' });
+      return;
+    }
+    if (streaming.isStreaming) {
+      set({ error: 'A response is already streaming. Stop it before sending another message.' });
+      return;
+    }
+
+    const abortController = new AbortController();
+    const optimisticUserRenderId = `ui-user-${Date.now()}`;
+    const userMsg: ChatMessage = {
+      message_id: `tmp-${Date.now()}`,
+      ui_render_id: optimisticUserRenderId,
+      role: 'user',
+      content,
+      metadata: {},
+      created_at: Date.now() / 1000,
+    };
+    const requestOptions = buildResendRequestOptions(
+      activeConversation,
+      composerUiByConversation[activeConversationId],
+      options,
+    );
+    set((state) => ({
+      activeConversation: state.activeConversation
+        ? { ...state.activeConversation, messages: [...state.activeConversation.messages, userMsg] }
+        : null,
+      activePins: deriveActivePins(state.activeConversation),
+      streaming: {
+        isStreaming: true,
+        messageId: null,
+        contentBuffer: '',
+        reasoningBuffer: '',
+        abortController,
+        streamConversationId: activeConversationId,
+        toolMessageIdsByCallId: {},
+        suppressVisibleErrors: true,
+      },
+      latestCompaction: null,
+      agentLoopSummary: emptyAgentLoopSummary(),
+      error: null,
+    }));
+
+    let sawTerminalEvent = false;
+
+    try {
+      const response = await fetch(
+        `${API_BASE}/conversations/${activeConversationId}/messages`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ content, ...requestOptions }),
+          signal: abortController.signal,
+        },
+      );
+
+      if (!response.ok) {
+        const detail = await response.text().catch(() => response.statusText);
+        throw new Error(`API ${response.status}: ${detail}`);
+      }
+
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error('No response body');
+
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let eventType = '';
+      let eventData = '';
+      const streamConversationId = activeConversationId;
+
+      const processEvent = () => {
+        if (eventType && eventData) {
+          try {
+            const data = JSON.parse(eventData);
+            handleSSEEvent(eventType, data, set, get, streamConversationId);
+            if (eventType === 'message.complete' || eventType === 'message.error' || eventType === 'message.aborted') {
+              sawTerminalEvent = true;
+            }
+          } catch {
+          }
+        }
+        eventType = '';
+        eventData = '';
+      };
+
+      let streamDone = false;
+      while (!streamDone) {
+        const { done, value } = await reader.read();
+        if (done) {
+          streamDone = true;
+          break;
+        }
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+        for (const line of lines) {
+          if (line.startsWith('event: ')) {
+            eventType = line.slice(7).trim();
+          } else if (line.startsWith('data: ')) {
+            eventData = line.slice(6).trim();
+          } else if (line === '') {
+            processEvent();
+          }
+        }
+      }
+
+      if (buffer.trim()) {
+        const remainingLines = buffer.split('\n');
+        for (const line of remainingLines) {
+          if (line.startsWith('event: ')) {
+            eventType = line.slice(7).trim();
+          } else if (line.startsWith('data: ')) {
+            eventData = line.slice(6).trim();
+          } else if (line === '') {
+            processEvent();
+          }
+        }
+      }
+      processEvent();
+
+      const shouldReloadConversationAfterStream = (() => {
+        const state = get();
+        if (state.activeConversationId !== activeConversationId) return false;
+        return state.agentLoopSummary.toolCalls > 0
+          || state.agentLoopSummary.status === 'finalizing'
+          || Object.keys(state.streaming.toolMessageIdsByCallId).length > 0;
+      })();
+
+      set((state) => ({
+        streaming: {
+          ...state.streaming,
+          isStreaming: false,
+          abortController: null,
+          streamConversationId: null,
+          suppressVisibleErrors: false,
+        },
+      }));
+      if (shouldReloadConversationAfterStream) {
+        await get().loadConversation(activeConversationId, undefined, true);
+      }
+      void get().fetchConversations();
+    } catch (e: any) {
+      if (e.name !== 'AbortError' && !sawTerminalEvent && !get().streaming.suppressVisibleErrors) {
+        if (get().activeConversationId === activeConversationId) {
+          set({ error: e.message });
+        }
+      }
+    } finally {
+      set((state) => ({
+        streaming: {
+          ...state.streaming,
+          isStreaming: false,
+          abortController: null,
+          streamConversationId: null,
+          suppressVisibleErrors: false,
+        },
+      }));
+    }
   },
 
   clearError: () => set({ error: null }),
@@ -682,6 +1017,99 @@ export const useChatStore = create<ChatState>((set, get) => ({
       },
     },
   })),
+
+  fetchCompactions: async (conversationId) => {
+    const targetConversationId = conversationId ?? get().activeConversationId;
+    if (!targetConversationId) return;
+    set({ isLoadingCompactions: true, error: null });
+    try {
+      const data = await apiFetch<{ items: CompactionHistoryItem[] }>(
+        `/conversations/${targetConversationId}/compactions`,
+      );
+      if (get().activeConversationId === targetConversationId) {
+        set({
+          compactionHistory: data.items,
+          isLoadingCompactions: false,
+        });
+      }
+    } catch (e: any) {
+      if (get().activeConversationId === targetConversationId) {
+        set({ error: e.message, isLoadingCompactions: false });
+      }
+    }
+  },
+
+  restoreCompaction: async (compactionId) => {
+    const { activeConversationId } = get();
+    if (!activeConversationId) return;
+    set({ restoringCompactionId: compactionId, error: null });
+    try {
+      const data = await apiFetch<{
+        status: string;
+        backup_id: string;
+        restored_compaction_id: string;
+        restore_point_backup_id?: string | null;
+        conversation: Conversation;
+      }>(
+        `/conversations/${activeConversationId}/compactions/${compactionId}/restore`,
+        { method: 'POST' },
+      );
+      const restoredConversation = data.conversation;
+      const restoredMessages = restoredConversation.messages ?? [];
+      const latestMessageId = restoredMessages.length > 0
+        ? restoredMessages[restoredMessages.length - 1]?.message_id ?? null
+        : null;
+      await get().loadConversation(activeConversationId, latestMessageId ?? undefined);
+      set({
+        restoringCompactionId: null,
+        restoreNotice: {
+          message: 'Restored snapshot. You can undo this restore using the restore-point backup created immediately before the restore.',
+          undoBackupId: typeof data.restore_point_backup_id === 'string' && data.restore_point_backup_id
+            ? data.restore_point_backup_id
+            : null,
+          kind: 'restore_applied',
+          conversationId: activeConversationId,
+        },
+      });
+    } catch (e: any) {
+      set({ error: e.message, restoringCompactionId: null });
+    }
+  },
+
+  restoreBackup: async (backupId) => {
+    const { activeConversationId } = get();
+    if (!activeConversationId) return;
+    set({ restoringBackupId: backupId, error: null });
+    try {
+      const data = await apiFetch<{
+        status: string;
+        backup_id: string;
+        conversation: Conversation;
+      }>(
+        `/conversations/${activeConversationId}/backups/${backupId}/restore`,
+        { method: 'POST' },
+      );
+      const restoredConversation = data.conversation;
+      const restoredMessages = restoredConversation.messages ?? [];
+      const latestMessageId = restoredMessages.length > 0
+        ? restoredMessages[restoredMessages.length - 1]?.message_id ?? null
+        : null;
+      await get().loadConversation(activeConversationId, latestMessageId ?? undefined);
+      set({
+        restoringBackupId: null,
+        restoreNotice: {
+          message: 'Undo restore completed. Returned to the conversation state captured by the restore-point backup.',
+          undoBackupId: null,
+          kind: 'restore_undone',
+          conversationId: activeConversationId,
+        },
+      });
+    } catch (e: any) {
+      set({ error: e.message, restoringBackupId: null });
+    }
+  },
+
+  clearRestoreNotice: () => set({ restoreNotice: null }),
 
   // --- Message operations ---
 
@@ -736,6 +1164,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
     const abortController = new AbortController();
     set(() => ({
+      activePins: deriveActivePins(activeConversation as Conversation),
       streaming: {
         isStreaming: true,
         messageId: null,
@@ -744,6 +1173,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         abortController,
         streamConversationId: activeConversationId,
         toolMessageIdsByCallId: {},
+        suppressVisibleErrors: false,
       },
       latestCompaction: null,
       agentLoopSummary: emptyAgentLoopSummary(),
@@ -787,9 +1217,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
         regenEventData = '';
       };
 
-      while (true) {
+      let regenStreamDone = false;
+      while (!regenStreamDone) {
         const { done, value } = await reader.read();
-        if (done) break;
+        if (done) {
+          regenStreamDone = true;
+          break;
+        }
 
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split('\n');
@@ -822,18 +1256,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
       // Flush any final event without trailing newline
       processRegenEvent();
 
-      set((state) => ({
-        streaming: {
-          ...state.streaming,
-          isStreaming: false,
-          abortController: null,
-          streamConversationId: null,
-        },
-      }));
-
-      if (get().activeConversationId === activeConversationId) {
-        void get().loadConversation(activeConversationId, undefined, true);
-      }
       void get().fetchConversations();
     } catch (e: any) {
       if (e.name === 'AbortError') {
@@ -894,6 +1316,39 @@ export const useChatStore = create<ChatState>((set, get) => ({
         );
         return { activeConversation: { ...state.activeConversation, messages } };
       });
+    }
+  },
+
+  pinMessageToContext: async (messageId, options) => {
+    const { activeConversationId } = get();
+    if (!activeConversationId) return;
+    set({ error: null });
+    try {
+      await apiFetch(`/conversations/${activeConversationId}/messages/${messageId}/pin-context`, {
+        method: 'POST',
+        body: JSON.stringify({
+          replace_pin_id: options?.replacePinId,
+          title: options?.title,
+        }),
+      });
+      await get().loadConversation(activeConversationId);
+    } catch (e: any) {
+      set({ error: e.message });
+    }
+  },
+
+  updatePinnedContextStatus: async (pinId, status) => {
+    const { activeConversationId } = get();
+    if (!activeConversationId) return;
+    set({ error: null });
+    try {
+      await apiFetch(`/conversations/${activeConversationId}/pins/${pinId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ status }),
+      });
+      await get().loadConversation(activeConversationId);
+    } catch (e: any) {
+      set({ error: e.message });
     }
   },
 }));
@@ -1024,7 +1479,6 @@ function handleSSEEvent(
 
         return {
           activeConversation: updatedConversation,
-          streaming: { ...state.streaming, isStreaming: false },
         };
       });
       break;
@@ -1038,6 +1492,20 @@ function handleSSEEvent(
           ...state.agentLoopSummary,
           rounds: Math.max(state.agentLoopSummary.rounds, evt.round_index || 0),
           traceId: evt.trace_id ?? state.agentLoopSummary.traceId,
+          status: 'tool_loop',
+        },
+      }));
+      break;
+    }
+
+    case 'agent.finalizing': {
+      if (!isViewingStream) break;
+      const evt = data as { trace_id?: string };
+      set((state) => ({
+        agentLoopSummary: {
+          ...state.agentLoopSummary,
+          traceId: evt.trace_id ?? state.agentLoopSummary.traceId,
+          status: 'finalizing',
         },
       }));
       break;
@@ -1049,19 +1517,68 @@ function handleSSEEvent(
         const callId = evt.tool_call_id || '';
         const existingMessageId = callId ? state.streaming.toolMessageIdsByCallId[callId] : undefined;
         const toolMessageId = existingMessageId || `tmp-tool-${callId || Date.now()}`;
-        const toolName = evt.tool_name || 'tool';
+        const toolName = evt.requested_tool_name || evt.tool_name || 'tool';
         const argsText = stringifyPayload(evt.arguments);
+        const toolCallArguments = evt.arguments == null
+          ? ''
+          : typeof evt.arguments === 'string'
+            ? evt.arguments
+            : stringifyPayload(evt.arguments);
         const nextToolMap = callId
           ? { ...state.streaming.toolMessageIdsByCallId, [callId]: toolMessageId }
           : state.streaming.toolMessageIdsByCallId;
+        const assistantMessageId = evt.message_id
+          || state.streaming.messageId
+          || `tmp-assistant-stream-${Date.now()}`;
 
         if (!isViewingStream || !state.activeConversation) {
           return {
-            streaming: { ...state.streaming, toolMessageIdsByCallId: nextToolMap },
+            streaming: {
+              ...state.streaming,
+              messageId: state.streaming.messageId || assistantMessageId,
+              toolMessageIdsByCallId: nextToolMap,
+            },
           };
         }
 
         const messages = [...state.activeConversation.messages];
+        const assistantToolCall = {
+          id: callId || `tool-call-${toolMessageId}`,
+          type: 'function',
+          function: {
+            name: toolName,
+            arguments: toolCallArguments,
+          },
+        };
+        const existingAssistantIndex = messages.findIndex((m) => m.role === 'assistant' && m.message_id === assistantMessageId);
+        if (existingAssistantIndex < 0) {
+          messages.push({
+            message_id: assistantMessageId,
+            role: 'assistant',
+            content: '',
+            reasoning_content: null,
+            tool_calls: [assistantToolCall],
+            metadata: {},
+            created_at: Date.now() / 1000,
+          });
+        } else {
+          const existingAssistant = messages[existingAssistantIndex];
+          const existingToolCalls = Array.isArray(existingAssistant.tool_calls)
+            ? existingAssistant.tool_calls
+            : [];
+          const alreadyTracked = existingToolCalls.some((toolCall) => (
+            toolCall
+            && typeof toolCall === 'object'
+            && typeof (toolCall as Record<string, any>).id === 'string'
+            && String((toolCall as Record<string, any>).id) === assistantToolCall.id
+          ));
+          if (!alreadyTracked) {
+            messages[existingAssistantIndex] = {
+              ...existingAssistant,
+              tool_calls: [...existingToolCalls, assistantToolCall],
+            };
+          }
+        }
         const existingIndex = messages.findIndex((m) => m.message_id === toolMessageId);
         const toolMsg: ChatMessage = {
           message_id: toolMessageId,
@@ -1085,11 +1602,16 @@ function handleSSEEvent(
 
         return {
           activeConversation: { ...state.activeConversation, messages },
-          streaming: { ...state.streaming, toolMessageIdsByCallId: nextToolMap },
+          streaming: {
+            ...state.streaming,
+            messageId: state.streaming.messageId || assistantMessageId,
+            toolMessageIdsByCallId: nextToolMap,
+          },
           agentLoopSummary: {
             ...state.agentLoopSummary,
             toolCalls: state.agentLoopSummary.toolCalls + 1,
             traceId: evt.trace_id ?? state.agentLoopSummary.traceId,
+            status: 'tool_loop',
           },
         };
       });
@@ -1107,7 +1629,18 @@ function handleSSEEvent(
         }
 
         const callId = evt.tool_call_id || '';
-        const toolMessageId = callId ? state.streaming.toolMessageIdsByCallId[callId] : undefined;
+        const mappedToolMessageId = callId ? state.streaming.toolMessageIdsByCallId[callId] : undefined;
+        const fallbackToolMessage = state.activeConversation.messages
+          .slice()
+          .reverse()
+          .find((message) => {
+            if (message.role !== 'tool') return false;
+            if (callId && message.tool_call_id === callId) return true;
+            if (evt.tool_name && message.name !== evt.tool_name) return false;
+            const rawStatus = String(message.metadata?.tool_status || '').trim().toLowerCase();
+            return rawStatus === 'running' || rawStatus === 'pending';
+          });
+        const toolMessageId = mappedToolMessageId || fallbackToolMessage?.message_id;
         if (!toolMessageId) {
           return {};
         }
@@ -1119,6 +1652,7 @@ function handleSSEEvent(
           if (m.message_id !== toolMessageId) return m;
           return {
             ...m,
+            name: evt.requested_tool_name ?? evt.tool_name ?? m.name,
             content: payload,
             metadata: {
               ...m.metadata,
@@ -1132,9 +1666,16 @@ function handleSSEEvent(
 
         return {
           activeConversation: { ...state.activeConversation, messages },
+          streaming: {
+            ...state.streaming,
+            toolMessageIdsByCallId: callId && !mappedToolMessageId
+              ? { ...state.streaming.toolMessageIdsByCallId, [callId]: toolMessageId }
+              : state.streaming.toolMessageIdsByCallId,
+          },
           agentLoopSummary: {
             ...state.agentLoopSummary,
             traceId: evt.trace_id ?? state.agentLoopSummary.traceId,
+            status: 'tool_loop',
           },
         };
       });
@@ -1150,6 +1691,7 @@ function handleSSEEvent(
           finish_reason: evt.metadata?.finish_reason,
           budget: evt.metadata?.budget,
           first_token_latency_ms: evt.metadata?.first_token_latency_ms,
+          first_token_ms: evt.metadata?.first_token_ms,
           generation_time_ms: evt.metadata?.generation_time_ms,
           decode_tokens_per_second: evt.metadata?.decode_tokens_per_second,
           end_to_end_tokens_per_second: evt.metadata?.end_to_end_tokens_per_second,
@@ -1161,18 +1703,35 @@ function handleSSEEvent(
         }
 
         const messages = state.activeConversation.messages.map((m) => {
-          if (m.message_id !== evt.message_id) return m;
+          if (m.message_id === evt.message_id) {
+            return {
+              ...m,
+              metadata: {
+                ...m.metadata,
+                ...evt.metadata,
+              },
+            };
+          }
+          if (m.role !== 'tool') return m;
+          const rawStatus = String(m.metadata?.tool_status || '').trim().toLowerCase();
+          if (rawStatus !== 'running' && rawStatus !== 'pending') return m;
           return {
             ...m,
             metadata: {
               ...m.metadata,
-              ...evt.metadata,
+              tool_status: 'completed',
             },
           };
         });
 
         return {
           activeConversation: { ...state.activeConversation, messages },
+          error: null,
+          streaming: {
+            ...state.streaming,
+            isStreaming: false,
+            suppressVisibleErrors: false,
+          },
           agentLoopSummary: {
             ...state.agentLoopSummary,
             traceId,
@@ -1207,7 +1766,17 @@ function handleSSEEvent(
           activeConversation: updatedConversation,
           error: hasVisibleAssistantError
             ? null
-            : buildVisibleChatError(String(evt.error || 'Unknown streaming error'), 'gemini'),
+            : buildVisibleChatError(
+              {
+                error: String(evt.error || 'Unknown streaming error'),
+                error_code: evt.error_code,
+                public_message: evt.public_message,
+                retryable: evt.retryable,
+                status_code: evt.status_code,
+                provider_code: evt.provider_code,
+              },
+              chatErrorProvider(state.activeConversation?.model),
+            ),
           streaming: { ...state.streaming, isStreaming: false },
         };
       });

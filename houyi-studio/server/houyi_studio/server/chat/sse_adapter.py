@@ -19,6 +19,8 @@ import time
 from collections.abc import AsyncIterator, Callable
 from typing import Any
 
+from .chat_errors import build_transport_chat_error
+
 logger = logging.getLogger(__name__)
 
 
@@ -131,10 +133,11 @@ async def stream_chat_sse(
     except Exception as e:
         logger.error("SSE stream error for message %s: %s", message_id, e, exc_info=True)
         fallback_error_message = error_message_builder(e) if error_message_builder else None
+        transport_error = build_transport_chat_error(e)
         public_error_message = (
             public_error_builder(e)
             if public_error_builder
-            else (fallback_error_message or "The model request failed. Please retry in a moment.")
+            else (fallback_error_message or transport_error["public_message"])
         )
         if fallback_error_message:
             seq += 1
@@ -152,6 +155,11 @@ async def stream_chat_sse(
             data={
                 "message_id": message_id,
                 "error": public_error_message,
+                "error_code": transport_error["error_code"],
+                "public_message": transport_error["public_message"],
+                "retryable": transport_error["retryable"],
+                "status_code": transport_error["status_code"],
+                "provider_code": transport_error["provider_code"],
                 "error_type": type(e).__name__,
                 "chunks_sent": seq,
                 "timestamp": time.time(),

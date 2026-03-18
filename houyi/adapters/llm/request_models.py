@@ -25,6 +25,7 @@ class OpenAICompatRequest:
     max_tokens: int | None = None
     tool_choice: str | dict[str, Any] | None = None
     enable_streaming: bool = False
+    include_stream_usage: bool = True
     enable_thinking: bool = False
     thinking_budget: int | None = None
     extra_kwargs: dict[str, Any] = field(default_factory=dict)
@@ -46,6 +47,7 @@ class OpenAICompatRequest:
         top_k = payload.pop("top_k", None)
         frequency_penalty = payload.pop("frequency_penalty", None)
         tool_choice = payload.pop("tool_choice", None)
+        include_stream_usage = bool(payload.pop("include_stream_usage", True))
         enable_thinking = bool(
             payload.pop("enable_thinking", payload.pop("enable_reasoning", False))
         )
@@ -61,6 +63,7 @@ class OpenAICompatRequest:
             max_tokens=max_tokens,
             tool_choice=tool_choice,
             enable_streaming=enable_streaming,
+            include_stream_usage=include_stream_usage,
             enable_thinking=enable_thinking,
             thinking_budget=thinking_budget,
             extra_kwargs=payload,
@@ -82,7 +85,8 @@ class OpenAICompatRequest:
         }
         if self.enable_streaming:
             kwargs["stream"] = True
-            kwargs["stream_options"] = {"include_usage": True}
+            if self.include_stream_usage:
+                kwargs["stream_options"] = {"include_usage": True}
         if self.max_tokens is not None:
             kwargs["max_tokens"] = self.max_tokens
         if self.tools:

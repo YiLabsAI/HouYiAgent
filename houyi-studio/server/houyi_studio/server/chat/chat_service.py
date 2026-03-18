@@ -1,12 +1,13 @@
 """Chat Service: orchestrates SDK components for chat interactions.
 
-Bridges Studio Server with SDK Context Engine, Memory Engine, and LLM Adapter.
+Bridges Studio Server with Context Engine, Memory Engine, and LLM Adapter.
 Owns the business logic for sending messages, managing context, and streaming.
 
 """
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import json
 import logging
@@ -14,7 +15,7 @@ import os
 import re
 import time
 from collections.abc import AsyncIterator, Iterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -22,24 +23,19 @@ from houyi.adapters.llm import (
     DEFAULT_MODEL,
     LLMAdapter,
     LLMAdapterFactory,
-    LLMMessage,
     SiliconFlowAdapter,
     create_vertex_adapter,
 )
 from houyi.adapters.memory import MemoryStore
-from houyi.application.context.compaction_evaluator import CompactionEvaluator
-from houyi.application.context.context_planner import ContextPlanner
-from houyi.application.context.context_renderer import ContextRenderer
+from houyi.application.context.context_lifecycle import (
+    ContextLifecycleHookService as ChatContextHookService,
+)
+from houyi.application.context.stream_metrics import (
+    build_generation_metadata,
+    normalize_usage_payload,
+)
 from houyi.application.context.token_budget_policy import TokenBudgetPolicy
 from houyi.application.context.token_estimator import TokenEstimator
-from houyi.application.context.types import (
-    ContextBlockType,
-    ContextCandidate,
-    ContextSelectionPolicy,
-    ContextSourceKind,
-    TaskBoundary,
-)
-from houyi.application.context.usage_normalizer import UsageNormalizer
 from houyi.application.tool_calling.runner import ToolCallRunner
 from houyi.application.tool_calling.runtime_options import build_chat_kwargs
 from houyi.application.tool_calling.tool_bridge import ToolBridge
@@ -59,13 +55,43 @@ from houyi.infrastructure.observability import (
 )
 
 from ..skill.service import get_skill_service
+from .assistant_response_streamer import (
+    AssistantResponseStreamer,
+    FinalStreamCapture,
+    ReplayStreamCapture,
+)
+from .assistant_turn_persistence import AssistantTurnPersistence
+from .chat_context_adapter import ChatContextAdapter
+from .chat_errors import (
+    build_public_stream_error_message,
+    build_stream_error_content,
+    normalize_chat_error,
+)
+from .chat_request_preparation import ChatRequestPreparation, PreparedSendContext
+from .chat_tool_loop_policy import ChatToolLoopPolicy
+from .context_compressor import SummaryBuildResult
+from .conversation_compaction_coordinator import ConversationCompactionCoordinator
+from .conversation_context_adapter import ConversationContextAdapter
+from .conversation_message_manager import ConversationMessageManager
+from .conversation_streaming_state_manager import ConversationStreamingStateManager
 from .json_store import JsonStore
+from .llm_request_options_resolver import LLMRequestOptionsResolver
+from .model_adapter_resolver import ModelAdapterResolver
+from .pinned_context_store import PinnedContextStore
 from .provider_service import _is_vertex_provider
-from .sse_adapter import SSEEvent, stream_chat_sse
-from .types import EditMessageRequest, Message, MessageRole, SendMessageRequest
+from .sse_adapter import SSEEvent
+from .tool_loop_orchestrator import ToolLoopOrchestrator
+from .types import (
+    Conversation,
+    CreateConversationRequest,
+    EditMessageRequest,
+    Message,
+    MessageRole,
+    SendMessageRequest,
+    UpdateConversationRequest,
+)
 
 logger = logging.getLogger(__name__)
-_USAGE_NORMALIZER = UsageNormalizer()
 _TOKEN_BUDGET_POLICY = TokenBudgetPolicy(default_answer_reserve=512)
 
 # Vision-capable model patterns.
@@ -97,54 +123,11 @@ _VISION_PATTERNS = [
 _VISION_RE = re.compile("|".join(_VISION_PATTERNS), re.IGNORECASE)
 
 _DEFAULT_CHAT_MAX_TOOL_ITERATIONS = 10
-
-
-def _build_generation_metadata(
-    *,
-    usage_payload: dict[str, Any] | None,
-    first_token_ms: float | None,
-    generation_time_ms: float | None,
-) -> dict[str, Any]:
-    metadata: dict[str, Any] = {}
-    if first_token_ms is not None:
-        metadata["first_token_latency_ms"] = round(first_token_ms, 2)
-    if generation_time_ms is not None:
-        metadata["generation_time_ms"] = round(generation_time_ms, 2)
-    if isinstance(usage_payload, dict):
-        if usage_payload.get("first_token_ms") is not None:
-            metadata["first_token_ms"] = usage_payload.get("first_token_ms")
-        if usage_payload.get("end_to_end_tokens_per_second") is not None:
-            end_to_end_tps = float(usage_payload["end_to_end_tokens_per_second"])
-            metadata["end_to_end_tokens_per_second"] = round(end_to_end_tps, 2)
-            metadata["tokens_per_second"] = round(end_to_end_tps, 2)
-        if usage_payload.get("decode_tokens_per_second") is not None:
-            metadata["decode_tokens_per_second"] = round(
-                float(usage_payload["decode_tokens_per_second"]), 2
-            )
-    return metadata
-
-
-def _normalize_usage_payload(
-    usage_payload: dict[str, Any] | None,
-    *,
-    first_token_ms: float | None = None,
-    generation_time_ms: float | None = None,
-) -> dict[str, Any] | None:
-    timings: dict[str, float | int | None] | None = None
-    if first_token_ms is not None or generation_time_ms is not None:
-        decode_duration_ms: float | None = None
-        if generation_time_ms is not None and first_token_ms is not None:
-            decode_duration_ms = max(0.0, generation_time_ms - first_token_ms)
-        timings = {
-            "first_token_ms": first_token_ms,
-            "decode_duration_ms": decode_duration_ms,
-            "end_to_end_ms": generation_time_ms,
-        }
-    return _USAGE_NORMALIZER.normalize_payload(
-        usage=usage_payload,
-        timings=timings,
-        include_input_tokens=True,
-    )
+_ROLLING_CONTEXT_CAPACITY = max(
+    1,
+    int(os.getenv("HOUYI_CHAT_ROLLING_CONTEXT_CAPACITY", "272000") or "272000"),
+)
+_SUMMARY_MODEL_ENV = "HOUYI_CHAT_SUMMARY_MODEL"
 
 
 def _finalize_stream_result(
@@ -156,7 +139,7 @@ def _finalize_stream_result(
     chunk_count: int,
     finish_reason_sources: tuple[Any, ...] = (),
 ) -> tuple[dict[str, Any] | None, str | None, dict[str, Any]]:
-    usage_payload = _normalize_usage_payload(
+    usage_payload = normalize_usage_payload(
         _json_safe(getattr(llm_adapter, "last_usage", None)),
         first_token_ms=first_token_ms,
         generation_time_ms=generation_time_ms,
@@ -176,7 +159,7 @@ def _finalize_stream_result(
         )
     llm_span.set_status("ok")
     llm_span.end()
-    generation_metadata = _build_generation_metadata(
+    generation_metadata = build_generation_metadata(
         usage_payload=usage_payload,
         first_token_ms=first_token_ms,
         generation_time_ms=generation_time_ms,
@@ -306,31 +289,30 @@ _CHAT_BUILTIN_TOOL_NAMES = frozenset(
         "houyi_find_files",
         "houyi_list_dir",
         "houyi_grep",
+    }
+)
+_CHAT_EXPLICIT_TOOL_NAMES = frozenset(
+    {
         "houyi_shell_exec",
     }
 )
-_WEB_SEARCH_SKILL_NAME = "web_search"
+_WEB_SEARCH_SKILL_NAME = "houyi_web_search"
 _TOOL_CALL_STRATEGY_CONSERVATIVE = "conservative"
 _TOOL_CALL_STRATEGY_BALANCED = "balanced"
 _TOOL_CALL_STRATEGY_AGGRESSIVE = "aggressive"
 _TOOL_INTENT_KEYWORDS = (
     "grep",
     "find",
-    "search",
     "read file",
     "write file",
     "list dir",
     "terminal",
     "shell",
-    "command",
     "codebase",
-    "path",
-    "folder",
-    "directory",
-    "file",
-    "lookup",
-    "open",
-    "save",
+    "run command",
+    "execute command",
+    "open file",
+    "save file",
 )
 _TOOL_INTENT_REGEXES = (
     re.compile(r"`[^`]+`"),
@@ -346,33 +328,46 @@ _REPO_INTENT_KEYWORDS = (
     "readme",
     "read me",
 )
+_WEB_INTENT_KEYWORDS = (
+    "search web",
+    "search the web",
+    "web search",
+    "browse web",
+    "browse the web",
+    "search online",
+    "look up",
+    "lookup",
+    "google",
+    "duckduckgo",
+    "news",
+    "latest",
+    "recent",
+    "\u4e0a\u7f51\u641c\u7d22",
+    "\u4e0a\u7f51\u641c\u7d20",
+    "\u8054\u7f51\u641c\u7d22",
+    "\u8054\u7f51\u641c\u7d20",
+    "\u7f51\u4e0a\u641c\u7d22",
+    "\u7f51\u4e0a\u641c\u7d20",
+    "\u5728\u7ebf\u641c\u7d22",
+    "\u5728\u7ebf\u641c\u7d20",
+    "\u7f51\u7edc\u641c\u7d22",
+    "\u7f51\u7edc\u641c\u7d20",
+    "\u4e0a\u7f51\u67e5",
+    "\u8054\u7f51\u67e5",
+    "\u7f51\u4e0a\u67e5",
+    "\u5728\u7ebf\u67e5",
+    "\u641c\u4e00\u4e0b",
+    "\u641c\u7d20\u4e00\u4e0b",
+    "\u67e5\u4e00\u4e0b",
+    "\u6700\u65b0",
+    "\u8fd1\u671f",
+)
 _REPO_INTENT_REGEXES = (
     re.compile(r"https?://(?:www\.)?github\.com/[^\s]+", re.IGNORECASE),
     re.compile(r"\bgithub\.com/[^\s]+\b", re.IGNORECASE),
 )
 _REPO_TOOL_SKILLS = frozenset({_WEB_SEARCH_SKILL_NAME})
-
-
-@dataclass
-class _PreparedSendContext:
-    conv_lock: Any
-    model: str
-    llm_messages: list[dict[str, Any]]
-    context_usage: dict[str, Any]
-    llm_kwargs: dict[str, Any]
-    budget_metadata: dict[str, Any] | None = None
-    compaction_event: dict[str, Any] | None = None
-
-
-@dataclass
-class _ToolLoopOutcome:
-    llm_messages: list[dict[str, Any]]
-    event_chunks: list[str] = field(default_factory=list)
-    persisted_tool_messages: list[Message] = field(default_factory=list)
-    replay_response: Any | None = None
-    usage_payload: dict[str, Any] | None = None
-    finish_reason: str | None = None
-    convergence_reason: str | None = None
+_WEB_TOOL_SKILLS = frozenset({_WEB_SEARCH_SKILL_NAME})
 
 
 @dataclass
@@ -380,6 +375,43 @@ class _ToolLoopGateDecision:
     enabled_skills: list[str]
     mode: str
     reason: str
+
+
+@dataclass(frozen=True)
+class _ChatRuntimeProfile:
+    name: str
+    keep_n: int | None
+    low_watermark: float
+    compression_threshold: float
+    overflow_threshold: float
+    cooldown_messages: int
+    cooldown_seconds: float
+    tool_result_max_tokens: int | None
+    per_tool_quota: dict[str, int] | None
+
+
+_CHAT_DEFAULT_PROFILE = _ChatRuntimeProfile(
+    name="chat.default",
+    keep_n=None,
+    low_watermark=0.6,
+    compression_threshold=0.7,
+    overflow_threshold=0.9,
+    cooldown_messages=4,
+    cooldown_seconds=30.0,
+    tool_result_max_tokens=None,
+    per_tool_quota=None,
+)
+_DEEP_RESEARCH_PROFILE = _ChatRuntimeProfile(
+    name="agent.deep_research",
+    keep_n=5,
+    low_watermark=0.55,
+    compression_threshold=0.6,
+    overflow_threshold=0.85,
+    cooldown_messages=2,
+    cooldown_seconds=15.0,
+    tool_result_max_tokens=4096,
+    per_tool_quota={"search": 50, "read": 100, "exec": 20},
+)
 
 
 def _json_safe(value: Any) -> Any:
@@ -429,81 +461,6 @@ def _extract_finish_reason(*sources: Any) -> str | None:
     return None
 
 
-def _build_chat_context_selection_policy() -> ContextSelectionPolicy:
-    return ContextSelectionPolicy(
-        policy_name="chat_default",
-        allow_memory=True,
-        allow_tool_summaries=True,
-        allow_pinned=True,
-    )
-
-
-def _build_chat_context_candidates(
-    *,
-    messages: list[dict[str, Any]],
-    system_instructions: str,
-    memory_context: str | None,
-    task_boundary: TaskBoundary | None = None,
-) -> list[ContextCandidate]:
-    boundary_metadata: dict[str, Any] = {}
-    if task_boundary is not None:
-        boundary_metadata = {
-            "task_kind": task_boundary.task_kind,
-            "scope": task_boundary.scope,
-            "boundary_id": task_boundary.boundary_id,
-        }
-    candidates: list[ContextCandidate] = []
-    if system_instructions:
-        candidates.append(
-            ContextCandidate(
-                source=ContextSourceKind.SYSTEM,
-                block_type=ContextBlockType.SYSTEM,
-                content=system_instructions,
-                pinned=True,
-                priority=0,
-            )
-        )
-    if memory_context:
-        candidates.append(
-            ContextCandidate(
-                source=ContextSourceKind.MEMORY,
-                block_type=ContextBlockType.MEMORY,
-                content=memory_context,
-                priority=50,
-            )
-        )
-    if messages:
-        latest = messages[-1:]
-        earlier_recent = messages[:-1]
-        candidates.append(
-            ContextCandidate(
-                source=ContextSourceKind.CURRENT_TURN,
-                block_type=ContextBlockType.RECENT,
-                content=latest,
-                pinned=True,
-                priority=10,
-                metadata={
-                    "message_count": len(latest),
-                    **boundary_metadata,
-                },
-            )
-        )
-        if earlier_recent:
-            candidates.append(
-                ContextCandidate(
-                    source=ContextSourceKind.RECENT,
-                    block_type=ContextBlockType.RECENT,
-                    content=earlier_recent,
-                    priority=100,
-                    metadata={
-                        "message_count": len(earlier_recent),
-                        **boundary_metadata,
-                    },
-                )
-            )
-    return candidates
-
-
 def _looks_like_tool_intent(user_content: str) -> bool:
     lowered = user_content.lower()
     if any(keyword in lowered for keyword in _TOOL_INTENT_KEYWORDS):
@@ -520,6 +477,22 @@ def _looks_like_repo_intent(user_content: str) -> bool:
     return any(keyword in lowered for keyword in _REPO_INTENT_KEYWORDS)
 
 
+def _looks_like_web_intent(user_content: str) -> bool:
+    lowered = user_content.lower()
+    if _looks_like_repo_intent(user_content):
+        return True
+    return any(keyword in lowered for keyword in _WEB_INTENT_KEYWORDS)
+
+
+def _is_deep_research_enabled(request: SendMessageRequest) -> bool:
+    if request.enable_deep_research is True:
+        return True
+    return any(
+        isinstance(skill_name, str) and skill_name.strip() == "deep_research"
+        for skill_name in (request.enable_skills or [])
+    )
+
+
 def _truncate_middle(text: str, max_chars: int) -> str:
     if len(text) <= max_chars:
         return text.strip()
@@ -527,19 +500,6 @@ def _truncate_middle(text: str, max_chars: int) -> str:
         return text[:max_chars].strip()
     half = max(1, (max_chars - len("\n...[truncated]...\n")) // 2)
     return f"{text[:half].rstrip()}\n...[truncated]...\n{text[-half:].lstrip()}".strip()
-
-
-def _build_compaction_summary(messages: list[Message]) -> str:
-    snippets: list[str] = []
-    for message in messages[:3]:
-        role = message.role.value if isinstance(message.role, MessageRole) else str(message.role)
-        content = str(message.content or "").strip()
-        if message.tool_calls and not content:
-            content = "[tool loop turn]"
-        if not content:
-            content = "[empty]"
-        snippets.append(f"{role}: {content[:120]}")
-    return "\n".join(snippets)
 
 
 def _message_budget_chars(message: dict[str, Any]) -> int:
@@ -581,104 +541,25 @@ def _truncate_tool_call_arguments(message: dict[str, Any], max_chars: int) -> di
     return message
 
 
-def _sanitize_tool_loop_structure(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    has_assistant_tool_turn = any(
-        str(message.get("role") or "") == MessageRole.ASSISTANT.value
-        and isinstance(message.get("tool_calls"), list)
-        and bool(message.get("tool_calls"))
-        for message in messages
-    )
-    if not has_assistant_tool_turn:
+def _cap_total_payload_chars(
+    messages: list[dict[str, Any]],
+    max_total_chars: int,
+) -> list[dict[str, Any]]:
+    total_chars = sum(_message_budget_chars(message) for message in messages)
+    if total_chars <= max_total_chars:
         return messages
 
-    sanitized: list[dict[str, Any]] = []
-    pending_assistant: dict[str, Any] | None = None
-    pending_expected_ids: list[str] = []
-    pending_tool_messages: list[dict[str, Any]] = []
-    pending_tool_ids: list[str] = []
-
-    def flush_pending_group() -> None:
-        nonlocal pending_assistant, pending_expected_ids, pending_tool_messages, pending_tool_ids
-        if pending_assistant is None:
-            pending_expected_ids = []
-            pending_tool_messages = []
-            pending_tool_ids = []
-            return
-        if pending_expected_ids and pending_tool_ids == pending_expected_ids:
-            sanitized.append(pending_assistant)
-            sanitized.extend(pending_tool_messages)
-        pending_assistant = None
-        pending_expected_ids = []
-        pending_tool_messages = []
-        pending_tool_ids = []
-
-    for message in messages:
-        role = str(message.get("role") or "")
-        if role == MessageRole.ASSISTANT.value:
-            flush_pending_group()
-            tool_calls = message.get("tool_calls")
-            if isinstance(tool_calls, list) and tool_calls:
-                expected_ids = [
-                    str(call.get("id") or "")
-                    for call in tool_calls
-                    if isinstance(call, dict) and str(call.get("id") or "")
-                ]
-                if expected_ids:
-                    pending_assistant = message
-                    pending_expected_ids = expected_ids
-                    pending_tool_messages = []
-                    pending_tool_ids = []
-                    continue
-            sanitized.append(message)
-            continue
-        if role == MessageRole.TOOL.value:
-            tool_call_id = str(message.get("tool_call_id") or "")
-            if (
-                pending_assistant is not None
-                and tool_call_id
-                and tool_call_id in pending_expected_ids
-                and tool_call_id not in pending_tool_ids
-            ):
-                pending_tool_messages.append(message)
-                pending_tool_ids.append(tool_call_id)
-            continue
-        flush_pending_group()
-        sanitized.append(message)
-
-    flush_pending_group()
-    return sanitized
-
-
-def _cap_total_payload_chars(
-    items: list[dict[str, Any]], max_total_chars: int
-) -> list[dict[str, Any]]:
-    total_chars = sum(_message_budget_chars(msg) for msg in items)
-    if total_chars <= max_total_chars:
-        return items
-
-    system_messages = [msg for msg in items if msg.get("role") == MessageRole.SYSTEM.value]
-    non_system = [msg for msg in items if msg.get("role") != MessageRole.SYSTEM.value]
-    system_chars = sum(_message_budget_chars(msg) for msg in system_messages)
-    budget_for_non_system = max(0, max_total_chars - system_chars)
-
-    kept_non_system: list[dict[str, Any]] = []
-    used = 0
-    for msg in reversed(non_system):
-        payload_chars = _message_budget_chars(msg)
-        if kept_non_system and used + payload_chars > budget_for_non_system:
-            continue
-        kept_non_system.append(msg)
-        used += payload_chars
-
-    trimmed = system_messages + list(reversed(kept_non_system))
-    logger.warning(
-        "Tool-loop message budget applied: total_payload=%d -> %d messages=%d -> %d",
-        total_chars,
-        sum(_message_budget_chars(msg) for msg in trimmed),
-        len(items),
-        len(trimmed),
-    )
-    return trimmed
+    capped = list(messages)
+    while total_chars > max_total_chars:
+        drop_index = next(
+            (index for index, message in enumerate(capped) if message.get("role") != "system"),
+            None,
+        )
+        if drop_index is None:
+            break
+        dropped = capped.pop(drop_index)
+        total_chars -= _message_budget_chars(dropped)
+    return capped
 
 
 def _sanitize_tool_loop_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -694,7 +575,87 @@ def _sanitize_tool_loop_messages(messages: list[dict[str, Any]]) -> list[dict[st
         normalized = _truncate_tool_call_arguments(normalized, _TOOL_LOOP_MAX_MESSAGE_CHARS)
         sanitized.append(normalized)
     capped = _cap_total_payload_chars(sanitized, _TOOL_LOOP_MAX_TOTAL_CHARS)
-    return _sanitize_tool_loop_structure(capped)
+    return capped
+
+
+def _sanitize_tool_loop_structure(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    sanitized = _sanitize_tool_loop_messages(messages)
+    normalized: list[dict[str, Any]] = []
+    pending_carrier: dict[str, Any] | None = None
+    pending_steps: list[dict[str, Any]] = []
+    pending_ids: set[str] = set()
+    resolved_ids: set[str] = set()
+
+    def flush_pending() -> None:
+        nonlocal pending_carrier, pending_steps, pending_ids, resolved_ids
+        if pending_carrier is not None and (not pending_ids or pending_ids.issubset(resolved_ids)):
+            normalized.append(pending_carrier)
+            normalized.extend(pending_steps)
+        pending_carrier = None
+        pending_steps = []
+        pending_ids = set()
+        resolved_ids = set()
+
+    for message in sanitized:
+        role = message.get("role")
+        tool_calls = message.get("tool_calls")
+        if role == MessageRole.ASSISTANT.value and isinstance(tool_calls, list) and tool_calls:
+            flush_pending()
+            pending_carrier = message
+            pending_steps = []
+            pending_ids = {
+                str(call.get("id"))
+                for call in tool_calls
+                if isinstance(call, dict) and isinstance(call.get("id"), str) and call.get("id")
+            }
+            resolved_ids = set()
+            continue
+
+        if role == MessageRole.TOOL.value and pending_carrier is not None:
+            tool_call_id = message.get("tool_call_id")
+            if isinstance(tool_call_id, str) and tool_call_id:
+                resolved_ids.add(tool_call_id)
+            pending_steps.append(message)
+            continue
+
+        flush_pending()
+        normalized.append(message)
+
+    flush_pending()
+    return normalized
+
+
+def _sanitize_final_stream_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    sanitized = _sanitize_tool_loop_structure(messages)
+    normalized: list[dict[str, Any]] = []
+    for message in sanitized:
+        role = str(message.get("role") or "")
+        if role == MessageRole.ASSISTANT.value and message.get("tool_calls"):
+            cleaned = dict(message)
+            if cleaned.get("content") == "":
+                cleaned["content"] = "[tool call]"
+            cleaned.pop("tool_calls", None)
+            cleaned.pop("tool_call_id", None)
+            cleaned.pop("reasoning_content", None)
+            normalized.append(cleaned)
+            continue
+        if role == MessageRole.TOOL.value:
+            tool_name = str(message.get("name") or "tool")
+            tool_content = str(message.get("content") or "")
+            normalized.append(
+                {
+                    "role": MessageRole.USER.value,
+                    "content": f"[tool:{tool_name}] {tool_content}",
+                }
+            )
+            continue
+        if role == MessageRole.ASSISTANT.value and "reasoning_content" in message:
+            cleaned = dict(message)
+            cleaned.pop("reasoning_content", None)
+            normalized.append(cleaned)
+            continue
+        normalized.append(dict(message))
+    return normalized
 
 
 def _flatten_span_tree(root: Span) -> list[Span]:
@@ -706,54 +667,6 @@ def _flatten_span_tree(root: Span) -> list[Span]:
         if current.children:
             stack.extend(reversed(current.children))
     return ordered
-
-
-def _build_stream_error_content(error: Exception) -> str:
-    message = str(error).strip()
-    upper_message = message.upper()
-    if "429" in message or "RESOURCE_EXHAUSTED" in upper_message:
-        return "The model is temporarily rate limited by Vertex AI. Please retry in a moment."
-    if "401" in message or "UNAUTHENTICATED" in upper_message:
-        return "The model request could not be authenticated. Check the configured credentials and retry."
-    if "403" in message or "PERMISSION_DENIED" in upper_message or "FORBIDDEN" in upper_message:
-        return "The model request was blocked due to missing permissions. Check the configured credentials and project access before retrying."
-    if (
-        "TIMEOUT" in upper_message
-        or "TIMED OUT" in upper_message
-        or "DEADLINE_EXCEEDED" in upper_message
-    ):
-        return "The model request timed out before the response completed. Please retry or reduce the request size."
-    if (
-        "UNEXPECTED EOF" in upper_message
-        or "ECONNRESET" in upper_message
-        or "NETWORK ERROR" in upper_message
-    ):
-        return "The connection to the model was interrupted. Please retry in a moment."
-    return "The model request failed. Please retry in a moment."
-
-
-def _build_public_stream_error_message(error: Exception) -> str:
-    message = str(error).strip()
-    upper_message = message.upper()
-    if "429" in message or "RESOURCE_EXHAUSTED" in upper_message:
-        return "The model is temporarily rate limited. Please retry in a moment."
-    if "401" in message or "UNAUTHENTICATED" in upper_message:
-        return "The request failed due to authentication issues. Check the configured credentials before retrying."
-    if "403" in message or "PERMISSION_DENIED" in upper_message or "FORBIDDEN" in upper_message:
-        return "The request failed due to missing permissions. Check the configured credentials and project access before retrying."
-    if (
-        "TIMEOUT" in upper_message
-        or "TIMED OUT" in upper_message
-        or "DEADLINE_EXCEEDED" in upper_message
-    ):
-        return "The request timed out before the model finished responding. Please retry or reduce the request size."
-    if (
-        "UNEXPECTED EOF" in upper_message
-        or "ECONNRESET" in upper_message
-        or "NETWORK ERROR" in upper_message
-    ):
-        return "The connection to the model was interrupted. Please retry in a moment."
-    return "The model request failed. Please retry in a moment."
 
 
 def _build_empty_stream_content() -> str:
@@ -821,6 +734,11 @@ def _stage_span(
         span.end()
 
 
+class _NullHookSpan:
+    def set_attribute(self, key: str, value: Any) -> None:
+        return None
+
+
 class ChatService:
     """Orchestrates chat interactions between UI, Server, and SDK layers.
 
@@ -856,12 +774,303 @@ class ChatService:
         self.default_system_instructions = default_system_instructions
         self._settings_store = settings_store
         self._default_adapter = LLMAdapterFactory.create()
-        self._adapter_cache: dict[str, LLMAdapter] = {}
+        self._model_adapter_resolver = ModelAdapterResolver(
+            get_settings_store=lambda: self._settings_store,
+            get_default_adapter=lambda: self._default_adapter,
+            is_vertex_provider=lambda provider_id, provider_url: _is_vertex_provider(
+                provider_id, provider_url
+            ),
+            create_vertex_adapter=lambda: create_vertex_adapter(),
+            siliconflow_adapter_cls=SiliconFlowAdapter,
+        )
+        self._adapter_cache = self._model_adapter_resolver.adapter_cache
+        self.pinned_context_store = PinnedContextStore(json_store=json_store)
+        self._conversation_context = ConversationContextAdapter(
+            json_store=json_store,
+            default_model=self.default_model,
+            rolling_capacity=_ROLLING_CONTEXT_CAPACITY,
+            is_vision_model=is_vision_model,
+        )
+        self._context_hooks = ChatContextHookService()
+        self._context_runtime = ChatContextAdapter(
+            memory_store=memory_store,
+            is_vision_model=is_vision_model,
+            sanitize_tool_loop_structure=_sanitize_tool_loop_structure,
+            hook_service=self._context_hooks,
+        )
+        self._llm_request_options_resolver = LLMRequestOptionsResolver(
+            apply_budget_policy=_apply_budget_policy,
+        )
+        self._tool_loop_policy = ChatToolLoopPolicy(
+            builtin_tool_names=_CHAT_BUILTIN_TOOL_NAMES,
+            explicit_tool_names=_CHAT_EXPLICIT_TOOL_NAMES,
+            web_search_skill_name=_WEB_SEARCH_SKILL_NAME,
+            repo_tool_skills=_REPO_TOOL_SKILLS,
+            web_tool_skills=_WEB_TOOL_SKILLS,
+            conservative_strategy=_TOOL_CALL_STRATEGY_CONSERVATIVE,
+            balanced_strategy=_TOOL_CALL_STRATEGY_BALANCED,
+            aggressive_strategy=_TOOL_CALL_STRATEGY_AGGRESSIVE,
+            looks_like_repo_intent=_looks_like_repo_intent,
+            looks_like_web_intent=_looks_like_web_intent,
+            looks_like_tool_intent=_looks_like_tool_intent,
+        )
+        self._streaming_state_manager = ConversationStreamingStateManager(json_store=json_store)
+        self._background_tasks: set[asyncio.Task[Any]] = set()
+        self._compaction_coordinator = ConversationCompactionCoordinator(
+            json_store=json_store,
+            default_model=self.default_model,
+            is_vision_model=is_vision_model,
+            apply_conversation_context_delta=self._conversation_context.apply_delta,
+            repo_intent_detector=_looks_like_repo_intent,
+            hook_service=self._context_hooks,
+            get_adapter_for_model=lambda model: self._get_adapter_for_model(model),
+            resolve_summary_model=lambda model: self._resolve_summary_model(model),
+            background_tasks=self._background_tasks,
+        )
+        self._context_compressor = self._compaction_coordinator.context_compressor
+        self._request_preparation = self._build_request_preparation(json_store)
+        self._tool_loop_orchestrator = self._build_tool_loop_orchestrator()
+        self._response_streamer = self._build_response_streamer()
+        self._turn_persistence = self._build_turn_persistence(json_store)
+        self._message_manager = ConversationMessageManager(
+            json_store=json_store,
+            send_message=lambda conversation_id, request: self.send_message(
+                conversation_id,
+                request,
+            ),
+        )
+
+    def build_initial_conversation_context_state(
+        self,
+        conversation_id: str,
+        *,
+        now: float | None = None,
+    ):
+        return self._conversation_context.build_initial_state(conversation_id, now=now)
+
+    def describe_context_hook_contract(self) -> dict[str, dict[str, str]]:
+        return self._context_hooks.describe_contract()
+
+    def create_conversation(self, request: CreateConversationRequest) -> dict[str, Any]:
+        conversation = Conversation(
+            title=request.title,
+            model=request.model,
+            system_instructions=request.system_instructions,
+            metadata=request.metadata,
+        )
+        conversation.conversation_context_state = self.build_initial_conversation_context_state(
+            conversation.conversation_id,
+            now=conversation.created_at,
+        )
+        created = self.json_store.create(conversation)
+        return created.to_summary()
+
+    def seed_messages(
+        self,
+        conversation_id: str,
+        *,
+        messages: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        conversation = self.json_store.get(conversation_id)
+        if conversation is None:
+            raise FileNotFoundError(f"Conversation {conversation_id} not found")
+        for message_data in messages:
+            conversation.messages.append(
+                Message(
+                    role=message_data["role"],
+                    content=message_data["content"],
+                )
+            )
+        conversation.updated_at = max(conversation.updated_at, conversation.created_at)
+        self.ensure_conversation_context_state(conversation, persist=False)
+        self.json_store.update(conversation)
+        return {"seeded": len(messages)}
+
+    def list_conversations(
+        self,
+        *,
+        status: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        conversations = self.json_store.list_conversations(
+            status=status,
+            limit=limit,
+            offset=offset,
+        )
+        total = self.json_store.count(status=status)
+        return {
+            "conversations": conversations,
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+        }
+
+    def get_conversation(self, conversation_id: str) -> dict[str, Any]:
+        conversation = self.json_store.get(conversation_id)
+        if conversation is None:
+            raise FileNotFoundError(f"Conversation {conversation_id} not found")
+        self.ensure_conversation_context_state(
+            conversation,
+            model=conversation.model or self.default_model,
+            persist=True,
+        )
+        return conversation.model_dump(mode="json")
+
+    def update_conversation(
+        self,
+        conversation_id: str,
+        request: UpdateConversationRequest,
+    ) -> dict[str, Any]:
+        conversation = self.json_store.get(conversation_id)
+        if conversation is None:
+            raise FileNotFoundError(f"Conversation {conversation_id} not found")
+        if request.title is not None:
+            conversation.title = request.title
+        if request.status is not None:
+            conversation.status = request.status
+        if request.system_instructions is not None:
+            conversation.system_instructions = request.system_instructions
+        if request.model is not None:
+            conversation.model = request.model
+        raw_body = request.model_dump(exclude_unset=True)
+        if "temperature" in raw_body:
+            conversation.temperature = request.temperature
+        if "max_tokens" in raw_body:
+            conversation.max_tokens = request.max_tokens
+        if "top_p" in raw_body:
+            conversation.top_p = request.top_p
+        if "stream" in raw_body:
+            conversation.stream = request.stream
+        if request.bookmarked is not None:
+            conversation.bookmarked = request.bookmarked
+        updated = self.json_store.update(conversation)
+        return updated.to_summary()
+
+    def delete_conversation(self, conversation_id: str) -> dict[str, str]:
+        deleted = self.json_store.delete(conversation_id)
+        if not deleted:
+            raise FileNotFoundError(f"Conversation {conversation_id} not found")
+        return {"status": "deleted", "conversation_id": conversation_id}
+
+    def toggle_message_bookmark(
+        self,
+        *,
+        conversation_id: str,
+        message_id: str,
+        bookmarked: bool,
+    ) -> dict[str, Any]:
+        conversation = self.json_store.get(conversation_id)
+        if conversation is None:
+            raise FileNotFoundError(f"Conversation {conversation_id} not found")
+        message = next(
+            (item for item in conversation.messages if item.message_id == message_id), None
+        )
+        if message is None:
+            raise ValueError(f"Message {message_id} not found")
+        message.bookmarked = bookmarked
+        self.json_store.update(conversation)
+        return message.model_dump(mode="json")
+
+    def _build_request_preparation(self, json_store: JsonStore) -> ChatRequestPreparation:
+        return ChatRequestPreparation(
+            json_store=json_store,
+            default_model=self.default_model,
+            default_system_instructions=self.default_system_instructions,
+            conversation_context=self._conversation_context,
+            resolve_llm_kwargs=self._resolve_llm_kwargs,
+            resolve_runtime_profile=self._resolve_runtime_profile,
+            context_compressor=self._context_compressor,
+            build_context_messages=self._build_context_messages,
+        )
+
+    def _build_tool_loop_orchestrator(self) -> ToolLoopOrchestrator:
+        return ToolLoopOrchestrator(
+            default_chat_max_tool_iterations=_DEFAULT_CHAT_MAX_TOOL_ITERATIONS,
+            get_tool_runner=lambda *args, **kwargs: self._get_tool_runner(*args, **kwargs),
+            context_hooks=self._context_hooks,
+            extract_finish_reason=_extract_finish_reason,
+            json_safe=_json_safe,
+            normalize_usage_payload=normalize_usage_payload,
+            null_hook_span_factory=_NullHookSpan,
+            sanitize_tool_loop_messages=_sanitize_tool_loop_structure,
+            tool_bridge_factory=lambda: ToolBridge(DEFAULT_SKILL_REGISTRY),
+            build_chat_kwargs=build_chat_kwargs,
+            skill_executor_factory=lambda: SkillExecutor(max_retries=2, timeout=30.0),
+            stage_span=_stage_span,
+        )
+
+    def _build_response_streamer(self) -> AssistantResponseStreamer:
+        return AssistantResponseStreamer(
+            build_stream_error_content=build_stream_error_content,
+            build_public_stream_error_message=build_public_stream_error_message,
+            build_empty_stream_content=_build_empty_stream_content,
+            extract_finish_reason=_extract_finish_reason,
+            finalize_stream_result=_finalize_stream_result,
+            json_safe=_json_safe,
+            normalize_usage_payload=normalize_usage_payload,
+            stage_span=_stage_span,
+        )
+
+    def _build_turn_persistence(self, json_store: JsonStore) -> AssistantTurnPersistence:
+        return AssistantTurnPersistence(
+            json_store=json_store,
+            conversation_context=self._conversation_context,
+        )
+
+    def ensure_conversation_context_state(
+        self,
+        conversation: Conversation,
+        *,
+        model: str | None = None,
+        persist: bool = False,
+    ):
+        return self._conversation_context.ensure_state(
+            conversation,
+            model=model,
+            persist=persist,
+        )
+
+    def _resolve_runtime_profile(self, request: SendMessageRequest) -> _ChatRuntimeProfile:
+        return (
+            _DEEP_RESEARCH_PROFILE if _is_deep_research_enabled(request) else _CHAT_DEFAULT_PROFILE
+        )
+
+    async def _set_active_streaming_state(
+        self,
+        *,
+        conversation_id: str,
+        conv_lock: Any,
+        message_id: str,
+        request_id: str,
+        status: str = "streaming",
+        started_at: float | None = None,
+    ) -> None:
+        await self._streaming_state_manager.set_active_streaming_state(
+            conversation_id=conversation_id,
+            conv_lock=conv_lock,
+            message_id=message_id,
+            request_id=request_id,
+            status=status,
+            started_at=started_at,
+        )
+
+    async def _clear_active_streaming_state(
+        self,
+        *,
+        conversation_id: str,
+        conv_lock: Any,
+        message_id: str,
+    ) -> None:
+        await self._streaming_state_manager.clear_active_streaming_state(
+            conversation_id=conversation_id,
+            conv_lock=conv_lock,
+            message_id=message_id,
+        )
 
     def invalidate_adapter_cache(self) -> None:
         """Clear cached adapters. Call when provider settings change."""
-        self._adapter_cache.clear()
-        logger.info("LLM adapter cache invalidated")
+        self._model_adapter_resolver.invalidate_adapter_cache()
 
     def _get_tool_runner(self, parent_span: Span | None = None) -> ToolCallRunner:
         """Build a ToolCallRunner with governance components from SkillService."""
@@ -885,69 +1094,61 @@ class ChatService:
 
     def _resolve_enabled_chat_skills(self, request: SendMessageRequest) -> list[str]:
         """Resolve chat-allowed skills from request toggles and defaults."""
-        if request.enable_tool_calls is False:
-            return []
-        resolved: set[str] = set(_CHAT_BUILTIN_TOOL_NAMES)
-        user_content = str(request.content or "").strip()
-        auto_repo_search = _looks_like_repo_intent(user_content)
-        if request.enable_web_search or auto_repo_search:
-            resolved.add(_WEB_SEARCH_SKILL_NAME)
-        if request.enable_skills:
-            for skill_name in request.enable_skills:
-                if isinstance(skill_name, str) and skill_name.strip():
-                    resolved.add(skill_name.strip())
-        return sorted(resolved)
+        return self._tool_loop_policy.resolve_enabled_chat_skills(request)
 
     def _gate_tool_loop(
         self,
         *,
         request: SendMessageRequest,
         resolved_skills: list[str],
+        context_usage: dict[str, Any] | None = None,
+        runtime_profile: Any | None = None,
     ) -> _ToolLoopGateDecision:
         """Lightweight tool-loop gating for latency-sensitive enterprise chat."""
-        if request.enable_tool_calls is False:
-            return _ToolLoopGateDecision([], "disabled_by_request", "request_disable")
-
-        if not resolved_skills:
-            return _ToolLoopGateDecision([], "disabled_no_skills", "no_resolved_skills")
-
-        explicit_skills = [
-            name.strip()
-            for name in (request.enable_skills or [])
-            if isinstance(name, str) and name.strip()
-        ]
-        strategy = (request.tool_call_strategy or _TOOL_CALL_STRATEGY_BALANCED).strip().lower()
-        if strategy not in {
-            _TOOL_CALL_STRATEGY_CONSERVATIVE,
-            _TOOL_CALL_STRATEGY_BALANCED,
-            _TOOL_CALL_STRATEGY_AGGRESSIVE,
-        }:
-            strategy = _TOOL_CALL_STRATEGY_BALANCED
-
-        if request.enable_web_search or explicit_skills:
-            return _ToolLoopGateDecision(resolved_skills, "enabled", "explicit_skill_request")
-
-        if strategy == _TOOL_CALL_STRATEGY_AGGRESSIVE:
-            return _ToolLoopGateDecision(
-                resolved_skills, "enabled", "strategy_aggressive_default_on"
+        decision = self._tool_loop_policy.gate_tool_loop(
+            request=request,
+            resolved_skills=resolved_skills,
+        )
+        used_tokens = None
+        max_context_tokens = None
+        if isinstance(context_usage, dict):
+            used_tokens = context_usage.get("used_tokens")
+            max_context_tokens = context_usage.get("max_context_tokens")
+        try:
+            utilization = (
+                float(used_tokens) / float(max_context_tokens)
+                if used_tokens is not None and max_context_tokens not in (None, 0)
+                else None
             )
-
-        if strategy == _TOOL_CALL_STRATEGY_CONSERVATIVE:
+        except (TypeError, ValueError, ZeroDivisionError):
+            utilization = None
+        compression_threshold = getattr(runtime_profile, "compression_threshold", None)
+        try:
+            threshold = float(compression_threshold) if compression_threshold is not None else None
+        except (TypeError, ValueError):
+            threshold = None
+        if (
+            utilization is not None
+            and threshold is not None
+            and utilization >= threshold
+            and decision.reason.startswith("heuristic_")
+        ):
+            if decision.reason == "heuristic_web_intent" and decision.enabled_skills:
+                return _ToolLoopGateDecision(
+                    decision.enabled_skills,
+                    "enabled_under_pressure",
+                    "context_pressure_preserve_web_search",
+                )
             return _ToolLoopGateDecision(
-                [], "disabled_by_gating", "strategy_conservative_requires_explicit"
+                [],
+                "disabled_by_pressure",
+                "context_pressure_near_compaction",
             )
-
-        user_content = str(request.content or "").strip()
-        if _looks_like_repo_intent(user_content):
-            repo_skills = [
-                skill_name for skill_name in resolved_skills if skill_name in _REPO_TOOL_SKILLS
-            ]
-            if repo_skills:
-                return _ToolLoopGateDecision(repo_skills, "enabled", "heuristic_repo_intent")
-        if _looks_like_tool_intent(user_content):
-            return _ToolLoopGateDecision(resolved_skills, "enabled", "heuristic_tool_intent")
-
-        return _ToolLoopGateDecision([], "disabled_by_gating", "heuristic_no_tool_intent")
+        return _ToolLoopGateDecision(
+            decision.enabled_skills,
+            decision.mode,
+            decision.reason,
+        )
 
     def _get_adapter_for_model(self, model: str) -> LLMAdapter:
         """Get the LLM adapter for a given model by looking up its provider.
@@ -955,48 +1156,23 @@ class ChatService:
         Routes the model to the correct provider's adapter based on settings.
         Falls back to the default adapter if no provider match is found.
         """
-        if not self._settings_store:
-            return self._default_adapter
+        return self._model_adapter_resolver.get_adapter_for_model(model)
 
-        settings = self._settings_store.get()
-        for provider in settings.providers:
-            if not provider.enabled:
-                continue
-            if model in provider.models:
-                cache_key = provider.id
-                if cache_key in self._adapter_cache:
-                    return self._adapter_cache[cache_key]
+    def _resolve_summary_model(self, model: str) -> str | None:
+        return self._model_adapter_resolver.resolve_summary_model(model)
 
-                provider_url = (provider.base_url or "").rstrip("/")
-                is_vertex = _is_vertex_provider(provider.id, provider_url) or _is_vertex_provider(
-                    provider.name.lower(), provider_url
-                )
-                if is_vertex:
-                    adapter = create_vertex_adapter()
-                elif provider_url and "/v1" in provider_url:
-                    adapter = SiliconFlowAdapter(
-                        api_key=provider.api_key or None,
-                        base_url=provider_url,
-                        default_model=model,
-                    )
-                else:
-                    # No usable base_url, fall back to default
-                    logger.info(
-                        "Model '%s' provider '%s' has no OpenAI-compatible base_url, using default adapter",
-                        model,
-                        provider.name,
-                    )
-                    return self._default_adapter
-                self._adapter_cache[cache_key] = adapter
-                logger.info(
-                    "Model '%s' routed to provider '%s' (%s)",
-                    model,
-                    provider.name,
-                    provider.base_url or "default",
-                )
-                return adapter
-
-        return self._default_adapter
+    async def _build_compaction_summary(
+        self,
+        messages: list[Message],
+        *,
+        model: str,
+        chat_span: Any | None = None,
+    ) -> SummaryBuildResult:
+        return await self._compaction_coordinator.build_compaction_summary(
+            messages,
+            model=model,
+            chat_span=chat_span,
+        )
 
     def _resolve_llm_kwargs(
         self,
@@ -1004,514 +1180,27 @@ class ChatService:
         request: SendMessageRequest,
         conversation: Any,
     ) -> tuple[dict[str, Any], dict[str, Any] | None]:
-        llm_kwargs: dict[str, Any] = {}
-        if request.temperature is not None:
-            llm_kwargs["temperature"] = request.temperature
-        elif conversation.temperature is not None:
-            llm_kwargs["temperature"] = conversation.temperature
-        if request.max_tokens is not None:
-            llm_kwargs["max_tokens"] = request.max_tokens
-        elif conversation.max_tokens is not None:
-            llm_kwargs["max_tokens"] = conversation.max_tokens
-        if conversation.top_p is not None:
-            llm_kwargs["top_p"] = conversation.top_p
-        if request.enable_reasoning:
-            llm_kwargs["enable_reasoning"] = True
-        budget_metadata = _apply_budget_policy(
+        return self._llm_request_options_resolver.resolve_llm_kwargs(
             model=model,
             request=request,
             conversation=conversation,
-            llm_kwargs=llm_kwargs,
         )
-        reasoning_budget = None
-        if isinstance(budget_metadata, dict):
-            candidate = budget_metadata.get("reasoning_budget")
-            if isinstance(candidate, int) and candidate > 0:
-                reasoning_budget = candidate
-        if request.enable_reasoning and reasoning_budget is not None:
-            llm_kwargs["thinking_budget"] = reasoning_budget
-        return llm_kwargs, budget_metadata
 
     def _build_context_messages(
         self,
         conversation: Any,
         model: str,
         sys_instructions: str,
-        chat_span: Span,
+        span: Span,
         input_budget: int | None = None,
     ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-        estimator = TokenEstimator(model=model)
-        planner = ContextPlanner(
-            token_estimator=estimator,
-            system_instructions=sys_instructions,
-        )
-        renderer = ContextRenderer()
-
-        memory_text = ""
-        if self.memory_store:
-            from houyi.adapters.memory.types import MemoryScope
-
-            memory_text = self.memory_store.as_context_text(MemoryScope.SESSION)
-
-        _vision = is_vision_model(model)
-        history_messages = [
-            m.to_llm_message(vision=_vision)
-            for m in conversation.messages
-            if m.role != MessageRole.SYSTEM
-        ]
-        history_messages = _sanitize_tool_loop_structure(history_messages)
-
-        if input_budget is not None and input_budget <= 0 and history_messages:
-            llm_messages = [history_messages[-1]]
-            used_tokens = estimator.count_messages(llm_messages)
-            context_usage = {
-                "model": estimator.model,
-                "max_context_tokens": estimator.context_window,
-                "used_tokens": used_tokens,
-                "reserved_output_tokens": estimator.context_window,
-                "available_tokens": 0,
-                "planned_prompt_tokens": used_tokens,
-                "available_input_tokens": 0,
-                "block_breakdown": {"recent": used_tokens},
-                "dropped_blocks": [],
-                "drop_reasons": {},
-            }
-            chat_span.set_attribute("chat.context_tokens_used", used_tokens)
-            chat_span.set_attribute("chat.context_tokens_max", estimator.context_window)
-            chat_span.set_attribute("chat.llm_messages_count", len(llm_messages))
-            logger.info(
-                "Chat context: %d messages, %d tokens used / %d max (%s)",
-                len(llm_messages),
-                used_tokens,
-                estimator.context_window,
-                model,
-            )
-            logger.warning(
-                "Context input budget is zero; using latest message fallback: model=%s requested_input_budget=%d",
-                model,
-                input_budget,
-            )
-            return llm_messages, context_usage
-
-        task_boundary = TaskBoundary(task_kind="chat", scope="conversation")
-
-        selection_policy = _build_chat_context_selection_policy()
-        candidates = _build_chat_context_candidates(
-            messages=history_messages,
-            system_instructions=sys_instructions,
-            memory_context=memory_text if memory_text else None,
-            task_boundary=task_boundary,
-        )
-        plan = planner.plan(
-            messages=history_messages,
-            system_instructions=sys_instructions,
-            memory_context=memory_text if memory_text else None,
-            input_budget=input_budget,
-            candidates=candidates,
-            selection_policy=selection_policy,
-            task_boundary=task_boundary,
-        )
-
-        llm_messages = renderer.render(plan)
-        if not llm_messages and history_messages:
-            llm_messages = [history_messages[-1]]
-            used_tokens = estimator.count_messages(llm_messages)
-            context_usage = plan.usage.model_copy(
-                update={
-                    "used_tokens": used_tokens,
-                    "planned_prompt_tokens": used_tokens,
-                    "available_tokens": max(0, plan.usage.available_tokens - used_tokens),
-                    "available_input_tokens": max(
-                        0, plan.usage.available_input_tokens - used_tokens
-                    ),
-                    "block_breakdown": {"recent": used_tokens},
-                }
-            ).model_dump(mode="json")
-            logger.warning(
-                "Context rendering returned empty messages; falling back to latest message: model=%s role=%s",
-                model,
-                history_messages[-1].get("role"),
-            )
-        else:
-            context_usage = plan.usage.model_dump(mode="json")
-        chat_span.set_attribute("chat.context_tokens_used", context_usage.get("used_tokens", 0))
-        chat_span.set_attribute(
-            "chat.context_tokens_max",
-            context_usage.get("max_context_tokens", estimator.context_window),
-        )
-        chat_span.set_attribute("chat.llm_messages_count", len(llm_messages))
-
-        logger.info(
-            "Chat context: %d messages, %d tokens used / %d max (%s)",
-            len(llm_messages),
-            context_usage.get("used_tokens", 0),
-            context_usage.get("max_context_tokens", estimator.context_window),
-            model,
-        )
-        return llm_messages, context_usage
-
-    async def _prepare_send_context(
-        self,
-        conversation_id: str,
-        request: SendMessageRequest,
-        chat_span: Span,
-    ) -> _PreparedSendContext:
-        conv_lock = await self.json_store.lock(conversation_id)
-        conversation_snapshot: Any | None = None
-        async with conv_lock:
-            conversation = self.json_store.get(conversation_id)
-            if conversation is None:
-                raise FileNotFoundError(f"Conversation {conversation_id} not found")
-
-            model = (
-                (request.model if request.model else None)
-                or (conversation.model if conversation.model else None)
-                or self.default_model
-            )
-            sys_instructions = conversation.system_instructions or self.default_system_instructions
-            chat_span.set_attribute("chat.model", model)
-
-            user_msg = Message(
-                role=MessageRole.USER,
-                content=request.content,
-                attachments=request.attachments,
-            )
-            user_input_tokens = TokenEstimator(model=model).count_message(user_msg.to_llm_message())
-            user_msg.metadata["usage"] = {
-                "input_tokens": user_input_tokens,
-                "prompt_tokens": user_input_tokens,
-                "total_tokens": user_input_tokens,
-            }
-            conversation.messages.append(user_msg)
-            conversation.updated_at = time.time()
-            self.json_store.update(conversation)
-            llm_kwargs, budget_metadata = self._resolve_llm_kwargs(
-                model=model,
-                request=request,
-                conversation=conversation,
-            )
-            conversation_snapshot = conversation.model_copy(deep=True)
-
-        if conversation_snapshot is None:
-            raise RuntimeError(f"Conversation snapshot unavailable: {conversation_id}")
-
-        compaction_event: dict[str, Any] | None = None
-        if _looks_like_repo_intent(str(request.content or "").strip()):
-            original_messages = list(conversation_snapshot.messages)
-            conversation_snapshot.messages = conversation_snapshot.messages[-6:]
-            dropped_messages = original_messages[: max(0, len(original_messages) - 6)]
-            if dropped_messages:
-                estimator = TokenEstimator(model=model)
-                evaluator = CompactionEvaluator(estimator)
-                before_messages = [
-                    m.to_llm_message(vision=is_vision_model(model)) for m in dropped_messages
-                ]
-                record = evaluator.evaluate(
-                    before_messages=before_messages,
-                    summary=_build_compaction_summary(dropped_messages),
-                    source_message_ids=[
-                        m.message_id for m in dropped_messages if isinstance(m.message_id, str)
-                    ],
-                    trigger="repo_intent_trim",
-                    metadata={
-                        "kind": "history_trim",
-                        "reason": "repo_intent_recent_window",
-                        "kept_recent_messages": len(conversation_snapshot.messages),
-                        "dropped_messages": len(dropped_messages),
-                    },
-                )
-                compaction_event = {
-                    "compaction": record.model_dump(mode="json"),
-                }
-                async with conv_lock:
-                    conversation = self.json_store.get(conversation_id)
-                    if conversation is not None:
-                        history = conversation.metadata.get("compaction_history")
-                        if not isinstance(history, list):
-                            history = []
-                        history.append(record.model_dump(mode="json"))
-                        conversation.metadata["compaction_history"] = history[-20:]
-                        conversation.updated_at = time.time()
-                        self.json_store.update(conversation)
-                chat_span.set_attribute("chat.compaction.triggered", True)
-                chat_span.set_attribute("chat.compaction.trigger", record.trigger)
-                chat_span.set_attribute(
-                    "chat.compaction.messages_compacted",
-                    record.metrics.messages_compacted,
-                )
-                chat_span.set_attribute(
-                    "chat.compaction.tokens_before",
-                    record.metrics.tokens_before,
-                )
-                chat_span.set_attribute(
-                    "chat.compaction.tokens_after",
-                    record.metrics.tokens_after,
-                )
-
-        llm_messages, context_usage = self._build_context_messages(
-            conversation=conversation_snapshot,
+        return self._context_runtime.build_context_messages(
+            conversation=conversation,
             model=model,
             sys_instructions=sys_instructions,
-            chat_span=chat_span,
-            input_budget=(
-                int(budget_metadata["input_budget"])
-                if isinstance(budget_metadata, dict)
-                and budget_metadata.get("input_budget") is not None
-                else None
-            ),
-        )
-
-        return _PreparedSendContext(
-            conv_lock=conv_lock,
-            model=model,
-            llm_messages=llm_messages,
-            context_usage=context_usage,
-            llm_kwargs=llm_kwargs,
-            budget_metadata=budget_metadata,
-            compaction_event=compaction_event,
-        )
-
-    def _collect_persisted_tool_messages(
-        self,
-        intermediate_messages: list[dict[str, Any]],
-        tool_trace: list[dict[str, Any]] | None = None,
-    ) -> list[Message]:
-        persisted_tool_messages: list[Message] = []
-        tool_trace_by_call_id: dict[str, dict[str, Any]] = {}
-        for entry in tool_trace or []:
-            if not isinstance(entry, dict):
-                continue
-            call_id = entry.get("tool_call_id")
-            if isinstance(call_id, str) and call_id:
-                tool_trace_by_call_id[call_id] = entry
-        for intermediate in intermediate_messages:
-            role = intermediate.get("role")
-            if role == MessageRole.ASSISTANT.value and intermediate.get("tool_calls"):
-                persisted_tool_messages.append(
-                    Message(
-                        role=MessageRole.ASSISTANT,
-                        content=str(intermediate.get("content") or ""),
-                        reasoning_content=(
-                            str(intermediate.get("reasoning_content"))
-                            if isinstance(intermediate.get("reasoning_content"), str)
-                            else None
-                        ),
-                        tool_calls=intermediate.get("tool_calls"),
-                    )
-                )
-                continue
-            if role == MessageRole.TOOL.value:
-                metadata = intermediate.get("metadata")
-                tool_call_id = (
-                    str(intermediate.get("tool_call_id"))
-                    if intermediate.get("tool_call_id")
-                    else None
-                )
-                trace_meta = (
-                    tool_trace_by_call_id.get(tool_call_id or "")
-                    if tool_call_id is not None
-                    else None
-                )
-                merged_metadata = dict(metadata) if isinstance(metadata, dict) else {}
-                if isinstance(trace_meta, dict):
-                    if trace_meta.get("round_index") is not None:
-                        merged_metadata.setdefault("round_index", trace_meta.get("round_index"))
-                    if trace_meta.get("parallel_group_id") is not None:
-                        merged_metadata.setdefault(
-                            "parallel_group_id", trace_meta.get("parallel_group_id")
-                        )
-                    if trace_meta.get("duration_ms") is not None:
-                        merged_metadata.setdefault("duration_ms", trace_meta.get("duration_ms"))
-                persisted_tool_messages.append(
-                    Message(
-                        role=MessageRole.TOOL,
-                        content=str(intermediate.get("content") or ""),
-                        tool_call_id=tool_call_id,
-                        name=(str(intermediate.get("name")) if intermediate.get("name") else None),
-                        metadata=merged_metadata,
-                    )
-                )
-        return persisted_tool_messages
-
-    async def _run_tool_loop(
-        self,
-        *,
-        llm_adapter: LLMAdapter,
-        model: str,
-        llm_messages: list[dict[str, Any]],
-        llm_kwargs: dict[str, Any],
-        request: SendMessageRequest,
-        assistant_message_id: str,
-        trace_id: str,
-        enabled_chat_skills: list[str],
-        parent_span: Span | None = None,
-    ) -> _ToolLoopOutcome:
-        if not enabled_chat_skills:
-            return _ToolLoopOutcome(llm_messages=llm_messages)
-
-        tool_bridge = ToolBridge(DEFAULT_SKILL_REGISTRY)
-        tool_schemas = tool_bridge.collect_tool_schemas(
-            skill_filter=enabled_chat_skills,
-            include_core=True,
-        )
-        tool_specs = tool_bridge.collect_skills(
-            skill_filter=enabled_chat_skills,
-            include_core=True,
-        )
-        if not tool_schemas or not tool_specs or not hasattr(llm_adapter, "chat"):
-            return _ToolLoopOutcome(llm_messages=llm_messages)
-
-        try:
-            tool_runner = self._get_tool_runner(parent_span)
-        except TypeError:
-            # Backward compatibility for tests/overrides that monkeypatch
-            # _get_tool_runner as a zero-arg callable.
-            tool_runner = self._get_tool_runner()
-        tool_loop_messages = _sanitize_tool_loop_messages(list(llm_messages))
-        max_tool_iterations = request.max_tool_iterations or _DEFAULT_CHAT_MAX_TOOL_ITERATIONS
-        tool_chat_kwargs = build_chat_kwargs(
-            max_tokens=llm_kwargs.get("max_tokens"),
-            temperature=llm_kwargs.get("temperature"),
-            parallel_tool_calls=True,
-            max_parallel_calls=None,
-            prompt_cache_key=None,
-        )
-        # Keep tool-loop model consistent with the request-selected model.
-        tool_chat_kwargs["model"] = model
-        tool_executor = SkillExecutor(max_retries=3, timeout=30.0)
-        tool_loop_response, tool_trace = await tool_runner.run(
-            adapter=llm_adapter,
-            messages=tool_loop_messages,
-            tools=tool_schemas,
-            skills=tool_specs,
-            executor=tool_executor,
-            max_rounds=max_tool_iterations,
-            chat_kwargs=tool_chat_kwargs,
-            allow_tool_replace=False,
-        )
-
-        event_chunks: list[str] = []
-        round_indexes = sorted(
-            {
-                round_index
-                for round_index in (
-                    entry.get("round_index") if isinstance(entry, dict) else None
-                    for entry in tool_trace
-                )
-                if isinstance(round_index, int)
-            }
-        )
-        for round_index in round_indexes:
-            event_chunks.append(
-                SSEEvent(
-                    event="agent.iteration",
-                    data={
-                        "message_id": assistant_message_id,
-                        "trace_id": trace_id,
-                        "round_index": round_index,
-                    },
-                ).encode()
-            )
-
-        for entry in tool_trace:
-            if not isinstance(entry, dict):
-                continue
-            tool_call_id = entry.get("tool_call_id")
-            tool_name = entry.get("tool_name")
-            parallel_group_id = entry.get("parallel_group_id")
-            round_value = entry.get("round_index")
-            duration_ms = entry.get("duration_ms")
-            args = entry.get("args")
-            result = entry.get("result") if isinstance(entry.get("result"), dict) else {}
-            raw_result = result.get("raw") if isinstance(result, dict) else None
-
-            event_chunks.append(
-                SSEEvent(
-                    event="tool_call.start",
-                    data={
-                        "message_id": assistant_message_id,
-                        "trace_id": trace_id,
-                        "tool_call_id": tool_call_id,
-                        "tool_name": tool_name,
-                        "parallel_group_id": parallel_group_id,
-                        "round_index": round_value,
-                        "duration_ms": duration_ms,
-                        "arguments": args,
-                    },
-                ).encode()
-            )
-
-            if isinstance(raw_result, dict) and raw_result.get("error"):
-                event_chunks.append(
-                    SSEEvent(
-                        event="tool_call.error",
-                        data={
-                            "message_id": assistant_message_id,
-                            "trace_id": trace_id,
-                            "tool_call_id": tool_call_id,
-                            "tool_name": tool_name,
-                            "parallel_group_id": parallel_group_id,
-                            "round_index": round_value,
-                            "duration_ms": duration_ms,
-                            "error": raw_result,
-                        },
-                    ).encode()
-                )
-            else:
-                event_chunks.append(
-                    SSEEvent(
-                        event="tool_call.result",
-                        data={
-                            "message_id": assistant_message_id,
-                            "trace_id": trace_id,
-                            "tool_call_id": tool_call_id,
-                            "tool_name": tool_name,
-                            "parallel_group_id": parallel_group_id,
-                            "round_index": round_value,
-                            "duration_ms": duration_ms,
-                            "result": raw_result,
-                        },
-                    ).encode()
-                )
-
-        intermediate_messages = [
-            msg for msg in tool_loop_messages[len(llm_messages) :] if isinstance(msg, dict)
-        ]
-        persisted_tool_messages = self._collect_persisted_tool_messages(
-            intermediate_messages,
-            tool_trace,
-        )
-
-        usage_payload: dict[str, Any] | None = None
-        if isinstance(getattr(tool_loop_response, "usage", None), dict):
-            usage_payload = _normalize_usage_payload(_json_safe(tool_loop_response.usage))
-
-        replay_response: Any | None = None
-        convergence_reason: str | None = None
-        replay_content = str(getattr(tool_loop_response, "content", "") or "")
-        replay_reasoning = None
-        replay_metadata = getattr(tool_loop_response, "metadata", None)
-        if (
-            isinstance(replay_metadata, dict)
-            and replay_metadata.get("reasoning_content") is not None
-        ):
-            replay_reasoning = str(replay_metadata.get("reasoning_content") or "")
-        if (
-            tool_loop_response
-            and not list(getattr(tool_loop_response, "tool_calls", []) or [])
-            and (replay_content or replay_reasoning)
-        ):
-            replay_response = tool_loop_response
-            convergence_reason = "no_tool_calls_with_replay_payload"
-
-        return _ToolLoopOutcome(
-            llm_messages=tool_loop_messages,
-            event_chunks=event_chunks,
-            persisted_tool_messages=persisted_tool_messages,
-            replay_response=replay_response,
-            usage_payload=usage_payload,
-            finish_reason=_extract_finish_reason(tool_loop_response, replay_response),
-            convergence_reason=convergence_reason,
+            span=span,
+            input_budget=input_budget,
+            truncation_log_label="chat_send",
         )
 
     def get_context_usage(self, conversation_id: str) -> dict[str, Any] | None:
@@ -1526,231 +1215,46 @@ class ChatService:
 
         model = conversation.model or self.default_model
         sys_instructions = conversation.system_instructions or self.default_system_instructions
-
-        history_messages = [
-            m.to_llm_message() for m in conversation.messages if m.role != MessageRole.SYSTEM
-        ]
-        if not history_messages:
-            return None
-
-        estimator = TokenEstimator(model=model)
-        planner = ContextPlanner(
-            token_estimator=estimator,
-            system_instructions=sys_instructions,
-        )
-
-        memory_text = ""
-        if self.memory_store:
-            from houyi.adapters.memory.types import MemoryScope
-
-            memory_text = self.memory_store.as_context_text(MemoryScope.SESSION)
-
-        plan = planner.plan(
-            messages=history_messages,
-            system_instructions=sys_instructions,
-            memory_context=memory_text if memory_text else None,
-        )
-
-        return plan.usage.model_dump(mode="json")
-
-    async def _stream_replay_chunks(
-        self,
-        *,
-        replay_response: Any,
-        assistant_message_id: str,
-        model: str,
-        context_usage: dict[str, Any],
-        finish_reason: str | None,
-    ) -> tuple[list[str], list[str], list[str]]:
-        replay_content = str(getattr(replay_response, "content", "") or "")
-        replay_reasoning: str | None = None
-        metadata = getattr(replay_response, "metadata", None)
-        if isinstance(metadata, dict) and metadata.get("reasoning_content") is not None:
-            replay_reasoning = str(metadata.get("reasoning_content") or "")
-
-        content_parts = [replay_content] if replay_content else []
-        reasoning_parts = [replay_reasoning] if replay_reasoning else []
-
-        async def replay_stream() -> AsyncIterator[tuple[str, str | None]]:
-            yield replay_content, replay_reasoning
-
-        sse_chunks = [
-            chunk
-            async for chunk in stream_chat_sse(
-                llm_stream=replay_stream(),
-                message_id=assistant_message_id,
-                model=model,
-                context_usage=context_usage,
-                finish_reason=finish_reason,
-            )
-        ]
-        return sse_chunks, content_parts, reasoning_parts
-
-    async def _stream_adapter_chunks(
-        self,
-        *,
-        llm_adapter: LLMAdapter,
-        llm_messages: list[dict[str, Any]],
-        llm_kwargs: dict[str, Any],
-        assistant_message_id: str,
-        model: str,
-        context_usage: dict[str, Any],
-        chat_span: Span,
-    ) -> tuple[list[str], list[str], list[str], dict[str, Any] | None, dict[str, Any]]:
-        llm_span = Span(
-            name="llm.call",
-            parent=chat_span,
-            span_type=SpanType.LLM,
+        return self._context_runtime.get_context_usage(
+            conversation=conversation,
             model=model,
-            attributes={
-                "llm.model": model,
-                "llm.message_count": len(llm_messages),
-            },
+            sys_instructions=sys_instructions,
+            truncation_log_label=None,
         )
 
-        content_parts: list[str] = []
-        reasoning_parts: list[str] = []
-        stream_started_at = time.perf_counter()
-        first_token_ms: float | None = None
-        llm_stream = llm_adapter.stream_chat(
-            messages=cast(list[LLMMessage | dict[str, Any]], llm_messages),
-            model=model,
-            **llm_kwargs,
-        )
-
-        async def accumulating_stream() -> AsyncIterator[tuple[str, str | None]]:
-            nonlocal first_token_ms
-            async for chunk in llm_stream:
-                content_delta = chunk.content_delta
-                reasoning_delta = chunk.reasoning_delta
-                if first_token_ms is None and (content_delta or reasoning_delta):
-                    first_token_ms = (time.perf_counter() - stream_started_at) * 1000
-                    llm_span.set_attribute("chat.first_token_ms", round(first_token_ms, 2))
-                if content_delta:
-                    content_parts.append(content_delta)
-                if reasoning_delta:
-                    reasoning_parts.append(reasoning_delta)
-                yield content_delta, reasoning_delta
-
-        sse_chunks = [
-            chunk
-            async for chunk in stream_chat_sse(
-                llm_stream=accumulating_stream(),
-                message_id=assistant_message_id,
-                model=model,
-                context_usage=context_usage,
-                usage=lambda: _normalize_usage_payload(
-                    _json_safe(getattr(llm_adapter, "last_usage", None))
-                ),
-            )
-        ]
-
-        usage_payload = _normalize_usage_payload(
-            _json_safe(getattr(llm_adapter, "last_usage", None))
-        )
-        llm_span.set_attribute(
-            "chat.stream_total_ms",
-            round((time.perf_counter() - stream_started_at) * 1000, 2),
-        )
-        llm_span.set_attribute("chat.stream_chunk_count", len(sse_chunks))
-        if first_token_ms is None:
-            llm_span.set_attribute("chat.first_token_ms", None)
-        if isinstance(usage_payload, dict) and usage_payload:
-            llm_span.set_tokens(
-                input_tokens=int(usage_payload.get("prompt_tokens", 0) or 0),
-                output_tokens=int(usage_payload.get("completion_tokens", 0) or 0),
-            )
-        llm_span.set_status("ok")
-        llm_span.end()
-        generation_metadata = _build_generation_metadata(
-            usage_payload=usage_payload,
-            first_token_ms=first_token_ms,
-            generation_time_ms=(time.perf_counter() - stream_started_at) * 1000,
-        )
-        return sse_chunks, content_parts, reasoning_parts, usage_payload, generation_metadata
-
-    async def _persist_assistant_message(
+    async def _run_post_turn_compaction(
         self,
         *,
         conversation_id: str,
-        conv_lock: Any,
-        assistant_msg: Message,
-        content_parts: list[str],
-        reasoning_parts: list[str],
-        persisted_tool_messages: list[Message],
-        usage_payload: dict[str, Any] | None,
-        finish_reason: str | None,
-        budget_metadata: dict[str, Any] | None,
-        generation_metadata: dict[str, Any],
-        chat_span: Span,
-    ) -> bool:
-        assistant_msg.content = "".join(content_parts)
-        if reasoning_parts:
-            assistant_msg.reasoning_content = "".join(reasoning_parts)
-
-        if not (assistant_msg.content or assistant_msg.reasoning_content):
-            chat_span.set_status("error", "LLM returned no content")
-            logger.warning(
-                "Chat response empty (LLM error): conversation=%s, message=%s — not persisted",
-                conversation_id,
-                assistant_msg.message_id,
-            )
-            return False
-
-        async with conv_lock:
-            if isinstance(usage_payload, dict) and usage_payload:
-                assistant_msg.metadata["usage"] = usage_payload
-            if isinstance(finish_reason, str) and finish_reason:
-                assistant_msg.metadata["finish_reason"] = finish_reason
-            if isinstance(budget_metadata, dict) and budget_metadata:
-                assistant_msg.metadata["budget"] = budget_metadata
-            assistant_msg.metadata.update(generation_metadata)
-            assistant_msg.metadata["trace_id"] = chat_span.trace_id
-
-            conversation = self.json_store.get(conversation_id)
-            if conversation is not None:
-                if persisted_tool_messages:
-                    conversation.messages.extend(persisted_tool_messages)
-                conversation.messages.append(assistant_msg)
-                conversation.updated_at = time.time()
-                self.json_store.update(conversation)
-
-        chat_span.set_attribute("chat.response_content_len", len(assistant_msg.content))
-        chat_span.set_status("ok")
-        logger.info(
-            "Chat response complete: conversation=%s, message=%s, content_len=%d",
-            conversation_id,
-            assistant_msg.message_id,
-            len(assistant_msg.content),
+        model: str,
+    ) -> None:
+        await self._compaction_coordinator.run_post_turn_compaction(
+            conversation_id=conversation_id,
+            model=model,
         )
-        return True
+
+    def _schedule_post_turn_compaction(
+        self,
+        *,
+        conversation_id: str,
+        model: str,
+    ) -> None:
+        self._compaction_coordinator.schedule_post_turn_compaction(
+            conversation_id=conversation_id,
+            model=model,
+        )
+
+    async def compact_conversation(
+        self,
+        conversation_id: str,
+    ) -> dict[str, Any]:
+        return await self._compaction_coordinator.compact_conversation(conversation_id)
 
     async def send_message(
         self,
         conversation_id: str,
         request: SendMessageRequest,
     ) -> AsyncIterator[str]:
-        """Send a user message and stream the assistant response as SSE.
-
-        Flow:
-        1. Load conversation from store
-        2. Append user message
-        3. Build context plan (TokenEstimator → ContextPlanner → ContextRenderer)
-        4. Call LLM with rendered messages
-        5. Stream response as SSE events
-        6. On completion, persist assistant message
-
-        Args:
-            conversation_id: Target conversation.
-            request: User message and optional overrides.
-
-        Yields:
-            SSE-encoded event strings.
-
-        Raises:
-            FileNotFoundError: If conversation does not exist.
-        """
-        # --- Observability: create chat.request root span ---
         chat_span = Span(
             name="chat.request",
             parent=TraceContext.current(),
@@ -1761,16 +1265,30 @@ class ChatService:
             },
         )
         chat_token = TraceContext.push(chat_span)
+        prepared: PreparedSendContext | None = None
+        assistant_message_id = ""
+        active_streaming_registered = False
+        assistant_persisted = False
 
         try:
             with _stage_span(chat_span, "chat.prepare"):
-                prepared = await self._prepare_send_context(
+                prepared = await self._request_preparation.prepare(
                     conversation_id=conversation_id,
                     request=request,
                     chat_span=chat_span,
                 )
 
             assistant_msg = Message(role=MessageRole.ASSISTANT, content="")
+            assistant_message_id = assistant_msg.message_id
+            chat_span.set_attribute("chat.request_id", assistant_msg.message_id)
+            await self._set_active_streaming_state(
+                conversation_id=conversation_id,
+                conv_lock=prepared.conv_lock,
+                message_id=assistant_msg.message_id,
+                request_id=assistant_msg.message_id,
+                status="streaming",
+            )
+            active_streaming_registered = True
             llm_messages = prepared.llm_messages
             context_usage = prepared.context_usage
             llm_adapter = self._get_adapter_for_model(prepared.model)
@@ -1789,11 +1307,11 @@ class ChatService:
             tool_gate = self._gate_tool_loop(
                 request=request,
                 resolved_skills=resolved_chat_skills,
+                context_usage=context_usage,
+                runtime_profile=prepared.runtime_profile,
             )
             enabled_chat_skills = tool_gate.enabled_skills
 
-            # Keep an early assistant anchor only when tool loop is enabled,
-            # so tool_call.* events can consistently reference one message id.
             if enabled_chat_skills:
                 yield SSEEvent(
                     event="message.delta",
@@ -1816,20 +1334,22 @@ class ChatService:
                 },
             ) as tool_loop_span:
                 try:
-                    tool_outcome = await self._run_tool_loop(
+                    tool_outcome = await self._tool_loop_orchestrator.run(
                         llm_adapter=llm_adapter,
                         model=prepared.model,
                         llm_messages=llm_messages,
                         llm_kwargs=prepared.llm_kwargs,
                         request=request,
+                        runtime_profile=prepared.runtime_profile,
                         assistant_message_id=assistant_msg.message_id,
                         trace_id=chat_span.trace_id,
                         enabled_chat_skills=enabled_chat_skills,
                         parent_span=tool_loop_span,
                     )
                 except Exception as exc:
-                    visible_error = _build_stream_error_content(exc)
-                    public_error = _build_public_stream_error_message(exc)
+                    visible_error = build_stream_error_content(exc)
+                    normalized_error = normalize_chat_error(exc)
+                    public_error = normalized_error.public_message
                     if visible_error:
                         yield SSEEvent(
                             event="message.delta",
@@ -1838,13 +1358,17 @@ class ChatService:
                                 "seq": 1,
                                 "content": visible_error,
                             },
-                            event_id=f"{assistant_msg.message_id}-1",
                         ).encode()
                     yield SSEEvent(
                         event="message.error",
                         data={
                             "message_id": assistant_msg.message_id,
                             "error": public_error,
+                            "error_code": normalized_error.error_code,
+                            "public_message": normalized_error.public_message,
+                            "retryable": normalized_error.retryable,
+                            "status_code": normalized_error.status_code,
+                            "provider_code": normalized_error.provider_code,
                             "error_type": type(exc).__name__,
                             "chunks_sent": 1 if visible_error else 0,
                             "timestamp": time.time(),
@@ -1860,7 +1384,8 @@ class ChatService:
                             },
                         },
                     ).encode()
-                    await self._persist_assistant_message(
+                    completion_emitted_at = time.perf_counter()
+                    await self._turn_persistence.persist(
                         conversation_id=conversation_id,
                         conv_lock=prepared.conv_lock,
                         assistant_msg=assistant_msg,
@@ -1871,7 +1396,9 @@ class ChatService:
                         finish_reason="error",
                         budget_metadata=prepared.budget_metadata,
                         generation_metadata={},
+                        completion_emitted_at=completion_emitted_at,
                         chat_span=chat_span,
+                        model=prepared.model,
                     )
                     return
                 final_stream_skipped = tool_outcome.replay_response is not None
@@ -1888,12 +1415,22 @@ class ChatService:
                 yield event_chunk
             persisted_tool_messages = tool_outcome.persisted_tool_messages
             llm_messages = tool_outcome.llm_messages
+            final_stream_messages_reconstructed = False
+            if tool_outcome.event_chunks or persisted_tool_messages:
+                yield SSEEvent(
+                    event="agent.finalizing",
+                    data={
+                        "message_id": assistant_msg.message_id,
+                        "trace_id": chat_span.trace_id,
+                    },
+                ).encode()
             if not llm_messages:
                 reconstructed_messages = list(prepared.llm_messages)
                 reconstructed_messages.extend(
                     message.to_llm_message() for message in persisted_tool_messages
                 )
                 llm_messages = reconstructed_messages
+                final_stream_messages_reconstructed = True
                 logger.warning(
                     "Tool loop returned empty final-stream messages; reconstructed from prepared context: conversation=%s, message=%s, persisted_tool_messages=%d",
                     conversation_id,
@@ -1905,120 +1442,86 @@ class ChatService:
             reasoning_parts: list[str] = []
             usage_payload: dict[str, Any] | None = None
             finish_reason: str | None = tool_outcome.finish_reason
+            if tool_outcome.convergence_reason:
+                generation_metadata["tool_loop_convergence_reason"] = (
+                    tool_outcome.convergence_reason
+                )
+            generation_metadata["tool_loop_final_stream_skipped"] = (
+                tool_outcome.replay_response is not None
+            )
+            generation_metadata["tool_loop_terminal_tool_call_count"] = (
+                tool_outcome.terminal_tool_call_count
+            )
+            generation_metadata["tool_loop_max_rounds_reached"] = (
+                tool_outcome.convergence_reason == "pending_tool_calls_after_tool_loop"
+            )
+            generation_metadata["final_stream_messages_reconstructed"] = (
+                final_stream_messages_reconstructed
+            )
+            generation_metadata["final_stream_persisted_tool_message_count"] = len(
+                persisted_tool_messages
+            )
+            generation_metadata["final_stream_prepared_message_count"] = len(llm_messages)
+            if isinstance(tool_outcome.response_metadata, dict) and tool_outcome.response_metadata:
+                generation_metadata.update(
+                    {
+                        key: value
+                        for key, value in tool_outcome.response_metadata.items()
+                        if key not in {"reasoning_content", "usage", "finish_reason"}
+                    }
+                )
             if tool_outcome.replay_response is not None:
                 with _stage_span(chat_span, "chat.stream.replay"):
-                    (
-                        replay_chunks,
-                        replay_content_parts,
-                        replay_reasoning_parts,
-                    ) = await self._stream_replay_chunks(
+                    replay_capture = ReplayStreamCapture()
+                    async for sse_chunk in self._response_streamer.iter_replay_chunks(
                         replay_response=tool_outcome.replay_response,
                         assistant_message_id=assistant_msg.message_id,
                         model=prepared.model,
                         context_usage=context_usage,
                         finish_reason=finish_reason,
-                    )
-                    for sse_chunk in replay_chunks:
+                        capture=replay_capture,
+                        stream_reasoning=not bool(persisted_tool_messages),
+                    ):
                         yield sse_chunk
-                    content_parts = replay_content_parts
-                    reasoning_parts = replay_reasoning_parts
+                    content_parts = replay_capture.content_parts
+                    reasoning_parts = replay_capture.reasoning_parts
                 usage_payload = tool_outcome.usage_payload
             else:
-                with _stage_span(chat_span, "chat.stream.llm"):
-                    final_stream_kwargs = dict(prepared.llm_kwargs)
-                    final_stream_kwargs["parallel_tool_calls"] = False
-                    llm_span = Span(
-                        name="llm.call",
-                        parent=chat_span,
-                        span_type=SpanType.LLM,
-                        model=prepared.model,
-                        attributes={
-                            "llm.model": prepared.model,
-                            "llm.message_count": len(llm_messages),
-                        },
-                    )
-                    stream_started_at = time.perf_counter()
-                    first_token_ms: float | None = None
-                    llm_chunk_count = 0
-                    stream_error_content: str | None = None
-                    llm_stream = llm_adapter.stream_chat(
-                        messages=cast(list[LLMMessage | dict[str, Any]], llm_messages),
-                        model=prepared.model,
-                        tools=None,
-                        **final_stream_kwargs,
-                    )
+                final_stream_messages = _sanitize_final_stream_messages(llm_messages)
+                generation_metadata["final_stream_sanitized_message_count"] = len(
+                    final_stream_messages
+                )
+                prior_generation_metadata = dict(generation_metadata)
+                final_stream_capture = FinalStreamCapture()
+                async for sse_chunk in self._response_streamer.iter_final_response(
+                    llm_adapter=llm_adapter,
+                    llm_messages=final_stream_messages,
+                    llm_kwargs=prepared.llm_kwargs,
+                    model=prepared.model,
+                    conversation_id=conversation_id,
+                    assistant_message_id=assistant_msg.message_id,
+                    context_usage=context_usage,
+                    chat_span=chat_span,
+                    capture=final_stream_capture,
+                ):
+                    yield sse_chunk
+                content_parts = final_stream_capture.content_parts
+                reasoning_parts = final_stream_capture.reasoning_parts
+                usage_payload = final_stream_capture.usage_payload
+                finish_reason = final_stream_capture.finish_reason
+                generation_metadata = {
+                    **prior_generation_metadata,
+                    **final_stream_capture.generation_metadata,
+                }
 
-                    async def accumulating_stream() -> AsyncIterator[tuple[str, str | None]]:
-                        nonlocal first_token_ms
-                        async for chunk in llm_stream:
-                            content_delta = chunk.content_delta
-                            reasoning_delta = chunk.reasoning_delta
-                            if first_token_ms is None and (content_delta or reasoning_delta):
-                                first_token_ms = (time.perf_counter() - stream_started_at) * 1000
-                                llm_span.set_attribute(
-                                    "chat.first_token_ms", round(first_token_ms, 2)
-                                )
-                            if content_delta:
-                                content_parts.append(content_delta)
-                            if reasoning_delta:
-                                reasoning_parts.append(reasoning_delta)
-                            yield content_delta, reasoning_delta
-
-                    def _capture_stream_error(exc: Exception) -> str:
-                        nonlocal stream_error_content
-                        stream_error_content = _build_stream_error_content(exc)
-                        if stream_error_content:
-                            content_parts.append(stream_error_content)
-                        return stream_error_content or ""
-
-                    async for sse_chunk in stream_chat_sse(
-                        llm_stream=accumulating_stream(),
-                        message_id=assistant_msg.message_id,
-                        model=prepared.model,
-                        context_usage=context_usage,
-                        usage=lambda: _normalize_usage_payload(
-                            _json_safe(getattr(llm_adapter, "last_usage", None)),
-                            first_token_ms=first_token_ms,
-                            generation_time_ms=(time.perf_counter() - stream_started_at) * 1000,
-                        ),
-                        finish_reason=lambda: _extract_finish_reason(
-                            getattr(llm_adapter, "last_finish_reason", None)
-                        ),
-                        error_message_builder=_capture_stream_error,
-                        public_error_builder=_build_public_stream_error_message,
-                    ):
-                        llm_chunk_count += 1
-                        yield sse_chunk
-                    generation_time_ms = (time.perf_counter() - stream_started_at) * 1000
-                    usage_payload, finish_reason, generation_metadata = _finalize_stream_result(
-                        llm_adapter=llm_adapter,
-                        llm_span=llm_span,
-                        first_token_ms=first_token_ms,
-                        generation_time_ms=generation_time_ms,
-                        chunk_count=llm_chunk_count,
-                    )
-                    if stream_error_content and not finish_reason:
-                        finish_reason = "error"
-                    if not content_parts and not reasoning_parts:
-                        empty_stream_content = _build_empty_stream_content()
-                        content_parts.append(empty_stream_content)
-                        finish_reason = finish_reason or "error"
-                        logger.warning(
-                            "Chat final stream returned no visible deltas: conversation=%s, message=%s, model=%s",
-                            conversation_id,
-                            assistant_msg.message_id,
-                            prepared.model,
-                        )
-                        yield SSEEvent(
-                            event="message.delta",
-                            data={
-                                "message_id": assistant_msg.message_id,
-                                "seq": llm_chunk_count + 1,
-                                "content": empty_stream_content,
-                            },
-                            event_id=f"{assistant_msg.message_id}-{llm_chunk_count + 1}",
-                        ).encode()
             completion_metadata: dict[str, Any] = {"trace_id": chat_span.trace_id}
+            await self._set_active_streaming_state(
+                conversation_id=conversation_id,
+                conv_lock=prepared.conv_lock,
+                message_id=assistant_msg.message_id,
+                request_id=assistant_msg.message_id,
+                status="finishing",
+            )
             if isinstance(usage_payload, dict) and usage_payload:
                 completion_metadata["usage"] = usage_payload
             if isinstance(finish_reason, str) and finish_reason:
@@ -2026,6 +1529,7 @@ class ChatService:
             if isinstance(prepared.budget_metadata, dict) and prepared.budget_metadata:
                 completion_metadata["budget"] = prepared.budget_metadata
             completion_metadata.update(generation_metadata)
+            completion_emitted_at = time.perf_counter()
             yield SSEEvent(
                 event="message.complete",
                 data={
@@ -2035,7 +1539,7 @@ class ChatService:
             ).encode()
 
             with _stage_span(chat_span, "chat.persist"):
-                await self._persist_assistant_message(
+                assistant_persisted = await self._turn_persistence.persist(
                     conversation_id=conversation_id,
                     conv_lock=prepared.conv_lock,
                     assistant_msg=assistant_msg,
@@ -2046,18 +1550,29 @@ class ChatService:
                     finish_reason=finish_reason,
                     budget_metadata=prepared.budget_metadata,
                     generation_metadata=generation_metadata,
+                    completion_emitted_at=completion_emitted_at,
                     chat_span=chat_span,
+                    model=prepared.model,
                 )
 
         except Exception as e:
             chat_span.set_status("error", str(e))
             raise
         finally:
+            if active_streaming_registered and prepared is not None and assistant_message_id:
+                with contextlib.suppress(Exception):
+                    await self._clear_active_streaming_state(
+                        conversation_id=conversation_id,
+                        conv_lock=prepared.conv_lock,
+                        message_id=assistant_message_id,
+                    )
+            if assistant_persisted and prepared is not None:
+                self._schedule_post_turn_compaction(
+                    conversation_id=conversation_id,
+                    model=prepared.model,
+                )
             chat_span.end()
             _persist_trace_tree(chat_span)
-            # GeneratorExit during async streaming may cause cleanup
-            # in a different asyncio Context, making ContextVar.reset()
-            # fail. This is safe to ignore — the span is already ended.
             with contextlib.suppress(ValueError):
                 TraceContext.pop(chat_token)
 
@@ -2084,24 +1599,11 @@ class ChatService:
             FileNotFoundError: If conversation not found.
             ValueError: If message not found or not a user message.
         """
-        conv_lock = await self.json_store.lock(conversation_id)
-        async with conv_lock:
-            conversation = self.json_store.get(conversation_id)
-            if conversation is None:
-                raise FileNotFoundError(f"Conversation {conversation_id} not found")
-
-            msg = next((m for m in conversation.messages if m.message_id == message_id), None)
-            if msg is None:
-                raise ValueError(f"Message {message_id} not found")
-            if msg.role != MessageRole.USER:
-                raise ValueError("Only user messages can be edited")
-
-            msg.content = request.content
-            msg.metadata["edited"] = True
-            msg.metadata["edited_at"] = time.time()
-            conversation.updated_at = time.time()
-            self.json_store.update(conversation)
-            return msg
+        return await self._message_manager.edit_message(
+            conversation_id,
+            message_id,
+            request,
+        )
 
     async def delete_message(
         self,
@@ -2118,54 +1620,7 @@ class ChatService:
             FileNotFoundError: If conversation not found.
             ValueError: If message not found.
         """
-        conv_lock = await self.json_store.lock(conversation_id)
-        async with conv_lock:
-            conversation = self.json_store.get(conversation_id)
-            if conversation is None:
-                raise FileNotFoundError(f"Conversation {conversation_id} not found")
-
-            message_index = next(
-                (
-                    idx
-                    for idx, item in enumerate(conversation.messages)
-                    if item.message_id == message_id
-                ),
-                None,
-            )
-            if message_index is None:
-                raise ValueError(f"Message {message_id} not found")
-
-            target_message = conversation.messages[message_index]
-            to_remove_ids = {message_id}
-            if target_message.role == MessageRole.ASSISTANT:
-                removed_tool_call_ids: set[str] = set()
-                cursor = message_index - 1
-                while cursor >= 0 and conversation.messages[cursor].role == MessageRole.TOOL:
-                    tool_msg = conversation.messages[cursor]
-                    to_remove_ids.add(tool_msg.message_id)
-                    if tool_msg.tool_call_id:
-                        removed_tool_call_ids.add(str(tool_msg.tool_call_id))
-                    cursor -= 1
-
-                if cursor >= 0:
-                    carrier = conversation.messages[cursor]
-                    if carrier.role == MessageRole.ASSISTANT and carrier.tool_calls:
-                        carrier_call_ids = {
-                            str(call.get("id"))
-                            for call in carrier.tool_calls
-                            if isinstance(call, dict) and call.get("id")
-                        }
-                        if not removed_tool_call_ids or bool(
-                            carrier_call_ids & removed_tool_call_ids
-                        ):
-                            to_remove_ids.add(carrier.message_id)
-
-            conversation.messages = [
-                item for item in conversation.messages if item.message_id not in to_remove_ids
-            ]
-
-            conversation.updated_at = time.time()
-            self.json_store.update(conversation)
+        await self._message_manager.delete_message(conversation_id, message_id)
 
     async def regenerate_message(
         self,
@@ -2188,51 +1643,8 @@ class ChatService:
             FileNotFoundError: If conversation not found.
             ValueError: If message not found or not an assistant message.
         """
-        conv_lock = await self.json_store.lock(conversation_id)
-        async with conv_lock:
-            conversation = self.json_store.get(conversation_id)
-            if conversation is None:
-                raise FileNotFoundError(f"Conversation {conversation_id} not found")
-
-            # Find the target message index
-            msg_idx = next(
-                (i for i, m in enumerate(conversation.messages) if m.message_id == message_id),
-                None,
-            )
-            if msg_idx is None:
-                raise ValueError(f"Message {message_id} not found")
-            if conversation.messages[msg_idx].role != MessageRole.ASSISTANT:
-                raise ValueError("Only assistant messages can be regenerated")
-
-            # Find the last user message before this assistant message
-            last_user_content = None
-            for i in range(msg_idx - 1, -1, -1):
-                if conversation.messages[i].role == MessageRole.USER:
-                    last_user_content = conversation.messages[i].content
-                    break
-
-            if last_user_content is None:
-                raise ValueError("No user message found before the assistant message")
-
-            # Remove the assistant message and everything after it
-            conversation.messages = conversation.messages[:msg_idx]
-            conversation.updated_at = time.time()
-            self.json_store.update(conversation)
-
-        # Re-send the last user message (send_message will append it again)
-        # We need to remove the last user message too since send_message will re-add it
-        conv_lock2 = await self.json_store.lock(conversation_id)
-        async with conv_lock2:
-            conversation = self.json_store.get(conversation_id)
-            if (
-                conversation
-                and conversation.messages
-                and conversation.messages[-1].role == MessageRole.USER
-            ):
-                conversation.messages.pop()
-                conversation.updated_at = time.time()
-                self.json_store.update(conversation)
-
-        request = SendMessageRequest(content=last_user_content)
-        async for chunk in self.send_message(conversation_id, request):
+        async for chunk in self._message_manager.regenerate_message(
+            conversation_id,
+            message_id,
+        ):
             yield chunk

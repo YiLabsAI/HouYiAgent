@@ -17,14 +17,14 @@ from houyi_studio.server.chat.types import (
 )
 
 
-def test_resolve_chat_data_dir_defaults_to_project_root(monkeypatch, tmp_path):
+def test_resolve_chat_data_dir_default(monkeypatch, tmp_path):
     project_root = tmp_path / "project-root"
     monkeypatch.setattr(json_store_module, "_project_root", lambda: project_root)
     resolved = resolve_chat_data_dir()
     assert resolved == project_root / "data/conversations"
 
 
-def test_resolve_chat_data_dir_resolves_relative_path_from_project_root(monkeypatch, tmp_path):
+def test_resolve_chat_data_dir_relative_path(monkeypatch, tmp_path):
     project_root = tmp_path / "project-root"
     monkeypatch.setattr(json_store_module, "_project_root", lambda: project_root)
     resolved = resolve_chat_data_dir("custom/chat-data")
@@ -205,6 +205,97 @@ class TestJsonStoreAtomicWrite:
         index_path = tmp_path / "conversations" / "index.json"
         data = json.loads(index_path.read_text())
         assert len(data["conversations"]) == 0
+
+    def test_create_backup_writes_snapshot_and_index(self, store, sample_conversation, tmp_path):
+        store.create(sample_conversation)
+        backup = store.create_backup("conv001", trigger="manual")
+        backup_path = tmp_path / "conversations" / "_backups" / backup["path"]
+        assert backup_path.exists()
+        payload = json.loads(backup_path.read_text())
+        assert payload["conversation_id"] == "conv001"
+        backup_index = json.loads(
+            (tmp_path / "conversations" / "_backups" / "index.json").read_text()
+        )
+        assert backup_index["backups"][0]["backup_id"] == backup["backup_id"]
+        assert backup_index["backups"][0]["trigger"] == "manual"
+
+    def test_attach_backup_record_updates_backup_index(self, store, sample_conversation):
+        store.create(sample_conversation)
+        backup = store.create_backup("conv001", trigger="manual")
+        updated = store.attach_backup_record(backup["backup_id"], record_id="cmp_123")
+        assert updated is not None
+        assert updated["record_id"] == "cmp_123"
+        assert store.get_backup(backup["backup_id"])["record_id"] == "cmp_123"
+
+    def test_restore_backup_rewrites_conversation_file(self, store, sample_conversation):
+        store.create(sample_conversation)
+        backup = store.create_backup("conv001", trigger="manual")
+        mutated = store.get("conv001")
+        assert mutated is not None
+        mutated.title = "Mutated"
+        mutated.messages.append(Message(role=MessageRole.USER, content="new"))
+        store.update(mutated)
+        restored = store.restore_backup(backup["backup_id"])
+        assert restored.title == "Test Chat"
+        assert len(restored.messages) == 2
+        assert restored.messages[0].content == "Hello"
+
+    def test_restore_backup_targets_snapshot(self, store, sample_conversation):
+        store.create(sample_conversation)
+
+        backup_one = store.create_backup("conv001", trigger="manual")
+        first_mutation = store.get("conv001")
+        assert first_mutation is not None
+        first_mutation.title = "After first mutation"
+        store.update(first_mutation)
+
+        backup_two = store.create_backup("conv001", trigger="manual")
+        second_mutation = store.get("conv001")
+        assert second_mutation is not None
+        second_mutation.title = "Latest state"
+        store.update(second_mutation)
+
+        assert backup_one["backup_id"] != backup_two["backup_id"]
+        assert backup_one["conversation_id"] == "conv001"
+        assert backup_two["conversation_id"] == "conv001"
+        assert backup_one["created_at"] <= backup_two["created_at"]
+
+        restored_first = store.restore_backup(backup_one["backup_id"])
+        assert restored_first.title == "Test Chat"
+
+        restored_second = store.restore_backup(backup_two["backup_id"])
+        assert restored_second.title == "After first mutation"
+
+    def test_restore_backup_is_isolated_per_conversation(self, store, sample_conversation):
+        store.create(sample_conversation)
+        other = Conversation(
+            conversation_id="conv002",
+            title="Other Chat",
+            messages=[Message(role=MessageRole.USER, content="other")],
+        )
+        store.create(other)
+
+        backup_one = store.create_backup("conv001", trigger="manual")
+        backup_two = store.create_backup("conv002", trigger="manual")
+
+        conv_one = store.get("conv001")
+        conv_two = store.get("conv002")
+        assert conv_one is not None
+        assert conv_two is not None
+        conv_one.title = "Conv one mutated"
+        conv_two.title = "Conv two mutated"
+        store.update(conv_one)
+        store.update(conv_two)
+
+        restored_two = store.restore_backup(backup_two["backup_id"])
+        current_one = store.get("conv001")
+        assert current_one is not None
+
+        assert backup_one["conversation_id"] == "conv001"
+        assert backup_two["conversation_id"] == "conv002"
+        assert restored_two.conversation_id == "conv002"
+        assert restored_two.title == "Other Chat"
+        assert current_one.title == "Conv one mutated"
 
 
 class TestJsonStoreIndexRebuild:

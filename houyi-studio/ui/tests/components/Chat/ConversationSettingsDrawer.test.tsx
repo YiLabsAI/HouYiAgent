@@ -178,4 +178,20 @@ describe('ConversationSettingsDrawer', () => {
     expect(onClose).toHaveBeenCalled();
     expect(onOpenGlobal).toHaveBeenCalled();
   });
+
+  it('shows max tokens explanation tooltip', async () => {
+    render(
+      <ConversationSettingsDrawer isOpen={true} onClose={vi.fn()} onOpenGlobalSettings={vi.fn()} />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('conversation-max-tokens-info')).toBeInTheDocument();
+    });
+
+    fireEvent.mouseEnter(screen.getByTestId('conversation-max-tokens-info'));
+
+    expect(screen.getByRole('tooltip')).toHaveTextContent(
+      'Maximum response tokens to generate. Larger values allow longer answers, but leave less room for input context in each request. This does not change the model context window.',
+    );
+  });
 });

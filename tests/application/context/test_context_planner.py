@@ -12,7 +12,6 @@ from houyi.application.context.types import (
     ContextCandidate,
     ContextSelectionPolicy,
     ContextSourceKind,
-    TaskBoundary,
 )
 
 
@@ -192,7 +191,7 @@ class TestContextPlannerUsage:
             ContextBlockType.RECENT,
         ]
 
-    def test_excludes_older_recent_when_current_turn_cannot_fit(self):
+    def test_drops_recent_for_current_turn(self):
         est = TokenEstimator(context_window_override=120, output_reserve=20)
         planner = ContextPlanner(token_estimator=est, system_instructions="Sys")
         current_turn = {"role": "user", "content": "current " + ("x" * 400)}
@@ -207,13 +206,15 @@ class TestContextPlannerUsage:
         assert recent == []
         assert plan.usage.dropped_blocks
         assert "excluded_without_current_turn" in plan.usage.drop_reasons.values()
+        assert plan.usage.dropped_block_details
+        assert plan.usage.dropped_block_details[0].block_type == ContextBlockType.RECENT.value
+        assert plan.usage.dropped_block_details[0].source in {
+            ContextSourceKind.CURRENT_TURN.value,
+            ContextSourceKind.RECENT.value,
+        }
+        assert plan.usage.dropped_block_details[0].token_count > 0
 
-    def test_excludes_recent_candidates_from_different_task_boundary(self, planner):
-        current_boundary = TaskBoundary(
-            boundary_id="boundary-current",
-            task_kind="chat",
-            scope="conversation",
-        )
+    def test_excludes_other_boundary_recent(self, planner):
         candidates = [
             ContextCandidate(
                 source=ContextSourceKind.CURRENT_TURN,
@@ -224,8 +225,6 @@ class TestContextPlannerUsage:
                 metadata={
                     "message_count": 1,
                     "boundary_id": "boundary-current",
-                    "task_kind": "chat",
-                    "scope": "conversation",
                 },
             ),
             ContextCandidate(
@@ -236,8 +235,6 @@ class TestContextPlannerUsage:
                 metadata={
                     "message_count": 1,
                     "boundary_id": "boundary-previous",
-                    "task_kind": "chat",
-                    "scope": "conversation",
                 },
             ),
         ]
@@ -245,10 +242,95 @@ class TestContextPlannerUsage:
         plan = planner.plan(
             messages=[],
             candidates=candidates,
-            task_boundary=current_boundary,
+            boundary_id="boundary-current",
         )
 
         recent = plan.get_blocks_by_type(ContextBlockType.RECENT)
         assert len(recent) == 1
         assert recent[0].content == [{"role": "user", "content": "Current ask"}]
         assert "boundary_excluded" in plan.usage.drop_reasons.values()
+
+    def test_prefers_recent_over_summary(self, estimator):
+        planner = ContextPlanner(
+            token_estimator=estimator,
+            system_instructions="Sys",
+        )
+        candidates = [
+            ContextCandidate(
+                source=ContextSourceKind.SUMMARY,
+                block_type=ContextBlockType.SUMMARY,
+                content="Earlier summary " + ("s " * 800),
+                priority=200,
+            ),
+            ContextCandidate(
+                source=ContextSourceKind.RECENT,
+                block_type=ContextBlockType.RECENT,
+                content=[{"role": "assistant", "content": "Older recent fact"}],
+                priority=100,
+                metadata={"message_count": 1},
+            ),
+            ContextCandidate(
+                source=ContextSourceKind.CURRENT_TURN,
+                block_type=ContextBlockType.RECENT,
+                content=[{"role": "user", "content": "Current ask must survive"}],
+                pinned=True,
+                priority=10,
+                metadata={"message_count": 1},
+            ),
+        ]
+
+        plan = planner.plan(
+            messages=[],
+            candidates=candidates,
+            input_budget=80,
+        )
+
+        recent = plan.get_blocks_by_type(ContextBlockType.RECENT)
+        assert len(recent) == 2
+        assert recent[0].content == [{"role": "assistant", "content": "Older recent fact"}]
+        assert recent[1].content == [{"role": "user", "content": "Current ask must survive"}]
+        assert plan.get_blocks_by_type(ContextBlockType.SUMMARY) == []
+        assert "budget_exceeded" in plan.usage.drop_reasons.values()
+
+    def test_keeps_memory_over_assistant(self, estimator):
+        planner = ContextPlanner(
+            token_estimator=estimator,
+            system_instructions="Sys",
+        )
+        candidates = [
+            ContextCandidate(
+                source=ContextSourceKind.MEMORY,
+                block_type=ContextBlockType.MEMORY,
+                content="Stable memory rule",
+                priority=150,
+            ),
+            ContextCandidate(
+                source=ContextSourceKind.RECENT,
+                block_type=ContextBlockType.RECENT,
+                content=[{"role": "assistant", "content": "Older recent fact " + ("x " * 400)}],
+                priority=160,
+                metadata={"message_count": 1},
+            ),
+            ContextCandidate(
+                source=ContextSourceKind.CURRENT_TURN,
+                block_type=ContextBlockType.RECENT,
+                content=[{"role": "user", "content": "Current ask must survive"}],
+                pinned=True,
+                priority=10,
+                metadata={"message_count": 1},
+            ),
+        ]
+
+        plan = planner.plan(
+            messages=[],
+            candidates=candidates,
+            input_budget=40,
+        )
+
+        recent = plan.get_blocks_by_type(ContextBlockType.RECENT)
+        assert len(recent) == 1
+        assert recent[0].content == [{"role": "user", "content": "Current ask must survive"}]
+        memory = plan.get_blocks_by_type(ContextBlockType.MEMORY)
+        assert len(memory) == 1
+        assert memory[0].content == "Stable memory rule"
+        assert "truncated_to_fit" in plan.usage.drop_reasons.values()

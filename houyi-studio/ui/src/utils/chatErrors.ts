@@ -1,74 +1,64 @@
-export const CHAT_ERROR_SIGNALS = {
-  rateLimit: ['RESOURCE_EXHAUSTED', '429', 'RATE LIMIT', 'RATE_LIMIT'],
-  auth: ['UNAUTHENTICATED', '401'],
-  permission: ['PERMISSION_DENIED', 'FORBIDDEN', '403'],
-  timeout: ['TIMEOUT', 'TIMED OUT', 'DEADLINE_EXCEEDED'],
-  network: ['UNEXPECTED EOF', 'ECONNRESET', 'NETWORK ERROR', 'CONNECTION RESET'],
-} as const;
-
 export const CHAT_ERROR_MESSAGES = {
-  rateLimit:
-    'The model is temporarily rate limited. Please retry in a moment, reduce request frequency, or switch to another model if the issue persists.',
-  auth:
-    'The request failed due to authentication issues. Check the configured credentials before retrying.',
+  rateLimit: 'The model is temporarily rate limited. Please retry in a moment.',
+  auth: 'The request failed due to authentication issues. Check the configured credentials before retrying.',
   permission:
     'The request failed due to missing permissions. Check the configured credentials and project access before retrying.',
-  timeout:
-    'The request timed out before the model finished responding. Please retry or reduce the request size.',
-  network:
-    'The connection to the model was interrupted. Please retry in a moment.',
-  geminiRateLimit:
-    'Gemini is temporarily rate limited. Please retry in a moment, reduce request frequency, or switch to another model if the issue persists.',
-  geminiAuth:
-    'Gemini request failed due to authentication or permission issues. Check the configured Vertex AI credentials and project access.',
-  unknown:
-    'The model request failed. Please retry in a moment.',
+  timeout: 'The request timed out before the model finished responding. Please retry or reduce the request size.',
+  network: 'The connection to the model was interrupted. Please retry in a moment.',
+  unknown: 'The model request failed. Please retry in a moment.',
 } as const;
 
-export type ChatErrorCategory = 'rate_limit' | 'auth' | 'permission' | 'timeout' | 'network' | 'unknown';
+export type ChatErrorCode =
+  | 'provider_rate_limited'
+  | 'provider_auth_failed'
+  | 'provider_permission_denied'
+  | 'provider_timeout'
+  | 'provider_network_error'
+  | 'provider_request_failed';
 export type ChatErrorProvider = 'generic' | 'gemini';
 
-function includesAnySignal(messageUpper: string, signals: readonly string[]): boolean {
-  return signals.some((signal) => messageUpper.includes(signal));
+export interface ChatErrorPayload {
+  error?: string;
+  error_code?: string;
+  public_message?: string;
+  retryable?: boolean;
+  status_code?: number | null;
+  provider_code?: string | null;
 }
 
-export function classifyChatError(raw: string): ChatErrorCategory {
-  const message = raw.trim();
-  const upper = message.toUpperCase();
-
-  if (includesAnySignal(upper, CHAT_ERROR_SIGNALS.rateLimit)) {
-    return 'rate_limit';
+export function classifyChatError(code?: string | null): ChatErrorCode | 'unknown' {
+  switch (code) {
+    case 'provider_rate_limited':
+    case 'provider_auth_failed':
+    case 'provider_permission_denied':
+    case 'provider_timeout':
+    case 'provider_network_error':
+    case 'provider_request_failed':
+      return code;
+    default:
+      return 'unknown';
   }
-  if (includesAnySignal(upper, CHAT_ERROR_SIGNALS.auth)) {
-    return 'auth';
-  }
-  if (includesAnySignal(upper, CHAT_ERROR_SIGNALS.permission)) {
-    return 'permission';
-  }
-  if (includesAnySignal(upper, CHAT_ERROR_SIGNALS.timeout)) {
-    return 'timeout';
-  }
-  if (includesAnySignal(upper, CHAT_ERROR_SIGNALS.network)) {
-    return 'network';
-  }
-  return 'unknown';
 }
 
 export function formatChatErrorMessage(
-  raw: string,
-  provider: ChatErrorProvider = 'generic',
+  payload: string | ChatErrorPayload,
+  _provider: ChatErrorProvider = 'generic',
 ): string {
-  const message = raw.trim();
-  switch (classifyChatError(message)) {
-    case 'rate_limit':
-      return provider === 'gemini' ? CHAT_ERROR_MESSAGES.geminiRateLimit : CHAT_ERROR_MESSAGES.rateLimit;
-    case 'auth':
-      return provider === 'gemini' ? CHAT_ERROR_MESSAGES.geminiAuth : CHAT_ERROR_MESSAGES.auth;
-    case 'permission':
-      return provider === 'gemini' ? CHAT_ERROR_MESSAGES.geminiAuth : CHAT_ERROR_MESSAGES.permission;
-    case 'timeout':
+  if (typeof payload !== 'string' && typeof payload.public_message === 'string' && payload.public_message.trim()) {
+    return payload.public_message.trim();
+  }
+
+  const code = typeof payload === 'string' ? undefined : payload.error_code;
+  switch (classifyChatError(code)) {
+    case 'provider_rate_limited':
+      return CHAT_ERROR_MESSAGES.rateLimit;
+    case 'provider_auth_failed':
+      return CHAT_ERROR_MESSAGES.auth;
+    case 'provider_permission_denied':
+      return CHAT_ERROR_MESSAGES.permission;
+    case 'provider_timeout':
       return CHAT_ERROR_MESSAGES.timeout;
-    case 'network':
+    case 'provider_network_error':
       return CHAT_ERROR_MESSAGES.network;
     default:
       return CHAT_ERROR_MESSAGES.unknown;
@@ -76,8 +66,8 @@ export function formatChatErrorMessage(
 }
 
 export function buildVisibleChatError(
-  raw: string,
+  payload: string | ChatErrorPayload,
   provider: ChatErrorProvider = 'generic',
 ): string {
-  return formatChatErrorMessage(raw, provider);
+  return formatChatErrorMessage(payload, provider);
 }

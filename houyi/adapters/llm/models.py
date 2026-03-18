@@ -15,6 +15,8 @@ Usage:
 
 from __future__ import annotations
 
+import re
+
 # ---------------------------------------------------------------------------
 # Well-known model identifiers (fallback defaults; prefer dynamic fetch)
 # ---------------------------------------------------------------------------
@@ -41,6 +43,13 @@ GEMINI_31_PRO_PREVIEW = "gemini-3.1-pro-preview"
 
 # Moonshot
 KIMI_K2_5 = "moonshotai/Kimi-K2.5"
+
+# MiniMax
+MINIMAX_M25 = "MiniMax-M2.5"
+
+# ZAI / GLM
+GLM_47 = "GLM-4.7"
+GLM_5 = "GLM-5"
 
 # ---------------------------------------------------------------------------
 # Provider identifiers (canonical lowercase keys used in config/env/API)
@@ -95,8 +104,98 @@ MODEL_CONTEXT_WINDOWS: dict[str, int] = {
     CLAUDE_35_SONNET: 200_000,
     CLAUDE_35_HAIKU: 200_000,
     GEMINI_25_PRO: 1_048_576,
+    GEMINI_3_PRO_PREVIEW: 1_048_576,
+    GEMINI_3_FLASH_PREVIEW: 1_048_576,
+    GEMINI_31_PRO_PREVIEW: 1_048_576,
     KIMI_K2_5: 131_072,
+    MINIMAX_M25: 1_000_000,
+    GLM_47: 128_000,
+    GLM_5: 128_000,
 }
+
+MODEL_ID_ALIASES: dict[str, str] = {
+    "moonshotai/kimi-k2.5".lower(): KIMI_K2_5,
+    "zai-org/glm-4.7".lower(): GLM_47,
+    "zai-org/glm-5".lower(): GLM_5,
+}
+
+MODEL_CONTEXT_WINDOW_PATTERNS: tuple[tuple[str, int], ...] = (
+    (DEEPSEEK_V3.lower(), MODEL_CONTEXT_WINDOWS[DEEPSEEK_V3]),
+    (DEEPSEEK_R1.lower(), MODEL_CONTEXT_WINDOWS[DEEPSEEK_R1]),
+    (GPT_4O_MINI.lower(), MODEL_CONTEXT_WINDOWS[GPT_4O_MINI]),
+    (GPT_4O.lower(), MODEL_CONTEXT_WINDOWS[GPT_4O]),
+    (GPT_4_TURBO.lower(), MODEL_CONTEXT_WINDOWS[GPT_4_TURBO]),
+    (GPT_35_TURBO.lower(), MODEL_CONTEXT_WINDOWS[GPT_35_TURBO]),
+    (CLAUDE_35_SONNET.lower(), MODEL_CONTEXT_WINDOWS[CLAUDE_35_SONNET]),
+    (CLAUDE_35_HAIKU.lower(), MODEL_CONTEXT_WINDOWS[CLAUDE_35_HAIKU]),
+    (GEMINI_31_PRO_PREVIEW.lower(), MODEL_CONTEXT_WINDOWS[GEMINI_31_PRO_PREVIEW]),
+    (GEMINI_3_PRO_PREVIEW.lower(), MODEL_CONTEXT_WINDOWS[GEMINI_3_PRO_PREVIEW]),
+    (GEMINI_3_FLASH_PREVIEW.lower(), MODEL_CONTEXT_WINDOWS[GEMINI_3_FLASH_PREVIEW]),
+    (GEMINI_25_PRO.lower(), MODEL_CONTEXT_WINDOWS[GEMINI_25_PRO]),
+    (KIMI_K2_5.lower(), MODEL_CONTEXT_WINDOWS[KIMI_K2_5]),
+    (MINIMAX_M25.lower(), MODEL_CONTEXT_WINDOWS[MINIMAX_M25]),
+    (GLM_47.lower(), MODEL_CONTEXT_WINDOWS[GLM_47]),
+    (GLM_5.lower(), MODEL_CONTEXT_WINDOWS[GLM_5]),
+)
+
+
+def normalize_model_id(model: str) -> str:
+    raw = str(model or "").strip()
+    if not raw:
+        return ""
+    without_tag = raw.split(":", 1)[0].strip()
+    alias = MODEL_ID_ALIASES.get(without_tag.lower())
+    if alias:
+        return alias
+    normalized = without_tag
+    if normalized.lower().startswith("pro/"):
+        normalized = normalized.split("/", 1)[1].strip()
+    alias = MODEL_ID_ALIASES.get(normalized.lower())
+    if alias:
+        return alias
+    tail = normalized.rsplit("/", 1)[-1].strip() or normalized
+    alias = MODEL_ID_ALIASES.get(tail.lower())
+    if alias:
+        return alias
+    return tail
+
+
+def _resolve_family_context_window(model_lower: str) -> int | None:
+    if "gemini" in model_lower and (
+        "2.5" in model_lower
+        or "3.1" in model_lower
+        or "3-pro" in model_lower
+        or "3-flash" in model_lower
+        or "flash" in model_lower
+        or "pro" in model_lower
+    ):
+        return 1_048_576
+    if "minimax" in model_lower:
+        return 1_000_000
+    if re.search(r"\bglm[-\s_/]*5\b", model_lower) or re.search(
+        r"\bglm[-\s_/]*4\.7\b", model_lower
+    ):
+        return 128_000
+    if "kimi-k2.5" in model_lower or ("kimi" in model_lower and "2.5" in model_lower):
+        return 131_072
+    return None
+
+
+def resolve_model_context_window(model: str) -> int | None:
+    normalized = normalize_model_id(model)
+    if not normalized:
+        return None
+    if normalized in MODEL_CONTEXT_WINDOWS:
+        return MODEL_CONTEXT_WINDOWS[normalized]
+    model_lower = normalized.lower()
+    alias = MODEL_ID_ALIASES.get(model_lower)
+    if alias and alias in MODEL_CONTEXT_WINDOWS:
+        return MODEL_CONTEXT_WINDOWS[alias]
+    for pattern, value in MODEL_CONTEXT_WINDOW_PATTERNS:
+        if pattern in model_lower or model_lower in pattern:
+            return value
+    return _resolve_family_context_window(model_lower)
+
 
 # Default context window for unknown models
 DEFAULT_CONTEXT_WINDOW: int = 8_192

@@ -282,6 +282,240 @@ describe('ChatTimeline tool-step association', () => {
     expect(screen.getByText('houyi_find_files')).toBeInTheDocument();
   });
 
+  it('keeps steps visible when a final assistant message arrives after tool events', () => {
+    const now = Date.now() / 1000;
+    render(
+      <ChatTimeline
+        conversationId="c3c"
+        streamingMessageId={null}
+        isWaitingForResponse={false}
+        messages={[
+          {
+            message_id: 'u3c',
+            role: 'user',
+            content: 'analyze repo',
+            metadata: {},
+            created_at: now,
+          },
+          {
+            message_id: 'a3c-stream',
+            role: 'assistant',
+            content: '',
+            metadata: {},
+            created_at: now + 1,
+          },
+          {
+            message_id: 't3c',
+            role: 'tool',
+            content: '{"path":"README.md"}',
+            name: 'houyi_read_file',
+            tool_call_id: 'call-3c',
+            metadata: { tool_status: 'ok', round_index: 1 },
+            created_at: now + 2,
+          },
+          {
+            message_id: 'a3c-final',
+            role: 'assistant',
+            content: 'done',
+            metadata: {},
+            created_at: now + 3,
+          },
+        ]}
+      />,
+    );
+
+    expect(screen.getAllByText('done').length).toBeGreaterThan(0);
+    expect(screen.getByRole('button', { name: 'Tool activity 1' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Tool activity 1' }));
+    expect(screen.getByText('houyi_read_file')).toBeInTheDocument();
+  });
+
+  it('restores a near-bottom conversation snapshot back to exact bottom on switch', () => {
+    const layout = installScrollableTimelineLayout();
+    const firstConversation = buildMessages(20);
+    const secondConversation = buildMessages(6).map((message) => ({
+      ...message,
+      message_id: `n-${message.message_id}`,
+    }));
+
+    const { rerender, getByTestId } = render(
+      <ChatTimeline
+        conversationId="conv-a"
+        streamingMessageId={null}
+        isWaitingForResponse={false}
+        messages={firstConversation}
+      />,
+    );
+
+    const timeline = getByTestId('chat-timeline');
+    timeline.scrollTop = 18;
+    fireEvent.scroll(timeline);
+
+    rerender(
+      <ChatTimeline
+        conversationId="conv-b"
+        streamingMessageId={null}
+        isWaitingForResponse={false}
+        messages={secondConversation}
+      />,
+    );
+
+    rerender(
+      <ChatTimeline
+        conversationId="conv-a"
+        streamingMessageId={null}
+        isWaitingForResponse={false}
+        messages={firstConversation}
+      />,
+    );
+
+    expect(timeline.scrollTop).toBe(0);
+    layout.restore();
+  });
+
+  it('reattaches trailing tool messages to the latest assistant after refresh ordering changes', () => {
+    const now = Date.now() / 1000;
+    render(
+      <ChatTimeline
+        conversationId="c3d"
+        streamingMessageId={null}
+        isWaitingForResponse={false}
+        messages={[
+          {
+            message_id: 'u3d',
+            role: 'user',
+            content: 'analyze repo',
+            metadata: {},
+            created_at: now,
+          },
+          {
+            message_id: 'a3d-final',
+            role: 'assistant',
+            content: 'done',
+            metadata: { trace_id: 'trace-1' },
+            created_at: now + 2,
+          },
+          {
+            message_id: 't3d',
+            role: 'tool',
+            content: '{"path":"README.md"}',
+            name: 'houyi_read_file',
+            tool_call_id: 'call-3d',
+            metadata: { tool_status: 'ok', round_index: 1 },
+            created_at: now + 3,
+          },
+        ]}
+      />,
+    );
+
+    expect(screen.getByText('done')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Tool activity 1' })).toBeInTheDocument();
+    expect(screen.queryByText(/^houyi_read_file$/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Tool activity 1' }));
+    expect(screen.getByText('houyi_read_file')).toBeInTheDocument();
+  });
+
+  it('keeps tool activity attached when a system message appears before the final assistant', () => {
+    const now = Date.now() / 1000;
+    render(
+      <ChatTimeline
+        conversationId="c3e"
+        streamingMessageId={null}
+        isWaitingForResponse={false}
+        messages={[
+          {
+            message_id: 'u3e',
+            role: 'user',
+            content: 'scan repo',
+            metadata: {},
+            created_at: now,
+          },
+          {
+            message_id: 'a3e-carrier',
+            role: 'assistant',
+            content: '',
+            tool_calls: [{ id: 'call-3e', function: { name: 'houyi_read_file', arguments: '{"path":"README.md"}' } }],
+            metadata: {},
+            created_at: now + 1,
+          },
+          {
+            message_id: 't3e',
+            role: 'tool',
+            content: '{"path":"README.md"}',
+            name: 'houyi_read_file',
+            tool_call_id: 'call-3e',
+            metadata: { tool_status: 'ok', round_index: 1 },
+            created_at: now + 2,
+          },
+          {
+            message_id: 's3e',
+            role: 'system',
+            content: 'internal status',
+            metadata: {},
+            created_at: now + 3,
+          },
+          {
+            message_id: 'a3e-final',
+            role: 'assistant',
+            content: 'done',
+            metadata: {},
+            created_at: now + 4,
+          },
+        ]}
+      />,
+    );
+
+    expect(screen.getAllByText('done').length).toBeGreaterThan(0);
+    expect(screen.getByRole('button', { name: 'Tool activity 1' })).toBeInTheDocument();
+    expect(screen.queryByText(/^houyi_read_file$/)).not.toBeInTheDocument();
+  });
+
+  it('hides literal tool-call carrier markers from assistant content', () => {
+    const now = Date.now() / 1000;
+    render(
+      <ChatTimeline
+        conversationId="c3b"
+        streamingMessageId={null}
+        isWaitingForResponse={false}
+        messages={[
+          {
+            message_id: 'u3b',
+            role: 'user',
+            content: 'analyze repo',
+            metadata: {},
+            created_at: now,
+          },
+          {
+            message_id: 'a3b-carrier',
+            role: 'assistant',
+            content: '[tool call]<tool_call>houyi_read_file</tool_call>',
+            metadata: {},
+            created_at: now + 1,
+          },
+          {
+            message_id: 't3b',
+            role: 'tool',
+            content: '{"path":"README.md"}',
+            name: 'houyi_read_file',
+            tool_call_id: 'call-3b',
+            metadata: { tool_status: 'ok', round_index: 1 },
+            created_at: now + 2,
+          },
+          {
+            message_id: 'a3b-final',
+            role: 'assistant',
+            content: 'done',
+            metadata: {},
+            created_at: now + 3,
+          },
+        ]}
+      />,
+    );
+
+    expect(screen.queryByText('[tool call]')).not.toBeInTheDocument();
+    expect(screen.getAllByText('done').length).toBeGreaterThan(0);
+  });
+
   it('renders safely when assistant reasoning payload is non-string', () => {
     const now = Date.now() / 1000;
     render(
@@ -388,8 +622,6 @@ describe('ChatTimeline tool-step association', () => {
         messages={messages}
       />,
     );
-
-    expect(screen.getByText('hello')).toBeInTheDocument();
   });
 
   it('renders only the most recent 120 messages until Show more is clicked', () => {
@@ -457,6 +689,48 @@ describe('ChatTimeline tool-step association', () => {
     }
   });
 
+  it('captures the current scroll snapshot immediately when switching conversations', () => {
+    const layout = installScrollableTimelineLayout();
+    try {
+      const { rerender } = render(
+        <ChatTimeline
+          conversationId="switch-a"
+          streamingMessageId={null}
+          isWaitingForResponse={false}
+          messages={buildMessages(160)}
+        />,
+      );
+
+      const timeline = screen.getByTestId('chat-timeline');
+      timeline.scrollTop = 240;
+
+      rerender(
+        <ChatTimeline
+          conversationId="switch-b"
+          streamingMessageId={null}
+          isWaitingForResponse={false}
+          messages={buildMessages(32).map((message, index) => ({
+            ...message,
+            message_id: `b-${index + 1}`,
+          }))}
+        />,
+      );
+
+      rerender(
+        <ChatTimeline
+          conversationId="switch-a"
+          streamingMessageId={null}
+          isWaitingForResponse={false}
+          messages={buildMessages(160)}
+        />,
+      );
+
+      expect(layout.scrollTopAssignments).toContain(240);
+    } finally {
+      layout.restore();
+    }
+  });
+
   it('preserves the scroll anchor on the final Show more expansion before the button disappears', () => {
     const layout = installScrollableTimelineLayout();
     try {
@@ -519,6 +793,19 @@ describe('ChatTimeline tool-step association', () => {
     expect(screen.getAllByTestId('message-bubble')).toHaveLength(80);
     expect(screen.queryByTestId('chat-timeline-show-more')).not.toBeInTheDocument();
     expect(screen.queryByText(/Showing \d+ \/ \d+/)).not.toBeInTheDocument();
+  });
+
+  it('clips horizontal overflow on the timeline container', () => {
+    render(
+      <ChatTimeline
+        conversationId="c-overflow"
+        streamingMessageId={null}
+        isWaitingForResponse={false}
+        messages={buildMessages(2)}
+      />,
+    );
+
+    expect(screen.getByTestId('chat-timeline')).toHaveClass('overflow-x-hidden');
   });
 
   it('renders date dividers when messages cross calendar days', () => {

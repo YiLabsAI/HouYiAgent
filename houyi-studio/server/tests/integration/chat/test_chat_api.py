@@ -6,11 +6,11 @@ Each endpoint has at least happy path + 1 error path.
 
 from __future__ import annotations
 
+import asyncio
 import io
 import json
 import zipfile
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi import FastAPI
@@ -20,40 +20,114 @@ from houyi_studio.server.chat import chat_service as chat_service_module
 from houyi_studio.server.chat.chat_api import register_chat_routes, router
 from houyi_studio.server.chat.chat_service import ChatService
 from houyi_studio.server.chat.json_store import JsonStore
-from houyi_studio.server.chat.settings_store import GlobalSettings, ProviderConfig
+from houyi_studio.server.chat.types import (
+    Attachment,
+    Conversation,
+    ConversationContextState,
+    Message,
+    MessageRole,
+)
 
-from houyi.adapters.llm.base import StreamChunk
 from houyi.adapters.llm.models import GPT_4O
 
+from .chat_test_utils import (
+    cleanup_app_client,
+    create_app_client_store,
+    create_conversation_id,
+    get_registered_chat_service,
+    make_mock_llm,
+)
 
-def _make_mock_llm():
-    """Create a mock LLM adapter that yields predictable content."""
-    mock = AsyncMock()
+_create_conversation_id = create_conversation_id
+_get_registered_chat_service = get_registered_chat_service
 
-    async def mock_stream_chat(messages, model=None, **kwargs):
-        yield StreamChunk(content_delta="Hello ")
-        yield StreamChunk(content_delta="from ")
-        yield StreamChunk(content_delta="mock!")
 
-    mock.stream_chat = mock_stream_chat
-    mock.last_usage = {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
-    mock.last_finish_reason = "stop"
-    return mock
+def _make_trace_span(
+    *,
+    span_id: str = "root",
+    parent_id: str | None = None,
+    start_time: float = 10.0,
+    end_time: float = 10.2,
+    name: str = "chat.send_message",
+    span_type: str = "llm",
+    status: str = "ok",
+    attributes: dict[str, object] | None = None,
+    events: list[object] | None = None,
+    tokens: object | None = None,
+):
+    return SimpleNamespace(
+        span_id=span_id,
+        parent_id=parent_id,
+        start_time=start_time,
+        end_time=end_time,
+        name=name,
+        span_type=span_type,
+        status=status,
+        attributes=attributes or {},
+        events=events or [],
+        tokens=tokens,
+    )
+
+
+def _install_fake_trace_query(monkeypatch, trace_id: str, trace_view: object) -> None:
+    class _FakeObservabilityQuery:
+        def get_trace(self, requested_trace_id: str, include_content: bool = False):
+            if requested_trace_id == trace_id and include_content is False:
+                return trace_view
+            return None
+
+    monkeypatch.setattr(chat_api_module, "ObservabilityQuery", _FakeObservabilityQuery)
+
+
+def _expected_trace_context_contract() -> dict[str, object]:
+    return {
+        "request_context": {
+            "request_id": "msg_req_1",
+            "conversation_id": "conv_1",
+            "model": "deepseek-chat",
+            "max_context_tokens": 8192,
+            "llm_messages_count": 14,
+        },
+        "context_plan": {
+            "used_tokens": 1520,
+            "planned_prompt_tokens": 1520,
+            "reserved_output_tokens": 1024,
+            "available_input_tokens": 5648,
+            "block_breakdown": {"recent": 1200, "pinned": 320},
+        },
+        "context_governance": {
+            "dropped_blocks": ["memory"],
+            "drop_reasons": {"memory": "boundary_excluded"},
+            "dropped_block_details": [
+                {
+                    "candidate_id": "memory",
+                    "block_type": "memory",
+                    "source": "memory",
+                    "token_count": 42,
+                    "message_count": 2,
+                    "pinned": True,
+                }
+            ],
+            "compaction": {
+                "triggered": True,
+                "trigger": "pre_request_pressure",
+                "messages_compacted": 4,
+                "tokens_before": 4800,
+                "tokens_after": 2600,
+                "saved_tokens": 2200,
+                "pin_violation_count": 0,
+            },
+        },
+    }
 
 
 @pytest.fixture
 def app_and_client(tmp_path):
-    """Create FastAPI app with Chat routes and TestClient."""
-    store = JsonStore(data_dir=tmp_path / "conversations")
-    service = ChatService(json_store=store, default_model="test-model")
-    service._default_adapter = _make_mock_llm()
-
-    app = FastAPI()
-    register_chat_routes(service)
-    app.include_router(router)
-
-    client = TestClient(app)
-    return app, client, store
+    app, client, store = create_app_client_store(tmp_path, llm=make_mock_llm())
+    try:
+        yield app, client, store
+    finally:
+        cleanup_app_client(client)
 
 
 class TestCreateConversation:
@@ -68,6 +142,7 @@ class TestCreateConversation:
         assert "conversation_id" in data
         assert data["status"] == "active"
         assert data["message_count"] == 0
+        assert data["active_streaming_state"] is None
 
     def test_create_default_title(self, app_and_client):
         _, client, _ = app_and_client
@@ -110,6 +185,7 @@ class TestListConversations:
         data = resp.json()
         assert data["total"] == 2
         assert len(data["conversations"]) == 2
+        assert all(item["active_streaming_state"] is None for item in data["conversations"])
 
     def test_list_pagination(self, app_and_client):
         _, client, _ = app_and_client
@@ -127,8 +203,7 @@ class TestGetConversation:
 
     def test_get_success(self, app_and_client):
         _, client, _ = app_and_client
-        create_resp = client.post("/api/chat/conversations", json={"title": "Get Test"})
-        conv_id = create_resp.json()["conversation_id"]
+        conv_id = _create_conversation_id(client, title="Get Test")
 
         resp = client.get(f"/api/chat/conversations/{conv_id}")
         assert resp.status_code == 200
@@ -136,11 +211,26 @@ class TestGetConversation:
         assert data["conversation_id"] == conv_id
         assert data["title"] == "Get Test"
         assert "messages" in data
+        assert data["conversation_context_state"] == {
+            "conversation_id": conv_id,
+            "used_units": 0,
+            "max_units": 272000,
+            "state": "healthy",
+            "last_compacted_at": None,
+            "last_compaction_delta": None,
+            "last_compacted_message_count": None,
+            "updated_at": data["conversation_context_state"]["updated_at"],
+        }
+        assert data["active_streaming_state"] is None
 
     def test_get_not_found(self, app_and_client):
         _, client, _ = app_and_client
         resp = client.get("/api/chat/conversations/nonexistent")
         assert resp.status_code == 404
+        detail = resp.json()["detail"]
+        assert detail["error_code"] == "resource_not_found"
+        assert detail["public_message"] == "Conversation nonexistent not found"
+        assert detail["retryable"] is False
 
 
 class TestGetTrace:
@@ -149,28 +239,18 @@ class TestGetTrace:
     def test_get_trace_success(self, app_and_client, monkeypatch):
         _, client, _ = app_and_client
 
-        root = SimpleNamespace(
-            span_id="root",
-            parent_id=None,
-            start_time=10.0,
-            end_time=10.2,
-            name="chat.send_message",
-            span_type="llm",
-            status="ok",
+        root = _make_trace_span(
             attributes={"k": "v"},
             events=[SimpleNamespace(name="started", timestamp=10.0, attributes={"a": 1})],
             tokens=SimpleNamespace(input=100, output=50, total=150),
         )
-        child = SimpleNamespace(
+        child = _make_trace_span(
             span_id="child1",
             parent_id="root",
             start_time=10.05,
             end_time=10.1,
             name="tool.execute",
             span_type="tool",
-            status="ok",
-            attributes={},
-            events=[],
             tokens=SimpleNamespace(input=20, output=10, total=30),
         )
 
@@ -179,14 +259,7 @@ class TestGetTrace:
             spans=[root, child],
             total_duration_ms=200.0,
         )
-
-        class _FakeObservabilityQuery:
-            def get_trace(self, trace_id: str, include_content: bool = False):
-                if trace_id == "trace_123" and include_content is False:
-                    return fake_trace_view
-                return None
-
-        monkeypatch.setattr(chat_api_module, "ObservabilityQuery", _FakeObservabilityQuery)
+        _install_fake_trace_query(monkeypatch, "trace_123", fake_trace_view)
 
         resp = client.get("/api/chat/trace/trace_123")
         assert resp.status_code == 200
@@ -205,6 +278,75 @@ class TestGetTrace:
         assert len(data["root_span"]["children"]) == 1
         assert data["root_span"]["children"][0]["name"] == "tool.execute"
 
+    def test_get_trace_context(self, app_and_client, monkeypatch):
+        _, client, _ = app_and_client
+
+        trace_context = _expected_trace_context_contract()
+        root = _make_trace_span(
+            end_time=10.3,
+            span_type="execution",
+            attributes={
+                "chat.request_id": "msg_req_1",
+                "chat.conversation_id": "conv_1",
+                "chat.model": "deepseek-chat",
+                "chat.context_tokens_max": 8192,
+                "chat.llm_messages_count": 14,
+                "chat.context_tokens_used": 1520,
+                "chat.context_planned_prompt_tokens": 1520,
+                "chat.context_reserved_output_tokens": 1024,
+                "chat.context_available_input_tokens": 5648,
+                "chat.context_blocks": json.dumps(trace_context["context_plan"]["block_breakdown"]),
+                "chat.context_dropped_blocks": json.dumps(
+                    trace_context["context_governance"]["dropped_blocks"]
+                ),
+                "chat.context_drop_reasons": json.dumps(
+                    trace_context["context_governance"]["drop_reasons"]
+                ),
+                "chat.context_dropped_block_details": json.dumps(
+                    trace_context["context_governance"]["dropped_block_details"]
+                ),
+                "chat.compaction.triggered": True,
+                "chat.compaction.trigger": "pre_request_pressure",
+                "chat.compaction.messages_compacted": 4,
+                "chat.compaction.tokens_before": 4800,
+                "chat.compaction.tokens_after": 2600,
+                "chat.compaction.pin_violation_count": 0,
+            },
+        )
+
+        fake_trace_view = SimpleNamespace(
+            trace_id="trace_ctx",
+            spans=[root],
+            total_duration_ms=300.0,
+        )
+        _install_fake_trace_query(monkeypatch, "trace_ctx", fake_trace_view)
+
+        resp = client.get("/api/chat/trace/trace_ctx")
+        assert resp.status_code == 200
+        data = resp.json()
+        attrs = data["root_span"]["attributes"]
+        assert (
+            json.loads(attrs["chat.context_blocks"])
+            == trace_context["context_plan"]["block_breakdown"]
+        )
+        assert (
+            json.loads(attrs["chat.context_drop_reasons"])
+            == trace_context["context_governance"]["drop_reasons"]
+        )
+        assert (
+            json.loads(attrs["chat.context_dropped_block_details"])
+            == trace_context["context_governance"]["dropped_block_details"]
+        )
+        assert attrs["chat.compaction.triggered"] is True
+        assert attrs["chat.compaction.trigger"] == "pre_request_pressure"
+        assert attrs["chat.compaction.messages_compacted"] == 4
+        assert attrs["chat.compaction.tokens_before"] == 4800
+        assert attrs["chat.compaction.tokens_after"] == 2600
+        assert attrs["chat.compaction.pin_violation_count"] == 0
+        assert data["request_context"] == trace_context["request_context"]
+        assert data["context_plan"] == trace_context["context_plan"]
+        assert data["context_governance"] == trace_context["context_governance"]
+
     def test_get_trace_missing(self, app_and_client, monkeypatch):
         _, client, _ = app_and_client
 
@@ -216,7 +358,9 @@ class TestGetTrace:
 
         resp = client.get("/api/chat/trace/missing")
         assert resp.status_code == 404
-        assert "Trace missing not found" in resp.json()["detail"]
+        detail = resp.json()["detail"]
+        assert detail["error_code"] == "trace_not_found"
+        assert detail["public_message"] == "Trace missing not found"
 
 
 class TestUpdateConversation:
@@ -224,8 +368,7 @@ class TestUpdateConversation:
 
     def test_update_title(self, app_and_client):
         _, client, _ = app_and_client
-        create_resp = client.post("/api/chat/conversations", json={"title": "Old Title"})
-        conv_id = create_resp.json()["conversation_id"]
+        conv_id = _create_conversation_id(client, title="Old Title")
 
         resp = client.patch(f"/api/chat/conversations/{conv_id}", json={"title": "New Title"})
         assert resp.status_code == 200
@@ -235,11 +378,11 @@ class TestUpdateConversation:
         _, client, _ = app_and_client
         resp = client.patch("/api/chat/conversations/nonexistent", json={"title": "X"})
         assert resp.status_code == 404
+        assert resp.json()["detail"]["error_code"] == "resource_not_found"
 
     def test_update_status(self, app_and_client):
         _, client, _ = app_and_client
-        create_resp = client.post("/api/chat/conversations", json={})
-        conv_id = create_resp.json()["conversation_id"]
+        conv_id = _create_conversation_id(client)
 
         resp = client.patch(f"/api/chat/conversations/{conv_id}", json={"status": "archived"})
         assert resp.status_code == 200
@@ -247,8 +390,7 @@ class TestUpdateConversation:
 
     def test_bookmark_conversation(self, app_and_client):
         _, client, _ = app_and_client
-        create_resp = client.post("/api/chat/conversations", json={})
-        conv_id = create_resp.json()["conversation_id"]
+        conv_id = _create_conversation_id(client)
 
         # Default: not bookmarked
         get_resp = client.get(f"/api/chat/conversations/{conv_id}")
@@ -269,13 +411,127 @@ class TestUpdateConversation:
         assert resp2.json()["bookmarked"] is False
 
 
+class TestPinnedContextApi:
+    def test_pin_message_to_context(self, app_and_client):
+        _, client, store = app_and_client
+        conversation = Conversation(title="Pinned API")
+        conversation.messages = [
+            Message(
+                message_id="u1",
+                role=MessageRole.USER,
+                content="Please remember the deployment order.",
+            )
+        ]
+        store.create(conversation)
+
+        resp = client.post(
+            f"/api/chat/conversations/{conversation.conversation_id}/messages/u1/pin-context",
+            json={"title": "Deployment order"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["source_message_id"] == "u1"
+        assert data["title"] == "Deployment order"
+        assert data["status"] == "active"
+
+        persisted = store.get(conversation.conversation_id)
+        assert persisted is not None
+        pins = persisted.metadata.get("pinned_contexts")
+        assert isinstance(pins, list)
+        assert len(pins) == 1
+        assert pins[0]["source_message_id"] == "u1"
+
+    def test_list_pins_returns_active_and_inactive(self, app_and_client):
+        _, client, store = app_and_client
+        conversation = Conversation(title="Pinned List")
+        conversation.messages = [
+            Message(message_id="u1", role=MessageRole.USER, content="Rule A"),
+            Message(message_id="u2", role=MessageRole.USER, content="Rule B"),
+        ]
+        store.create(conversation)
+
+        first = client.post(
+            f"/api/chat/conversations/{conversation.conversation_id}/messages/u1/pin-context",
+            json={"title": "Rule A"},
+        )
+        assert first.status_code == 200
+        first_pin_id = first.json()["pin_id"]
+
+        second = client.post(
+            f"/api/chat/conversations/{conversation.conversation_id}/messages/u2/pin-context",
+            json={"title": "Rule B", "replace_pin_id": first_pin_id},
+        )
+        assert second.status_code == 200
+
+        resp = client.get(f"/api/chat/conversations/{conversation.conversation_id}/pins")
+        assert resp.status_code == 200
+        pins = resp.json()["pins"]
+        assert len(pins) == 2
+        by_id = {pin["pin_id"]: pin for pin in pins}
+        assert by_id[first_pin_id]["status"] == "superseded"
+        second_pin_id = second.json()["pin_id"]
+        assert by_id[second_pin_id]["status"] == "active"
+
+        persisted = store.get(conversation.conversation_id)
+        assert persisted is not None
+        persisted_pins = persisted.metadata.get("pinned_contexts")
+        assert isinstance(persisted_pins, list)
+        persisted_by_id = {pin["pin_id"]: pin for pin in persisted_pins}
+        assert persisted_by_id[first_pin_id]["status"] == "superseded"
+        assert persisted_by_id[second_pin_id]["status"] == "active"
+
+    def test_update_pin_status(self, app_and_client):
+        _, client, store = app_and_client
+        conversation = Conversation(title="Pinned Update")
+        conversation.messages = [
+            Message(message_id="u1", role=MessageRole.USER, content="Archive me"),
+        ]
+        store.create(conversation)
+
+        created = client.post(
+            f"/api/chat/conversations/{conversation.conversation_id}/messages/u1/pin-context",
+            json={},
+        )
+        assert created.status_code == 200
+        pin_id = created.json()["pin_id"]
+
+        resp = client.patch(
+            f"/api/chat/conversations/{conversation.conversation_id}/pins/{pin_id}",
+            json={"status": "archived"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["pin_id"] == pin_id
+        assert resp.json()["status"] == "archived"
+
+    def test_pin_message_not_found(self, app_and_client):
+        _, client, _ = app_and_client
+        conv_id = _create_conversation_id(client, title="Missing Message")
+
+        resp = client.post(
+            f"/api/chat/conversations/{conv_id}/messages/missing/pin-context",
+            json={},
+        )
+        assert resp.status_code == 404
+        assert resp.json()["detail"]["error_code"] == "resource_not_found"
+
+    def test_update_pin_not_found(self, app_and_client):
+        _, client, _ = app_and_client
+        conv_id = _create_conversation_id(client, title="Missing Pin")
+
+        resp = client.patch(
+            f"/api/chat/conversations/{conv_id}/pins/missing",
+            json={"status": "removed"},
+        )
+        assert resp.status_code == 404
+        assert resp.json()["detail"]["error_code"] == "resource_not_found"
+
+
 class TestDeleteConversation:
     """DELETE /api/chat/conversations/{id}"""
 
     def test_delete_success(self, app_and_client):
         _, client, _ = app_and_client
-        create_resp = client.post("/api/chat/conversations", json={})
-        conv_id = create_resp.json()["conversation_id"]
+        conv_id = _create_conversation_id(client)
 
         resp = client.delete(f"/api/chat/conversations/{conv_id}")
         assert resp.status_code == 200
@@ -289,148 +545,13 @@ class TestDeleteConversation:
         _, client, _ = app_and_client
         resp = client.delete("/api/chat/conversations/nonexistent")
         assert resp.status_code == 404
+        assert resp.json()["detail"]["error_code"] == "resource_not_found"
 
 
-class TestSendMessage:
-    """POST /api/chat/conversations/{id}/messages"""
-
-    def test_send_message_streams(self, app_and_client):
+class TestCompactConversation:
+    def test_compact_conversation(self, app_and_client):
         _, client, store = app_and_client
-        create_resp = client.post("/api/chat/conversations", json={"title": "SSE Test"})
-        conv_id = create_resp.json()["conversation_id"]
-
-        resp = client.post(
-            f"/api/chat/conversations/{conv_id}/messages",
-            json={"content": "Hello"},
-        )
-        assert resp.status_code == 200
-        assert resp.headers["content-type"].startswith("text/event-stream")
-
-        # Parse SSE events
-        events = _parse_sse_response(resp.text)
-        event_types = [e["event"] for e in events]
-
-        # Must have context.usage, deltas, and finish
-        assert "context.usage" in event_types
-        assert "message.delta" in event_types
-        assert "message.finish" in event_types
-        assert "message.complete" in event_types
-
-        # Verify delta content
-        deltas = [e for e in events if e["event"] == "message.delta"]
-        full_content = "".join(e["data"].get("content", "") for e in deltas)
-        assert "Hello from mock!" in full_content
-
-        complete = next(e for e in events if e["event"] == "message.complete")
-        metadata = complete["data"]["metadata"]
-        assert metadata["usage"]["total_tokens"] == 15
-        assert metadata["usage"]["prompt_tokens"] == 10
-        assert metadata["usage"]["completion_tokens"] == 5
-        assert metadata["usage"]["reasoning_tokens"] == 0
-        assert metadata["usage"]["answer_tokens"] == 5
-        assert metadata["usage"]["cached_prompt_tokens"] == 0
-        assert metadata["usage"]["usage_confidence"] == "reported"
-        assert metadata["finish_reason"] == "stop"
-        assert metadata["first_token_latency_ms"] >= 0
-        assert metadata["generation_time_ms"] >= 0
-        assert metadata["tokens_per_second"] > 0
-        assert metadata["end_to_end_tokens_per_second"] > 0
-        assert metadata["decode_tokens_per_second"] > 0
-
-        finish = next(e for e in events if e["event"] == "message.finish")
-        assert finish["data"]["finish_reason"] == "stop"
-
-        conv = store.get(conv_id)
-        assert conv is not None
-        assert conv.messages[0].metadata["usage"]["input_tokens"] > 0
-        assert conv.messages[1].metadata["usage"]["total_tokens"] == 15
-        assert conv.messages[1].metadata["usage"]["reasoning_tokens"] == 0
-        assert conv.messages[1].metadata["usage"]["answer_tokens"] == 5
-        assert conv.messages[1].metadata["usage"]["cached_prompt_tokens"] == 0
-        assert conv.messages[1].metadata["usage"]["usage_confidence"] == "reported"
-        assert conv.messages[1].metadata["finish_reason"] == "stop"
-        assert conv.messages[1].metadata["first_token_latency_ms"] >= 0
-        assert conv.messages[1].metadata["tokens_per_second"] > 0
-
-    def test_send_message_finish(self, app_and_client, monkeypatch):
-        _, client, store = app_and_client
-        create_resp = client.post("/api/chat/conversations", json={"title": "Finish Reason"})
-        conv_id = create_resp.json()["conversation_id"]
-
-        from houyi_studio.server.chat import chat_api
-
-        service = chat_api._chat_service
-        assert service is not None
-
-        class _AdapterWithLengthStop:
-            last_usage = {"prompt_tokens": 12, "completion_tokens": 8, "total_tokens": 20}
-            last_finish_reason = None
-
-            async def stream_chat(self, *args, **kwargs):
-                _ = (args, kwargs)
-                yield StreamChunk(content_delta="Partial ")
-                yield StreamChunk(content_delta="answer")
-                self.last_finish_reason = "length"
-
-        monkeypatch.setattr(service, "_default_adapter", _AdapterWithLengthStop())
-
-        resp = client.post(
-            f"/api/chat/conversations/{conv_id}/messages",
-            json={"content": "truncate please"},
-        )
-        assert resp.status_code == 200
-
-        events = _parse_sse_response(resp.text)
-        finish = next(e for e in events if e["event"] == "message.finish")
-        complete = next(e for e in events if e["event"] == "message.complete")
-        assert finish["data"]["finish_reason"] == "length"
-        assert complete["data"]["metadata"]["finish_reason"] == "length"
-
-        conv = store.get(conv_id)
-        assert conv is not None
-        assert conv.messages[-1].metadata["finish_reason"] == "length"
-
-    def test_send_message_finish_usage(self, app_and_client, monkeypatch):
-        _, client, _ = app_and_client
-        create_resp = client.post("/api/chat/conversations", json={"title": "Finish Usage"})
-        conv_id = create_resp.json()["conversation_id"]
-
-        from houyi_studio.server.chat import chat_api
-
-        service = chat_api._chat_service
-        assert service is not None
-
-        class _AdapterWithUsage:
-            last_usage = {"input_tokens": 12, "completion_tokens": 8, "reasoning_tokens": 3}
-            last_finish_reason = "stop"
-
-            async def stream_chat(self, *args, **kwargs):
-                _ = (args, kwargs)
-                yield StreamChunk(content_delta="Done")
-
-        monkeypatch.setattr(service, "_default_adapter", _AdapterWithUsage())
-
-        resp = client.post(
-            f"/api/chat/conversations/{conv_id}/messages",
-            json={"content": "hello"},
-        )
-        assert resp.status_code == 200
-
-        events = _parse_sse_response(resp.text)
-        finish = next(e for e in events if e["event"] == "message.finish")
-        complete = next(e for e in events if e["event"] == "message.complete")
-
-        assert finish["data"]["usage"]["prompt_tokens"] == 12
-        assert finish["data"]["usage"]["answer_tokens"] == 5
-        assert complete["data"]["metadata"]["usage"]["prompt_tokens"] == 12
-        assert complete["data"]["metadata"]["usage"]["total_tokens"] == 20
-
-    def test_send_message_emits_context_compacted_and_persists_history_for_repo_intent(
-        self, app_and_client
-    ):
-        _, client, store = app_and_client
-        create_resp = client.post("/api/chat/conversations", json={"title": "Compaction Event"})
-        conv_id = create_resp.json()["conversation_id"]
+        conv_id = _create_conversation_id(client, title="Manual Compact")
 
         conv = store.get(conv_id)
         assert conv is not None
@@ -442,927 +563,102 @@ class TestSendMessage:
             )
             for i in range(1, 8)
         ]
+        max_units = int(chat_service_module._ROLLING_CONTEXT_CAPACITY)
+        conv.conversation_context_state = ConversationContextState(
+            conversation_id=conv.conversation_id,
+            used_units=max_units - 1000,
+            max_units=max_units,
+            state="elevated",
+            updated_at=1.0,
+        )
         store.update(conv)
 
-        resp = client.post(
-            f"/api/chat/conversations/{conv_id}/messages",
-            json={
-                "content": "Read README from https://github.com/foo/bar",
-                "enable_tool_calls": False,
-            },
-        )
+        resp = client.post(f"/api/chat/conversations/{conv_id}/compact")
         assert resp.status_code == 200
-
-        events = _parse_sse_response(resp.text)
-        event_types = [e["event"] for e in events]
-
-        assert "context.compacted" in event_types
-        compacted = next(e for e in events if e["event"] == "context.compacted")
-        compaction = compacted["data"]["compaction"]
-        assert compaction["trigger"] == "repo_intent_trim"
-        assert compaction["metadata"]["reason"] == "repo_intent_recent_window"
-        assert event_types.index("context.compacted") < event_types.index("message.delta")
-        assert compaction["metadata"]["dropped_messages"] == 2
-        assert compaction["metrics"]["messages_compacted"] == 2
-        assert compaction["source_message_ids"] == ["u1", "u2"]
+        data = resp.json()
+        assert data["conversation_id"] == conv_id
+        assert data["applied"] is True
+        assert data["compaction"]["trigger"] == "manual"
 
         persisted = store.get(conv_id)
         assert persisted is not None
         history = persisted.metadata.get("compaction_history")
-        assert isinstance(history, list)
-        assert history
-        assert history[-1]["trigger"] == "repo_intent_trim"
-        assert history[-1]["metadata"]["dropped_messages"] == 2
+        assert isinstance(history, list) and history
+        assert history[-1]["trigger"] == "manual"
 
-    def test_send_message_persists(self, app_and_client, monkeypatch):
-        _, client, store = app_and_client
-        create_resp = client.post("/api/chat/conversations", json={"title": "No Usage Stream"})
-        conv_id = create_resp.json()["conversation_id"]
-
-        from houyi_studio.server.chat import chat_api
-
-        service = chat_api._chat_service
-        assert service is not None
-
-        class _AdapterWithoutUsage:
-            last_usage = None
-            last_finish_reason = None
-
-            async def stream_chat(self, *args, **kwargs):
-                _ = (args, kwargs)
-                yield StreamChunk(content_delta="Final answer")
-                self.last_finish_reason = "stop"
-
-        monkeypatch.setattr(service, "_default_adapter", _AdapterWithoutUsage())
-
-        resp = client.post(
-            f"/api/chat/conversations/{conv_id}/messages",
-            json={"content": "hello"},
-        )
-        assert resp.status_code == 200
-
-        events = _parse_sse_response(resp.text)
-        deltas = [e for e in events if e["event"] == "message.delta"]
-        assert "".join(e["data"].get("content", "") for e in deltas) == "Final answer"
-
-        complete = next(e for e in events if e["event"] == "message.complete")
-        metadata = complete["data"]["metadata"]
-        assert metadata["finish_reason"] == "stop"
-        assert metadata["first_token_latency_ms"] >= 0
-        assert metadata["generation_time_ms"] >= 0
-        assert "tokens_per_second" not in metadata
-
-        conv = store.get(conv_id)
-        assert conv is not None
-        assert conv.messages[-1].content == "Final answer"
-        assert conv.messages[-1].metadata["finish_reason"] == "stop"
-        assert conv.messages[-1].metadata["first_token_latency_ms"] >= 0
-        assert conv.messages[-1].metadata["generation_time_ms"] >= 0
-
-    def test_streams_tool_loop(self, app_and_client, monkeypatch):
-        _, client, store = app_and_client
-        create_resp = client.post("/api/chat/conversations", json={"title": "Tool Loop Replay"})
-        conv_id = create_resp.json()["conversation_id"]
-
-        from houyi_studio.server.chat import chat_api
-
-        service = chat_api._chat_service
-        assert service is not None
-
-        class _AdapterWithStream:
-            last_usage = {"prompt_tokens": 9, "completion_tokens": 6, "total_tokens": 15}
-            stream_calls = 0
-
-            async def chat(self, *args, **kwargs):
-                _ = (args, kwargs)
-                return SimpleNamespace(content="", tool_calls=[], usage={}, metadata={})
-
-            async def stream_chat(self, *args, **kwargs):
-                _ = (args, kwargs)
-                self.stream_calls += 1
-                yield StreamChunk(content_delta="Answer ")
-                yield StreamChunk(content_delta="from ")
-                yield StreamChunk(content_delta="stream")
-
-        class _FakeToolRunner:
-            async def run(self, **kwargs):
-                _ = kwargs
-                return (
-                    SimpleNamespace(
-                        content="Answer from tool loop",
-                        tool_calls=[],
-                        usage={"prompt_tokens": 11, "completion_tokens": 7, "total_tokens": 18},
-                        metadata={"finish_reason": "stop"},
-                    ),
-                    [],
-                )
-
-        adapter = _AdapterWithStream()
-        monkeypatch.setattr(service, "_default_adapter", adapter)
-        monkeypatch.setattr(service, "_get_tool_runner", lambda: _FakeToolRunner())
-        monkeypatch.setattr(
-            chat_service_module.ToolBridge,
-            "collect_tool_schemas",
-            lambda self, skill_filter, include_core: [
-                {"type": "function", "function": {"name": "demo"}}
-            ],
-        )
-        monkeypatch.setattr(
-            chat_service_module.ToolBridge,
-            "collect_skills",
-            lambda self, skill_filter, include_core: [SimpleNamespace(name="demo")],
-        )
-
-        resp = client.post(
-            f"/api/chat/conversations/{conv_id}/messages",
-            json={"content": "hello", "enable_skills": ["demo"]},
-        )
-        assert resp.status_code == 200
-        events = _parse_sse_response(resp.text)
-        deltas = [e for e in events if e["event"] == "message.delta"]
-        assert deltas[0]["data"].get("content", "") == ""
-        assert "".join(e["data"].get("content", "") for e in deltas) == "Answer from tool loop"
-        assert adapter.stream_calls == 0
-
-        finish = next(e for e in events if e["event"] == "message.finish")
-        complete = next(e for e in events if e["event"] == "message.complete")
-        assert finish["data"]["finish_reason"] == "stop"
-        assert complete["data"]["metadata"]["finish_reason"] == "stop"
-        assert complete["data"]["metadata"]["usage"]["total_tokens"] == 18
-        assert complete["data"]["metadata"]["usage"]["reasoning_tokens"] == 0
-        assert complete["data"]["metadata"]["usage"]["answer_tokens"] == 7
-        assert complete["data"]["metadata"]["usage"]["cached_prompt_tokens"] == 0
-        assert complete["data"]["metadata"]["usage"]["usage_confidence"] == "reported"
-
-        conv = store.get(conv_id)
-        assert conv is not None
-        assert conv.messages[-1].metadata["finish_reason"] == "stop"
-
-    def test_tool_loop_shows_error(self, app_and_client, monkeypatch):
-        _, client, store = app_and_client
-        create_resp = client.post("/api/chat/conversations", json={"title": "Tool Loop Error"})
-        conv_id = create_resp.json()["conversation_id"]
-
-        from houyi_studio.server.chat import chat_api
-
-        service = chat_api._chat_service
-        assert service is not None
-
-        class _AdapterWithStream:
-            last_usage = None
-            last_finish_reason = None
-
-            async def chat(self, *args, **kwargs):
-                _ = (args, kwargs)
-                return SimpleNamespace(content="", tool_calls=[], usage={}, metadata={})
-
-            async def stream_chat(self, *args, **kwargs):
-                _ = (args, kwargs)
-                yield StreamChunk(content_delta="should-not-run")
-
-        class _FailingToolRunner:
-            async def run(self, **kwargs):
-                _ = kwargs
-                raise RuntimeError("429 RESOURCE_EXHAUSTED")
-
-        monkeypatch.setattr(service, "_default_adapter", _AdapterWithStream())
-        monkeypatch.setattr(service, "_get_tool_runner", lambda: _FailingToolRunner())
-        monkeypatch.setattr(
-            chat_service_module.ToolBridge,
-            "collect_tool_schemas",
-            lambda self, skill_filter, include_core: [
-                {"type": "function", "function": {"name": "demo"}}
-            ],
-        )
-        monkeypatch.setattr(
-            chat_service_module.ToolBridge,
-            "collect_skills",
-            lambda self, skill_filter, include_core: [SimpleNamespace(name="demo")],
-        )
-
-        resp = client.post(
-            f"/api/chat/conversations/{conv_id}/messages",
-            json={"content": "hello", "enable_skills": ["demo"]},
-        )
-        assert resp.status_code == 200
-
-        events = _parse_sse_response(resp.text)
-        deltas = [e for e in events if e["event"] == "message.delta"]
-        assert any("temporarily rate limited" in e["data"].get("content", "") for e in deltas)
-        assert any(e["event"] == "message.error" for e in events)
-        complete = next(e for e in events if e["event"] == "message.complete")
-        assert complete["data"]["metadata"]["finish_reason"] == "error"
-
-        conv = store.get(conv_id)
-        assert conv is not None
-        assert "temporarily rate limited" in conv.messages[-1].content
-        assert conv.messages[-1].metadata["finish_reason"] == "error"
-
-    def test_emits_tool_events(self, app_and_client, monkeypatch):
+    def test_compact_conversation_missing(self, app_and_client):
         _, client, _ = app_and_client
-        create_resp = client.post("/api/chat/conversations", json={"title": "Tool Lifecycle"})
-        conv_id = create_resp.json()["conversation_id"]
-
-        from houyi_studio.server.chat import chat_api
-
-        service = chat_api._chat_service
-        assert service is not None
-
-        class _AdapterWithStream:
-            last_usage = {"prompt_tokens": 8, "completion_tokens": 4, "total_tokens": 12}
-
-            async def chat(self, *args, **kwargs):
-                _ = (args, kwargs)
-                return SimpleNamespace(content="", tool_calls=[], usage={}, metadata={})
-
-            async def stream_chat(self, *args, **kwargs):
-                _ = (args, kwargs)
-                yield StreamChunk(content_delta="done")
-
-        class _FakeToolRunner:
-            async def run(self, **kwargs):
-                _ = kwargs
-                return (
-                    SimpleNamespace(
-                        content="Done after tools",
-                        tool_calls=[],
-                        usage={"prompt_tokens": 13, "completion_tokens": 9, "total_tokens": 22},
-                        metadata={},
-                    ),
-                    [
-                        {
-                            "tool_call_id": "call_ok",
-                            "tool_name": "demo_ok",
-                            "parallel_group_id": "round_1",
-                            "round_index": 1,
-                            "duration_ms": 1280.0,
-                            "args": {"q": "alpha"},
-                            "result": {"raw": {"success": True, "value": "ok"}},
-                        },
-                        {
-                            "tool_call_id": "call_err",
-                            "tool_name": "demo_err",
-                            "parallel_group_id": "round_1",
-                            "round_index": 1,
-                            "duration_ms": 245.0,
-                            "args": {"q": "beta"},
-                            "result": {"raw": {"error": "boom", "code": "tool_failed"}},
-                        },
-                    ],
-                )
-
-        adapter = _AdapterWithStream()
-        monkeypatch.setattr(service, "_default_adapter", adapter)
-        monkeypatch.setattr(service, "_get_tool_runner", lambda: _FakeToolRunner())
-        monkeypatch.setattr(
-            chat_service_module.ToolBridge,
-            "collect_tool_schemas",
-            lambda self, skill_filter, include_core: [
-                {"type": "function", "function": {"name": "demo_ok"}},
-                {"type": "function", "function": {"name": "demo_err"}},
-            ],
-        )
-        monkeypatch.setattr(
-            chat_service_module.ToolBridge,
-            "collect_skills",
-            lambda self, skill_filter, include_core: [
-                SimpleNamespace(name="demo_ok"),
-                SimpleNamespace(name="demo_err"),
-            ],
-        )
-
-        resp = client.post(
-            f"/api/chat/conversations/{conv_id}/messages",
-            json={"content": "run tools", "enable_skills": ["demo_ok", "demo_err"]},
-        )
-        assert resp.status_code == 200
-
-        events = _parse_sse_response(resp.text)
-        event_types = [e["event"] for e in events]
-        assert "agent.iteration" in event_types
-        assert event_types.count("tool_call.start") == 2
-        assert event_types.count("tool_call.result") == 1
-        assert event_types.count("tool_call.error") == 1
-
-        iteration = next(e for e in events if e["event"] == "agent.iteration")
-        trace_id = iteration["data"]["trace_id"]
-        assert trace_id
-        assert iteration["data"]["round_index"] == 1
-
-        starts = [e for e in events if e["event"] == "tool_call.start"]
-        assert starts[0]["data"]["parallel_group_id"] == "round_1"
-        assert starts[0]["data"]["duration_ms"] == 1280.0
-        assert starts[0]["data"]["tool_call_id"] == "call_ok"
-        assert starts[1]["data"]["tool_call_id"] == "call_err"
-
-        result_evt = next(e for e in events if e["event"] == "tool_call.result")
-        error_evt = next(e for e in events if e["event"] == "tool_call.error")
-        assert result_evt["data"]["trace_id"] == trace_id
-        assert result_evt["data"]["duration_ms"] == 1280.0
-        assert result_evt["data"]["result"]["success"] is True
-        assert error_evt["data"]["trace_id"] == trace_id
-        assert error_evt["data"]["duration_ms"] == 245.0
-        assert error_evt["data"]["error"]["error"] == "boom"
-
-        complete = next(e for e in events if e["event"] == "message.complete")
-        assert complete["data"]["metadata"]["trace_id"] == trace_id
-        assert complete["data"]["metadata"]["usage"]["total_tokens"] == 22
-
-    def test_persists_tool_results(self, app_and_client, monkeypatch):
-        _, client, store = app_and_client
-        create_resp = client.post("/api/chat/conversations", json={"title": "Persist Tool Steps"})
-        conv_id = create_resp.json()["conversation_id"]
-
-        from houyi_studio.server.chat import chat_api
-
-        service = chat_api._chat_service
-        assert service is not None
-
-        class _AdapterWithStream:
-            last_usage = {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8}
-
-            async def chat(self, *args, **kwargs):
-                _ = (args, kwargs)
-                return SimpleNamespace(content="", tool_calls=[], usage={}, metadata={})
-
-            async def stream_chat(self, *args, **kwargs):
-                _ = (args, kwargs)
-                yield StreamChunk(content_delta="final")
-
-        class _FakeToolRunner:
-            async def run(self, **kwargs):
-                messages = kwargs["messages"]
-                messages.extend(
-                    [
-                        {
-                            "role": "assistant",
-                            "content": "",
-                            "tool_calls": [
-                                {
-                                    "id": "call_1",
-                                    "type": "function",
-                                    "function": {
-                                        "name": "demo",
-                                        "arguments": '{"path":"README.md"}',
-                                    },
-                                }
-                            ],
-                        },
-                        {
-                            "role": "tool",
-                            "content": '{"matches":["README.md"]}',
-                            "tool_call_id": "call_1",
-                            "name": "demo",
-                        },
-                    ]
-                )
-                return (
-                    SimpleNamespace(
-                        content="Final answer",
-                        tool_calls=[],
-                        usage={"prompt_tokens": 7, "completion_tokens": 6, "total_tokens": 13},
-                        metadata={},
-                    ),
-                    [
-                        {
-                            "tool_call_id": "call_1",
-                            "tool_name": "demo",
-                            "parallel_group_id": "round_1",
-                            "round_index": 1,
-                            "duration_ms": 321.0,
-                            "args": {"path": "README.md"},
-                            "result": {"raw": {"matches": ["README.md"]}},
-                        }
-                    ],
-                )
-
-        adapter = _AdapterWithStream()
-        monkeypatch.setattr(service, "_default_adapter", adapter)
-        monkeypatch.setattr(service, "_get_tool_runner", lambda: _FakeToolRunner())
-        monkeypatch.setattr(
-            chat_service_module.ToolBridge,
-            "collect_tool_schemas",
-            lambda self, skill_filter, include_core: [
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "demo",
-                        "description": "Demo",
-                        "parameters": {},
-                    },
-                }
-            ],
-        )
-        monkeypatch.setattr(
-            chat_service_module.ToolBridge,
-            "collect_skills",
-            lambda self, skill_filter, include_core: [SimpleNamespace(name="demo")],
-        )
-
-        resp = client.post(
-            f"/api/chat/conversations/{conv_id}/messages",
-            json={"content": "find file", "enable_skills": ["demo"]},
-        )
-        assert resp.status_code == 200
-
-        conv = store.get(conv_id)
-        assert conv is not None
-        assert len(conv.messages) == 4
-
-        user_msg, assistant_carrier, tool_msg, final_assistant = conv.messages
-        assert user_msg.role.value == "user"
-        assert assistant_carrier.role.value == "assistant"
-        assert assistant_carrier.tool_calls is not None
-        assert assistant_carrier.tool_calls[0]["id"] == "call_1"
-        assert assistant_carrier.tool_calls[0]["function"]["name"] == "demo"
-
-        assert tool_msg.role.value == "tool"
-        assert tool_msg.tool_call_id == "call_1"
-        assert tool_msg.name == "demo"
-        assert "README.md" in tool_msg.content
-        assert tool_msg.metadata.get("duration_ms") == 321.0
-        assert tool_msg.metadata.get("parallel_group_id") == "round_1"
-        assert tool_msg.metadata.get("round_index") == 1
-
-        assert final_assistant.role.value == "assistant"
-        assert final_assistant.content == "Final answer"
-        assert final_assistant.metadata.get("usage", {}).get("total_tokens") == 13
-        assert final_assistant.metadata.get("usage", {}).get("reasoning_tokens") == 0
-        assert final_assistant.metadata.get("usage", {}).get("answer_tokens") == 6
-        assert final_assistant.metadata.get("usage", {}).get("cached_prompt_tokens") == 0
-        assert final_assistant.metadata.get("usage", {}).get("usage_confidence") == "reported"
-
-    def test_persists_reasoning_replay(self, app_and_client, monkeypatch):
-        _, client, store = app_and_client
-        create_resp = client.post("/api/chat/conversations", json={"title": "Reasoning Replay"})
-        conv_id = create_resp.json()["conversation_id"]
-
-        from houyi_studio.server.chat import chat_api
-
-        service = chat_api._chat_service
-        assert service is not None
-
-        class _AdapterWithNoFinalStream:
-            last_usage = {"prompt_tokens": 4, "completion_tokens": 2, "total_tokens": 6}
-
-            async def chat(self, *args, **kwargs):
-                _ = (args, kwargs)
-                return SimpleNamespace(content="", tool_calls=[], usage={}, metadata={})
-
-            async def stream_chat(self, *args, **kwargs):
-                _ = (args, kwargs)
-                if False:
-                    yield None
-
-        class _FakeToolRunner:
-            async def run(self, **kwargs):
-                messages = kwargs["messages"]
-                messages.extend(
-                    [
-                        {
-                            "role": "assistant",
-                            "content": "",
-                            "tool_calls": [
-                                {
-                                    "id": "call_reasoning",
-                                    "type": "function",
-                                    "function": {
-                                        "name": "demo",
-                                        "arguments": '{"path":"README.md"}',
-                                    },
-                                }
-                            ],
-                        },
-                        {
-                            "role": "tool",
-                            "content": '{"ok":true}',
-                            "tool_call_id": "call_reasoning",
-                            "name": "demo",
-                        },
-                    ]
-                )
-                return (
-                    SimpleNamespace(
-                        content="",
-                        tool_calls=[],
-                        usage={"prompt_tokens": 8, "completion_tokens": 5, "total_tokens": 13},
-                        metadata={"reasoning_content": "final reasoning only"},
-                    ),
-                    [
-                        {
-                            "tool_call_id": "call_reasoning",
-                            "tool_name": "demo",
-                            "parallel_group_id": "round_1",
-                            "round_index": 1,
-                            "duration_ms": 123.0,
-                            "args": {"path": "README.md"},
-                            "result": {"raw": {"ok": True}},
-                        }
-                    ],
-                )
-
-        adapter = _AdapterWithNoFinalStream()
-        monkeypatch.setattr(service, "_default_adapter", adapter)
-        monkeypatch.setattr(service, "_get_tool_runner", lambda: _FakeToolRunner())
-        monkeypatch.setattr(
-            chat_service_module.ToolBridge,
-            "collect_tool_schemas",
-            lambda self, skill_filter, include_core: [
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "demo",
-                        "description": "Demo",
-                        "parameters": {},
-                    },
-                }
-            ],
-        )
-        monkeypatch.setattr(
-            chat_service_module.ToolBridge,
-            "collect_skills",
-            lambda self, skill_filter, include_core: [SimpleNamespace(name="demo")],
-        )
-
-        resp = client.post(
-            f"/api/chat/conversations/{conv_id}/messages",
-            json={"content": "reason please", "enable_skills": ["demo"]},
-        )
-        assert resp.status_code == 200
-
-        conv = store.get(conv_id)
-        assert conv is not None
-        assert len(conv.messages) == 4
-
-        final_assistant = conv.messages[-1]
-        assert final_assistant.role.value == "assistant"
-        assert final_assistant.content == ""
-        assert final_assistant.reasoning_content == "final reasoning only"
-        assert final_assistant.metadata.get("usage", {}).get("total_tokens") == 13
-
-    def test_send_orphan_ignored(self, app_and_client, monkeypatch):
-        _, client, store = app_and_client
-        create_resp = client.post(
-            "/api/chat/conversations", json={"title": "Historical Orphan Tool"}
-        )
-        conv_id = create_resp.json()["conversation_id"]
-
-        conversation = store.get(conv_id)
-        assert conversation is not None
-        conversation.messages.extend(
-            [
-                chat_service_module.Message(
-                    role=chat_service_module.MessageRole.USER, content="older"
-                ),
-                chat_service_module.Message(
-                    role=chat_service_module.MessageRole.TOOL,
-                    content='{"legacy":true}',
-                    name="legacy_tool",
-                ),
-            ]
-        )
-        store.update(conversation)
-
-        from houyi_studio.server.chat import chat_api
-
-        service = chat_api._chat_service
-        assert service is not None
-
-        class _AdapterWithFinalText:
-            last_usage = {"prompt_tokens": 6, "completion_tokens": 4, "total_tokens": 10}
-            last_finish_reason = "stop"
-
-            async def stream_chat(self, *args, **kwargs):
-                _ = (args, kwargs)
-                yield StreamChunk(content_delta="Recovered answer")
-
-        monkeypatch.setattr(service, "_default_adapter", _AdapterWithFinalText())
-
-        resp = client.post(
-            f"/api/chat/conversations/{conv_id}/messages",
-            json={"content": "continue"},
-        )
-        assert resp.status_code == 200
-
-        events = _parse_sse_response(resp.text)
-        deltas = [e for e in events if e["event"] == "message.delta"]
-        assert "".join(e["data"].get("content", "") for e in deltas) == "Recovered answer"
-
-        updated = store.get(conv_id)
-        assert updated is not None
-        assert updated.messages[-1].content == "Recovered answer"
-
-    def test_send_stream_error(self, app_and_client, monkeypatch):
-        _, client, store = app_and_client
-        create_resp = client.post("/api/chat/conversations", json={"title": "Stream Error Visible"})
-        conv_id = create_resp.json()["conversation_id"]
-
-        from houyi_studio.server.chat import chat_api
-
-        service = chat_api._chat_service
-        assert service is not None
-
-        class _AdapterWithError:
-            last_usage = None
-            last_finish_reason = None
-
-            async def stream_chat(self, *args, **kwargs):
-                _ = (args, kwargs)
-                raise RuntimeError("429 RESOURCE_EXHAUSTED")
-                yield
-
-        monkeypatch.setattr(service, "_default_adapter", _AdapterWithError())
-
-        resp = client.post(
-            f"/api/chat/conversations/{conv_id}/messages",
-            json={"content": "hello"},
-        )
-        assert resp.status_code == 200
-
-        events = _parse_sse_response(resp.text)
-        deltas = [e for e in events if e["event"] == "message.delta"]
-        assert any("temporarily rate limited" in e["data"].get("content", "") for e in deltas)
-        assert any(e["event"] == "message.error" for e in events)
-
-        conv = store.get(conv_id)
-        assert conv is not None
-        assert "temporarily rate limited" in conv.messages[-1].content
-        assert conv.messages[-1].metadata["finish_reason"] == "error"
-
-    def test_send_empty_stream(self, app_and_client, monkeypatch):
-        _, client, store = app_and_client
-        create_resp = client.post("/api/chat/conversations", json={"title": "Empty Stream Visible"})
-        conv_id = create_resp.json()["conversation_id"]
-
-        from houyi_studio.server.chat import chat_api
-
-        service = chat_api._chat_service
-        assert service is not None
-
-        class _AdapterWithEmptyStream:
-            last_usage = {"prompt_tokens": 2, "completion_tokens": 0, "total_tokens": 2}
-            last_finish_reason = "stop"
-
-            async def stream_chat(self, *args, **kwargs):
-                _ = (args, kwargs)
-                if False:
-                    yield None
-
-        monkeypatch.setattr(service, "_default_adapter", _AdapterWithEmptyStream())
-
-        resp = client.post(
-            f"/api/chat/conversations/{conv_id}/messages",
-            json={"content": "hello"},
-        )
-        assert resp.status_code == 200
-
-        events = _parse_sse_response(resp.text)
-        deltas = [e for e in events if e["event"] == "message.delta"]
-        assert any("empty final response" in e["data"].get("content", "") for e in deltas)
-
-        conv = store.get(conv_id)
-        assert conv is not None
-        assert "empty final response" in conv.messages[-1].content
-        assert conv.messages[-1].metadata["finish_reason"] == "stop"
-
-    def test_send_reasoning_persists(self, app_and_client, monkeypatch):
-        _, client, store = app_and_client
-        create_resp = client.post(
-            "/api/chat/conversations", json={"title": "Reasoning Only Stream"}
-        )
-        conv_id = create_resp.json()["conversation_id"]
-
-        from houyi_studio.server.chat import chat_api
-
-        service = chat_api._chat_service
-        assert service is not None
-
-        class _AdapterWithReasoningOnlyStream:
-            last_usage = {"prompt_tokens": 4, "completion_tokens": 3, "total_tokens": 7}
-            last_finish_reason = "stop"
-
-            async def stream_chat(self, *args, **kwargs):
-                _ = (args, kwargs)
-                yield StreamChunk(reasoning_delta="thinking step 1")
-                yield StreamChunk(reasoning_delta=" + step 2")
-
-        monkeypatch.setattr(service, "_default_adapter", _AdapterWithReasoningOnlyStream())
-
-        resp = client.post(
-            f"/api/chat/conversations/{conv_id}/messages",
-            json={"content": "hello"},
-        )
-        assert resp.status_code == 200
-
-        events = _parse_sse_response(resp.text)
-        deltas = [e for e in events if e["event"] == "message.delta"]
-        assert "".join(e["data"].get("content", "") for e in deltas) == ""
-        assert (
-            "".join(e["data"].get("reasoning_content", "") for e in deltas)
-            == "thinking step 1 + step 2"
-        )
-        assert not any("empty final response" in e["data"].get("content", "") for e in deltas)
-
-        conv = store.get(conv_id)
-        assert conv is not None
-        assert conv.messages[-1].content == ""
-        assert conv.messages[-1].reasoning_content == "thinking step 1 + step 2"
-        assert conv.messages[-1].metadata["finish_reason"] == "stop"
-
-    def test_send_message_tooling(self, app_and_client):
-        _, client, _ = app_and_client
-        create_resp = client.post("/api/chat/conversations", json={})
-        conv_id = create_resp.json()["conversation_id"]
-
-        resp = client.post(
-            f"/api/chat/conversations/{conv_id}/messages",
-            json={
-                "content": "Tooling fields",
-                "enable_tool_calls": False,
-                "tool_call_strategy": "aggressive",
-                "enable_skills": ["web_search"],
-                "max_tool_iterations": 3,
-            },
-        )
-        assert resp.status_code == 200
-
-    def test_send_round_limit(self, app_and_client, monkeypatch):
-        _, client, _ = app_and_client
-        create_resp = client.post("/api/chat/conversations", json={"title": "Tool Iteration Limit"})
-        conv_id = create_resp.json()["conversation_id"]
-
-        from houyi_studio.server.chat import chat_api
-
-        service = chat_api._chat_service
-        assert service is not None
-
-        class _CapturedToolRunner:
-            def __init__(self):
-                self.max_rounds = None
-
-            async def run(self, **kwargs):
-                self.max_rounds = kwargs.get("max_rounds")
-                return (
-                    SimpleNamespace(
-                        content="Done",
-                        tool_calls=[],
-                        usage={"prompt_tokens": 5, "completion_tokens": 4, "total_tokens": 9},
-                        metadata={},
-                    ),
-                    [],
-                )
-
-        runner = _CapturedToolRunner()
-        monkeypatch.setattr(service, "_get_tool_runner", lambda: runner)
-        monkeypatch.setattr(
-            chat_service_module.ToolBridge,
-            "collect_tool_schemas",
-            lambda self, skill_filter, include_core: [
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "web_search",
-                        "description": "Web search",
-                        "parameters": {},
-                    },
-                }
-            ],
-        )
-        monkeypatch.setattr(
-            chat_service_module.ToolBridge,
-            "collect_skills",
-            lambda self, skill_filter, include_core: [SimpleNamespace(name="web_search")],
-        )
-
-        resp = client.post(
-            f"/api/chat/conversations/{conv_id}/messages",
-            json={
-                "content": "Tooling fields",
-                "enable_skills": ["web_search"],
-                "max_tool_iterations": 3,
-            },
-        )
-
-        assert resp.status_code == 200
-        assert runner.max_rounds == 3
-
-    def test_send_message_trace(self, app_and_client):
-        _, client, _ = app_and_client
-        create_resp = client.post("/api/chat/conversations", json={"title": "Trace Query"})
-        conv_id = create_resp.json()["conversation_id"]
-
-        resp = client.post(
-            f"/api/chat/conversations/{conv_id}/messages",
-            json={"content": "trace please"},
-        )
-        assert resp.status_code == 200
-
-        events = _parse_sse_response(resp.text)
-        complete = next(e for e in events if e["event"] == "message.complete")
-        trace_id = complete["data"]["metadata"].get("trace_id")
-        assert isinstance(trace_id, str) and trace_id
-
-        trace_resp = client.get(f"/api/chat/trace/{trace_id}")
-        assert trace_resp.status_code == 200
-        trace_data = trace_resp.json()
-        assert trace_data["trace_id"] == trace_id
-        assert trace_data["root_span"] is not None
-
-        root_span = trace_data["root_span"]
-        assert root_span.get("name") == "chat.request"
-        assert root_span.get("span_type") == "node"
-
-        stage_names = {
-            child.get("name")
-            for child in (root_span.get("children") or [])
-            if isinstance(child, dict)
-        }
-        assert "chat.prepare" in stage_names
-        assert "chat.tool_loop" in stage_names
-        assert "chat.persist" in stage_names
-        assert "chat.stream.llm" in stage_names or "chat.stream.replay" in stage_names
-
-    def test_send_message_routes_google(self, app_and_client, monkeypatch):
-        _, client, store = app_and_client
-        create_resp = client.post("/api/chat/conversations", json={"title": "Google AI Route"})
-        conv_id = create_resp.json()["conversation_id"]
-
-        from houyi_studio.server.chat import chat_api
-
-        service = chat_api._chat_service
-        assert service is not None
-        service._adapter_cache.clear()
-        service._settings_store = SimpleNamespace(
-            get=lambda: GlobalSettings(
-                providers=[
-                    ProviderConfig(
-                        id="google-ai-custom",
-                        name="Google AI",
-                        base_url="https://generativelanguage.googleapis.com/v1beta/openai",
-                        models=["gemini-2.5-pro"],
-                        enabled=True,
-                    )
-                ]
-            )
-        )
-
-        class _VertexAdapter:
-            last_usage = {"prompt_tokens": 7, "completion_tokens": 3, "total_tokens": 10}
-            last_finish_reason = "stop"
-
-            async def stream_chat(self, *args, **kwargs):
-                _ = (args, kwargs)
-                yield StreamChunk(content_delta="Vertex path")
-
-        with patch.object(
-            chat_service_module,
-            "create_vertex_adapter",
-            return_value=_VertexAdapter(),
-        ) as mocked:
-            resp = client.post(
-                f"/api/chat/conversations/{conv_id}/messages",
-                json={"content": "route please", "model": "gemini-2.5-pro"},
-            )
-
-        assert resp.status_code == 200
-        mocked.assert_called_once()
-        events = _parse_sse_response(resp.text)
-        deltas = [e for e in events if e["event"] == "message.delta"]
-        assert "".join(e["data"].get("content", "") for e in deltas) == "Vertex path"
-
-        conv = store.get(conv_id)
-        assert conv is not None
-        assert conv.messages[-1].content == "Vertex path"
-
-    def test_send_message_persists(self, app_and_client):
-        _, client, store = app_and_client
-        create_resp = client.post("/api/chat/conversations", json={})
-        conv_id = create_resp.json()["conversation_id"]
-
-        # Send message (consume the stream)
-        client.post(
-            f"/api/chat/conversations/{conv_id}/messages",
-            json={"content": "Test persist"},
-        )
-
-        # Verify persisted
-        conv = store.get(conv_id)
-        assert conv is not None
-        assert len(conv.messages) == 2  # user + assistant
-        assert conv.messages[0].role.value == "user"
-        assert conv.messages[0].content == "Test persist"
-        assert conv.messages[0].metadata["usage"]["input_tokens"] > 0
-        assert conv.messages[1].role.value == "assistant"
-        assert len(conv.messages[1].content) > 0
-        assert conv.messages[1].metadata["usage"]["total_tokens"] == 15
-
-    def test_send_message_missing(self, app_and_client):
-        _, client, _ = app_and_client
-        resp = client.post(
-            "/api/chat/conversations/nonexistent/messages",
-            json={"content": "Hello"},
-        )
+        resp = client.post("/api/chat/conversations/nonexistent/compact")
         assert resp.status_code == 404
+        assert resp.json()["detail"]["error_code"] == "resource_not_found"
+
+    def test_restore_compaction(self, app_and_client):
+        _, client, store = app_and_client
+        conv_id = _create_conversation_id(client, title="Restore Flow")
+
+        conv = store.get(conv_id)
+        assert conv is not None
+        conv.messages = [
+            Message(message_id="u1", role=MessageRole.USER, content="Before compaction"),
+            Message(message_id="a1", role=MessageRole.ASSISTANT, content="Current state"),
+        ]
+        store.update(conv)
+
+        original_backup = store.create_backup(conv_id, trigger="manual")
+
+        conv = store.get(conv_id)
+        assert conv is not None
+        conv.messages = [
+            Message(message_id="u1", role=MessageRole.USER, content="Older state"),
+        ]
+        conv.metadata["compaction_history"] = [
+            {
+                "compaction_id": "cmp_restore_1",
+                "trigger": "manual",
+                "backup_id": original_backup["backup_id"],
+                "summary": "Compacted old history",
+                "source_message_ids": ["u1"],
+                "pinned_message_ids": [],
+                "retained_refs": [],
+                "metrics": {"messages_compacted": 1, "tokens_before": 100, "tokens_after": 50},
+                "created_at": 1.0,
+                "metadata": {},
+            }
+        ]
+        store.update(conv)
+
+        restore_resp = client.post(
+            f"/api/chat/conversations/{conv_id}/compactions/cmp_restore_1/restore"
+        )
+        assert restore_resp.status_code == 200
+        restore_data = restore_resp.json()
+        assert restore_data["status"] == "restored"
+        assert restore_data["restored_compaction_id"] == "cmp_restore_1"
+        restore_point_backup_id = restore_data["restore_point_backup_id"]
+        assert isinstance(restore_point_backup_id, str) and restore_point_backup_id
+
+        restore_point = store.get_backup(restore_point_backup_id)
+        assert restore_point is not None
+        assert restore_point["conversation_id"] == conv_id
+        assert restore_point["trigger"] == "restore_point"
+        assert restore_point["metadata"]["reason"] == "before_restore_compaction"
+        assert restore_point["metadata"]["restored_compaction_id"] == "cmp_restore_1"
+
+        restored_conv = store.get(conv_id)
+        assert restored_conv is not None
+        assert restored_conv.messages[-1].content == "Current state"
+
+        undo_resp = client.post(
+            f"/api/chat/conversations/{conv_id}/backups/{restore_point_backup_id}/restore"
+        )
+        assert undo_resp.status_code == 200
+        undo_data = undo_resp.json()
+        assert undo_data["status"] == "restored"
+        assert undo_data["backup_id"] == restore_point_backup_id
+
+        undone_conv = store.get(conv_id)
+        assert undone_conv is not None
+        assert undone_conv.messages[-1].content == "Older state"
 
 
 class TestImportBackup:
@@ -1398,13 +694,16 @@ class TestImportBackup:
         assert data["success"] is True
         assert data["conversations_imported"] == 1
 
-    def test_import_non_zip(self, app_and_client):
+    def test_import_invalid_file(self, app_and_client):
         _, client, _ = app_and_client
         resp = client.post(
             "/api/chat/import/cherrystudio",
             files={"file": ("backup.txt", io.BytesIO(b"not a zip"), "text/plain")},
         )
         assert resp.status_code == 400
+        detail = resp.json()["detail"]
+        assert detail["error_code"] == "invalid_import_file"
+        assert detail["public_message"] == "Expected a .zip file"
 
     def test_import_empty_file(self, app_and_client):
         _, client, _ = app_and_client
@@ -1413,6 +712,9 @@ class TestImportBackup:
             files={"file": ("backup.zip", io.BytesIO(b""), "application/zip")},
         )
         assert resp.status_code == 400
+        detail = resp.json()["detail"]
+        assert detail["error_code"] == "empty_import_file"
+        assert detail["public_message"] == "Empty file"
 
 
 class TestExportConversations:
@@ -1465,31 +767,6 @@ class TestExportConversations:
         resp = client.get("/api/chat/export")
         assert "content-disposition" in resp.headers
         assert "houyi-chat-export.json" in resp.headers["content-disposition"]
-
-
-# --- Helpers ---
-
-
-def _parse_sse_response(text: str) -> list[dict]:
-    """Parse SSE response text into structured events."""
-    events = []
-    current: dict = {}
-    for line in text.split("\n"):
-        if line.startswith("id: "):
-            current["id"] = line[4:]
-        elif line.startswith("event: "):
-            current["event"] = line[7:]
-        elif line.startswith("data: "):
-            try:
-                current["data"] = json.loads(line[6:])
-            except json.JSONDecodeError:
-                current["data"] = line[6:]
-        elif line == "" and "event" in current:
-            events.append(current)
-            current = {}
-    if "event" in current:
-        events.append(current)
-    return events
 
 
 def _make_backup_zip(data: dict) -> bytes:
@@ -1621,3 +898,407 @@ class TestTraceTreeBuilder:
         tree = _build_trace_tree([root, c2, c1])
         assert tree["children"][0]["name"] == "first"
         assert tree["children"][1]["name"] == "second"
+
+
+class TestChatApiHelpers:
+    def test_get_service(self, monkeypatch):
+        monkeypatch.setattr(chat_api_module, "_chat_service", None)
+        with pytest.raises(RuntimeError, match="ChatService not initialized"):
+            chat_api_module._get_service()
+
+    def test_get_settings(self, monkeypatch):
+        monkeypatch.setattr(chat_api_module, "_settings_store", None)
+        with pytest.raises(RuntimeError, match="SettingsStore not initialized"):
+            chat_api_module._get_settings_store()
+
+    @pytest.mark.asyncio
+    async def test_iter_on_disconnect(self):
+        class _Request:
+            def __init__(self):
+                self.calls = 0
+
+            async def is_disconnected(self):
+                self.calls += 1
+                return self.calls > 1
+
+        class _SlowStream:
+            def __init__(self):
+                self.closed = False
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                await asyncio.sleep(1)
+                return "late"
+
+            async def aclose(self):
+                self.closed = True
+
+        stream = _SlowStream()
+        chunks = []
+        async for chunk in chat_api_module._iter_with_disconnect_guard(
+            request=_Request(),
+            stream=stream,
+            disconnect_log="disconnect",
+        ):
+            chunks.append(chunk)
+        assert chunks == []
+        assert stream.closed is True
+
+    def test_parse_trace(self):
+        assert chat_api_module._parse_trace_json_mapping('{"a":1}') == {"a": 1}
+        assert chat_api_module._parse_trace_json_mapping('["x"]') == {}
+        assert chat_api_module._parse_trace_json_mapping("{bad") == {}
+        assert chat_api_module._parse_trace_json_list('["x"]') == ["x"]
+        assert chat_api_module._parse_trace_json_list('{"a":1}') == []
+        assert chat_api_module._parse_trace_json_list("[bad") == []
+        assert chat_api_module._coerce_int("12") == 12
+        assert chat_api_module._coerce_int("") is None
+        assert chat_api_module._coerce_int("x") is None
+
+    def test_message_preview(self):
+        reasoning = Message(
+            message_id="m1",
+            role=MessageRole.ASSISTANT,
+            content="",
+            reasoning_content="think   hard",
+        )
+        tool_call = Message(
+            message_id="m2",
+            role=MessageRole.ASSISTANT,
+            content="",
+            tool_calls=[{"id": "t1"}],
+        )
+        tool_result = Message(
+            message_id="m3",
+            role=MessageRole.TOOL,
+            content="",
+            tool_call_id="call_1",
+        )
+        attachment = Message(
+            message_id="m4",
+            role=MessageRole.USER,
+            content="",
+            attachments=[
+                Attachment(
+                    filename="a.txt",
+                    mime_type="text/plain",
+                    data="data:text/plain;base64,QQ==",
+                    size=1,
+                )
+            ],
+        )
+        empty = Message(message_id="m5", role=MessageRole.USER, content="")
+
+        previews = chat_api_module._build_message_previews(
+            [reasoning, tool_call, tool_result, attachment, empty],
+            ordered_ids=["m1", "m2", "m3", "m4", "m5", "missing"],
+        )
+        assert [item["message_id"] for item in previews] == ["m1", "m2", "m3", "m4", "m5"]
+        assert previews[0]["preview"] == "think hard"
+        assert previews[1]["preview"] == "[tool calls: 1]"
+        assert previews[2]["preview"] == "[tool result: call_1]"
+        assert previews[3]["preview"] == "[attachments: 1]"
+        assert previews[4]["preview"] == "[empty]"
+
+    def test_compaction_diff_and_history(self, tmp_path):
+        store = JsonStore(data_dir=tmp_path / "helper-store")
+        service = ChatService(json_store=store, default_model="test-model")
+        current = Conversation(
+            conversation_id="conv-helper",
+            title="Helper",
+            messages=[
+                Message(message_id="m2", role=MessageRole.ASSISTANT, content="kept"),
+                Message(message_id="m3", role=MessageRole.USER, content="added later"),
+            ],
+        )
+        backup = Conversation(
+            conversation_id="conv-helper",
+            title="Helper",
+            messages=[
+                Message(message_id="m1", role=MessageRole.USER, content="removed"),
+                Message(message_id="m2", role=MessageRole.ASSISTANT, content="kept"),
+            ],
+        )
+        store.create(current)
+        backup_entry = store.create_backup("conv-helper", trigger="manual")
+        backup_id = backup_entry["backup_id"]
+        backup_path = store._backup_dir / backup_entry["path"]
+        backup_path.write_text(backup.model_dump_json(indent=2), encoding="utf-8")
+
+        diff = chat_api_module._build_compaction_diff(
+            current_conversation=current,
+            backup_conversation=backup,
+            compaction={"source_message_ids": ["m1"], "backup_id": backup_id},
+        )
+        assert diff["removed_message_ids"] == ["m1"]
+        assert diff["added_message_ids"] == ["m3"]
+        assert diff["source_message_previews"][0]["message_id"] == "m1"
+        assert diff["added_message_previews"][0]["message_id"] == "m3"
+
+        history_item = chat_api_module._build_compaction_history_item(
+            service=service,
+            conversation=current,
+            compaction={
+                "compaction_id": "cmp1",
+                "backup_id": backup_id,
+                "source_message_ids": ["m1"],
+            },
+        )
+        assert history_item["backup"]["backup_id"] == backup_id
+        assert history_item["diff"]["removed_message_ids"] == ["m1"]
+
+
+class TestAdditionalChatApiRoutes:
+    def test_seed_messages(self, app_and_client):
+        _, client, _ = app_and_client
+        conv_id = _create_conversation_id(client, title="Seeded")
+        resp = client.post(
+            f"/api/chat/conversations/{conv_id}/_seed-messages",
+            json={"messages": [{"role": "user", "content": "hello"}]},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["seeded"] == 1
+
+        missing = client.post(
+            "/api/chat/conversations/missing/_seed-messages",
+            json={"messages": [{"role": "user", "content": "hello"}]},
+        )
+        assert missing.status_code == 404
+        assert missing.json()["detail"]["error_code"] == "resource_not_found"
+
+    def test_context_usage_endpoint(self, app_and_client):
+        _, client, store = app_and_client
+        conv_id = _create_conversation_id(client, title="Usage")
+        none_resp = client.get(f"/api/chat/conversations/{conv_id}/context-usage")
+        assert none_resp.status_code == 200
+        assert none_resp.json() == {"usage": None}
+
+        conv = store.get(conv_id)
+        assert conv is not None
+        conv.messages = [Message(message_id="u1", role=MessageRole.USER, content="hello " * 40)]
+        store.update(conv)
+
+        usage_resp = client.get(f"/api/chat/conversations/{conv_id}/context-usage")
+        assert usage_resp.status_code == 200
+        assert usage_resp.json()["usage"] is not None
+
+    def test_list_compactions_and_not_found(self, app_and_client):
+        _, client, store = app_and_client
+        conv_id = _create_conversation_id(client, title="Compactions")
+        conv = store.get(conv_id)
+        assert conv is not None
+        conv.metadata["compaction_history"] = [
+            {"compaction_id": "c1", "backup_id": "", "source_message_ids": ["m1"]},
+            {"compaction_id": "c2", "backup_id": "", "source_message_ids": ["m2"]},
+            "ignored",
+        ]
+        store.update(conv)
+
+        resp = client.get(f"/api/chat/conversations/{conv_id}/compactions")
+        assert resp.status_code == 200
+        items = resp.json()["items"]
+        assert [item["compaction"]["compaction_id"] for item in items] == ["c2", "c1"]
+
+        missing = client.get("/api/chat/conversations/missing/compactions")
+        assert missing.status_code == 404
+        assert missing.json()["detail"]["error_code"] == "conversation_not_found"
+
+    def test_restore_compaction(self, app_and_client):
+        _, client, store = app_and_client
+        conv_id = _create_conversation_id(client, title="Restore Edge")
+        conv = store.get(conv_id)
+        assert conv is not None
+
+        missing_conv = client.post("/api/chat/conversations/missing/compactions/c1/restore")
+        assert missing_conv.status_code == 404
+        assert missing_conv.json()["detail"]["error_code"] == "conversation_not_found"
+
+        conv.metadata["compaction_history"] = [{"compaction_id": "c1"}]
+        store.update(conv)
+
+        missing_compaction = client.post(
+            f"/api/chat/conversations/{conv_id}/compactions/nope/restore"
+        )
+        assert missing_compaction.status_code == 404
+        assert missing_compaction.json()["detail"]["error_code"] == "compaction_not_found"
+
+        no_backup = client.post(f"/api/chat/conversations/{conv_id}/compactions/c1/restore")
+        assert no_backup.status_code == 400
+        assert no_backup.json()["detail"]["error_code"] == "compaction_backup_missing"
+
+        conv.metadata["compaction_history"] = [
+            {"compaction_id": "c2", "backup_id": "missing-backup"}
+        ]
+        store.update(conv)
+        missing_backup = client.post(f"/api/chat/conversations/{conv_id}/compactions/c2/restore")
+        assert missing_backup.status_code == 404
+        assert missing_backup.json()["detail"]["error_code"] == "resource_not_found"
+
+        other = Conversation(conversation_id="conv-other", title="Other")
+        store.create(other)
+        foreign_backup = store.create_backup("conv-other", trigger="manual")
+        conv.metadata["compaction_history"] = [
+            {"compaction_id": "c3", "backup_id": foreign_backup["backup_id"]}
+        ]
+        store.update(conv)
+        mismatch = client.post(f"/api/chat/conversations/{conv_id}/compactions/c3/restore")
+        assert mismatch.status_code == 400
+        assert mismatch.json()["detail"]["error_code"] == "backup_conversation_mismatch"
+
+    def test_restore_backup_errors(self, app_and_client):
+        _, client, store = app_and_client
+        conv_id = _create_conversation_id(client, title="Backup Edge")
+
+        missing_conv = client.post("/api/chat/conversations/missing/backups/any/restore")
+        assert missing_conv.status_code == 404
+        assert missing_conv.json()["detail"]["error_code"] == "conversation_not_found"
+
+        missing_backup = client.post(f"/api/chat/conversations/{conv_id}/backups/missing/restore")
+        assert missing_backup.status_code == 404
+        assert missing_backup.json()["detail"]["error_code"] == "backup_not_found"
+
+        other = Conversation(conversation_id="conv-b", title="Other")
+        store.create(other)
+        foreign_backup = store.create_backup("conv-b", trigger="manual")
+        mismatch = client.post(
+            f"/api/chat/conversations/{conv_id}/backups/{foreign_backup['backup_id']}/restore"
+        )
+        assert mismatch.status_code == 400
+        assert mismatch.json()["detail"]["error_code"] == "backup_conversation_mismatch"
+
+    def test_delete_message_error_paths(self, app_and_client, monkeypatch):
+        _, client, _ = app_and_client
+        service = _get_registered_chat_service()
+
+        async def _missing(*args, **kwargs):
+            _ = (args, kwargs)
+            raise FileNotFoundError("missing")
+
+        async def _bad(*args, **kwargs):
+            _ = (args, kwargs)
+            raise ValueError("bad delete")
+
+        monkeypatch.setattr(service, "delete_message", _missing)
+        missing = client.delete("/api/chat/conversations/c1/messages/m1")
+        assert missing.status_code == 404
+        assert missing.json()["detail"]["error_code"] == "resource_not_found"
+
+        monkeypatch.setattr(service, "delete_message", _bad)
+        bad = client.delete("/api/chat/conversations/c1/messages/m1")
+        assert bad.status_code == 400
+        assert bad.json()["detail"]["error_code"] == "invalid_request"
+
+    def test_regenerate_error_paths(self, app_and_client, monkeypatch):
+        _, client, _ = app_and_client
+        service = _get_registered_chat_service()
+
+        async def _missing(*args, **kwargs):
+            _ = (args, kwargs)
+            raise FileNotFoundError("missing")
+            yield
+
+        async def _bad(*args, **kwargs):
+            _ = (args, kwargs)
+            raise ValueError("bad regenerate")
+            yield
+
+        monkeypatch.setattr(service, "regenerate_message", _missing)
+        with pytest.raises(RuntimeError, match="response already started"):
+            client.post("/api/chat/conversations/c1/messages/m1/regenerate")
+
+        monkeypatch.setattr(service, "regenerate_message", _bad)
+        with pytest.raises(RuntimeError, match="response already started"):
+            client.post("/api/chat/conversations/c1/messages/m1/regenerate")
+
+    def test_bookmarks_and_search_routes(self, app_and_client):
+        _, client, store = app_and_client
+        conv = Conversation(
+            conversation_id="conv-search",
+            title="Searchable Title",
+            bookmarked=True,
+            messages=[
+                Message(message_id="m1", role=MessageRole.USER, content="Hello search world")
+            ],
+        )
+        store.create(conv)
+
+        bookmarks = client.get("/api/chat/bookmarks")
+        assert bookmarks.status_code == 200
+        assert any(item["type"] == "conversation" for item in bookmarks.json()["bookmarks"])
+
+        search = client.get("/api/chat/search?q=search&limit=5")
+        assert search.status_code == 200
+        assert search.json()["query"] == "search"
+        assert search.json()["results"]
+
+    def test_settings_models(self, tmp_path, monkeypatch):
+        settings_store = chat_api_module.SettingsStore(tmp_path / "settings.json")
+        service = ChatService(json_store=JsonStore(tmp_path / "conv"), default_model="test-model")
+        app = FastAPI()
+        register_chat_routes(service, settings_store=settings_store)
+        app.include_router(router)
+        client = TestClient(app)
+
+        get_settings = client.get("/api/chat/settings")
+        assert get_settings.status_code == 200
+        assert get_settings.json()["version"] == 1
+
+        put_settings = client.put(
+            "/api/chat/settings",
+            json={
+                "version": 1,
+                "providers": [
+                    {
+                        "id": "p1",
+                        "name": "Provider 1",
+                        "base_url": "https://example.com",
+                        "models": ["m1"],
+                        "enabled": True,
+                        "api_key": "",
+                    }
+                ],
+                "defaults": {
+                    "model": "m1",
+                    "system_instructions": "hi",
+                    "temperature": 0.7,
+                    "max_tokens": 4096,
+                    "stream": True,
+                },
+                "display": {
+                    "user_name": "You",
+                    "user_avatar": None,
+                    "assistant_name": "Assistant",
+                    "assistant_avatar": None,
+                },
+                "updated_at": 0,
+            },
+        )
+        assert put_settings.status_code == 200
+
+        models = client.get("/api/chat/models")
+        assert models.status_code == 200
+        assert models.json()["models"][0]["model"] == "m1"
+
+        class _Probe:
+            async def test_connection(self, base_url, api_key):
+                return {"ok": True, "base_url": base_url, "api_key": api_key}
+
+            async def fetch_models(self, base_url, api_key):
+                return {"models": [{"id": "m1"}], "base_url": base_url, "api_key": api_key}
+
+        monkeypatch.setattr(chat_api_module, "get_probe", lambda provider_id, base_url: _Probe())
+        tested = client.post(
+            "/api/chat/providers/test",
+            json={"base_url": "https://example.com/", "api_key": "key", "provider_id": "p1"},
+        )
+        assert tested.status_code == 200
+        assert tested.json()["base_url"] == "https://example.com"
+
+        fetched = client.post(
+            "/api/chat/providers/fetch-models",
+            json={"base_url": "https://example.com/", "api_key": "key", "provider_id": "p1"},
+        )
+        assert fetched.status_code == 200
+        assert fetched.json()["models"][0]["id"] == "m1"

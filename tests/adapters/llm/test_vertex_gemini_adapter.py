@@ -127,6 +127,46 @@ def test_normalize_extracts_tools() -> None:
     assert result.tool_calls[0]["function"]["name"] == "weather"
 
 
+def test_response_with_token_usage() -> None:
+    class _Part:
+        def __init__(self) -> None:
+            self.text = "hi"
+            self.function_call = None
+
+    class _Content:
+        def __init__(self) -> None:
+            self.parts = [_Part()]
+
+    class _Candidate:
+        def __init__(self) -> None:
+            self.content = _Content()
+
+    class _UsageMetadata:
+        def __init__(self) -> None:
+            self.prompt_token_count = 7
+            self.candidates_token_count = 5
+            self.total_token_count = 16
+            self.thoughts_token_count = 3
+            self.cached_content_token_count = 2
+            self.prompt_tokens_details = [{"modality": "TEXT", "token_count": 7}]
+
+    class _Response:
+        def __init__(self) -> None:
+            self.candidates = [_Candidate()]
+            self.usage_metadata = _UsageMetadata()
+
+    adapter = _build_adapter()
+    result = adapter._normalize_response(_Response())
+
+    assert result.usage == {
+        "prompt_tokens": 7,
+        "completion_tokens": 5,
+        "total_tokens": 16,
+        "thinking_tokens": 3,
+        "cache_read_input_tokens": 2,
+    }
+
+
 def test_normalize_keeps_signature() -> None:
     class _FunctionCall:
         def __init__(self) -> None:
@@ -799,6 +839,9 @@ async def test_stream_chat() -> None:
             self.prompt_token_count = 4
             self.candidates_token_count = 2
             self.total_token_count = 6
+            self.thoughts_token_count = 3
+            self.cached_content_token_count = 1
+            self.prompt_tokens_details = [{"modality": "TEXT", "token_count": 4}]
 
     async def _fake_stream(model=None, contents=None, config=None):
         yield _Chunk("hello")
@@ -819,8 +862,61 @@ async def test_stream_chat() -> None:
         chunks.append((chunk.content_delta, chunk.reasoning_delta))
 
     assert chunks == [("hello", None), (" world", None)]
-    assert adapter.last_usage == {"prompt_tokens": 4, "completion_tokens": 2, "total_tokens": 6}
+    assert adapter.last_usage == {
+        "prompt_tokens": 4,
+        "completion_tokens": 2,
+        "total_tokens": 6,
+        "thinking_tokens": 3,
+        "cache_read_input_tokens": 1,
+    }
     assert adapter.last_finish_reason == "stop"
+
+
+@pytest.mark.asyncio
+async def test_no_visible_output(caplog) -> None:
+    pytest.importorskip("google.genai")
+
+    adapter = _build_adapter()
+
+    class _UsageMetadata:
+        def __init__(self) -> None:
+            self.prompt_token_count = 4
+            self.candidates_token_count = 0
+            self.total_token_count = 4
+            self.thoughts_token_count = 0
+            self.cached_content_token_count = 0
+            self.prompt_tokens_details = None
+
+    class _Candidate:
+        def __init__(self) -> None:
+            self.finish_reason = "STOP"
+            self.content = types.SimpleNamespace(parts=[])
+
+    class _Chunk:
+        def __init__(self) -> None:
+            self.candidates = [_Candidate()]
+            self.usage_metadata = _UsageMetadata()
+
+    async def _fake_stream(model=None, contents=None, config=None):
+        _ = (model, contents, config)
+        yield _Chunk()
+
+    class _Models:
+        async def generate_content_stream(self, model=None, contents=None, config=None):
+            return _fake_stream(model, contents, config)
+
+    class _Aio:
+        def __init__(self) -> None:
+            self.models = _Models()
+
+    adapter._client = type("FakeClient", (), {"aio": _Aio()})()
+
+    with caplog.at_level("WARNING"):
+        chunks = [chunk async for chunk in adapter.stream_chat([{"role": "user", "content": "hi"}])]
+
+    assert chunks == []
+    assert adapter.last_finish_reason == "stop"
+    assert "Gemini stream completed without visible output" in caplog.text
 
 
 def test_init_sets_env(monkeypatch) -> None:

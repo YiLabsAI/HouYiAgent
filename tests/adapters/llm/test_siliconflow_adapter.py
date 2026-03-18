@@ -11,7 +11,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from houyi.adapters.llm.siliconflow_adapter import SiliconFlowAdapter
+from houyi.adapters.llm.siliconflow_adapter import (
+    SiliconFlowAdapter,
+    _format_siliconflow_http_error,
+)
 from houyi.infrastructure.config.env_config import EnvConfig
 
 
@@ -143,6 +146,15 @@ class TestSiliconFlowAdapterRoutePath:
         assert chunks == [("ok", None)]
         direct_stream.assert_not_called()
         httpx_stream.assert_called_once()
+
+
+class TestSiliconFlowAdapterErrors:
+    def test_balance_error(self):
+        message = _format_siliconflow_http_error(
+            403,
+            '{"code":30001,"message":"Sorry, your account balance is insufficient","data":null}',
+        )
+        assert "insufficient balance or credits" in message
 
 
 class TestSiliconFlowAdapterHttpxPath:

@@ -17,6 +17,14 @@ class TestToolCallWebSearchHooks:
         assert patch == {"args": {"query": "q", "provider": "tavily"}}
 
     @pytest.mark.asyncio
+    async def test_injects_chat_alias(self) -> None:
+        hook = WebSearchProviderHook(provider="tavily")
+        patch = await hook.before_tool_call(
+            {"tool_name": "houyi_web_search", "args": {"query": "q"}}
+        )
+        assert patch == {"args": {"query": "q", "provider": "tavily"}}
+
+    @pytest.mark.asyncio
     async def test_provider_keeps(self) -> None:
         hook = WebSearchProviderHook(provider="tavily")
         patch = await hook.before_tool_call(
@@ -28,6 +36,14 @@ class TestToolCallWebSearchHooks:
     async def test_cache_injects(self) -> None:
         hook = WebSearchCachePolicyHook(use_cache=False)
         patch = await hook.before_tool_call({"tool_name": "web_search", "args": {"query": "q"}})
+        assert patch == {"args": {"query": "q", "use_cache": False}}
+
+    @pytest.mark.asyncio
+    async def test_cache_injects_chat_alias(self) -> None:
+        hook = WebSearchCachePolicyHook(use_cache=False)
+        patch = await hook.before_tool_call(
+            {"tool_name": "houyi_web_search", "args": {"query": "q"}}
+        )
         assert patch == {"args": {"query": "q", "use_cache": False}}
 
     @pytest.mark.asyncio

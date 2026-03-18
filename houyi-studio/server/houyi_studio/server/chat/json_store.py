@@ -10,6 +10,7 @@ import asyncio
 import json
 import logging
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -60,6 +61,8 @@ class JsonStore:
         """
         self._data_dir = resolve_chat_data_dir(data_dir)
         self._data_dir.mkdir(parents=True, exist_ok=True)
+        self._backup_dir = self._data_dir / "_backups"
+        self._backup_dir.mkdir(parents=True, exist_ok=True)
         self._index: dict[str, dict[str, Any]] = {}
         self._locks: dict[str, asyncio.Lock] = {}
         self._global_lock = asyncio.Lock()
@@ -259,6 +262,85 @@ class JsonStore:
 
         return results[:limit]
 
+    def create_backup(
+        self,
+        conversation_id: str,
+        *,
+        trigger: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        file_path = self._file_path(conversation_id)
+        if not file_path.exists():
+            raise FileNotFoundError(f"Conversation {conversation_id} not found")
+        backup_id = uuid.uuid4().hex[:12]
+        created_at = time.time()
+        backup_filename = f"{conversation_id}--{backup_id}.json"
+        backup_path = self._backup_dir / backup_filename
+        tmp_path = backup_path.with_suffix(".tmp")
+        payload = file_path.read_text(encoding="utf-8")
+        try:
+            tmp_path.write_text(payload, encoding="utf-8")
+            tmp_path.rename(backup_path)
+        except Exception:
+            tmp_path.unlink(missing_ok=True)
+            raise
+        entry = {
+            "backup_id": backup_id,
+            "conversation_id": conversation_id,
+            "trigger": trigger,
+            "created_at": created_at,
+            "path": backup_filename,
+            "record_id": None,
+            "metadata": dict(metadata or {}),
+        }
+        index = self._load_backup_index()
+        index[backup_id] = entry
+        self._write_backup_index(index)
+        return dict(entry)
+
+    def get_backup(self, backup_id: str) -> dict[str, Any] | None:
+        entry = self._load_backup_index().get(backup_id)
+        if not isinstance(entry, dict):
+            return None
+        return dict(entry)
+
+    def list_backups(self, conversation_id: str | None = None) -> list[dict[str, Any]]:
+        backups = list(self._load_backup_index().values())
+        if conversation_id is not None:
+            backups = [
+                item
+                for item in backups
+                if isinstance(item, dict) and item.get("conversation_id") == conversation_id
+            ]
+        return [dict(item) for item in backups]
+
+    def read_backup(self, backup_id: str) -> Conversation:
+        entry = self._load_backup_index().get(backup_id)
+        if not isinstance(entry, dict):
+            raise FileNotFoundError(f"Backup {backup_id} not found")
+        backup_path = self._backup_dir / str(entry.get("path") or "")
+        if not backup_path.exists():
+            raise FileNotFoundError(f"Backup file missing for {backup_id}")
+        return Conversation(**json.loads(backup_path.read_text(encoding="utf-8")))
+
+    def attach_backup_record(self, backup_id: str, *, record_id: str) -> dict[str, Any] | None:
+        index = self._load_backup_index()
+        entry = index.get(backup_id)
+        if not isinstance(entry, dict):
+            return None
+        updated = dict(entry)
+        updated["record_id"] = record_id
+        index[backup_id] = updated
+        self._write_backup_index(index)
+        return dict(updated)
+
+    def restore_backup(self, backup_id: str) -> Conversation:
+        conversation = self.read_backup(backup_id)
+        conversation.updated_at = time.time()
+        self._write_conversation(conversation)
+        self._update_index(conversation)
+        return conversation
+
     def get_bookmarks(self) -> list[dict[str, Any]]:
         """Get all bookmarked conversations and messages.
 
@@ -332,6 +414,9 @@ class JsonStore:
         """Get file path for a conversation."""
         return self._data_dir / f"{conversation_id}.json"
 
+    def _backup_index_path(self) -> Path:
+        return self._backup_dir / "index.json"
+
     def _write_conversation(self, conversation: Conversation) -> None:
         """Atomic write: write to .tmp then rename."""
         file_path = self._file_path(conversation.conversation_id)
@@ -394,6 +479,48 @@ class JsonStore:
             tmp_path.rename(index_path)
         except Exception as e:
             logger.error("Failed to write index: %s", e)
+            tmp_path.unlink(missing_ok=True)
+
+    def _load_backup_index(self) -> dict[str, dict[str, Any]]:
+        index_path = self._backup_index_path()
+        if not index_path.exists():
+            return {}
+        try:
+            data = json.loads(index_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            logger.warning("Failed to read backup index: %s", exc)
+            return {}
+        backups = data.get("backups")
+        if not isinstance(backups, list):
+            return {}
+        result: dict[str, dict[str, Any]] = {}
+        for item in backups:
+            if not isinstance(item, dict):
+                continue
+            backup_id = item.get("backup_id")
+            if isinstance(backup_id, str) and backup_id:
+                result[backup_id] = item
+        return result
+
+    def _write_backup_index(self, index: dict[str, dict[str, Any]]) -> None:
+        index_path = self._backup_index_path()
+        tmp_path = index_path.with_suffix(".tmp")
+        payload = {
+            "backups": sorted(
+                index.values(),
+                key=lambda item: float(item.get("created_at", 0) or 0),
+                reverse=True,
+            ),
+            "updated_at": time.time(),
+        }
+        try:
+            tmp_path.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            tmp_path.rename(index_path)
+        except Exception as exc:
+            logger.error("Failed to write backup index: %s", exc)
             tmp_path.unlink(missing_ok=True)
 
     def _load_index(self) -> None:

@@ -15,6 +15,9 @@ from typing import Any
 from houyi.domain.skill.registry import SkillRegistry
 
 _RELEVANCE_TOKEN_PATTERN = re.compile(r"[a-zA-Z0-9_]{3,}")
+_SKILL_NAME_ALIASES = {
+    "houyi_web_search": "web_search",
+}
 
 
 @dataclass(slots=True)
@@ -104,7 +107,7 @@ class ToolBridge:
             seen: set[int] = set()
             selected: list[Any] = []
             for skill_name in skill_filter:
-                skill = self._registry.get(skill_name)
+                skill = self._resolve_skill(skill_name)
                 if skill is None:
                     continue
                 marker = id(skill)
@@ -118,6 +121,15 @@ class ToolBridge:
         if include_core:
             return list(all_skills)
         return [skill for skill in all_skills if not getattr(skill, "is_core", False)]
+
+    def _resolve_skill(self, skill_name: str) -> Any | None:
+        skill = self._registry.get(skill_name)
+        if skill is not None:
+            return skill
+        alias = _SKILL_NAME_ALIASES.get(skill_name)
+        if not alias:
+            return None
+        return self._registry.get(alias)
 
     def collect_tool_schemas(
         self,

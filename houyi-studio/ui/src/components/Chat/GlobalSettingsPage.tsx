@@ -21,6 +21,7 @@ import {
 } from '@/constants/models';
 import { invalidateModelCache } from '@/hooks/useAvailableModels';
 import { useSettingsStore } from '@/stores/useSettingsStore';
+import { InfoHint } from '@/components/InfoHint';
 
 const API_BASE = '/api/chat';
 
@@ -553,7 +554,13 @@ export const GlobalSettingsPage: React.FC<GlobalSettingsPageProps> = ({ isOpen, 
                     />
                   </div>
                   <div className="flex-1">
-                    <label className="block text-[10px] text-gray-500 mb-0.5">Max Tokens (≥256)</label>
+                    <label className="mb-0.5 flex items-center gap-1 text-[10px] text-gray-500">
+                      <span>Max Tokens (≥256)</span>
+                      <InfoHint
+                        testId="global-max-tokens-info"
+                        content="Maximum response tokens to generate. Larger values allow longer answers, but leave less room for input context in each request. This does not change the model context window."
+                      />
+                    </label>
                     <input
                       type="number"
                       step="256"

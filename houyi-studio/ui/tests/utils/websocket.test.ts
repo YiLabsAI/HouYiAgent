@@ -62,7 +62,7 @@ describe('ConsoleWebSocket heartbeat', () => {
     triggerOpen();
   });
 
-  it('should reply with pong when receiving ping from server', () => {
+  it('replies with pong to ping', () => {
     triggerMessage({ event_type: 'ping' });
 
     expect(sentMessages).toHaveLength(1);
@@ -70,7 +70,7 @@ describe('ConsoleWebSocket heartbeat', () => {
     expect(pong.command_type).toBe('pong');
   });
 
-  it('should not dispatch ping to event handlers', () => {
+  it('skips ping handlers', () => {
     const handler = vi.fn();
     ws.onEvent(handler);
 
@@ -79,7 +79,7 @@ describe('ConsoleWebSocket heartbeat', () => {
     expect(handler).not.toHaveBeenCalled();
   });
 
-  it('should silently consume server_info events', () => {
+  it('skips server info handlers', () => {
     const handler = vi.fn();
     ws.onEvent(handler);
 
@@ -88,7 +88,7 @@ describe('ConsoleWebSocket heartbeat', () => {
     expect(handler).not.toHaveBeenCalled();
   });
 
-  it('should dispatch normal events to handlers', () => {
+  it('dispatches normal events', () => {
     const handler = vi.fn();
     ws.onEvent(handler);
 
@@ -100,7 +100,7 @@ describe('ConsoleWebSocket heartbeat', () => {
     );
   });
 
-  it('should not crash on malformed messages', () => {
+  it('ignores malformed messages', () => {
     const handlers = capturedListeners['message'] || [];
     // Send non-JSON
     expect(() => {
@@ -108,7 +108,7 @@ describe('ConsoleWebSocket heartbeat', () => {
     }).not.toThrow();
   });
 
-  it('should send pong on visibilitychange to visible', () => {
+  it('sends pong when visible', () => {
     // The client sends a proactive pong when the tab becomes visible,
     // resetting the server's liveness timer after background throttling.
     sentMessages.length = 0;
@@ -121,7 +121,7 @@ describe('ConsoleWebSocket heartbeat', () => {
     expect(pongs.length).toBeGreaterThanOrEqual(1);
   });
 
-  it('should clean up timer and listener on disconnect', () => {
+  it('cleans up on disconnect', () => {
     const removeSpy = vi.spyOn(document, 'removeEventListener');
     ws.disconnect();
     expect(removeSpy).toHaveBeenCalledWith('visibilitychange', expect.any(Function));

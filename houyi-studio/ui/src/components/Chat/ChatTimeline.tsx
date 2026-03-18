@@ -37,6 +37,7 @@ type ScrollSnapshot = {
   // Fallback: pixel-based (used when anchor message not found in DOM)
   distFromBottom: number;
   scrollTopSign: 1 | -1;
+  isAtBottom: boolean;
 };
 
 const scrollPositionCache = new Map<string, ScrollSnapshot>();
@@ -44,6 +45,9 @@ const scrollPositionCache = new Map<string, ScrollSnapshot>();
 function getScrollSnapshot(el: HTMLDivElement): ScrollSnapshot {
   const distFromBottom = Math.abs(el.scrollTop);
   const scrollTopSign: 1 | -1 = el.scrollTop < 0 ? -1 : 1;
+  const maxScroll = Math.max(0, el.scrollHeight - el.clientHeight);
+  const clampedDistFromBottom = Math.min(maxScroll, distFromBottom);
+  const isAtBottom = clampedDistFromBottom < 60;
 
   // Find the message closest to the viewport center
   const containerRect = el.getBoundingClientRect();
@@ -65,12 +69,23 @@ function getScrollSnapshot(el: HTMLDivElement): ScrollSnapshot {
     ? closestEl.getBoundingClientRect().top - containerRect.top
     : 0;
 
-  return { anchorMessageId, anchorOffsetFromContainerTop, distFromBottom, scrollTopSign };
+  return {
+    anchorMessageId,
+    anchorOffsetFromContainerTop,
+    distFromBottom: clampedDistFromBottom,
+    scrollTopSign,
+    isAtBottom,
+  };
 }
 
 function restoreScrollFromSnapshot(el: HTMLDivElement, snap: ScrollSnapshot) {
   const maxScroll = Math.max(0, el.scrollHeight - el.clientHeight);
   if (maxScroll === 0) {
+    el.scrollTop = 0;
+    return;
+  }
+
+  if (snap.isAtBottom) {
     el.scrollTop = 0;
     return;
   }
@@ -90,6 +105,10 @@ function restoreScrollFromSnapshot(el: HTMLDivElement, snap: ScrollSnapshot) {
 // Refine scroll position using message anchor after content has fully expanded.
 // Called by ResizeObserver when content-visibility reveals real element heights.
 function refineScrollWithAnchor(el: HTMLDivElement, snap: ScrollSnapshot) {
+  if (snap.isAtBottom) {
+    el.scrollTop = 0;
+    return;
+  }
   if (!snap.anchorMessageId) return;
   const anchor = el.querySelector(`[data-message-id="${snap.anchorMessageId}"]`);
   if (!anchor) return;
@@ -154,10 +173,11 @@ const sliceTimelineItemsByPrimaryCount = (
 };
 
 const sanitizeAssistantToolMarkers = (raw: string): string => {
-  const hasToolMarker = /<\|tool_[^|]+\|>|<tool_call\b|<\/tool_call>|<arg_[^>]+>|<\/?think>/i.test(raw);
+  const hasToolMarker = /\[tool call\]|<\|tool_[^|]+\|>|<tool_call\b|<\/tool_call>|<arg_[^>]+>|<\/?think>/i.test(raw);
   if (!hasToolMarker) return raw;
 
   const stripped = raw
+    .replace(/\[tool call\]/gi, ' ')
     .replace(/<tool_call[^>]*>[\s\S]*?<\/tool_call>/gi, ' ')
     .replace(/<tool_call[^>]*>/gi, ' ')
     .replace(/<\/tool_call>/gi, ' ')
@@ -177,6 +197,7 @@ const sanitizeAssistantToolMarkers = (raw: string): string => {
   if (stripped) return stripped;
 
   return raw
+    .replace(/\[tool call\]/gi, ' ')
     .replace(/<tool_call[^>]*>/gi, ' ')
     .replace(/<\/tool_call>/gi, ' ')
     .replace(/<arg_[^>]+>/gi, ' ')
@@ -304,6 +325,11 @@ const buildTimelineItems = (
       continue;
     }
 
+    if (msg.role === 'system') {
+      items.push({ message: msg, toolSteps: [] });
+      continue;
+    }
+
     if (pendingToolSteps.length > 0) {
       if (!hasOnlySyntheticPendingToolSteps()) {
         for (const step of pendingToolSteps) {
@@ -317,7 +343,7 @@ const buildTimelineItems = (
   }
 
   if (pendingToolSteps.length > 0) {
-    if (latestAssistantCarrier && latestCarrierHasToolCalls) {
+    if (latestAssistantCarrier) {
       const lastIndex = items.length - 1;
       if (lastIndex >= 0 && items[lastIndex].message.message_id === latestAssistantCarrier.message_id) {
         items[lastIndex] = {
@@ -559,6 +585,17 @@ export const ChatTimeline: React.FC<ChatTimelineProps> = ({
 
   // --- 1. Mark pending restore when conversationId changes ---
   React.useLayoutEffect(() => {
+    const previousConversationId = prevConversationIdRef.current;
+    const el = containerRef.current;
+    if (
+      previousConversationId
+      && previousConversationId !== conversationId
+      && el
+      && renderedConvIdRef.current === previousConversationId
+    ) {
+      scrollPositionCache.set(previousConversationId, getScrollSnapshot(el));
+    }
+
     // Do NOT recompute/overwrite the snapshot here.
     // During a conversation switch, the DOM may transiently reset scrollTop
     // (especially with flex-col-reverse), and overwriting the cached snapshot
@@ -794,11 +831,11 @@ export const ChatTimeline: React.FC<ChatTimelineProps> = ({
       onScroll={handleScroll}
       onWheel={handleWheel}
       data-testid="chat-timeline"
-      className="flex-1 overflow-y-auto min-h-0 flex flex-col-reverse"
+      className="flex min-h-0 flex-1 flex-col-reverse overflow-x-hidden overflow-y-auto"
       style={{ scrollbarGutter: 'stable' }}
     >
       {/* Inner wrapper restores visual order: oldest at top, newest at bottom */}
-      <div ref={contentRef} className="py-2">
+      <div ref={contentRef} className="min-w-0 py-2">
         {totalPrimaryTimelineItemCount > shownPrimaryTimelineItemCount && (
           <div className="px-4 py-2">
             <button

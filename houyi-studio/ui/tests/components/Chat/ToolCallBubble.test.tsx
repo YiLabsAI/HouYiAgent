@@ -39,6 +39,35 @@ describe('ToolCallBubble', () => {
 
     expect(screen.queryByText('{"result":"ok"}')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button'));
-    expect(screen.getByText('{"result":"ok"}')).toBeInTheDocument();
+    expect(screen.getByText(/"result": "ok"/)).toBeInTheDocument();
+  });
+
+  it('keeps long meta chips within the bubble width', () => {
+    render(
+      <ToolCallBubble
+        message={{
+          message_id: 'm3',
+          role: 'tool',
+          name: 'houyi_read_file',
+          content: JSON.stringify({ data: { path: '/tmp/file.txt' } }),
+          metadata: {
+            tool_status: 'ok',
+            parallel_group_id: 'parallel-group-with-a-very-long-identifier-that-should-wrap-inside-the-bubble',
+            round_index: 2,
+            duration_ms: 1280,
+          },
+          created_at: 1,
+        } as any}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button'));
+
+    const metaSection = screen.getByText('Meta').parentElement;
+    expect(metaSection).toHaveClass('min-w-0', 'max-w-full');
+    const wrappedMetaValue = screen.getAllByText(/parallel-group-with-a-very-long-identifier/i)
+      .find((node) => node.className.includes('break-all'));
+    expect(wrappedMetaValue).toBeDefined();
+    expect(wrappedMetaValue).toHaveClass('min-w-0', 'break-all');
   });
 });

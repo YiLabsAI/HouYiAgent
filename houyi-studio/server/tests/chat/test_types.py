@@ -45,7 +45,7 @@ class TestMessage:
         llm = msg.to_llm_message()
         assert llm == {"role": "tool", "content": "result"}
 
-    def test_to_llm_message_assistant_keeps_tool_calls(self):
+    def test_assistant_tool_calls(self):
         msg = Message(
             role=MessageRole.ASSISTANT,
             content="",
@@ -62,7 +62,7 @@ class TestMessage:
         assert llm["content"] == ""
         assert llm["tool_calls"] == msg.tool_calls
 
-    def test_to_llm_message_assistant_includes_reasoning_content(self):
+    def test_assistant_keeps_reasoning(self):
         msg = Message(
             role=MessageRole.ASSISTANT,
             content="",
@@ -81,7 +81,7 @@ class TestMessage:
         assert llm["reasoning_content"] == "thinking..."
         assert llm["tool_calls"] == msg.tool_calls
 
-    def test_to_llm_message_tool_keeps_tool_call_id_and_name(self):
+    def test_tool_call_fields(self):
         msg = Message(
             role=MessageRole.TOOL,
             content='{"result":"ok"}',
@@ -140,7 +140,7 @@ class TestAttachment:
         )
         assert att.size == 12345
 
-    def test_message_with_image_attachment_to_llm_message(self):
+    def test_image_attachment(self):
         """Image attachments produce OpenAI multimodal content array."""
         att = Attachment(
             filename="img.png", mime_type="image/png", data="data:image/png;base64,AAAA"
@@ -160,7 +160,7 @@ class TestAttachment:
         txt_part = next(p for p in llm["content"] if p["type"] == "text")
         assert txt_part["text"] == "What is this?"
 
-    def test_message_with_multiple_images(self):
+    def test_multiple_images(self):
         """Multiple image attachments produce multiple image_url parts."""
         att1 = Attachment(filename="a.png", mime_type="image/png", data="data:image/png;base64,A")
         att2 = Attachment(filename="b.jpg", mime_type="image/jpeg", data="data:image/jpeg;base64,B")
@@ -169,7 +169,7 @@ class TestAttachment:
         img_parts = [p for p in llm["content"] if p["type"] == "image_url"]
         assert len(img_parts) == 2
 
-    def test_message_image_only_no_text(self):
+    def test_image_only(self):
         """Image attachment with empty content — no text part."""
         att = Attachment(filename="img.png", mime_type="image/png", data="data:image/png;base64,X")
         msg = Message(role=MessageRole.USER, content="", attachments=[att])
@@ -178,14 +178,14 @@ class TestAttachment:
         assert "image_url" in types
         assert "text" not in types
 
-    def test_message_without_attachments_plain_string(self):
+    def test_plain_string(self):
         """No attachments → plain string content (not array)."""
         msg = Message(role=MessageRole.USER, content="Hello")
         llm = msg.to_llm_message()
         assert llm["content"] == "Hello"
         assert isinstance(llm["content"], str)
 
-    def test_message_pdf_attachment_becomes_text_description(self):
+    def test_pdf_attachment_becomes_text(self):
         """PDF attachments produce a text description (no server-side parser)."""
         att = Attachment(
             filename="doc.pdf",
@@ -218,7 +218,7 @@ class TestAttachment:
         assert "readme.md" in llm["content"]
         assert "Summarize" in llm["content"]
 
-    def test_message_text_file_by_extension(self):
+    def test_text_file_extension(self):
         """Text file detected by extension even with generic MIME."""
         import base64
 
@@ -234,7 +234,7 @@ class TestAttachment:
         assert isinstance(llm["content"], str)
         assert "print('hi')" in llm["content"]
 
-    def test_message_image_vision_false_fallback(self):
+    def test_image_vision_false(self):
         """vision=False: image attachments become text placeholders."""
         att = Attachment(
             filename="img.png", mime_type="image/png", data="data:image/png;base64,AAAA"
@@ -245,7 +245,7 @@ class TestAttachment:
         assert "[Image: img.png]" in llm["content"]
         assert "Describe" in llm["content"]
 
-    def test_message_image_vision_true_sends_image_url(self):
+    def test_image_vision_true(self):
         """vision=True (default): image attachments produce image_url parts."""
         att = Attachment(
             filename="img.png", mime_type="image/png", data="data:image/png;base64,AAAA"
@@ -256,7 +256,7 @@ class TestAttachment:
         types = [p["type"] for p in llm["content"]]
         assert "image_url" in types
 
-    def test_message_mixed_image_and_text_file(self):
+    def test_mixed_image_text(self):
         """Image + text file: image as image_url, text file extracted."""
         import base64
 
@@ -293,7 +293,7 @@ class TestAttachment:
         assert restored.attachments[0].data == "data:image/png;base64,abc"
         assert restored.attachments[0].size == 999
 
-    def test_send_message_request_with_attachments(self):
+    def test_request_attachments(self):
         """SendMessageRequest accepts attachments."""
         att = Attachment(
             filename="img.png", mime_type="image/png", data="data:image/png;base64,X", size=100
@@ -302,7 +302,7 @@ class TestAttachment:
         assert len(req.attachments) == 1
         assert req.attachments[0].filename == "img.png"
 
-    def test_send_message_request_default_no_attachments(self):
+    def test_request_defaults(self):
         """SendMessageRequest defaults to empty attachments."""
         req = SendMessageRequest(content="Hello")
         assert req.attachments == []
@@ -335,7 +335,7 @@ class TestConversation:
         conv = Conversation()
         assert conv.message_count == 0
 
-    def test_visible_message_count_excludes_system_and_tool(self):
+    def test_visible_count(self):
         conv = Conversation(
             messages=[
                 Message(role=MessageRole.SYSTEM, content="sys"),
@@ -455,6 +455,24 @@ class TestConversation:
         assert restored.metadata == {"key": "value"}
         assert restored.schema_version == 1
 
+    def test_roundtrip_compaction(self):
+        conv = Conversation(
+            metadata={
+                "compaction_history": [
+                    {
+                        "compaction_id": "cmp_1",
+                        "trigger": "manual",
+                        "backup_id": "bck_1",
+                        "pressure_level": "high",
+                    }
+                ]
+            }
+        )
+        restored = Conversation(**conv.model_dump(mode="json"))
+        history = restored.metadata["compaction_history"]
+        assert history[0]["backup_id"] == "bck_1"
+        assert history[0]["pressure_level"] == "high"
+
     def test_conversation_status_enum(self):
         assert ConversationStatus.ACTIVE.value == "active"
         assert ConversationStatus.ARCHIVED.value == "archived"
@@ -477,6 +495,10 @@ class TestRequestModels:
         assert req.temperature is None
         assert req.max_tokens is None
 
+    def test_send_message_accepts_deep_research_toggle(self):
+        req = SendMessageRequest(content="Hello", enable_deep_research=True)
+        assert req.enable_deep_research is True
+
     def test_update_conversation_all_none(self):
         req = UpdateConversationRequest()
         assert req.title is None
@@ -493,7 +515,7 @@ class TestRequestModels:
         req = UpdateConversationRequest(stream=False)
         assert req.stream is False
 
-    def test_update_conversation_stream_null_reset(self):
+    def test_update_stream_reset(self):
         req = UpdateConversationRequest.model_validate({"stream": None})
         assert req.stream is None
         raw = req.model_dump(exclude_unset=True)
@@ -503,17 +525,17 @@ class TestRequestModels:
 class TestMessageBookmark:
     """Test message-level bookmark functionality."""
 
-    def test_message_bookmarked_default_false(self):
+    def test_default_false(self):
         """Message.bookmarked defaults to False."""
         msg = Message(role=MessageRole.USER, content="Hello")
         assert msg.bookmarked is False
 
-    def test_message_bookmarked_set_true(self):
+    def test_set_true(self):
         """Message.bookmarked can be set to True."""
         msg = Message(role=MessageRole.USER, content="Hello", bookmarked=True)
         assert msg.bookmarked is True
 
-    def test_message_bookmarked_serialization_roundtrip(self):
+    def test_roundtrip_true(self):
         """bookmarked survives JSON serialization roundtrip."""
         msg = Message(role=MessageRole.USER, content="Hello", bookmarked=True)
         data = msg.model_dump(mode="json")
@@ -521,7 +543,7 @@ class TestMessageBookmark:
         restored = Message(**data)
         assert restored.bookmarked is True
 
-    def test_message_bookmarked_false_serialization(self):
+    def test_roundtrip_false(self):
         """bookmarked=False also survives roundtrip."""
         msg = Message(role=MessageRole.USER, content="Hello")
         data = msg.model_dump(mode="json")
@@ -529,7 +551,7 @@ class TestMessageBookmark:
         restored = Message(**data)
         assert restored.bookmarked is False
 
-    def test_conversation_with_bookmarked_messages(self):
+    def test_conversation_messages(self):
         """Conversation can contain messages with mixed bookmark states."""
         msgs = [
             Message(role=MessageRole.USER, content="Q1", bookmarked=True),
@@ -547,7 +569,7 @@ class TestMessageBookmark:
 class TestTextExtraction:
     """Test text extraction from attachments in to_llm_message."""
 
-    def test_text_file_content_included_in_llm_message(self):
+    def test_text_file(self):
         """Text file content is decoded and included in LLM message."""
         import base64
 
@@ -565,7 +587,7 @@ class TestTextExtraction:
         assert "print('world')" in llm["content"]
         assert "hello.py" in llm["content"]
 
-    def test_json_file_extracted_by_mime(self):
+    def test_json_mime(self):
         """JSON file detected by application/json MIME type."""
         import base64
 
@@ -580,7 +602,7 @@ class TestTextExtraction:
         llm = msg.to_llm_message()
         assert '"key": "value"' in llm["content"]
 
-    def test_binary_pdf_not_text_extracted(self):
+    def test_pdf_binary(self):
         """PDF (binary) falls back to filename description."""
         att = Attachment(
             filename="report.pdf",
@@ -594,7 +616,7 @@ class TestTextExtraction:
         assert "report.pdf" in llm["content"]
         assert "content not extractable" in llm["content"]
 
-    def test_excel_falls_back_to_description(self):
+    def test_excel_fallback(self):
         """Excel file (binary) falls back to filename description."""
         att = Attachment(
             filename="data.xlsx",
@@ -624,7 +646,7 @@ class TestTextExtraction:
         # Should not contain the full 150K chars
         assert len(llm["content"]) < 150_000
 
-    def test_mixed_image_and_text_file_vision_true(self):
+    def test_mixed_vision_true(self):
         """Image + text file with vision=True: image as image_url, text extracted."""
         import base64
 
@@ -645,7 +667,7 @@ class TestTextExtraction:
         text_content = " ".join(p["text"] for p in llm["content"] if p["type"] == "text")
         assert "SELECT * FROM users" in text_content
 
-    def test_mixed_image_and_text_file_vision_false(self):
+    def test_mixed_vision_false(self):
         """Image + text file with vision=False: image placeholder, text extracted."""
         import base64
 

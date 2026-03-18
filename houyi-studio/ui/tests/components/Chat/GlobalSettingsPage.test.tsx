@@ -187,4 +187,23 @@ describe('GlobalSettingsPage', () => {
       expect(assistantNameInputs.length).toBeGreaterThan(0);
     });
   });
+
+  it('shows max tokens explanation tooltip', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => defaultSettings,
+    });
+
+    render(<GlobalSettingsPage isOpen={true} onClose={vi.fn()} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('global-max-tokens-info')).toBeInTheDocument();
+    });
+
+    fireEvent.mouseEnter(screen.getByTestId('global-max-tokens-info'));
+
+    expect(screen.getByRole('tooltip')).toHaveTextContent(
+      'Maximum response tokens to generate. Larger values allow longer answers, but leave less room for input context in each request. This does not change the model context window.',
+    );
+  });
 });

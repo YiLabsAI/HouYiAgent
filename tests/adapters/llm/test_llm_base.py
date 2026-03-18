@@ -14,6 +14,7 @@ from houyi.adapters.llm.base import (
     LLMResponse,
     MessageRole,
     StreamChunk,
+    _normalize_usage,
 )
 
 
@@ -115,7 +116,7 @@ def test_llm_response_serialization():
     assert response_dict["finish_reason"] == "stop"
 
 
-def test_message_role_string_values():
+def test_message_role():
     """Test MessageRole string values."""
     roles = [MessageRole.SYSTEM, MessageRole.USER, MessageRole.ASSISTANT, MessageRole.TOOL]
     role_strings = ["system", "user", "assistant", "tool"]
@@ -124,7 +125,7 @@ def test_message_role_string_values():
         assert role.value == role_str
 
 
-def test_llm_response_with_tool_calls():
+def test_response_with_tool_calls():
     """Test LLMResponse with tool calls."""
     response = LLMResponse(
         content="",
@@ -144,7 +145,7 @@ def test_llm_response_with_tool_calls():
     assert response.finish_reason == "tool_calls"
 
 
-def test_from_raw_dict_preserves_tool_call_extra_fields():
+def test_tool_call_extra_fields():
     """Provider-specific tool call fields (e.g. thought_signature) must survive parsing."""
     raw = {
         "model": "gemini-2.5-pro",
@@ -177,7 +178,7 @@ def test_from_raw_dict_preserves_tool_call_extra_fields():
     assert parsed.tool_calls[0]["function"].get("thought_signature") == "sig-123"
 
 
-def test_from_raw_dict_extracts_reasoning_content_into_metadata():
+def test_from_extracts_reasoning_content():
     raw = {
         "model": "deepseek-chat",
         "choices": [
@@ -204,6 +205,62 @@ def test_from_raw_dict_extracts_reasoning_content_into_metadata():
     parsed = LLMResponse.from_raw_dict(raw)
 
     assert parsed.metadata.get("reasoning_content") == "I should inspect files first"
+
+
+def test_parses_dsml_tool_call():
+    raw = {
+        "model": "deepseek-chat",
+        "choices": [
+            {
+                "finish_reason": "stop",
+                "message": {
+                    "content": "",
+                    "reasoning_content": (
+                        "[tool call]\n\n"
+                        "<｜DSML｜function_calls>\n"
+                        '<｜DSML｜invoke name="houyi_web_search">\n'
+                        '<｜DSML｜parameter name="query" string="true">Articles authored by Von Gosling on InfoQ in 2025</｜DSML｜parameter>\n'
+                        '<｜DSML｜parameter name="search_engine" string="true">bing</｜DSML｜parameter>\n'
+                        '<｜DSML｜parameter name="max_results" string="false">10</｜DSML｜parameter>\n'
+                        "</｜DSML｜invoke>\n"
+                        "</｜DSML｜function_calls>"
+                    ),
+                },
+            }
+        ],
+    }
+
+    parsed = LLMResponse.from_raw_dict(raw)
+
+    assert len(parsed.tool_calls) == 1
+    assert parsed.tool_calls[0]["function"]["name"] == "houyi_web_search"
+    assert parsed.tool_calls[0]["function"]["arguments"] == {
+        "query": "Articles authored by Von Gosling on InfoQ in 2025",
+        "search_engine": "bing",
+        "max_results": 10,
+    }
+    assert parsed.metadata.get("reasoning_content")
+
+
+def test_normalize_usage_for_gemini():
+    class _Usage:
+        prompt_token_count = 14
+        candidates_token_count = 9
+        total_token_count = 23
+        thoughts_token_count = 4
+        cached_content_token_count = 5
+        cache_hit = True
+
+    normalized = _normalize_usage(_Usage())
+
+    assert normalized == {
+        "prompt_token_count": 14,
+        "candidates_token_count": 9,
+        "total_token_count": 23,
+        "thoughts_token_count": 4,
+        "cached_content_token_count": 5,
+        "cache_hit": True,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -252,7 +309,7 @@ class TestLLMAdapterBaseStreamCompletion:
     """Test the base class stream_completion convenience wrapper."""
 
     @pytest.mark.asyncio
-    async def test_stream_completion_delegates_to_stream_chat(self):
+    async def test_stream_completion(self):
         """stream_completion wraps prompt as user message and calls stream_chat."""
         adapter = StubAdapter()
         chunks = []
@@ -274,7 +331,7 @@ class TestLLMAdapterBaseStreamCompletion:
         assert chunks == []
 
     @pytest.mark.asyncio
-    async def test_normalize_messages_with_llm_message(self):
+    async def test_normalize_messages(self):
         """_normalize_messages converts LLMMessage to dict."""
         adapter = StubAdapter()
 

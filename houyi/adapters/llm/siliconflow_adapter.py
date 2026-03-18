@@ -31,7 +31,18 @@ from houyi.adapters.llm.retry import (
 logger = logging.getLogger(__name__)
 
 
-def _format_siliconflow_http_error(status_code: int) -> str:
+def _looks_like_siliconflow_balance_error(error_text: str) -> bool:
+    normalized = str(error_text or "").upper()
+    return "INSUFFICIENT BALANCE" in normalized or '"CODE":30001' in normalized
+
+
+def _format_siliconflow_http_error(status_code: int, error_text: str = "") -> str:
+    if status_code == 403 and _looks_like_siliconflow_balance_error(error_text):
+        return (
+            "SiliconFlow rejected the request because the configured account has "
+            "insufficient balance or credits. Check the provider billing status "
+            "or switch to another API key."
+        )
     if status_code == 400:
         return "SiliconFlow rejected the request as invalid. Please retry or adjust the request payload."
     if status_code == 401:
@@ -281,7 +292,10 @@ class SiliconFlowAdapter(OpenAICompatAdapterBase):
     @staticmethod
     def _parse_httpx_chat_response(response: Any) -> dict[str, Any]:
         if response.status_code >= 400:
-            raise RuntimeError(_format_siliconflow_http_error(int(response.status_code)))
+            error_text = getattr(response, "text", "") or ""
+            raise RuntimeError(
+                _format_siliconflow_http_error(int(response.status_code), error_text)
+            )
         return response.json()
 
     def _chat_retry(self) -> RetryController:
@@ -408,7 +422,7 @@ class SiliconFlowAdapter(OpenAICompatAdapterBase):
             await asyncio.sleep(decision.delay_seconds)
             return True
         logger.error("httpx API error %d: %s", response.status_code, error_text)
-        raise RuntimeError(_format_siliconflow_http_error(int(response.status_code)))
+        raise RuntimeError(_format_siliconflow_http_error(int(response.status_code), error_text))
 
     def _stream_retry(self) -> RetryController:
         return self._new_retry_controller(status_only=False)

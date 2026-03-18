@@ -6,45 +6,50 @@ import {
 } from '@/utils/chatErrors';
 
 describe('chatErrors', () => {
-  it('classifies rate limit errors generically', () => {
-    expect(classifyChatError('429 RESOURCE_EXHAUSTED')).toBe('rate_limit');
+  it('classifies normalized rate limit codes', () => {
+    expect(classifyChatError('provider_rate_limited')).toBe('provider_rate_limited');
   });
 
   it('classifies permission errors separately from auth', () => {
-    expect(classifyChatError('403 PERMISSION_DENIED')).toBe('permission');
+    expect(classifyChatError('provider_permission_denied')).toBe('provider_permission_denied');
   });
 
-  it('classifies network interruption signals', () => {
-    expect(classifyChatError('unavailable: unexpected EOF')).toBe('network');
+  it('returns unknown for unrecognized codes', () => {
+    expect(classifyChatError('unavailable: unexpected EOF')).toBe('unknown');
   });
 
-  it('formats generic timeout errors with provider-agnostic copy', () => {
-    expect(formatChatErrorMessage('request timed out')).toBe(
+  it('formats timeout errors', () => {
+    expect(formatChatErrorMessage({ error_code: 'provider_timeout' })).toBe(
       'The request timed out before the model finished responding. Please retry or reduce the request size.',
     );
   });
 
-  it('formats gemini rate limit errors with provider-specific copy', () => {
-    expect(formatChatErrorMessage('429 RESOURCE_EXHAUSTED', 'gemini')).toBe(
-      'Gemini is temporarily rate limited. Please retry in a moment, reduce request frequency, or switch to another model if the issue persists.',
+  it('prefers backend public messages', () => {
+    expect(
+      formatChatErrorMessage({
+        error_code: 'provider_rate_limited',
+        public_message: 'Backend says retry later.',
+      }, 'gemini'),
+    ).toBe(
+      'Backend says retry later.',
     );
   });
 
-  it('formats gemini auth and permission errors with provider-specific copy', () => {
-    expect(formatChatErrorMessage('403 PERMISSION_DENIED', 'gemini')).toBe(
-      'Gemini request failed due to authentication or permission issues. Check the configured Vertex AI credentials and project access.',
+  it('formats permission errors', () => {
+    expect(formatChatErrorMessage({ error_code: 'provider_permission_denied' }, 'gemini')).toBe(
+      'The request failed due to missing permissions. Check the configured credentials and project access before retrying.',
     );
   });
 
-  it('builds visible fallback errors for unknown messages', () => {
-    expect(buildVisibleChatError('something custom failed')).toBe(
+  it('builds fallback errors', () => {
+    expect(buildVisibleChatError({ error: 'something custom failed' })).toBe(
       'The model request failed. Please retry in a moment.',
     );
   });
 
-  it('does not append raw backend details for known errors', () => {
-    expect(buildVisibleChatError('429 RESOURCE_EXHAUSTED')).toBe(
-      'The model is temporarily rate limited. Please retry in a moment, reduce request frequency, or switch to another model if the issue persists.',
+  it('hides raw details', () => {
+    expect(buildVisibleChatError({ error_code: 'provider_rate_limited', error: '429 RESOURCE_EXHAUSTED' })).toBe(
+      'The model is temporarily rate limited. Please retry in a moment.',
     );
   });
 });

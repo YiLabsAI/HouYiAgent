@@ -584,11 +584,18 @@ class GoogleVertexGeminiAdapter(LLMAdapter):
         usage_metadata = getattr(chunk, "usage_metadata", None)
         if not usage_metadata:
             return
-        self.last_usage = {
-            "prompt_tokens": usage_metadata.prompt_token_count or 0,
-            "completion_tokens": usage_metadata.candidates_token_count or 0,
-            "total_tokens": usage_metadata.total_token_count or 0,
-        }
+        self.last_usage = _normalize_usage(
+            {
+                "prompt_tokens": getattr(usage_metadata, "prompt_token_count", None),
+                "completion_tokens": getattr(usage_metadata, "candidates_token_count", None),
+                "total_tokens": getattr(usage_metadata, "total_token_count", None),
+                "thinking_tokens": getattr(usage_metadata, "thoughts_token_count", None),
+                "cache_read_input_tokens": getattr(
+                    usage_metadata, "cached_content_token_count", None
+                ),
+                "prompt_tokens_details": getattr(usage_metadata, "prompt_tokens_details", None),
+            }
+        )
 
     def _resolve_stream_text(
         self,
@@ -734,7 +741,10 @@ class GoogleVertexGeminiAdapter(LLMAdapter):
                 contents=contents,
                 config=config,
             )
+            chunk_count = 0
+            saw_visible_output = False
             async for chunk in stream:
+                chunk_count += 1
                 self._update_stream_usage(chunk)
                 candidate, parts = _extract_chunk_candidate(chunk)
                 finish_reason = _extract_stream_finish_reason(candidate)
@@ -747,14 +757,25 @@ class GoogleVertexGeminiAdapter(LLMAdapter):
                     request_model=request_model,
                 )
                 if text:
+                    saw_visible_output = True
                     yield StreamChunk(content_delta=text)
                 if reasoning:
+                    saw_visible_output = True
                     yield StreamChunk(reasoning_delta=reasoning)
                 tool_calls_delta = self._build_stream_tool_calls_delta(parts)
                 if tool_calls_delta:
+                    saw_visible_output = True
                     yield StreamChunk(tool_calls_delta=tool_calls_delta)
 
             self.last_finish_reason = self.last_finish_reason or "stop"
+            if not saw_visible_output:
+                logger.warning(
+                    "Gemini stream completed without visible output: model=%s finish_reason=%s chunk_count=%d usage=%s",
+                    request_model,
+                    self.last_finish_reason,
+                    chunk_count,
+                    self.last_usage,
+                )
         except Exception as exc:
             raise self._wrap_sdk_error(exc) from exc
 
@@ -830,6 +851,11 @@ class GoogleVertexGeminiAdapter(LLMAdapter):
                 "prompt_tokens": getattr(usage_metadata, "prompt_token_count", None),
                 "completion_tokens": getattr(usage_metadata, "candidates_token_count", None),
                 "total_tokens": getattr(usage_metadata, "total_token_count", None),
+                "thinking_tokens": getattr(usage_metadata, "thoughts_token_count", None),
+                "cache_read_input_tokens": getattr(
+                    usage_metadata, "cached_content_token_count", None
+                ),
+                "prompt_tokens_details": getattr(usage_metadata, "prompt_tokens_details", None),
             }
         )
 

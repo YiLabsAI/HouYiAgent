@@ -316,7 +316,30 @@ def test_encode_stream_request_for_httpx(monkeypatch) -> None:
     assert payload["stream_options"] == {"include_usage": True}
 
 
-def test_parse_httpx_sse_event(monkeypatch) -> None:
+def test_encode_request_without_usage(monkeypatch) -> None:
+    response = _FakeOpenAIResponse("ok", "test-model")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://example.test")
+    fake_openai = _build_openai_module(response)
+    monkeypatch.setitem(__import__("sys").modules, "openai", fake_openai)
+
+    adapter = OpenAICompatibleAdapter(model="test-model")
+    request = adapter._build_request(
+        messages=[{"role": "user", "content": "hi"}],
+        tools=None,
+        temperature=0.3,
+        max_tokens=None,
+        enable_streaming=True,
+        kwargs={"include_stream_usage": False},
+    )
+
+    payload = adapter._encode_stream_request_for_httpx(request)
+
+    assert payload["stream"] is True
+    assert "stream_options" not in payload
+
+
+def test_parse_sse_event(monkeypatch) -> None:
     response = _FakeOpenAIResponse("ok", "test-model")
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     monkeypatch.setenv("OPENAI_BASE_URL", "https://example.test")
@@ -422,7 +445,7 @@ async def test_dispatches_chat_by_transport(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_dispatches_stream_by_transport(monkeypatch) -> None:
+async def test_dispatches_stream(monkeypatch) -> None:
     response = _FakeOpenAIResponse("ok", "test-model")
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     monkeypatch.setenv("OPENAI_BASE_URL", "https://example.test")
@@ -622,7 +645,7 @@ async def test_chat_sanitizes_messages(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_openai_compat_adapter_stream(monkeypatch) -> None:
+async def test_openai_compat_adapter(monkeypatch) -> None:
     """OpenAICompatibleAdapter should stream content chunks."""
 
     class _Delta:
@@ -732,7 +755,7 @@ async def test_chat_httpx(monkeypatch) -> None:
     assert captured["json"]["max_tokens"] == 10
 
 
-def test_openai_compat_adapter_requires_key(monkeypatch) -> None:
+def test_requires_key(monkeypatch) -> None:
     """Adapter should raise when API key is missing."""
 
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
@@ -740,7 +763,7 @@ def test_openai_compat_adapter_requires_key(monkeypatch) -> None:
         OpenAICompatibleAdapter()
 
 
-def test_openai_compat_adapter_requires_openai_package(monkeypatch) -> None:
+def test_requires_openai_package(monkeypatch) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     monkeypatch.delitem(__import__("sys").modules, "openai", raising=False)
 

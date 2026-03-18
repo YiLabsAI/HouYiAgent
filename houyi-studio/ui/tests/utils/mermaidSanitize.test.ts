@@ -5,7 +5,7 @@ import {
 } from '@/utils/mermaidSanitize';
 
 describe('normalizeFullWidthPunctuation', () => {
-  it('converts full-width parentheses to half-width', () => {
+  it('converts parentheses', () => {
     expect(normalizeFullWidthPunctuation('API（Server）')).toBe('API(Server)');
   });
 
@@ -13,11 +13,11 @@ describe('normalizeFullWidthPunctuation', () => {
     expect(normalizeFullWidthPunctuation('text【A】')).toBe('text[A]');
   });
 
-  it('converts mixed full-width punctuation', () => {
+  it('converts mixed punctuation', () => {
     expect(normalizeFullWidthPunctuation('a：b，c；d')).toBe('a:b,c;d');
   });
 
-  it('leaves regular CJK text and half-width chars untouched', () => {
+  it('keeps CJK text', () => {
     const input = 'API Server 控制平面 (Control)';
     expect(normalizeFullWidthPunctuation(input)).toBe(input);
   });
@@ -50,7 +50,7 @@ graph TD
     KubeProxy -->|网络规则| Pod1
     KubeProxy -->|网络规则| Pod2`;
 
-  it('fixes subgraph title containing parentheses (K8s diagram)', () => {
+  it('fixes subgraph titles', () => {
     const result = sanitizeMermaidCode(k8sCode);
     // The problematic line should now have a synthetic ID + quoted title
     expect(result).toContain('subgraph sg_0 ["Data Plane (Workers)"]');
@@ -58,13 +58,13 @@ graph TD
     expect(result).toContain('subgraph Control Plane');
   });
 
-  it('normalizes full-width parens in comments', () => {
+  it('normalizes comment parens', () => {
     const result = sanitizeMermaidCode(k8sCode);
     // Comment's full-width （ and ） should be normalized
     expect(result).toContain('K8s架构图(Mermaid语法)');
   });
 
-  it('preserves edge labels with CJK text', () => {
+  it('keeps edge labels', () => {
     const result = sanitizeMermaidCode(k8sCode);
     expect(result).toContain('-->|通信|');
     expect(result).toContain('-->|存储状态|');
@@ -80,17 +80,17 @@ graph TD
 
   // ─── Subgraph edge cases ───────────────────────────────────────
 
-  it('does not modify subgraph without parentheses', () => {
+  it('keeps plain subgraphs', () => {
     const input = 'subgraph My Section\n  A\nend';
     expect(sanitizeMermaidCode(input)).toContain('subgraph My Section');
   });
 
-  it('does not modify subgraph with explicit id + bracket title', () => {
+  it('keeps explicit subgraph ids', () => {
     const input = 'subgraph myId ["Title (with parens)"]';
     expect(sanitizeMermaidCode(input)).toBe(input);
   });
 
-  it('handles multiple subgraphs with parentheses', () => {
+  it('handles multiple subgraphs', () => {
     const input = `graph TD
     subgraph A (first)
       X
@@ -105,13 +105,13 @@ graph TD
 
   // ─── Node label quoting ────────────────────────────────────────
 
-  it('quotes node labels containing parentheses', () => {
+  it('quotes node labels', () => {
     const input = 'graph TD\n  A[text (extra)]';
     const result = sanitizeMermaidCode(input);
     expect(result).toContain('["text (extra)"]');
   });
 
-  it('does not double-quote already quoted labels', () => {
+  it('avoids double quotes', () => {
     const input = 'graph TD\n  A["already quoted (ok)"]';
     const result = sanitizeMermaidCode(input);
     // Should not add another layer of quotes
@@ -120,14 +120,14 @@ graph TD
 
   // ─── Full-width in structural positions ─────────────────────────
 
-  it('fixes full-width parentheses used as node shape', () => {
+  it('fixes full-width node shape', () => {
     // LLM might output A（text） instead of A(text)
     const input = 'graph TD\n  A（圆形节点）';
     const result = sanitizeMermaidCode(input);
     expect(result).toContain('A(圆形节点)');
   });
 
-  it('is idempotent — sanitizing twice gives same result', () => {
+  it('is idempotent', () => {
     const once = sanitizeMermaidCode(k8sCode);
     const twice = sanitizeMermaidCode(once);
     expect(twice).toBe(once);

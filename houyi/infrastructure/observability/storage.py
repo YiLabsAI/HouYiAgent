@@ -106,6 +106,8 @@ class SQLiteSpanStorage(SpanStorage):
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
 
         self._local = threading.local()
+        self._connections: set[sqlite3.Connection] = set()
+        self._connections_lock = threading.Lock()
         self._init_schema()
 
     def _get_connection(self) -> sqlite3.Connection:
@@ -119,6 +121,8 @@ class SQLiteSpanStorage(SpanStorage):
             self._local.conn.row_factory = sqlite3.Row
             self._local.conn.execute("PRAGMA journal_mode=WAL")
             self._local.conn.execute("PRAGMA synchronous=NORMAL")
+            with self._connections_lock:
+                self._connections.add(self._local.conn)
         return self._local.conn
 
     @contextmanager
@@ -446,8 +450,13 @@ class SQLiteSpanStorage(SpanStorage):
 
     def close(self) -> None:
         """Close storage connection."""
-        if hasattr(self._local, "conn") and self._local.conn:
-            self._local.conn.close()
+        with self._connections_lock:
+            connections = list(self._connections)
+            self._connections.clear()
+        for connection in connections:
+            with suppress(Exception):
+                connection.close()
+        if hasattr(self._local, "conn"):
             self._local.conn = None
 
     def __del__(self) -> None:

@@ -42,6 +42,20 @@ class UsageNormalizer:
         metadata: dict[str, Any] | None = None,
     ) -> NormalizedUsage:
         raw = usage or {}
+        reasoning_tokens_reported = self._has_any(
+            raw.get("reasoning_tokens"),
+            raw.get("thinking_tokens"),
+            raw.get("thoughts_token_count"),
+            self._nested_value(raw.get("completion_tokens_details"), "reasoning_tokens"),
+        )
+        cached_prompt_tokens_reported = self._has_any(
+            raw.get("cached_prompt_tokens"),
+            raw.get("cache_read_input_tokens"),
+            raw.get("cached_content_token_count"),
+            raw.get("prompt_cache_hit_tokens"),
+            self._nested_value(raw.get("prompt_tokens_details"), "cached_tokens"),
+        )
+        cache_hit_reported = cached_prompt_tokens_reported or self._has_any(raw.get("cache_hit"))
         prompt_tokens = self._to_int(
             raw.get("prompt_tokens"),
             raw.get("input_tokens"),
@@ -55,10 +69,15 @@ class UsageNormalizer:
         reasoning_tokens = self._to_int(
             raw.get("reasoning_tokens"),
             raw.get("thinking_tokens"),
+            raw.get("thoughts_token_count"),
+            self._nested_int(raw.get("completion_tokens_details"), "reasoning_tokens"),
         )
         cached_prompt_tokens = self._to_int(
             raw.get("cached_prompt_tokens"),
             raw.get("cache_read_input_tokens"),
+            raw.get("cached_content_token_count"),
+            raw.get("prompt_cache_hit_tokens"),
+            self._nested_int(raw.get("prompt_tokens_details"), "cached_tokens"),
         )
         total_tokens = self._to_int(
             raw.get("total_tokens"),
@@ -76,8 +95,13 @@ class UsageNormalizer:
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             reasoning_tokens=reasoning_tokens,
+            reasoning_tokens_reported=reasoning_tokens_reported,
             answer_tokens=answer_tokens,
+            answer_tokens_reported=reasoning_tokens_reported,
             cached_prompt_tokens=cached_prompt_tokens,
+            cached_prompt_tokens_reported=cached_prompt_tokens_reported,
+            cache_hit=cached_prompt_tokens > 0 or bool(raw.get("cache_hit")),
+            cache_hit_reported=cache_hit_reported,
             total_tokens=total_tokens,
             usage_confidence=resolved_confidence,
             usage_source=resolved_source,
@@ -155,3 +179,23 @@ class UsageNormalizer:
             except (TypeError, ValueError):
                 continue
         return None
+
+    @staticmethod
+    def _nested_int(container: Any, key: str) -> int | None:
+        if not isinstance(container, dict):
+            return None
+        value = container.get(key)
+        try:
+            return max(0, int(value)) if value is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _nested_value(container: Any, key: str) -> Any:
+        if not isinstance(container, dict):
+            return None
+        return container.get(key)
+
+    @staticmethod
+    def _has_any(*values: Any) -> bool:
+        return any(value is not None for value in values)

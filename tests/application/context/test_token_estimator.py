@@ -2,8 +2,13 @@
 
 from __future__ import annotations
 
-from houyi.adapters.llm.models import DEFAULT_MODEL
-from houyi.application.context.token_estimator import MODEL_CONTEXT_WINDOWS, TokenEstimator
+from houyi.adapters.llm.models import (
+    DEFAULT_MODEL,
+    MODEL_CONTEXT_WINDOWS,
+    normalize_model_id,
+    resolve_model_context_window,
+)
+from houyi.application.context.token_estimator import TokenEstimator
 
 
 class TestTokenEstimatorInit:
@@ -34,6 +39,22 @@ class TestTokenEstimatorInit:
     def test_unknown_model_fallback(self):
         est = TokenEstimator(model="unknown-model-xyz")
         assert est.context_window == 8192  # DEFAULT_CONTEXT_WINDOW fallback
+
+    def test_minimax_arge_context(self):
+        est = TokenEstimator(model="Pro/MiniMaxAI/MiniMax-M2.5")
+        assert est.context_window == 1_000_000
+
+    def test_gemini_large_context(self):
+        est = TokenEstimator(model="gemini-3.1-pro-preview")
+        assert est.context_window == 1_048_576
+
+    def test_glm_context_window(self):
+        est = TokenEstimator(model="zai-org/glm-5")
+        assert est.context_window == 128_000
+
+    def test_kimi_canonical_model(self):
+        assert normalize_model_id("moonshotai/Kimi-K2.5") == "moonshotai/Kimi-K2.5"
+        assert resolve_model_context_window("moonshotai/Kimi-K2.5") == 131_072
 
 
 class TestTokenEstimatorCounting:

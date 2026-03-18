@@ -12,9 +12,13 @@ import logging
 import time
 import uuid
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
+
+from houyi.application.context.types import (
+    SessionContextState,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -254,10 +258,83 @@ class Message(BaseModel):
 
 
 class ConversationStatus(str, Enum):
-    """Status of a conversation."""
+    """Lifecycle status for a conversation."""
 
     ACTIVE = "active"
     ARCHIVED = "archived"
+
+
+class ConversationContextState(BaseModel):
+    conversation_id: str
+    used_units: int = 0
+    max_units: int = 0
+    state: Literal["healthy", "elevated", "near_compaction", "compacted_recently"] = "healthy"
+    last_compacted_at: float | None = None
+    last_compaction_delta: int | None = None
+    last_compacted_message_count: int | None = None
+    updated_at: float = Field(default_factory=time.time)
+
+    @classmethod
+    def from_session_state(
+        cls,
+        state: SessionContextState,
+        *,
+        conversation_id: str,
+    ) -> ConversationContextState:
+        return cls(
+            conversation_id=conversation_id,
+            used_units=state.used_units,
+            max_units=state.max_units,
+            state=state.state,
+            last_compacted_at=state.last_compacted_at,
+            last_compaction_delta=state.last_compaction_delta,
+            last_compacted_message_count=state.last_compacted_message_count,
+            updated_at=state.updated_at,
+        )
+
+    def to_session_state(self) -> SessionContextState:
+        return SessionContextState(
+            session_id=self.conversation_id,
+            used_units=self.used_units,
+            max_units=self.max_units,
+            state=self.state,
+            last_compacted_at=self.last_compacted_at,
+            last_compaction_delta=self.last_compaction_delta,
+            last_compacted_message_count=self.last_compacted_message_count,
+            updated_at=self.updated_at,
+        )
+
+
+class ActiveStreamingState(BaseModel):
+    conversation_id: str
+    message_id: str
+    request_id: str
+    status: Literal["streaming", "finishing"] = "streaming"
+    started_at: float = Field(default_factory=time.time)
+    updated_at: float = Field(default_factory=time.time)
+
+
+class PinStatus(str, Enum):
+    ACTIVE = "active"
+    ARCHIVED = "archived"
+    REMOVED = "removed"
+    SUPERSEDED = "superseded"
+
+
+class PinnedContextRecord(BaseModel):
+    pin_id: str = Field(default_factory=lambda: uuid.uuid4().hex[:12])
+    conversation_id: str
+    source_message_id: str
+    title: str = ""
+    content: str = ""
+    role: Literal["context", "user", "assistant", "system", "tool"] = "context"
+    scope: Literal["conversation"] = "conversation"
+    status: PinStatus = PinStatus.ACTIVE
+    priority: int = 25
+    token_count: int = 0
+    created_at: float = Field(default_factory=time.time)
+    updated_at: float = Field(default_factory=time.time)
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class Conversation(BaseModel):
@@ -277,6 +354,8 @@ class Conversation(BaseModel):
     top_p: float | None = None
     stream: bool | None = None
     bookmarked: bool = False
+    conversation_context_state: ConversationContextState | None = None
+    active_streaming_state: ActiveStreamingState | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
     created_at: float = Field(default_factory=time.time)
     updated_at: float = Field(default_factory=time.time)
@@ -500,6 +579,11 @@ class Conversation(BaseModel):
             "max_tokens": self.max_tokens,
             "top_p": self.top_p,
             "stream": self.stream,
+            "active_streaming_state": (
+                self.active_streaming_state.model_dump(mode="json")
+                if isinstance(self.active_streaming_state, ActiveStreamingState)
+                else None
+            ),
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "last_message_at": self.last_message_at,
@@ -538,6 +622,7 @@ class SendMessageRequest(BaseModel):
         pattern=r"^(conservative|balanced|aggressive)$",
     )
     enable_web_search: bool | None = None
+    enable_deep_research: bool | None = None
     enable_skills: list[str] | None = None
     max_tool_iterations: int | None = Field(default=None, ge=1, le=50)
 
@@ -560,3 +645,12 @@ class EditMessageRequest(BaseModel):
     """Request body for editing a message's content."""
 
     content: str
+
+
+class PinMessageRequest(BaseModel):
+    replace_pin_id: str | None = None
+    title: str | None = None
+
+
+class UpdatePinnedContextRequest(BaseModel):
+    status: PinStatus

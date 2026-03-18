@@ -145,6 +145,8 @@ class _ToolCallPresentationRequest:
     tool_result_summary_enabled: bool
     tool_result_summary_max_chars: int
     tool_result_summary_max_items: int
+    tool_category: str | None = None
+    tool_execution_mode: str | None = None
 
 
 @dataclass(frozen=True)

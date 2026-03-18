@@ -47,7 +47,7 @@ const LatexBlock: React.FC<{ children: string }> = ({ children }) => {
 
   return (
     <div
-      className="my-2 overflow-x-auto"
+      className="my-2 max-w-full overflow-x-auto"
       dangerouslySetInnerHTML={{ __html: html }}
     />
   );
@@ -129,7 +129,7 @@ const components: Components = {
   // Table styling
   table({ children }) {
     return (
-      <div className="my-2 overflow-x-auto rounded-md border border-gray-700/50">
+      <div className="my-2 max-w-full overflow-x-auto rounded-md border border-gray-700/50">
         <table className="min-w-full text-[12px]">{children}</table>
       </div>
     );
@@ -220,13 +220,15 @@ const components: Components = {
 
 export const MarkdownRenderer: React.FC<MarkdownRendererProps> = React.memo(({ content }) => {
   return (
-    <ReactMarkdown
-      remarkPlugins={[remarkGfm, remarkMath]}
-      rehypePlugins={[rehypeKatex]}
-      components={components}
-    >
-      {content}
-    </ReactMarkdown>
+    <div className="min-w-0 max-w-full overflow-x-hidden">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm, remarkMath]}
+        rehypePlugins={[rehypeKatex]}
+        components={components}
+      >
+        {content}
+      </ReactMarkdown>
+    </div>
   );
 });
 

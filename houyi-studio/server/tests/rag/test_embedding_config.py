@@ -67,7 +67,7 @@ class TestResolveEmbeddingConfig:
             assert cfg.model == "BAAI/bge-small-en-v1.5"
             assert cfg.dimension == 384
 
-    def test_explicit_local_falls_back_when_fastembed_missing(self):
+    def test_explicit_local_falls_back(self):
         def _available(provider: str) -> bool:
             return provider != "local"
 
@@ -295,7 +295,7 @@ class TestStoragePathHelpers:
         assert upload_dir.name == UPLOADS_SUBDIR
         assert index_dir.name == INDEX_SUBDIR
 
-    def test_is_index_path_detects_only_internal_index_locations(self):
+    def test_is_index_path_detects_internal_locations(self):
         from houyi_studio.server.rag import is_index_path
 
         index_path = Path(

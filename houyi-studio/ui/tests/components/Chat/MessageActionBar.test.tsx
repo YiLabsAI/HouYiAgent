@@ -6,21 +6,47 @@ import type { ChatMessage } from '@/types/chat';
 // Mock useChatStore
 const mockDeleteMessage = vi.fn();
 const mockRegenerateMessage = vi.fn();
+const mockResendMessage = vi.fn();
 const mockSendMessage = vi.fn();
 const mockToggleMessageBookmark = vi.fn();
+const mockPinMessageToContext = vi.fn();
+const mockUpdatePinnedContextStatus = vi.fn();
 let mockIsStreaming = false;
+let mockActivePins: Array<{ pin_id: string; source_message_id: string }> = [];
+let mockComposerUiState: Record<string, any> = {};
+let mockActiveConversationId: string | null = 'conv-1';
+let mockActiveConversation: any = {
+  conversation_id: 'conv-1',
+  max_tokens: 2048,
+  stream: true,
+};
+let mockRunSettings = {
+  enable_tool_calls: true,
+  tool_call_strategy: 'balanced',
+};
 
 vi.mock('@/stores/useChatStore', () => ({
   useChatStore: (selector: any) => {
     const state = {
       deleteMessage: mockDeleteMessage,
       regenerateMessage: mockRegenerateMessage,
+      resendMessage: mockResendMessage,
       sendMessage: mockSendMessage,
       toggleMessageBookmark: mockToggleMessageBookmark,
+      pinMessageToContext: mockPinMessageToContext,
+      updatePinnedContextStatus: mockUpdatePinnedContextStatus,
+      activePins: mockActivePins,
+      activeConversationId: mockActiveConversationId,
+      activeConversation: mockActiveConversation,
+      composerUiByConversation: mockComposerUiState,
       streaming: { isStreaming: mockIsStreaming },
     };
     return selector(state);
   },
+}));
+
+vi.mock('@/stores/useConsoleStore', () => ({
+  useConsoleStore: (selector: any) => selector({ runSettings: mockRunSettings }),
 }));
 
 // Mock clipboard
@@ -47,9 +73,22 @@ describe('MessageActionBar', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockIsStreaming = false;
+    mockActivePins = [];
+    mockComposerUiState = {
+      'conv-1': {
+        enableReasoning: true,
+        enableWebSearch: true,
+        enableDeepResearch: false,
+        showAdvanced: true,
+        maxTokensDraft: '1024',
+      },
+    };
+    mockActiveConversationId = 'conv-1';
+    mockActiveConversation = { conversation_id: 'conv-1', max_tokens: 2048, stream: true };
+    mockRunSettings = { enable_tool_calls: true, tool_call_strategy: 'balanced' };
   });
 
-  it('shows resend, edit, copy, delete for user messages', () => {
+  it('shows user actions', () => {
     const onStartEdit = vi.fn();
     render(<MessageActionBar message={userMsg} onStartEdit={onStartEdit} />);
 
@@ -60,7 +99,7 @@ describe('MessageActionBar', () => {
     expect(screen.queryByTitle('Regenerate')).not.toBeInTheDocument();
   });
 
-  it('shows regenerate, copy, delete for assistant messages', () => {
+  it('shows assistant actions', () => {
     render(<MessageActionBar message={assistantMsg} />);
 
     expect(screen.getByTitle('Regenerate')).toBeInTheDocument();
@@ -70,10 +109,17 @@ describe('MessageActionBar', () => {
     expect(screen.queryByTitle('Edit')).not.toBeInTheDocument();
   });
 
-  it('calls sendMessage on resend click', () => {
+  it('calls resendMessage on resend click', () => {
     render(<MessageActionBar message={userMsg} />);
     fireEvent.click(screen.getByTitle('Resend'));
-    expect(mockSendMessage).toHaveBeenCalledWith('Hello world');
+    expect(mockResendMessage).toHaveBeenCalledWith('Hello world', expect.objectContaining({
+      enable_reasoning: true,
+      enable_web_search: true,
+      max_tokens: 1024,
+      stream: true,
+      enable_tool_calls: true,
+      tool_call_strategy: 'balanced',
+    }));
   });
 
   it('calls deleteMessage after confirmation', async () => {
@@ -122,10 +168,45 @@ describe('MessageActionBar', () => {
     expect(navigator.clipboard.writeText).toHaveBeenCalledWith('Hello world');
   });
 
+  it('pins message on pin click', () => {
+    render(<MessageActionBar message={userMsg} />);
+    fireEvent.click(screen.getByTitle('Pin to context'));
+    expect(mockPinMessageToContext).toHaveBeenCalledWith('u1');
+  });
+
+  it('shows replace pin choices', () => {
+    mockActivePins = [{ pin_id: 'pin-1', source_message_id: 'a9', title: 'Old rule' } as any];
+    render(<MessageActionBar message={userMsg} />);
+
+    fireEvent.click(screen.getByTitle('Pin to context'));
+
+    expect(screen.getByText('Pin to context')).toBeInTheDocument();
+    expect(screen.getByText('Add as new pin')).toBeInTheDocument();
+    expect(screen.getByText('Replace Old rule')).toBeInTheDocument();
+    expect(mockPinMessageToContext).not.toHaveBeenCalled();
+  });
+
+  it('replaces an existing pin', () => {
+    mockActivePins = [{ pin_id: 'pin-1', source_message_id: 'a9', title: 'Old rule' } as any];
+    render(<MessageActionBar message={userMsg} />);
+
+    fireEvent.click(screen.getByTitle('Pin to context'));
+    fireEvent.click(screen.getByText('Replace Old rule'));
+
+    expect(mockPinMessageToContext).toHaveBeenCalledWith('u1', { replacePinId: 'pin-1' });
+  });
+
+  it('archives active pin on click', () => {
+    mockActivePins = [{ pin_id: 'pin-1', source_message_id: 'u1' }];
+    render(<MessageActionBar message={userMsg} />);
+    fireEvent.click(screen.getByTitle('Archive pin'));
+    expect(mockUpdatePinnedContextStatus).toHaveBeenCalledWith('pin-1', 'archived');
+  });
+
   it('does not resend or regenerate while streaming', () => {
     mockIsStreaming = true;
     render(<MessageActionBar message={userMsg} />);
     fireEvent.click(screen.getByTitle('Resend'));
-    expect(mockSendMessage).not.toHaveBeenCalled();
+    expect(mockResendMessage).not.toHaveBeenCalled();
   });
 });

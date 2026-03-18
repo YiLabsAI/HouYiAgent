@@ -44,7 +44,7 @@ def _make_skill(
 
 
 class TestBuildToolDefinitionsForSkill:
-    def test_builds_single_tool_from_skill_schema(self) -> None:
+    def test_builds_single_tool(self) -> None:
         skill = _make_skill("search_docs", "Search project docs")
 
         definitions = build_tool_definitions_for_skill(skill)
@@ -54,7 +54,7 @@ class TestBuildToolDefinitionsForSkill:
         assert definitions[0]["function"]["description"] == "Search project docs"
         assert definitions[0]["function"]["parameters"]["type"] == "object"
 
-    def test_builds_multiple_tools_from_skill_tools_list(self) -> None:
+    def test_builds_multiple_tools(self) -> None:
         tool_a = SimpleNamespace(name="read_file", description="Read file", input_schema=_InputA)
         tool_b = SimpleNamespace(
             name="list_dir", description="List directory", input_schema=_InputB
@@ -67,7 +67,7 @@ class TestBuildToolDefinitionsForSkill:
 
 
 class TestToolBridgeCollection:
-    def test_collect_skills_with_filter_skips_missing_names(self) -> None:
+    def test_collect_skills_with_filter(self) -> None:
         registry = SkillRegistry()
         alpha = _make_skill("alpha", "Alpha skill")
         registry.register(alpha)
@@ -77,7 +77,20 @@ class TestToolBridgeCollection:
 
         assert selected == [alpha]
 
-    def test_collect_tool_schemas_filters_by_relevance_hint(self) -> None:
+    def test_collect_skills_with_alias(self) -> None:
+        registry = SkillRegistry()
+        web_search = _make_skill("web_search", "Search the web")
+        registry.register(web_search)
+        bridge = ToolBridge(registry)
+
+        selected = bridge.collect_skills(
+            skill_filter=["houyi_web_search"],
+            include_core=False,
+        )
+
+        assert selected == [web_search]
+
+    def test_collect_tool_schemas_filters(self) -> None:
         registry = SkillRegistry()
         registry.register(_make_skill("search_docs", "Search docs", tags=["docs", "search"]))
         registry.register(_make_skill("run_terminal", "Execute terminal command", tags=["shell"]))
@@ -88,7 +101,7 @@ class TestToolBridgeCollection:
         names = [item["function"]["name"] for item in schemas]
         assert names == ["search_docs"]
 
-    def test_collect_tool_schemas_relevance_fallback_returns_all_when_no_match(self) -> None:
+    def test_collect_tool_schemas_relevance(self) -> None:
         registry = SkillRegistry()
         registry.register(_make_skill("search_docs", "Search docs"))
         registry.register(_make_skill("run_terminal", "Execute terminal command"))
@@ -98,7 +111,7 @@ class TestToolBridgeCollection:
 
         assert {item["function"]["name"] for item in schemas} == {"search_docs", "run_terminal"}
 
-    def test_collect_tool_schemas_orders_by_usage_counts(self) -> None:
+    def test_collect_tool_schemas_orders(self) -> None:
         registry = SkillRegistry()
         registry.register(_make_skill("search_docs", "Search docs"))
         registry.register(_make_skill("run_terminal", "Execute terminal command"))
@@ -111,7 +124,7 @@ class TestToolBridgeCollection:
         names = [item["function"]["name"] for item in schemas]
         assert names[0] == "run_terminal"
 
-    def test_collect_tool_schemas_cache_returns_immutable_copies(self) -> None:
+    def test_collect_tool_schemas_cache(self) -> None:
         registry = SkillRegistry()
         registry.register(_make_skill("search_docs", "Search docs"))
         bridge = ToolBridge(registry)

@@ -26,7 +26,46 @@ export interface ChatMessage {
   created_at: number;
 }
 
+export type PinStatus = 'active' | 'archived' | 'removed' | 'superseded';
+
+export interface PinnedContextRecord {
+  pin_id: string;
+  conversation_id: string;
+  source_message_id: string;
+  title: string;
+  content: string;
+  role: 'context' | 'user' | 'assistant' | 'system' | 'tool';
+  scope: 'conversation';
+  status: PinStatus;
+  priority: number;
+  token_count: number;
+  created_at: number;
+  updated_at: number;
+  metadata: Record<string, any>;
+}
+
 export type ConversationStatus = 'active' | 'archived';
+
+export type ConversationContextHealth = 'healthy' | 'elevated' | 'near_compaction' | 'compacted_recently';
+
+export interface ConversationContextState {
+  conversation_id: string;
+  used_units: number;
+  max_units: number;
+  state: ConversationContextHealth;
+  last_compacted_at?: number | null;
+  last_compaction_delta?: number | null;
+  updated_at: number;
+}
+
+export interface ActiveStreamingState {
+  conversation_id: string;
+  message_id: string;
+  request_id: string;
+  status: 'streaming' | 'finishing';
+  started_at: number;
+  updated_at: number;
+}
 
 export interface Conversation {
   conversation_id: string;
@@ -40,6 +79,8 @@ export interface Conversation {
   top_p: number | null;
   stream: boolean | null;
   bookmarked: boolean;
+  conversation_context_state?: ConversationContextState | null;
+  active_streaming_state?: ActiveStreamingState | null;
   metadata: Record<string, any>;
   created_at: number;
   updated_at: number;
@@ -57,6 +98,7 @@ export interface ConversationSummary {
   updated_at: number;
   last_message_at: number | null;
   bookmarked: boolean;
+  active_streaming_state?: ActiveStreamingState | null;
 }
 
 export interface ContextUsage {
@@ -66,6 +108,18 @@ export interface ContextUsage {
   reserved_output_tokens: number;
   available_tokens: number;
   block_breakdown: Record<string, number>;
+  dropped_blocks?: string[];
+  drop_reasons?: Record<string, string>;
+  dropped_block_details?: Array<{
+    candidate_id: string;
+    block_type: string;
+    source: string;
+    token_count: number;
+    message_count?: number | null;
+    pinned?: boolean;
+  }>;
+  planned_prompt_tokens?: number;
+  available_input_tokens?: number;
   timestamp: number;
 }
 
@@ -78,16 +132,76 @@ export interface CompactionMetrics {
   pin_violation_count?: number;
 }
 
+export interface TokenUsage {
+  input_tokens?: number;
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  total_tokens?: number;
+  reasoning_tokens?: number;
+  reasoning_tokens_reported?: boolean;
+  answer_tokens?: number;
+  answer_tokens_reported?: boolean;
+  cached_prompt_tokens?: number;
+  cached_prompt_tokens_reported?: boolean;
+  cache_hit?: boolean;
+  cache_hit_reported?: boolean;
+  usage_source?: string;
+  usage_confidence?: string;
+  first_token_ms?: number;
+  decode_tokens_per_second?: number;
+  end_to_end_tokens_per_second?: number;
+  [key: string]: any;
+}
+
 export interface CompactionRecord {
   compaction_id: string;
   trigger: string;
+  pressure_level?: string;
+  backup_id?: string | null;
   summary: string;
   source_message_ids: string[];
   pinned_message_ids: string[];
   retained_refs: string[];
   metrics: CompactionMetrics;
+  restore_status?: string | null;
   created_at: number;
   metadata: Record<string, any>;
+}
+
+export interface CompactionBackupRecord {
+  backup_id: string;
+  conversation_id: string;
+  trigger: string;
+  created_at: number;
+  path: string;
+  record_id?: string | null;
+  metadata: Record<string, any>;
+}
+
+export interface CompactionMessagePreview {
+  message_id: string;
+  role: string;
+  name?: string | null;
+  created_at?: number;
+  preview: string;
+}
+
+export interface CompactionDiff {
+  source_message_ids: string[];
+  backup_message_count: number | null;
+  current_message_count: number;
+  backup_visible_message_count: number | null;
+  current_visible_message_count: number;
+  removed_message_ids: string[];
+  added_message_ids: string[];
+  source_message_previews?: CompactionMessagePreview[];
+  added_message_previews?: CompactionMessagePreview[];
+}
+
+export interface CompactionHistoryItem {
+  compaction: CompactionRecord;
+  backup: CompactionBackupRecord | null;
+  diff: CompactionDiff;
 }
 
 // SSE event types
@@ -114,6 +228,11 @@ export interface SSEMessageError {
   error_type: string;
   chunks_sent: number;
   timestamp: number;
+  error_code?: string;
+  public_message?: string;
+  retryable?: boolean;
+  status_code?: number | null;
+  provider_code?: string | null;
 }
 
 export interface SSEContextUsage {
@@ -137,6 +256,7 @@ export interface SSEToolCallStart {
   trace_id?: string;
   tool_call_id?: string;
   tool_name?: string;
+  requested_tool_name?: string;
   parallel_group_id?: string;
   round_index?: number;
   duration_ms?: number;
@@ -148,6 +268,7 @@ export interface SSEToolCallResult {
   trace_id?: string;
   tool_call_id?: string;
   tool_name?: string;
+  requested_tool_name?: string;
   parallel_group_id?: string;
   round_index?: number;
   duration_ms?: number;
@@ -159,6 +280,7 @@ export interface SSEToolCallError {
   trace_id?: string;
   tool_call_id?: string;
   tool_name?: string;
+  requested_tool_name?: string;
   parallel_group_id?: string;
   round_index?: number;
   duration_ms?: number;
@@ -174,6 +296,82 @@ export interface SSEMessageComplete {
   };
 }
 
+export interface TraceSpanEvent {
+  name?: string;
+  timestamp?: number;
+  attributes?: Record<string, unknown>;
+}
+
+export interface TraceSpan {
+  name?: string;
+  span_type?: string;
+  status?: string;
+  duration_ms?: number;
+  start_time_ms?: number;
+  attributes?: Record<string, unknown>;
+  events?: TraceSpanEvent[];
+  children?: TraceSpan[];
+}
+
+export interface TraceTotalTokens {
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  total_tokens?: number;
+  llm_spans?: number;
+  llm_spans_with_usage?: number;
+  is_partial?: boolean;
+}
+
+export interface TraceRequestContext {
+  request_id?: string | null;
+  conversation_id?: string | null;
+  model?: string | null;
+  max_context_tokens?: number | null;
+  llm_messages_count?: number | null;
+}
+
+export interface TraceContextPlan {
+  used_tokens?: number | null;
+  planned_prompt_tokens?: number | null;
+  reserved_output_tokens?: number | null;
+  available_input_tokens?: number | null;
+  block_breakdown?: Record<string, number>;
+}
+
+export interface TraceCompactionSummary {
+  triggered?: boolean;
+  trigger?: string | null;
+  messages_compacted?: number | null;
+  tokens_before?: number | null;
+  tokens_after?: number | null;
+  saved_tokens?: number | null;
+  pin_violation_count?: number | null;
+}
+
+export interface TraceContextGovernance {
+  dropped_blocks?: string[];
+  drop_reasons?: Record<string, string>;
+  dropped_block_details?: Array<{
+    candidate_id: string;
+    block_type: string;
+    source: string;
+    token_count: number;
+    message_count?: number | null;
+    pinned?: boolean;
+  }>;
+  compaction?: TraceCompactionSummary;
+}
+
+export interface TracePayload {
+  trace_id?: string;
+  total_duration_ms?: number;
+  total_tokens?: TraceTotalTokens;
+  request_context?: TraceRequestContext;
+  context_plan?: TraceContextPlan;
+  context_governance?: TraceContextGovernance;
+  root_span?: TraceSpan;
+}
+
 // API request types
 export interface CreateConversationRequest {
   title?: string;
@@ -185,15 +383,20 @@ export interface CreateConversationRequest {
 export interface SendMessageRequest {
   content: string;
   attachments?: Attachment[];
-  model?: string;
-  temperature?: number;
-  max_tokens?: number;
+  parent_message_id?: string;
   enable_reasoning?: boolean;
   enable_tool_calls?: boolean;
   tool_call_strategy?: 'conservative' | 'balanced' | 'aggressive';
   enable_web_search?: boolean;
+  enable_deep_research?: boolean;
   enable_skills?: string[];
   max_tool_iterations?: number;
+  model?: string;
+  system_instructions?: string;
+  temperature?: number;
+  max_tokens?: number;
+  top_p?: number;
+  stream?: boolean;
 }
 
 export interface UpdateConversationRequest {

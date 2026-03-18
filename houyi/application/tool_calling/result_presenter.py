@@ -76,6 +76,7 @@ class _ToolCallResultPresenter:
                 "round_index": request.round_index_value,
                 "parallel_group_id": request.parallel_group_id,
                 "duration_ms": request.duration_ms,
+                "tool_args": request.args,
             },
         }
         if not request.tool_result_summary_enabled:

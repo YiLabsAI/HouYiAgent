@@ -137,10 +137,10 @@ test.describe('Chat mode', () => {
     });
 
     const assistantBubble = page.getByTestId('message-bubble').last();
-    const thinkingButton = assistantBubble.getByRole('button', { name: /Thinking/ });
-    await expect(thinkingButton).toBeVisible({ timeout: 10000 });
+    const reasoningButton = assistantBubble.getByRole('button', { name: /Reasoning/ });
+    await expect(reasoningButton).toBeVisible({ timeout: 10000 });
 
-    const reasoningPanel = thinkingButton.locator('xpath=following-sibling::div[1]');
+    const reasoningPanel = reasoningButton.locator('xpath=following-sibling::div[1]');
     await expect(reasoningPanel).toBeVisible({ timeout: 10000 });
 
     await page.evaluate(async ({ messageId, reasoningChunks }) => {
@@ -266,11 +266,13 @@ test.describe('Chat mode', () => {
       });
     });
 
-    await expect(page.getByText('Tool calls 1')).toBeVisible({ timeout: 10000 });
-    await page.getByText('Show steps').click();
-    await expect(page.getByText('houyi_read_file')).toBeVisible({ timeout: 10000 });
-    await expect(page.getByText('Duration 1.5s')).toBeVisible({ timeout: 10000 });
-    await expect(page.getByText('Parallel round_1')).toBeVisible({ timeout: 10000 });
+    const toolActivity = page.getByRole('button', { name: 'Tool activity 1' });
+    await expect(toolActivity).toBeVisible({ timeout: 10000 });
+    await toolActivity.click();
+    const toolStep = page.locator('div', { hasText: 'houyi_read_file' }).filter({ hasText: 'Parallel round_1' }).first();
+    await expect(toolStep).toBeVisible({ timeout: 10000 });
+    await expect(toolStep.locator('span', { hasText: 'Duration 1.5s' }).first()).toBeVisible({ timeout: 10000 });
+    await expect(toolStep.locator('span', { hasText: 'Parallel round_1' }).first()).toBeVisible({ timeout: 10000 });
   });
 
   // --- P-039B: Switching large conversations must NOT trigger settings-request storms ---
@@ -731,8 +733,8 @@ test.describe('Chat mode', () => {
     await page.goto('/');
     await switchToChat(page);
 
-    // Click the settings gear icon in the header
-    await page.getByTitle('Global settings').click();
+    // Click the unified settings entry in the activity bar
+    await page.getByTitle('Settings').click();
 
     // Settings page should show provider configuration
     await expect(page.getByText('LLM Providers')).toBeVisible({ timeout: 3000 });
@@ -912,7 +914,7 @@ test.describe('Chat mode', () => {
     await switchToChat(page);
 
     // Open global settings
-    await page.getByTitle('Global settings').click();
+    await page.getByTitle('Settings').click();
     await expect(page.getByText('LLM Providers')).toBeVisible({ timeout: 3000 });
 
     // Add a Vertex AI provider
@@ -920,24 +922,16 @@ test.describe('Chat mode', () => {
     await vertexBtn.click();
     await page.waitForTimeout(500);
 
-    // Fill in a base_url so the Test Connection button becomes enabled
-    const baseUrlInput = page.locator('input[placeholder="https://api.example.com/v1"]').first();
-    if (await baseUrlInput.isVisible()) {
-      await baseUrlInput.fill('https://aiplatform.googleapis.com');
-      await page.waitForTimeout(300);
-    }
-
     // The Vertex provider should be expanded — find Test Connection button
     const testBtn = page.locator('button', { hasText: 'Test Connection' }).first();
-    if (await testBtn.isVisible()) {
-      await testBtn.click();
-      await page.waitForTimeout(2000);
+    await expect(testBtn).toBeVisible({ timeout: 3000 });
+    await testBtn.click();
+    await page.waitForTimeout(2000);
 
-      // Should show a friendly result about Vertex AI (success or error), NOT an HTML 404
-      // Look for any text containing 'Vertex AI' in the test result area
-      const resultText = page.locator('[class*="text-"]', { hasText: 'Vertex AI' }).first();
-      await expect(resultText).toBeVisible({ timeout: 10000 });
-    }
+    // Should keep the settings panel usable and never dump raw HTML
+    const pageContent = await page.textContent('body');
+    expect(pageContent).not.toContain('{margin');
+    expect(pageContent).not.toContain('*{padding:0}');
   });
 
   // --- BUG-038a2: Vertex AI Fetch Models UI shows friendly error banner, no HTML ---
@@ -946,19 +940,12 @@ test.describe('Chat mode', () => {
     await switchToChat(page);
 
     // Open global settings
-    await page.getByTitle('Global settings').click();
+    await page.getByTitle('Settings').click();
     await expect(page.getByText('LLM Providers')).toBeVisible({ timeout: 3000 });
 
     // Add a Vertex AI provider
     await page.locator('button', { hasText: 'Vertex AI' }).first().click();
     await page.waitForTimeout(300);
-
-    // Fill base_url so Fetch Models button is enabled
-    const baseUrlInput = page.locator('input[placeholder="https://api.example.com/v1"]').first();
-    if (await baseUrlInput.isVisible()) {
-      await baseUrlInput.fill('https://aiplatform.googleapis.com');
-      await page.waitForTimeout(200);
-    }
 
     // Click Fetch Models
     const fetchBtn = page.locator('button', { hasText: 'Fetch Models' }).first();
@@ -1056,46 +1043,28 @@ test.describe('Chat mode', () => {
     await switchToChat(page);
     await createConversation(page);
 
-    // Get the active conversation ID, then PATCH its model to an invalid one
-    const convId = await page.evaluate(async () => {
-      const res = await fetch('/api/chat/conversations');
-      const data = await res.json();
-      return data.conversations[0]?.conversation_id;
-    });
-    expect(convId).toBeTruthy();
-
-    // PATCH the conversation model to something that will 400
-    await page.evaluate(async (id) => {
-      await fetch(`/api/chat/conversations/${id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model: 'nonexistent-model-xyz' }),
+    await page.route('**/api/chat/conversations/*/messages', async (route) => {
+      await route.fulfill({
+        status: 400,
+        contentType: 'text/plain',
+        body: 'Invalid model: nonexistent-model-xyz',
       });
-    }, convId);
+    });
 
-    // Reload to pick up the new model
-    await page.reload();
-    await switchToChat(page);
-    const convTitle = page.locator('.text-\\[12px\\].truncate').first();
-    await expect(convTitle).toBeVisible({ timeout: 5000 });
-    await convTitle.click();
-    await expect(page.getByTestId('chat-input')).toBeVisible({ timeout: 5000 });
-
-    // Send a message — this should trigger a 400 from the LLM
     const input = page.getByTestId('chat-input');
     await input.fill('trigger 400 error');
     await page.getByTestId('chat-send-btn').click();
 
-    // Wait for the error banner to appear (SSE message.error → error state → red banner)
     const errorBanner = page.locator('[class*="bg-red-900"]');
     await expect(errorBanner).toBeVisible({ timeout: 15000 });
 
-    // Error banner must contain meaningful text
+    await expect(errorBanner).toContainText('API 400');
+    await expect(errorBanner).toContainText('Invalid model');
+
     const errorText = await errorBanner.textContent();
     expect(errorText).toBeTruthy();
     expect(errorText!.length).toBeGreaterThan(10);
 
-    // Chat page should still be visible (not blank)
     await expect(page.getByTestId('chat-page')).toBeVisible();
   });
 
@@ -1825,8 +1794,8 @@ test.describe('Chat mode', () => {
     await searchInput.fill('UniqueSearchToken12345');
     await page.waitForTimeout(800); // debounce + API call
 
-    // Should see results — the modal is the rounded-xl div
-    const searchModal = page.locator('.rounded-xl.shadow-2xl');
+    // Should see results in the unified center-stage search dialog
+    const searchModal = page.getByRole('dialog', { name: 'Search Conversations' });
     const resultBtn = searchModal.locator('button.w-full.text-left').first();
     await expect(resultBtn).toBeVisible({ timeout: 5000 });
 
@@ -1957,6 +1926,459 @@ test.describe('Chat mode', () => {
     await page.evaluate(async (cid: string) => {
       await fetch(`/api/chat/conversations/${cid}`, { method: 'DELETE' }).catch(() => {});
     }, conv.conversation_id);
+  });
+
+  test('pinning a message surfaces active pin in inspector', async ({ page }) => {
+    await page.goto('/');
+    await switchToChat(page);
+    await createConversation(page);
+
+    const conversationId = await page.evaluate(() => {
+      const chatStore = (window as any).__chatStore;
+      return chatStore?.getState().activeConversationId;
+    });
+    expect(conversationId).toBeTruthy();
+
+    await page.evaluate(async (cid: string) => {
+      await fetch(`/api/chat/conversations/${cid}/_seed-messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          messages: [
+            { role: 'user', content: 'Deploy to staging first.' },
+            { role: 'assistant', content: 'Okay, I will stage first.' },
+          ],
+        }),
+      });
+      const chatStore = (window as any).__chatStore;
+      await chatStore.getState().loadConversation(cid);
+    }, conversationId);
+
+    await expect(page.getByText('Deploy to staging first.')).toBeVisible({ timeout: 5000 });
+
+    const firstBubble = page.getByTestId('message-bubble').first();
+    await firstBubble.hover();
+    await firstBubble.getByRole('button', { name: 'Pin to context' }).click();
+
+    await page.getByRole('button', { name: 'Inspect' }).click();
+
+    const inspector = page.getByTestId('chat-inspector-panel');
+    const activePinsSection = inspector.locator('section').filter({ hasText: 'Active pins' });
+    await expect(activePinsSection).toBeVisible({ timeout: 5000 });
+    await expect(activePinsSection.getByText('Deploy to staging first.').first()).toBeVisible({ timeout: 5000 });
+  });
+
+  test('inspector shows compaction history and restores snapshot', async ({ page }) => {
+    await page.goto('/');
+    await switchToChat(page);
+    await createConversation(page);
+
+    const currentConversation = await page.evaluate(() => {
+      const chatStore = (window as any).__chatStore;
+      const state = chatStore?.getState();
+      if (!state?.activeConversation) {
+        throw new Error('Active conversation not found');
+      }
+      const activeConversation = {
+        ...state.activeConversation,
+        title: 'Compaction acceptance',
+        messages: [
+          {
+            message_id: 'msg-current-1',
+            role: 'user',
+            content: 'Current draft message',
+            metadata: {},
+            created_at: 1,
+          },
+        ],
+        conversation_context_state: {
+          conversation_id: state.activeConversation.conversation_id,
+          used_units: 125306,
+          max_units: 272000,
+          state: 'elevated',
+          last_compacted_at: null,
+          last_compaction_delta: null,
+          updated_at: 2,
+        },
+      };
+      chatStore.setState({
+        ...state,
+        activeConversation: activeConversation,
+        contextUsage: {
+          model: 'deepseek-chat',
+          max_context_tokens: 8000,
+          used_tokens: 3200,
+          reserved_output_tokens: 1024,
+          available_tokens: 4792,
+          available_input_tokens: 4575,
+          planned_prompt_tokens: 3200,
+          block_breakdown: {
+            system: 186,
+            pinned: 420,
+            current_turn: 78,
+            summary: 640,
+          },
+          drop_reasons: {
+            older_summary: 'budget_exceeded',
+          },
+          timestamp: 1710000100,
+        },
+        latestCompaction: {
+          compaction_id: 'cmp-e2e-1',
+          trigger: 'repo_intent_trim',
+          summary: 'Kept only the newest repo-scoped turns.',
+          source_message_ids: ['u1', 'u2'],
+          pinned_message_ids: [],
+          retained_refs: [],
+          metrics: {
+            messages_compacted: 2,
+            tokens_before: 3840,
+            tokens_after: 2560,
+            pin_violation_count: 0,
+          },
+          created_at: 2,
+          metadata: {},
+        },
+      });
+      return JSON.parse(JSON.stringify(activeConversation));
+    });
+
+    const conversationId = currentConversation.conversation_id as string;
+    let restored = false;
+    const compactionItems = [
+      {
+        compaction: {
+          compaction_id: 'cmp-e2e-1',
+          trigger: 'repo_intent_trim',
+          summary: 'Kept only the newest repo-scoped turns.',
+          source_message_ids: ['u1', 'u2'],
+          pinned_message_ids: [],
+          retained_refs: [],
+          metrics: { messages_compacted: 2, tokens_before: 3840, tokens_after: 2560 },
+          created_at: 2,
+          metadata: {},
+        },
+        backup: {
+          backup_id: 'backup-e2e-1',
+          conversation_id: conversationId,
+          trigger: 'repo_intent_trim',
+          created_at: 2,
+          path: `${conversationId}--backup-e2e-1.json`,
+          record_id: 'cmp-e2e-1',
+          metadata: {},
+        },
+        diff: {
+          source_message_ids: ['u1', 'u2'],
+          backup_message_count: 7,
+          current_message_count: 5,
+          backup_visible_message_count: 7,
+          current_visible_message_count: 5,
+          removed_message_ids: ['u1', 'u2'],
+          added_message_ids: ['msg-current-1'],
+          source_message_previews: [
+            {
+              message_id: 'u1',
+              role: 'user',
+              preview: 'Removed repo context preview one',
+            },
+            {
+              message_id: 'u2',
+              role: 'assistant',
+              preview: 'Removed repo context preview two',
+            },
+            {
+              message_id: 'u3',
+              role: 'tool',
+              preview: 'Removed repo context preview three',
+            },
+          ],
+          added_message_previews: [
+            {
+              message_id: 'msg-current-1',
+              role: 'user',
+              preview: 'Current draft message',
+            },
+          ],
+        },
+      },
+    ];
+    const restoredConversation = {
+      ...currentConversation,
+      title: 'Restored snapshot',
+      messages: [
+        {
+          message_id: 'msg-restored-1',
+          role: 'user',
+          content: 'Restored snapshot content',
+          metadata: {},
+          created_at: 1,
+        },
+      ],
+      metadata: {
+        ...(currentConversation.metadata ?? {}),
+        compaction_history: [compactionItems[0].compaction],
+      },
+      updated_at: (currentConversation.updated_at ?? 1) + 1,
+    };
+
+    await page.route(`**/api/chat/conversations/${conversationId}/compactions`, async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ items: compactionItems }),
+      });
+    });
+    await page.route(`**/api/chat/conversations/${conversationId}/compactions/cmp-e2e-1/restore`, async (route) => {
+      restored = true;
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          status: 'restored',
+          restored_compaction_id: 'cmp-e2e-1',
+          backup_id: 'backup-e2e-1',
+          conversation: restoredConversation,
+        }),
+      });
+    });
+    await page.route(`**/api/chat/conversations/${conversationId}/context-usage`, async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          usage: {
+            model: 'deepseek-chat',
+            max_context_tokens: 8000,
+            used_tokens: 2800,
+            reserved_output_tokens: 1024,
+            available_tokens: 5176,
+            available_input_tokens: 4976,
+            planned_prompt_tokens: 2800,
+            block_breakdown: {
+              recent: 1200,
+              summary: 640,
+            },
+            drop_reasons: {},
+            timestamp: 1710000200,
+          },
+        }),
+      });
+    });
+    await page.route(`**/api/chat/conversations/${conversationId}`, async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(restored ? restoredConversation : currentConversation),
+      });
+    });
+
+    await expect(page.getByTestId('compaction-notice')).toBeVisible({ timeout: 5000 });
+    await page.getByRole('button', { name: 'Inspect' }).click();
+
+    const inspector = page.getByTestId('chat-inspector-panel');
+    await expect(inspector.getByText('Compaction history')).toBeVisible({ timeout: 5000 });
+    await expect(inspector.getByText('Compaction diff')).toBeVisible({ timeout: 5000 });
+    await expect(inspector.getByText('u1, u2')).toBeVisible({ timeout: 5000 });
+    await expect(inspector.getByTestId('compaction-removed-preview')).toBeVisible({ timeout: 5000 });
+    await expect(inspector.getByText('1 more preview item(s)')).toBeVisible({ timeout: 5000 });
+    await expect(inspector.getByText('Show details').first()).toBeVisible({ timeout: 5000 });
+
+    await inspector.getByRole('button', { name: 'Restore…' }).click();
+    await expect(page.getByTestId('restore-confirmation-dialog')).toBeVisible({ timeout: 5000 });
+    await Promise.all([
+      page.waitForResponse((response) => response.url().includes(`/api/chat/conversations/${conversationId}/compactions/cmp-e2e-1/restore`) && response.request().method() === 'POST'),
+      page.getByRole('button', { name: 'Restore snapshot' }).click(),
+    ]);
+
+    await expect(page.getByText('Restored snapshot content')).toBeVisible({ timeout: 5000 });
+    await expect(page.getByTestId('restore-notice')).toBeVisible({ timeout: 5000 });
+  });
+
+  test('message trace opens trace detail with context governance', async ({ page }) => {
+    await page.goto('/');
+    await switchToChat(page);
+    await createConversation(page);
+
+    await page.evaluate(() => {
+      const chatStore = (window as any).__chatStore;
+      const state = chatStore?.getState();
+      if (!state?.activeConversation) {
+        throw new Error('Active conversation not found');
+      }
+      chatStore.setState({
+        ...state,
+        activeConversation: {
+          ...state.activeConversation,
+          title: 'Trace acceptance',
+          messages: [
+            {
+              message_id: 'assistant-trace-e2e-1',
+              role: 'assistant',
+              content: 'Finished with governance metadata.',
+              metadata: {
+                trace_id: 'trace-e2e-1',
+                usage: {
+                  prompt_tokens: 34,
+                  completion_tokens: 54,
+                  total_tokens: 88,
+                },
+              },
+              created_at: 1,
+            },
+          ],
+        },
+      });
+    });
+
+    await page.route('**/api/chat/trace/trace-e2e-1', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          trace_id: 'trace-e2e-1',
+          total_duration_ms: 42,
+          request_context: {
+            request_id: 'req-e2e-1',
+            conversation_id: 'conv-e2e-1',
+            model: 'deepseek-chat',
+            max_context_tokens: 8192,
+            llm_messages_count: 14,
+          },
+          context_plan: {
+            used_tokens: 1520,
+            planned_prompt_tokens: 1520,
+            reserved_output_tokens: 1024,
+            available_input_tokens: 5648,
+            block_breakdown: {
+              recent: 1200,
+              pinned: 300,
+              current_turn: 180,
+            },
+          },
+          context_governance: {
+            dropped_blocks: ['memory'],
+            drop_reasons: {
+              memory: 'boundary_excluded',
+              older_summary: 'budget_exceeded',
+            },
+            compaction: {
+              triggered: true,
+              trigger: 'repo_intent_trim',
+              messages_compacted: 4,
+              tokens_before: 4800,
+              tokens_after: 2600,
+              saved_tokens: 2200,
+              pin_violation_count: 0,
+            },
+          },
+          root_span: {
+            name: 'chat.request',
+            span_type: 'node',
+            duration_ms: 42,
+            attributes: {
+              'chat.request_id': 'req-e2e-1',
+            },
+            children: [],
+          },
+        }),
+      });
+    });
+
+    const assistantBubble = page.getByTestId('message-bubble').last();
+    await expect(assistantBubble.getByRole('button', { name: 'View trace' })).toBeVisible({ timeout: 5000 });
+    await assistantBubble.getByRole('button', { name: 'View trace' }).click();
+
+    await expect(page.getByText('Trace Detail')).toBeVisible({ timeout: 5000 });
+    const traceRequestContext = page.getByTestId('trace-request-context');
+    await expect(traceRequestContext).toBeVisible({ timeout: 5000 });
+    await expect(traceRequestContext.getByText('req-e2e-1').first()).toBeVisible({ timeout: 5000 });
+    await expect(page.getByText('Context governance')).toBeVisible({ timeout: 5000 });
+    await expect(page.getByText('memory: boundary_excluded')).toBeVisible({ timeout: 5000 });
+    await expect(page.getByText('older_summary: budget_exceeded')).toBeVisible({ timeout: 5000 });
+    await expect(page.getByText('repo_intent_trim')).toBeVisible({ timeout: 5000 });
+    await expect(page.getByText('Tokens 4,800 → 2,600')).toBeVisible({ timeout: 5000 });
+    await expect(page.getByText('Pins protected')).toBeVisible({ timeout: 5000 });
+  });
+
+  test('compaction notice appears only after compaction state is reported during stream', async ({ page }) => {
+    await page.goto('/');
+    await switchToChat(page);
+    await createConversation(page);
+
+    await page.evaluate(() => {
+      const chatStore = (window as any).__chatStore;
+      const state = chatStore?.getState();
+      if (!state?.activeConversation) {
+        throw new Error('Active conversation not found');
+      }
+      const conversationId = state.activeConversation.conversation_id;
+      chatStore.setState({
+        ...state,
+        activeConversation: {
+          ...state.activeConversation,
+          messages: [
+            {
+              message_id: 'user-stream-1',
+              role: 'user',
+              content: 'Continue with the repository plan.',
+              metadata: {},
+              created_at: 1,
+            },
+            {
+              message_id: 'assistant-stream-1',
+              role: 'assistant',
+              content: '',
+              reasoning_content: 'Analyzing current context...',
+              metadata: {},
+              created_at: 2,
+            },
+          ],
+        },
+        latestCompaction: null,
+        streaming: {
+          ...state.streaming,
+          isStreaming: true,
+          messageId: 'assistant-stream-1',
+          contentBuffer: '',
+          reasoningBuffer: 'Analyzing current context...',
+          streamConversationId: conversationId,
+        },
+      });
+    });
+
+    await expect(page.getByTestId('chat-page')).toBeVisible({ timeout: 5000 });
+    await expect(page.getByTestId('compaction-notice')).toHaveCount(0);
+
+    await page.evaluate(() => {
+      const chatStore = (window as any).__chatStore;
+      const state = chatStore?.getState();
+      chatStore.setState({
+        ...state,
+        latestCompaction: {
+          compaction_id: 'cmp-stream-1',
+          trigger: 'pre_request_pressure',
+          summary: 'Prepared active context without dropping pinned content.',
+          source_message_ids: ['user-stream-1'],
+          pinned_message_ids: [],
+          retained_refs: [],
+          metrics: {
+            messages_compacted: 1,
+            tokens_before: 4096,
+            tokens_after: 2784,
+            pin_violation_count: 0,
+          },
+          created_at: 3,
+          metadata: {},
+        },
+      });
+    });
+
+    const notice = page.getByTestId('compaction-notice');
+    await expect(notice).toBeVisible({ timeout: 5000 });
+    await expect(notice.getByText('Prepared context for this request')).toBeVisible({ timeout: 5000 });
+    await expect(notice.getByText(/Saved/)).toBeVisible({ timeout: 5000 });
+    await expect(notice.getByText('Pins protected')).toBeVisible({ timeout: 5000 });
+    await expect(notice.getByRole('button', { name: 'Details' })).toBeVisible({ timeout: 5000 });
   });
 });
 
@@ -2250,9 +2672,9 @@ test.describe('Bookmark overview modal', () => {
     await bookmarkBtn.click();
 
     // Modal should appear with header containing "Bookmarks"
-    const modal = page.locator('.rounded-xl.shadow-2xl');
+    const modal = page.getByRole('dialog', { name: 'Bookmarks' });
     await expect(modal).toBeVisible({ timeout: 3000 });
-    await expect(modal.locator('span.text-gray-200', { hasText: 'Bookmarks' })).toBeVisible();
+    await expect(modal.getByRole('heading', { name: 'Bookmarks' })).toBeVisible();
 
     // Close with ESC
     await page.keyboard.press('Escape');
@@ -2265,7 +2687,7 @@ test.describe('Bookmark overview modal', () => {
     const bookmarkBtn = page.locator('button[title="Bookmarks"]');
     await bookmarkBtn.click();
 
-    const modal = page.locator('.rounded-xl.shadow-2xl');
+    const modal = page.getByRole('dialog', { name: 'Bookmarks' });
     await expect(modal).toBeVisible({ timeout: 3000 });
 
     // Should show empty state text
@@ -2315,7 +2737,7 @@ test.describe('Bookmark overview modal', () => {
     const bookmarkBtn = page.locator('button[title="Bookmarks"]');
     await bookmarkBtn.click();
 
-    const modal = page.locator('.rounded-xl.shadow-2xl');
+    const modal = page.getByRole('dialog', { name: 'Bookmarks' });
     await expect(modal).toBeVisible({ timeout: 3000 });
 
     // Should show the bookmarked conversation
@@ -2384,18 +2806,18 @@ test.describe('Bookmark overview modal', () => {
 
     // Open bookmark modal
     await page.locator('button[title="Bookmarks"]').click();
-    const modal = page.locator('.rounded-xl.shadow-2xl');
+    const modal = page.getByRole('dialog', { name: 'Bookmarks' });
     await expect(modal).toBeVisible({ timeout: 3000 });
 
-    // Click "Conversations" filter tab (text-[10px] distinguishes filter tabs from result items)
-    await modal.locator('button.text-\\[10px\\]', { hasText: 'Conversations' }).click();
+    // Click the conversation-only filter tab
+    await modal.getByRole('button', { name: /Conv \(/ }).click();
     await page.waitForTimeout(300);
 
     // Should still show the conversation entry
     await expect(modal.locator('text=bm-filter-test')).toBeVisible();
 
-    // Click "Messages" filter tab
-    await modal.locator('button.text-\\[10px\\]', { hasText: 'Messages' }).click();
+    // Click the message-only filter tab
+    await modal.getByRole('button', { name: /Msg \(/ }).click();
     await page.waitForTimeout(300);
 
     // Should show the bookmarked message snippet

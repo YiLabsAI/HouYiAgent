@@ -8,7 +8,7 @@ from __future__ import annotations
 import time
 import uuid
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -56,20 +56,12 @@ class ContextBlock(BaseModel):
         return isinstance(self.content, list)
 
 
-class TaskBoundary(BaseModel):
-    """Task-scoped boundary metadata for one planning run."""
-
-    boundary_id: str = Field(default_factory=lambda: uuid.uuid4().hex[:12])
-    task_kind: str = "chat"
-    scope: str = "conversation"
-    metadata: dict[str, Any] = Field(default_factory=dict)
-
-
 class ContextSelectionPolicy(BaseModel):
     """Planning policy that controls which candidate sources may be assembled."""
 
     policy_name: str = "default"
     allow_memory: bool = True
+    allow_summaries: bool = True
     allow_tool_summaries: bool = True
     allow_pinned: bool = True
     max_recent_messages: int | None = None
@@ -89,6 +81,15 @@ class ContextCandidate(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class DroppedContextBlockDetail(BaseModel):
+    candidate_id: str
+    block_type: str
+    source: str
+    token_count: int = 0
+    message_count: int | None = None
+    pinned: bool = False
+
+
 class ContextUsage(BaseModel):
     """Token usage snapshot for a context window."""
 
@@ -100,6 +101,7 @@ class ContextUsage(BaseModel):
     block_breakdown: dict[str, int] = Field(default_factory=dict)
     dropped_blocks: list[str] = Field(default_factory=list)
     drop_reasons: dict[str, str] = Field(default_factory=dict)
+    dropped_block_details: list[DroppedContextBlockDetail] = Field(default_factory=list)
     timestamp: float = Field(default_factory=time.time)
 
     @property
@@ -114,8 +116,13 @@ class NormalizedUsage(BaseModel):
     prompt_tokens: int = 0
     completion_tokens: int = 0
     reasoning_tokens: int = 0
+    reasoning_tokens_reported: bool = False
     answer_tokens: int = 0
+    answer_tokens_reported: bool = False
     cached_prompt_tokens: int = 0
+    cached_prompt_tokens_reported: bool = False
+    cache_hit: bool = False
+    cache_hit_reported: bool = False
     total_tokens: int = 0
     usage_confidence: str = "fallback"
     usage_source: str = "fallback"
@@ -144,6 +151,20 @@ class PlannedContextUsage(ContextUsage):
     available_input_tokens: int = 0
 
 
+class SessionContextState(BaseModel):
+    session_id: str
+    used_units: int = 0
+    max_units: int = 0
+    state: Literal["healthy", "elevated", "near_compaction", "compacted_recently"] = "healthy"
+    last_compacted_at: float | None = None
+    last_compaction_delta: int | None = None
+    last_compacted_message_count: int | None = None
+    updated_at: float = Field(default_factory=time.time)
+
+
+ConversationContextState = SessionContextState
+
+
 class CompactionMetrics(BaseModel):
     compression_ratio: float = 1.0
     retained_entity_coverage: float = 1.0
@@ -159,10 +180,19 @@ class CompactionMetrics(BaseModel):
 class CompactionRecord(BaseModel):
     compaction_id: str = Field(default_factory=lambda: uuid.uuid4().hex[:12])
     trigger: str = "threshold"
+    pressure_level: str = "normal"
     summary: str = ""
+    backup_id: str | None = None
     source_message_ids: list[str] = Field(default_factory=list)
     pinned_message_ids: list[str] = Field(default_factory=list)
     retained_refs: list[str] = Field(default_factory=list)
+    pruned_block_ids: list[str] = Field(default_factory=list)
+    summarized_block_ids: list[str] = Field(default_factory=list)
+    protected_block_ids: list[str] = Field(default_factory=list)
+    oversized_block_ids: list[str] = Field(default_factory=list)
+    active_turn_protected: bool = False
+    cooldown_applied: bool = False
+    restore_status: str | None = None
     metrics: CompactionMetrics = Field(default_factory=CompactionMetrics)
     created_at: float = Field(default_factory=time.time)
     metadata: dict[str, Any] = Field(default_factory=dict)

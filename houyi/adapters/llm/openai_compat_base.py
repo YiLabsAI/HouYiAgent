@@ -65,6 +65,7 @@ class OpenAICompatAdapterBase(LLMAdapter):
             max_tokens=request.max_tokens,
             tool_choice=request.tool_choice,
             enable_streaming=request.enable_streaming,
+            include_stream_usage=request.include_stream_usage,
             enable_thinking=request.enable_thinking,
             thinking_budget=request.thinking_budget,
             extra_kwargs=dict(request.extra_kwargs),

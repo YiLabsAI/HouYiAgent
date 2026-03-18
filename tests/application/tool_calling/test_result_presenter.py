@@ -9,7 +9,7 @@ from houyi.application.tool_calling.tool_results import ToolResultBuilder
 
 
 class TestToolCallResultPresenter:
-    def test_build_blocked_trace_and_message_marks_policy_blocked(self) -> None:
+    def test_blocked_policy(self) -> None:
         presenter = _ToolCallResultPresenter()
 
         trace_entry, tool_message = presenter.build_blocked_trace_and_message(
@@ -42,7 +42,7 @@ class TestToolCallResultPresenter:
         assert tool_message["name"] == "dangerous_tool"
         assert tool_message["content"] == ToolResultBuilder.format(result)
 
-    def test_build_trace_and_message_omits_override_when_no_attempted_tool_name(self) -> None:
+    def test_omit_override(self) -> None:
         presenter = _ToolCallResultPresenter()
         result = ToolResultBuilder.build({"ok": True}, call_id="call_1")
 
@@ -75,7 +75,7 @@ class TestToolCallResultPresenter:
         assert tool_message["content"] == ToolResultBuilder.format(result)
         assert tool_message["metadata"]["duration_ms"] == 125.0
 
-    def test_build_trace_and_message_records_unapplied_override(self) -> None:
+    def test_unapplied_override(self) -> None:
         presenter = _ToolCallResultPresenter()
         result = ToolResultBuilder.build({"executed_skill": "tool1"}, call_id="call_replace")
 
@@ -106,7 +106,7 @@ class TestToolCallResultPresenter:
             "applied": False,
         }
 
-    def test_build_trace_and_message_records_applied_override(self) -> None:
+    def test_applied_override(self) -> None:
         presenter = _ToolCallResultPresenter()
         result = ToolResultBuilder.build({"executed_skill": "tool2"}, call_id="call_replace")
 
@@ -139,7 +139,7 @@ class TestToolCallResultPresenter:
         assert tool_message["name"] == "tool2"
         assert tool_message["tool_call_id"] == "call_replace"
 
-    def test_build_trace_and_message_summarizes_large_result_and_marks_metadata(self) -> None:
+    def test_large_result_summary(self) -> None:
         presenter = _ToolCallResultPresenter()
         result = ToolResultBuilder.build(
             {"items": [{"idx": i, "payload": "y" * 200} for i in range(20)]},
@@ -173,7 +173,7 @@ class TestToolCallResultPresenter:
         assert result["metadata"]["result_summary_max_chars"] == 250
         assert result["metadata"]["result_summary_max_items"] == 3
 
-    def test_build_trace_and_message_keeps_original_content_when_summary_disabled(self) -> None:
+    def test_summary_disabled(self) -> None:
         presenter = _ToolCallResultPresenter()
         result = ToolResultBuilder.build(
             {"items": [{"idx": i, "payload": "y" * 200} for i in range(10)]},

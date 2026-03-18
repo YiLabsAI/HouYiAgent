@@ -78,7 +78,7 @@ def _make_handler(
 
 
 @pytest.mark.asyncio
-async def test_save_workflow_uses_session_plan_when_no_payload() -> None:
+async def test_save_workflow_plan() -> None:
     plan = FakePlan()
     events: list[object] = []
     engine = FakeEngine(plan)
@@ -91,7 +91,7 @@ async def test_save_workflow_uses_session_plan_when_no_payload() -> None:
 
 
 @pytest.mark.asyncio
-async def test_list_workflows_sends_event() -> None:
+async def test_list_workflows_event() -> None:
     events: list[object] = []
     engine = FakeEngine({"nodes": [], "edges": []})
     handler = _make_handler(events, engine, FakeKnowledgeService())
@@ -104,7 +104,7 @@ async def test_list_workflows_sends_event() -> None:
 
 
 @pytest.mark.asyncio
-async def test_create_knowledge_library_sends_event() -> None:
+async def test_create_library_event() -> None:
     events: list[object] = []
     engine = FakeEngine({"nodes": [], "edges": []})
     handler = _make_handler(events, engine, FakeKnowledgeService())
@@ -125,6 +125,6 @@ async def test_create_knowledge_library_sends_event() -> None:
     assert events[0].library["name"] == "KB Name"
 
 
-def test_can_handle_supports_registered_command_types() -> None:
+def test_can_handle_types() -> None:
     assert CommandHandler.can_handle({"command_type": "list_workflows"})
     assert not CommandHandler.can_handle({"command_type": "unknown_cmd"})

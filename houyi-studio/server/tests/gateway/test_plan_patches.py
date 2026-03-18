@@ -15,7 +15,7 @@ from houyi_studio.server.gateway.app import _apply_plan_patches  # noqa: E402
 from houyi_studio.server.gateway.commands import PlanPatch  # noqa: E402
 
 
-def test_apply_plan_patches_updates_inputs_outputs_metadata() -> None:
+def test_apply_patches_fields() -> None:
     """update_node patches should persist inputs/outputs/metadata."""
 
     plan = PlanIR(
@@ -58,7 +58,7 @@ def test_apply_plan_patches_updates_inputs_outputs_metadata() -> None:
     assert updated.metadata == {"label": "t"}
 
 
-def test_apply_plan_patches_position_updates_layout() -> None:
+def test_patch_position_layout() -> None:
     plan = PlanIR(
         plan_id="plan_test",
         version=1,
@@ -90,7 +90,7 @@ def test_apply_plan_patches_position_updates_layout() -> None:
     assert updated.position == {"x": 10.0, "y": 20.0}
 
 
-def test_apply_plan_patches_add_node_sets_layout() -> None:
+def test_add_node_layout() -> None:
     plan = PlanIR(
         plan_id="plan_test",
         version=1,

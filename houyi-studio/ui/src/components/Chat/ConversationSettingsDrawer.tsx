@@ -11,6 +11,7 @@ import { useChatStore } from '@/stores/useChatStore';
 import { DEFAULT_MODEL } from '@/constants/models';
 import { useAvailableModels } from '@/hooks/useAvailableModels';
 import { CenterStage } from '@/components/CenterStage';
+import { InfoHint } from '@/components/InfoHint';
 
 interface ConversationSettingsDrawerProps {
   isOpen: boolean;
@@ -183,7 +184,13 @@ export const ConversationSettingsDrawer: React.FC<ConversationSettingsDrawerProp
                   )}
                 </div>
                 <div className="flex-1">
-                  <label className="block text-[11px] font-medium text-gray-400 mb-1">Max Tokens</label>
+                  <label className="mb-1 flex items-center gap-1 text-[11px] font-medium text-gray-400">
+                    <span>Max Tokens</span>
+                    <InfoHint
+                      testId="conversation-max-tokens-info"
+                      content="Maximum response tokens to generate. Larger values allow longer answers, but leave less room for input context in each request. This does not change the model context window."
+                    />
+                  </label>
                   <input
                     type="number"
                     step="256"

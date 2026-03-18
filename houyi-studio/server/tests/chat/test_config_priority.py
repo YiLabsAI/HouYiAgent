@@ -15,7 +15,13 @@ from houyi_studio.server.chat import chat_service as chat_service_module
 from houyi_studio.server.chat.chat_service import ChatService
 from houyi_studio.server.chat.json_store import JsonStore
 from houyi_studio.server.chat.settings_store import GlobalSettings, ProviderConfig
-from houyi_studio.server.chat.types import Conversation, Message, MessageRole, SendMessageRequest
+from houyi_studio.server.chat.types import (
+    Conversation,
+    ConversationContextState,
+    Message,
+    MessageRole,
+    SendMessageRequest,
+)
 
 from houyi.adapters.llm.base import StreamChunk
 
@@ -242,7 +248,7 @@ class TestEnableReasoningPassthrough:
             assert persisted.messages[-1].metadata["budget"]["answer_reserve"] == 512
 
     @pytest.mark.asyncio
-    async def test_keeps_provider_default_max_tokens(self, store: JsonStore):
+    async def test_provider_defaults(self, store: JsonStore):
         conv = _make_conversation(store)
         service = ChatService(
             json_store=store,
@@ -306,12 +312,19 @@ class TestEnableReasoningPassthrough:
 
 class TestRepoIntentIsolation:
     @pytest.mark.asyncio
-    async def test_repo_intent_trims_older_history_before_llm_context_build(self, store: JsonStore):
+    async def test_preserves_history_under_low_pressure(self, store: JsonStore):
         conv = Conversation(title="Repo Intent Isolation", model="", system_instructions="")
         conv.messages = [
             Message(message_id=f"m{i}", role=MessageRole.USER, content=f"older message {i}")
             for i in range(1, 8)
         ]
+        conv.conversation_context_state = ConversationContextState(
+            conversation_id=conv.conversation_id,
+            used_units=750,
+            max_units=1000,
+            state="elevated",
+            updated_at=1.0,
+        )
         conv = store.create(conv)
         service = ChatService(
             json_store=store,
@@ -330,9 +343,9 @@ class TestRepoIntentIsolation:
             non_system_messages = [m for m in messages if m.get("role") != "system"]
             contents = [str(m.get("content") or "") for m in non_system_messages]
 
-            assert "older message 1" not in contents
-            assert "older message 2" not in contents
             assert contents == [
+                "older message 1",
+                "older message 2",
                 "older message 3",
                 "older message 4",
                 "older message 5",
@@ -340,9 +353,13 @@ class TestRepoIntentIsolation:
                 "older message 7",
                 "Read README from https://github.com/foo/bar",
             ]
+            persisted = store.get(conv.conversation_id)
+            assert persisted is not None
+            history = persisted.metadata.get("compaction_history")
+            assert history is None or history == []
 
     @pytest.mark.asyncio
-    async def test_repo_intent_drops_incomplete_tool_group(self, store: JsonStore):
+    async def test_drop_tool_group(self, store: JsonStore):
         conv = Conversation(title="Repo Intent Tool Isolation", model="", system_instructions="")
         conv.messages = [
             Message(message_id="u1", role=MessageRole.USER, content="older user 1"),
@@ -382,12 +399,17 @@ class TestRepoIntentIsolation:
 
             assert all(not m.get("tool_calls") for m in non_system_messages)
             assert [str(m.get("content") or "") for m in non_system_messages] == [
+                "older user 1",
                 "older user 2",
                 "older user 3",
                 "older user 4",
                 "older user 5",
                 "Read README from https://github.com/foo/bar",
             ]
+            persisted = store.get(conv.conversation_id)
+            assert persisted is not None
+            history = persisted.metadata.get("compaction_history")
+            assert history is None or history == []
 
 
 class TestProviderRouting:

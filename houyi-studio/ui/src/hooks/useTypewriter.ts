@@ -14,7 +14,7 @@
  */
 import { useState, useEffect, useRef } from 'react';
 
-const CHARS_PER_TICK = 4;
+const CHARS_PER_TICK = 1;
 const TICK_INTERVAL_MS = 16; // ~60fps
 const CATCH_UP_MULTIPLIER = 3;
 

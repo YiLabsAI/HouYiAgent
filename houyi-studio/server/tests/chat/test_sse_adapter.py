@@ -134,6 +134,12 @@ class TestStreamChatSSE:
 
         error_evt = next(e for e in parsed if e["event"] == "message.error")
         assert error_evt["data"]["error"] == "The model request failed. Please retry in a moment."
+        assert error_evt["data"]["error_code"] == "provider_request_failed"
+        assert (
+            error_evt["data"]["public_message"]
+            == "The model request failed. Please retry in a moment."
+        )
+        assert error_evt["data"]["retryable"] is True
         assert error_evt["data"]["error_type"] == "RuntimeError"
         assert error_evt["data"]["chunks_sent"] == 1
 
@@ -155,6 +161,26 @@ class TestStreamChatSSE:
         assert parsed[0]["event"] == "message.delta"
         assert parsed[0]["data"]["content"] == "visible: LLM connection failed"
         assert parsed[1]["event"] == "message.error"
+
+    @pytest.mark.asyncio
+    async def test_stream_balance_error(self):
+        async def mock_llm():
+            raise RuntimeError(
+                "SiliconFlow rejected the request because the configured account has "
+                "insufficient balance or credits. Check the provider billing status "
+                "or switch to another API key."
+            )
+            yield
+
+        events = []
+        async for chunk in stream_chat_sse(mock_llm(), message_id="msg004c"):
+            events.append(chunk)
+
+        parsed = _parse_sse_events(events)
+        error_evt = next(e for e in parsed if e["event"] == "message.error")
+        assert error_evt["data"]["error_code"] == "provider_quota_exhausted"
+        assert error_evt["data"]["retryable"] is False
+        assert "insufficient balance or credits" in error_evt["data"]["public_message"]
 
     @pytest.mark.asyncio
     async def test_stream_abort(self):

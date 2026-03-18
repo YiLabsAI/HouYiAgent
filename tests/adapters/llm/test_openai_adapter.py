@@ -167,7 +167,14 @@ class TestOpenAIAdapterHelpers:
 
     def test_update_stream_usage_records_prompt_completion_and_total(self):
         adapter = _build_adapter_with_client(AsyncMock())
-        usage = types.SimpleNamespace(prompt_tokens=5, completion_tokens=7, total_tokens=12)
+        usage = types.SimpleNamespace(
+            prompt_tokens=5,
+            completion_tokens=7,
+            total_tokens=12,
+            completion_tokens_details=types.SimpleNamespace(reasoning_tokens=4),
+            prompt_tokens_details=types.SimpleNamespace(cached_tokens=2),
+            prompt_cache_hit_tokens=2,
+        )
         chunk = types.SimpleNamespace(usage=usage)
 
         adapter._update_stream_usage(chunk)
@@ -176,6 +183,9 @@ class TestOpenAIAdapterHelpers:
             "prompt_tokens": 5,
             "completion_tokens": 7,
             "total_tokens": 12,
+            "completion_tokens_details": {"reasoning_tokens": 4},
+            "prompt_tokens_details": {"cached_tokens": 2},
+            "prompt_cache_hit_tokens": 2,
         }
 
     def test_build_chat_params_includes_stream_options_tools_and_extra_kwargs(self):

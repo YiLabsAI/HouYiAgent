@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
 from typing import Any
 
@@ -37,8 +38,10 @@ from .types import (
     CreateConversationRequest,
     EditMessageRequest,
     Message,
+    PinMessageRequest,
     SendMessageRequest,
     UpdateConversationRequest,
+    UpdatePinnedContextRequest,
 )
 
 logger = logging.getLogger(__name__)
@@ -81,6 +84,42 @@ def _get_settings_store() -> SettingsStore:
             "SettingsStore not initialized. Call register_chat_routes(..., settings_store=...) first."
         )
     return _settings_store
+
+
+def _http_error_detail(
+    *,
+    error_code: str,
+    public_message: str,
+    status_code: int,
+    retryable: bool,
+    provider_code: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "error": public_message,
+        "error_code": error_code,
+        "public_message": public_message,
+        "retryable": retryable,
+        "status_code": status_code,
+        "provider_code": provider_code,
+    }
+
+
+def _not_found_detail(message: str, error_code: str = "resource_not_found") -> dict[str, Any]:
+    return _http_error_detail(
+        error_code=error_code,
+        public_message=message,
+        status_code=404,
+        retryable=False,
+    )
+
+
+def _bad_request_detail(message: str, error_code: str = "invalid_request") -> dict[str, Any]:
+    return _http_error_detail(
+        error_code=error_code,
+        public_message=message,
+        status_code=400,
+        retryable=False,
+    )
 
 
 async def _iter_with_disconnect_guard(
@@ -132,14 +171,7 @@ async def _iter_with_disconnect_guard(
 async def create_conversation(req: CreateConversationRequest) -> dict[str, Any]:
     """Create a new conversation."""
     service = _get_service()
-    conversation = Conversation(
-        title=req.title,
-        model=req.model,
-        system_instructions=req.system_instructions,
-        metadata=req.metadata,
-    )
-    created = service.json_store.create(conversation)
-    return created.to_summary()
+    return service.create_conversation(req)
 
 
 @router.post("/conversations/{conversation_id}/_seed-messages")
@@ -149,19 +181,14 @@ async def seed_messages(conversation_id: str, request: Request) -> dict[str, Any
     Body: { "messages": [{"role": "user"|"assistant", "content": "..."}] }
     """
     service = _get_service()
-    conversation = service.json_store.get(conversation_id)
-    if conversation is None:
-        raise HTTPException(status_code=404, detail=f"Conversation {conversation_id} not found")
     body = await request.json()
-    for msg_data in body.get("messages", []):
-        conversation.messages.append(
-            Message(
-                role=msg_data["role"],
-                content=msg_data["content"],
-            )
+    try:
+        return service.seed_messages(
+            conversation_id,
+            messages=body.get("messages", []),
         )
-    service.json_store.update(conversation)
-    return {"seeded": len(body.get("messages", []))}
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=_not_found_detail(str(exc))) from exc
 
 
 @router.get("/conversations")
@@ -172,28 +199,17 @@ async def list_conversations(
 ) -> dict[str, Any]:
     """List conversations with optional filtering."""
     service = _get_service()
-    conversations = service.json_store.list_conversations(
-        status=status,
-        limit=limit,
-        offset=offset,
-    )
-    total = service.json_store.count(status=status)
-    return {
-        "conversations": conversations,
-        "total": total,
-        "limit": limit,
-        "offset": offset,
-    }
+    return service.list_conversations(status=status, limit=limit, offset=offset)
 
 
 @router.get("/conversations/{conversation_id}")
 async def get_conversation(conversation_id: str) -> dict[str, Any]:
     """Get a conversation with full message history."""
     service = _get_service()
-    conversation = service.json_store.get(conversation_id)
-    if conversation is None:
-        raise HTTPException(status_code=404, detail=f"Conversation {conversation_id} not found")
-    return conversation.model_dump(mode="json")
+    try:
+        return service.get_conversation(conversation_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=_not_found_detail(str(exc))) from exc
 
 
 @router.patch("/conversations/{conversation_id}")
@@ -203,36 +219,10 @@ async def update_conversation(
 ) -> dict[str, Any]:
     """Update conversation metadata (title, status, system_instructions, model)."""
     service = _get_service()
-    conversation = service.json_store.get(conversation_id)
-    if conversation is None:
-        raise HTTPException(status_code=404, detail=f"Conversation {conversation_id} not found")
-
-    if req.title is not None:
-        conversation.title = req.title
-    if req.status is not None:
-        conversation.status = req.status
-    if req.system_instructions is not None:
-        conversation.system_instructions = req.system_instructions
-    if req.model is not None:
-        conversation.model = req.model
-    # For numeric params, distinguish between "not sent" (field absent from JSON)
-    # and "explicitly set to null" (reset to global default).
-    # Pydantic v2: field is None both when absent and when explicitly null,
-    # so we check the raw request body to detect explicit null.
-    raw_body = req.model_dump(exclude_unset=True)
-    if "temperature" in raw_body:
-        conversation.temperature = req.temperature
-    if "max_tokens" in raw_body:
-        conversation.max_tokens = req.max_tokens
-    if "top_p" in raw_body:
-        conversation.top_p = req.top_p
-    if "stream" in raw_body:
-        conversation.stream = req.stream
-    if req.bookmarked is not None:
-        conversation.bookmarked = req.bookmarked
-
-    updated = service.json_store.update(conversation)
-    return updated.to_summary()
+    try:
+        return service.update_conversation(conversation_id, req)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=_not_found_detail(str(exc))) from exc
 
 
 @router.get("/conversations/{conversation_id}/context-usage")
@@ -295,6 +285,221 @@ def _build_trace_tree(spans: list[Any]) -> dict[str, Any] | None:
     return _to_node(roots[0]) if roots else None
 
 
+def _parse_trace_json_mapping(value: Any) -> dict[str, Any]:
+    if not isinstance(value, str) or not value:
+        return {}
+    try:
+        parsed = json.loads(value)
+    except Exception:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _parse_trace_json_list(value: Any) -> list[Any]:
+    if not isinstance(value, str) or not value:
+        return []
+    try:
+        parsed = json.loads(value)
+    except Exception:
+        return []
+    return parsed if isinstance(parsed, list) else []
+
+
+def _coerce_int(value: Any) -> int | None:
+    if value is None or value == "":
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _get_compaction_history(conversation: Conversation) -> list[dict[str, Any]]:
+    history = conversation.metadata.get("compaction_history")
+    if not isinstance(history, list):
+        return []
+    return [item for item in history if isinstance(item, dict)]
+
+
+def _summarize_message_preview(message: Message, *, max_chars: int = 180) -> str:
+    content = str(message.content or "").strip()
+    if not content and isinstance(message.reasoning_content, str):
+        content = message.reasoning_content.strip()
+    if not content and isinstance(message.tool_calls, list) and message.tool_calls:
+        content = f"[tool calls: {len(message.tool_calls)}]"
+    if not content and isinstance(message.tool_call_id, str) and message.tool_call_id:
+        content = f"[tool result: {message.tool_call_id}]"
+    if not content and message.attachments:
+        content = f"[attachments: {len(message.attachments)}]"
+    if not content:
+        content = "[empty]"
+    normalized = " ".join(content.split())
+    return normalized if len(normalized) <= max_chars else f"{normalized[:max_chars]}…"
+
+
+def _build_message_previews(
+    messages: list[Message],
+    *,
+    ordered_ids: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    if ordered_ids is None:
+        selected = [
+            message
+            for message in messages
+            if isinstance(message.message_id, str) and message.message_id
+        ]
+    else:
+        by_id = {
+            message.message_id: message
+            for message in messages
+            if isinstance(message.message_id, str) and message.message_id
+        }
+        selected = [by_id[message_id] for message_id in ordered_ids if message_id in by_id]
+    return [
+        {
+            "message_id": message.message_id,
+            "role": message.role.value,
+            "name": message.name,
+            "created_at": message.created_at,
+            "preview": _summarize_message_preview(message),
+        }
+        for message in selected
+    ]
+
+
+def _build_compaction_diff(
+    *,
+    current_conversation: Conversation,
+    backup_conversation: Conversation | None,
+    compaction: dict[str, Any],
+) -> dict[str, Any]:
+    current_ids = [
+        message.message_id
+        for message in current_conversation.messages
+        if isinstance(message.message_id, str) and message.message_id
+    ]
+    current_id_set = set(current_ids)
+    source_message_ids = [
+        message_id
+        for message_id in compaction.get("source_message_ids", [])
+        if isinstance(message_id, str) and message_id
+    ]
+    if backup_conversation is None:
+        return {
+            "source_message_ids": source_message_ids,
+            "backup_message_count": None,
+            "current_message_count": len(current_conversation.messages),
+            "backup_visible_message_count": None,
+            "current_visible_message_count": current_conversation.visible_message_count,
+            "removed_message_ids": source_message_ids,
+            "added_message_ids": [],
+            "source_message_previews": [],
+            "added_message_previews": [],
+        }
+    backup_ids = [
+        message.message_id
+        for message in backup_conversation.messages
+        if isinstance(message.message_id, str) and message.message_id
+    ]
+    backup_id_set = set(backup_ids)
+    removed_message_ids = [
+        message_id for message_id in backup_ids if message_id not in current_id_set
+    ]
+    added_message_ids = [
+        message_id for message_id in current_ids if message_id not in backup_id_set
+    ]
+    return {
+        "source_message_ids": source_message_ids,
+        "backup_message_count": len(backup_conversation.messages),
+        "current_message_count": len(current_conversation.messages),
+        "backup_visible_message_count": backup_conversation.visible_message_count,
+        "current_visible_message_count": current_conversation.visible_message_count,
+        "removed_message_ids": removed_message_ids,
+        "added_message_ids": added_message_ids,
+        "source_message_previews": _build_message_previews(
+            backup_conversation.messages,
+            ordered_ids=source_message_ids,
+        ),
+        "added_message_previews": _build_message_previews(
+            current_conversation.messages,
+            ordered_ids=added_message_ids,
+        ),
+    }
+
+
+def _build_compaction_history_item(
+    *,
+    service: ChatService,
+    conversation: Conversation,
+    compaction: dict[str, Any],
+) -> dict[str, Any]:
+    backup_id = str(compaction.get("backup_id") or "").strip()
+    backup_entry = service.json_store.get_backup(backup_id) if backup_id else None
+    backup_conversation: Conversation | None = None
+    if backup_id:
+        with contextlib.suppress(FileNotFoundError):
+            backup_conversation = service.json_store.read_backup(backup_id)
+    return {
+        "compaction": compaction,
+        "backup": backup_entry,
+        "diff": _build_compaction_diff(
+            current_conversation=conversation,
+            backup_conversation=backup_conversation,
+            compaction=compaction,
+        ),
+    }
+
+
+def _build_trace_request_context(root_attrs: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "request_id": root_attrs.get("chat.request_id"),
+        "conversation_id": root_attrs.get("chat.conversation_id"),
+        "model": root_attrs.get("chat.model"),
+        "max_context_tokens": _coerce_int(root_attrs.get("chat.context_tokens_max")),
+        "llm_messages_count": _coerce_int(root_attrs.get("chat.llm_messages_count")),
+    }
+
+
+def _build_trace_context_plan(root_attrs: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "used_tokens": _coerce_int(root_attrs.get("chat.context_tokens_used")),
+        "planned_prompt_tokens": _coerce_int(root_attrs.get("chat.context_planned_prompt_tokens")),
+        "reserved_output_tokens": _coerce_int(
+            root_attrs.get("chat.context_reserved_output_tokens")
+        ),
+        "available_input_tokens": _coerce_int(
+            root_attrs.get("chat.context_available_input_tokens")
+        ),
+        "block_breakdown": _parse_trace_json_mapping(root_attrs.get("chat.context_blocks")),
+    }
+
+
+def _build_trace_context_governance(root_attrs: dict[str, Any]) -> dict[str, Any]:
+    tokens_before = _coerce_int(root_attrs.get("chat.compaction.tokens_before"))
+    tokens_after = _coerce_int(root_attrs.get("chat.compaction.tokens_after"))
+    saved_tokens = None
+    if tokens_before is not None and tokens_after is not None:
+        saved_tokens = max(0, tokens_before - tokens_after)
+    return {
+        "dropped_blocks": _parse_trace_json_list(root_attrs.get("chat.context_dropped_blocks")),
+        "drop_reasons": _parse_trace_json_mapping(root_attrs.get("chat.context_drop_reasons")),
+        "dropped_block_details": _parse_trace_json_list(
+            root_attrs.get("chat.context_dropped_block_details")
+        ),
+        "compaction": {
+            "triggered": bool(root_attrs.get("chat.compaction.triggered")),
+            "trigger": root_attrs.get("chat.compaction.trigger"),
+            "messages_compacted": _coerce_int(root_attrs.get("chat.compaction.messages_compacted")),
+            "tokens_before": tokens_before,
+            "tokens_after": tokens_after,
+            "saved_tokens": saved_tokens,
+            "pin_violation_count": _coerce_int(
+                root_attrs.get("chat.compaction.pin_violation_count")
+            ),
+        },
+    }
+
+
 @router.get("/trace/{trace_id}")
 async def get_trace(trace_id: str) -> dict[str, Any]:
     """Get observability trace detail for Chat tool-calling timeline.
@@ -305,7 +510,10 @@ async def get_trace(trace_id: str) -> dict[str, Any]:
     trace_view = query.get_trace(trace_id, include_content=False)
     if trace_view is None:
         logger.warning("Chat trace not found: trace_id=%s", trace_id)
-        raise HTTPException(status_code=404, detail=f"Trace {trace_id} not found")
+        raise HTTPException(
+            status_code=404,
+            detail=_not_found_detail(f"Trace {trace_id} not found", "trace_not_found"),
+        )
 
     root_span = _build_trace_tree(trace_view.spans)
 
@@ -332,6 +540,7 @@ async def get_trace(trace_id: str) -> dict[str, Any]:
         bool(root_span),
         trace_view.total_duration_ms or 0.0,
     )
+    root_attrs = root_span.get("attributes", {}) if isinstance(root_span, dict) else {}
 
     return {
         "trace_id": trace_view.trace_id,
@@ -345,6 +554,150 @@ async def get_trace(trace_id: str) -> dict[str, Any]:
             "llm_spans_with_usage": llm_spans_with_usage,
             "is_partial": llm_span_count > llm_spans_with_usage,
         },
+        "request_context": _build_trace_request_context(root_attrs),
+        "context_plan": _build_trace_context_plan(root_attrs),
+        "context_governance": _build_trace_context_governance(root_attrs),
+    }
+
+
+@router.get("/conversations/{conversation_id}/compactions")
+async def list_compactions(conversation_id: str) -> dict[str, Any]:
+    service = _get_service()
+    conversation = service.json_store.get(conversation_id)
+    if conversation is None:
+        raise HTTPException(
+            status_code=404,
+            detail=_not_found_detail(
+                f"Conversation {conversation_id} not found",
+                "conversation_not_found",
+            ),
+        )
+    history = _get_compaction_history(conversation)
+    items = [
+        _build_compaction_history_item(
+            service=service,
+            conversation=conversation,
+            compaction=compaction,
+        )
+        for compaction in reversed(history)
+    ]
+    return {"items": items}
+
+
+@router.post("/conversations/{conversation_id}/compactions/{compaction_id}/restore")
+async def restore_compaction(conversation_id: str, compaction_id: str) -> dict[str, Any]:
+    service = _get_service()
+    conversation = service.json_store.get(conversation_id)
+    if conversation is None:
+        raise HTTPException(
+            status_code=404,
+            detail=_not_found_detail(
+                f"Conversation {conversation_id} not found",
+                "conversation_not_found",
+            ),
+        )
+    compaction = next(
+        (
+            item
+            for item in _get_compaction_history(conversation)
+            if str(item.get("compaction_id") or "") == compaction_id
+        ),
+        None,
+    )
+    if compaction is None:
+        raise HTTPException(
+            status_code=404,
+            detail=_not_found_detail(
+                f"Compaction {compaction_id} not found",
+                "compaction_not_found",
+            ),
+        )
+    backup_id = str(compaction.get("backup_id") or "").strip()
+    if not backup_id:
+        raise HTTPException(
+            status_code=400,
+            detail=_bad_request_detail(
+                f"Compaction {compaction_id} has no backup",
+                "compaction_backup_missing",
+            ),
+        )
+    try:
+        restore_point = service.json_store.create_backup(
+            conversation_id,
+            trigger="restore_point",
+            metadata={
+                "kind": "restore_point",
+                "reason": "before_restore_compaction",
+                "restored_compaction_id": compaction_id,
+                "source_backup_id": backup_id,
+            },
+        )
+        restored = service.json_store.restore_backup(backup_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=_not_found_detail(str(exc))) from exc
+    if restored.conversation_id != conversation_id:
+        raise HTTPException(
+            status_code=400,
+            detail=_bad_request_detail(
+                f"Backup {backup_id} does not belong to {conversation_id}",
+                "backup_conversation_mismatch",
+            ),
+        )
+    service.ensure_conversation_context_state(
+        restored,
+        model=restored.model or service.default_model,
+        persist=True,
+    )
+    refreshed = service.json_store.get(conversation_id) or restored
+    return {
+        "status": "restored",
+        "restored_compaction_id": compaction_id,
+        "backup_id": backup_id,
+        "restore_point_backup_id": restore_point["backup_id"],
+        "conversation": refreshed.model_dump(mode="json"),
+    }
+
+
+@router.post("/conversations/{conversation_id}/backups/{backup_id}/restore")
+async def restore_backup(conversation_id: str, backup_id: str) -> dict[str, Any]:
+    service = _get_service()
+    conversation = service.json_store.get(conversation_id)
+    if conversation is None:
+        raise HTTPException(
+            status_code=404,
+            detail=_not_found_detail(
+                f"Conversation {conversation_id} not found",
+                "conversation_not_found",
+            ),
+        )
+    backup = service.json_store.get_backup(backup_id)
+    if backup is None:
+        raise HTTPException(
+            status_code=404,
+            detail=_not_found_detail(f"Backup {backup_id} not found", "backup_not_found"),
+        )
+    if str(backup.get("conversation_id") or "") != conversation_id:
+        raise HTTPException(
+            status_code=400,
+            detail=_bad_request_detail(
+                f"Backup {backup_id} does not belong to {conversation_id}",
+                "backup_conversation_mismatch",
+            ),
+        )
+    try:
+        restored = service.json_store.restore_backup(backup_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=_not_found_detail(str(exc))) from exc
+    service.ensure_conversation_context_state(
+        restored,
+        model=restored.model or service.default_model,
+        persist=True,
+    )
+    refreshed = service.json_store.get(conversation_id) or restored
+    return {
+        "status": "restored",
+        "backup_id": backup_id,
+        "conversation": refreshed.model_dump(mode="json"),
     }
 
 
@@ -352,10 +705,20 @@ async def get_trace(trace_id: str) -> dict[str, Any]:
 async def delete_conversation(conversation_id: str) -> dict[str, str]:
     """Delete a conversation."""
     service = _get_service()
-    deleted = service.json_store.delete(conversation_id)
-    if not deleted:
-        raise HTTPException(status_code=404, detail=f"Conversation {conversation_id} not found")
-    return {"status": "deleted", "conversation_id": conversation_id}
+    try:
+        return service.delete_conversation(conversation_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=_not_found_detail(str(exc))) from exc
+
+
+@router.post("/conversations/{conversation_id}/compact")
+async def compact_conversation(conversation_id: str) -> dict[str, Any]:
+    """Run manual conversation compaction."""
+    service = _get_service()
+    try:
+        return await service.compact_conversation(conversation_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=_not_found_detail(str(exc))) from exc
 
 
 # --- Message streaming ---
@@ -379,7 +742,13 @@ async def send_message(
     # Verify conversation exists
     conversation = service.json_store.get(conversation_id)
     if conversation is None:
-        raise HTTPException(status_code=404, detail=f"Conversation {conversation_id} not found")
+        raise HTTPException(
+            status_code=404,
+            detail=_not_found_detail(
+                f"Conversation {conversation_id} not found",
+                "conversation_not_found",
+            ),
+        )
 
     async def event_generator():
         try:
@@ -390,7 +759,7 @@ async def send_message(
             ):
                 yield chunk
         except FileNotFoundError as e:
-            raise HTTPException(status_code=404, detail=str(e)) from e
+            raise HTTPException(status_code=404, detail=_not_found_detail(str(e))) from e
         except Exception as e:
             logger.error("Stream error for %s: %s", conversation_id, e, exc_info=True)
             # Error event already sent by sse_adapter; just stop
@@ -424,9 +793,9 @@ async def edit_message(
         msg = await service.edit_message(conversation_id, message_id, req)
         return msg.model_dump(mode="json")
     except FileNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e)) from e
+        raise HTTPException(status_code=404, detail=_not_found_detail(str(e))) from e
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+        raise HTTPException(status_code=400, detail=_bad_request_detail(str(e))) from e
 
 
 @router.patch("/conversations/{conversation_id}/messages/{message_id}/bookmark")
@@ -441,17 +810,68 @@ async def toggle_message_bookmark(
     Returns the updated message.
     """
     service = _get_service()
-    conversation = service.json_store.get(conversation_id)
-    if conversation is None:
-        raise HTTPException(status_code=404, detail=f"Conversation {conversation_id} not found")
     body = await request.json()
     bookmarked = body.get("bookmarked", False)
-    msg = next((m for m in conversation.messages if m.message_id == message_id), None)
-    if msg is None:
-        raise HTTPException(status_code=404, detail=f"Message {message_id} not found")
-    msg.bookmarked = bookmarked
-    service.json_store.update(conversation)
-    return msg.model_dump(mode="json")
+    try:
+        return service.toggle_message_bookmark(
+            conversation_id=conversation_id,
+            message_id=message_id,
+            bookmarked=bookmarked,
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=_not_found_detail(str(exc))) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=_bad_request_detail(str(exc))) from exc
+
+
+@router.get("/conversations/{conversation_id}/pins")
+async def list_pinned_contexts(conversation_id: str) -> dict[str, Any]:
+    service = _get_service()
+    try:
+        pins = await service.pinned_context_store.list_pins(
+            conversation_id=conversation_id,
+            include_inactive=True,
+        )
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=_not_found_detail(str(e))) from e
+    return {"pins": [pin.model_dump(mode="json") for pin in pins]}
+
+
+@router.post("/conversations/{conversation_id}/messages/{message_id}/pin-context")
+async def pin_message_to_context(
+    conversation_id: str,
+    message_id: str,
+    req: PinMessageRequest,
+) -> dict[str, Any]:
+    service = _get_service()
+    try:
+        pin = await service.pinned_context_store.pin_message(
+            conversation_id=conversation_id,
+            message_id=message_id,
+            replace_pin_id=req.replace_pin_id,
+            title=req.title,
+        )
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=_not_found_detail(str(e))) from e
+    return pin.model_dump(mode="json")
+
+
+@router.patch("/conversations/{conversation_id}/pins/{pin_id}")
+async def update_pinned_context(
+    conversation_id: str,
+    pin_id: str,
+    req: UpdatePinnedContextRequest,
+) -> dict[str, Any]:
+    service = _get_service()
+    try:
+        pin = await service.pinned_context_store.update_pin_status(
+            conversation_id=conversation_id,
+            pin_id=pin_id,
+            status=req.status,
+        )
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=_not_found_detail(str(e))) from e
+    return pin.model_dump(mode="json")
 
 
 @router.delete("/conversations/{conversation_id}/messages/{message_id}")
@@ -465,9 +885,9 @@ async def delete_message(
         await service.delete_message(conversation_id, message_id)
         return {"status": "deleted", "message_id": message_id}
     except FileNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e)) from e
+        raise HTTPException(status_code=404, detail=_not_found_detail(str(e))) from e
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+        raise HTTPException(status_code=400, detail=_bad_request_detail(str(e))) from e
 
 
 @router.post("/conversations/{conversation_id}/messages/{message_id}/regenerate")
@@ -492,9 +912,9 @@ async def regenerate_message(
             ):
                 yield chunk
         except FileNotFoundError as e:
-            raise HTTPException(status_code=404, detail=str(e)) from e
+            raise HTTPException(status_code=404, detail=_not_found_detail(str(e))) from e
         except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e)) from e
+            raise HTTPException(status_code=400, detail=_bad_request_detail(str(e))) from e
         except Exception as e:
             logger.error(
                 "Regenerate error for %s/%s: %s", conversation_id, message_id, e, exc_info=True
@@ -634,11 +1054,17 @@ async def import_cherrystudio(file: UploadFile) -> dict[str, Any]:
     service = _get_service()
 
     if not file.filename or not file.filename.endswith(".zip"):
-        raise HTTPException(status_code=400, detail="Expected a .zip file")
+        raise HTTPException(
+            status_code=400,
+            detail=_bad_request_detail("Expected a .zip file", "invalid_import_file"),
+        )
 
     zip_data = await file.read()
     if not zip_data:
-        raise HTTPException(status_code=400, detail="Empty file")
+        raise HTTPException(
+            status_code=400,
+            detail=_bad_request_detail("Empty file", "empty_import_file"),
+        )
 
     importer = CherryStudioImporter(service.json_store)
     result = importer.import_from_zip(zip_data)

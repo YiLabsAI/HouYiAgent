@@ -25,7 +25,7 @@ from houyi.adapters.llm.models import (
     GPT_4O,
     GPT_4O_MINI,
     GPT_35_TURBO,
-    MODEL_CONTEXT_WINDOWS,
+    resolve_model_context_window,
 )
 
 logger = logging.getLogger(__name__)
@@ -134,13 +134,9 @@ class TokenEstimator:
     @staticmethod
     def _lookup_context_window(model: str) -> int:
         """Look up context window size for a model."""
-        if model in MODEL_CONTEXT_WINDOWS:
-            return MODEL_CONTEXT_WINDOWS[model]
-        # Try partial match (e.g., "deepseek" in model name)
-        model_lower = model.lower()
-        for key, value in MODEL_CONTEXT_WINDOWS.items():
-            if key.lower() in model_lower or model_lower in key.lower():
-                return value
+        resolved = resolve_model_context_window(model)
+        if resolved is not None:
+            return resolved
         logger.debug(
             "Unknown model '%s', using default %dk context window",
             model,

@@ -59,7 +59,7 @@ class TestIngestFiles:
     """Core ingest_files entry point (RAG engine mocked away)."""
 
     @pytest.mark.asyncio
-    async def test_ingest_with_rag_covers_all_supported_suffixes(
+    async def test_suffixes(
         self,
         svc: IngestService,
         repo: LibraryRepository,
@@ -144,7 +144,7 @@ class TestIngestFiles:
         assert lib["doc_count"] == 2
 
     @pytest.mark.asyncio
-    async def test_failed_new_file_does_not_inflate_doc_count(
+    async def test_failed_doc_count(
         self,
         svc: IngestService,
         repo: LibraryRepository,
@@ -182,7 +182,7 @@ class TestIngestFiles:
         assert lib["doc_count"] == 0
 
     @pytest.mark.asyncio
-    async def test_local_provider_missing_fastembed_falls_back_to_metadata_ingest(
+    async def test_local_missing(
         self,
         svc: IngestService,
         repo: LibraryRepository,
@@ -223,7 +223,7 @@ class TestIngestFiles:
         assert lib["status"] == "degraded"
 
     @pytest.mark.asyncio
-    async def test_local_provider_runtime_error_falls_back_to_metadata_ingest(
+    async def test_local_error(
         self,
         svc: IngestService,
         repo: LibraryRepository,
@@ -267,7 +267,7 @@ class TestIngestFiles:
         assert "model_optimized.onnx" in str(doc.get("metadata", {}).get("degraded_reason", ""))
 
     @pytest.mark.asyncio
-    async def test_reingest_success_clears_stale_document_error(
+    async def test_reingest_error(
         self,
         svc: IngestService,
         repo: LibraryRepository,

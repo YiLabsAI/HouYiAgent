@@ -33,7 +33,7 @@ describe('ToolStatistics', () => {
 
   // ─── Rendering ─────────────────────────────────────────────────
 
-  it('returns null when no registered tools and no exec stats', async () => {
+  it('hides panel without tools or stats', async () => {
     mockFetch.mockResolvedValueOnce({
       ok: true,
       json: async () => ({ tools: [] }),
@@ -44,7 +44,7 @@ describe('ToolStatistics', () => {
     expect(container.querySelector('[data-testid="tool-statistics"]')).toBeNull();
   });
 
-  it('renders registered tools count from /api/tools', async () => {
+  it('renders registered tools count', async () => {
     mockFetch.mockResolvedValueOnce({
       ok: true,
       json: async () => ({
@@ -66,7 +66,7 @@ describe('ToolStatistics', () => {
     });
   });
 
-  it('renders execution stats when available', async () => {
+  it('renders execution stats', async () => {
     toolStatsMock = {
       ...emptyStats,
       totalCalls: 5,
@@ -95,7 +95,7 @@ describe('ToolStatistics', () => {
 
   // ─── Dropdown ──────────────────────────────────────────────────
 
-  it('opens dropdown on pill click', async () => {
+  it('opens dropdown', async () => {
     mockFetch.mockResolvedValueOnce({
       ok: true,
       json: async () => ({
@@ -124,7 +124,7 @@ describe('ToolStatistics', () => {
     expect(screen.getByText('Math operations')).toBeInTheDocument();
   });
 
-  it('shows execution statistics in dropdown when in graph mode', async () => {
+  it('shows execution stats in dropdown', async () => {
     toolStatsMock = {
       ...emptyStats,
       totalCalls: 3,
@@ -160,7 +160,7 @@ describe('ToolStatistics', () => {
     expect(callsText).toBeInTheDocument();
   });
 
-  it('closes dropdown on outside click', async () => {
+  it('closes on outside click', async () => {
     mockFetch.mockResolvedValueOnce({
       ok: true,
       json: async () => ({
@@ -186,7 +186,7 @@ describe('ToolStatistics', () => {
 
   // ─── Error resilience ─────────────────────────────────────────
 
-  it('handles fetch failure gracefully', async () => {
+  it('handles fetch failure', async () => {
     mockFetch.mockRejectedValueOnce(new Error('Network error'));
 
     toolStatsMock = {
@@ -207,7 +207,7 @@ describe('ToolStatistics', () => {
     });
   });
 
-  it('shows both registered tools and exec stats together', async () => {
+  it('shows registered tools with exec stats', async () => {
     toolStatsMock = {
       ...emptyStats,
       totalCalls: 2,

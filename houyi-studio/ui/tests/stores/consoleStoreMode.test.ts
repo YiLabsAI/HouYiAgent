@@ -25,7 +25,7 @@ describe('useConsoleStore — primaryMode & sidebarTab', () => {
   // ---------------------------------------------------------------------------
 
   describe('default values', () => {
-    it('starts with primaryMode = graph and sidebarTab = workflow', async () => {
+    it('starts in graph workflow mode', async () => {
       const { useConsoleStore } = await loadStoreFresh();
       const state = useConsoleStore.getState();
       expect(state.primaryMode).toBe('graph');
@@ -38,7 +38,7 @@ describe('useConsoleStore — primaryMode & sidebarTab', () => {
   // ---------------------------------------------------------------------------
 
   describe('setPrimaryMode', () => {
-    it('graph → chat remaps workflow to conversations', async () => {
+    it('remaps workflow to conversations', async () => {
       const { useConsoleStore } = await loadStoreFresh();
       useConsoleStore.getState().setPrimaryMode('chat');
       const state = useConsoleStore.getState();
@@ -46,7 +46,7 @@ describe('useConsoleStore — primaryMode & sidebarTab', () => {
       expect(state.sidebarTab).toBe('conversations');
     });
 
-    it('chat → graph remaps conversations to workflow', async () => {
+    it('remaps conversations to workflow', async () => {
       const { useConsoleStore } = await loadStoreFresh();
       // Set to chat first
       useConsoleStore.getState().setPrimaryMode('chat');
@@ -58,21 +58,21 @@ describe('useConsoleStore — primaryMode & sidebarTab', () => {
       expect(state.sidebarTab).toBe('workflow');
     });
 
-    it('graph → chat preserves knowledge tab', async () => {
+    it('keeps knowledge tab', async () => {
       const { useConsoleStore } = await loadStoreFresh();
       useConsoleStore.getState().setSidebarTab('knowledge');
       useConsoleStore.getState().setPrimaryMode('chat');
       expect(useConsoleStore.getState().sidebarTab).toBe('knowledge');
     });
 
-    it('graph → chat preserves skills tab', async () => {
+    it('keeps skills tab', async () => {
       const { useConsoleStore } = await loadStoreFresh();
       useConsoleStore.getState().setSidebarTab('skills');
       useConsoleStore.getState().setPrimaryMode('chat');
       expect(useConsoleStore.getState().sidebarTab).toBe('skills');
     });
 
-    it('chat → graph preserves knowledge tab', async () => {
+    it('keeps knowledge in graph mode', async () => {
       const { useConsoleStore } = await loadStoreFresh();
       useConsoleStore.getState().setPrimaryMode('chat');
       useConsoleStore.getState().setSidebarTab('knowledge');
@@ -80,7 +80,7 @@ describe('useConsoleStore — primaryMode & sidebarTab', () => {
       expect(useConsoleStore.getState().sidebarTab).toBe('knowledge');
     });
 
-    it('chat → graph preserves skills tab', async () => {
+    it('keeps skills in graph mode', async () => {
       const { useConsoleStore } = await loadStoreFresh();
       useConsoleStore.getState().setPrimaryMode('chat');
       useConsoleStore.getState().setSidebarTab('skills');
@@ -88,7 +88,7 @@ describe('useConsoleStore — primaryMode & sidebarTab', () => {
       expect(useConsoleStore.getState().sidebarTab).toBe('skills');
     });
 
-    it('no-op when setting same mode (graph → graph)', async () => {
+    it('keeps state on graph noop', async () => {
       const { useConsoleStore } = await loadStoreFresh();
       useConsoleStore.getState().setSidebarTab('knowledge');
       useConsoleStore.getState().setPrimaryMode('graph');
@@ -96,7 +96,7 @@ describe('useConsoleStore — primaryMode & sidebarTab', () => {
       expect(useConsoleStore.getState().sidebarTab).toBe('knowledge');
     });
 
-    it('no-op when setting same mode (chat → chat)', async () => {
+    it('keeps state on chat noop', async () => {
       const { useConsoleStore } = await loadStoreFresh();
       useConsoleStore.getState().setPrimaryMode('chat');
       useConsoleStore.getState().setSidebarTab('skills');
@@ -129,7 +129,7 @@ describe('useConsoleStore — primaryMode & sidebarTab', () => {
       expect(useConsoleStore.getState().sidebarTab).toBe('skills');
     });
 
-    it('rejects conversations tab in graph mode (constraint guard)', async () => {
+    it('rejects conversations in graph mode', async () => {
       const { useConsoleStore } = await loadStoreFresh();
       useConsoleStore.getState().setSidebarTab('conversations');
       // Should silently reject — stay on workflow
@@ -144,7 +144,7 @@ describe('useConsoleStore — primaryMode & sidebarTab', () => {
       expect(useConsoleStore.getState().sidebarTab).toBe('conversations');
     });
 
-    it('rejects workflow tab in chat mode (constraint guard)', async () => {
+    it('rejects workflow in chat mode', async () => {
       const { useConsoleStore } = await loadStoreFresh();
       useConsoleStore.getState().setPrimaryMode('chat');
       // Currently on conversations
@@ -173,7 +173,7 @@ describe('useConsoleStore — primaryMode & sidebarTab', () => {
   // ---------------------------------------------------------------------------
 
   describe('rapid switching edge cases', () => {
-    it('rapid graph→chat→graph→chat ends in correct state', async () => {
+    it('keeps correct state after rapid switches', async () => {
       const { useConsoleStore } = await loadStoreFresh();
       useConsoleStore.getState().setPrimaryMode('chat');
       useConsoleStore.getState().setPrimaryMode('graph');
@@ -191,7 +191,7 @@ describe('useConsoleStore — primaryMode & sidebarTab', () => {
       expect(useConsoleStore.getState().sidebarTab).toBe('workflow');
     });
 
-    it('mode switch + tab switch interleave preserves consistency', async () => {
+    it('preserves consistency across switches', async () => {
       const { useConsoleStore } = await loadStoreFresh();
       // graph + skills
       useConsoleStore.getState().setSidebarTab('skills');

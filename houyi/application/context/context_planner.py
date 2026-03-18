@@ -18,8 +18,8 @@ from houyi.application.context.types import (
     ContextPlan,
     ContextSelectionPolicy,
     ContextSourceKind,
+    DroppedContextBlockDetail,
     PlannedContextUsage,
-    TaskBoundary,
 )
 
 logger = logging.getLogger(__name__)
@@ -57,7 +57,8 @@ class ContextPlanner:
         input_budget: int | None = None,
         candidates: list[ContextCandidate] | None = None,
         selection_policy: ContextSelectionPolicy | None = None,
-        task_boundary: TaskBoundary | None = None,
+        boundary_id: str | None = None,
+        truncation_log_label: str | None = None,
     ) -> ContextPlan:
         """Build a ContextPlan from conversation messages.
 
@@ -82,20 +83,22 @@ class ContextPlanner:
             0, input_budget if input_budget is not None else self.estimator.max_input_tokens
         )
         policy = selection_policy or ContextSelectionPolicy()
-        boundary = task_boundary or TaskBoundary()
         assembled_candidates = candidates or self._build_default_candidates(
             messages=messages,
             system_text=sys_text,
             memory_context=memory_context,
             selection_policy=policy,
-            task_boundary=boundary,
+            boundary_id=boundary_id,
         )
-        blocks, used, dropped_blocks, drop_reasons = self._assemble_candidates(
-            candidates=assembled_candidates,
-            budget=budget,
-            selection_policy=policy,
-            task_boundary=boundary,
-            raw_message_count=len(messages),
+        blocks, used, dropped_blocks, drop_reasons, dropped_block_details = (
+            self._assemble_candidates(
+                candidates=assembled_candidates,
+                budget=budget,
+                selection_policy=policy,
+                boundary_id=boundary_id,
+                raw_message_count=len(messages),
+                truncation_log_label=truncation_log_label,
+            )
         )
 
         # Build usage snapshot
@@ -108,9 +111,10 @@ class ContextPlanner:
             available_tokens=max(0, budget - used),
             planned_prompt_tokens=used,
             available_input_tokens=max(0, budget - used),
-            block_breakdown={b.block_type.value: b.token_count for b in blocks},
+            block_breakdown=self._build_block_breakdown(blocks),
             dropped_blocks=dropped_blocks,
             drop_reasons=drop_reasons,
+            dropped_block_details=dropped_block_details,
         )
 
         return ContextPlan(blocks=blocks, usage=usage)
@@ -122,9 +126,9 @@ class ContextPlanner:
         system_text: str,
         memory_context: str | None,
         selection_policy: ContextSelectionPolicy,
-        task_boundary: TaskBoundary | None = None,
+        boundary_id: str | None = None,
     ) -> list[ContextCandidate]:
-        boundary_metadata = self._boundary_metadata(task_boundary)
+        boundary_metadata = self._boundary_metadata(boundary_id)
         candidates: list[ContextCandidate] = []
         if system_text:
             candidates.append(
@@ -143,7 +147,7 @@ class ContextPlanner:
                     source=ContextSourceKind.MEMORY,
                     block_type=ContextBlockType.MEMORY,
                     content=memory_context,
-                    priority=50,
+                    priority=150,
                 )
             )
 
@@ -186,9 +190,10 @@ class ContextPlanner:
         candidates: list[ContextCandidate],
         budget: int,
         selection_policy: ContextSelectionPolicy,
-        task_boundary: TaskBoundary,
+        boundary_id: str | None,
         raw_message_count: int,
-    ) -> tuple[list[ContextBlock], int, list[str], dict[str, str]]:
+        truncation_log_label: str | None = None,
+    ) -> tuple[list[ContextBlock], int, list[str], dict[str, str], list[DroppedContextBlockDetail]]:
         ordered = sorted(
             candidates,
             key=lambda item: (
@@ -201,21 +206,37 @@ class ContextPlanner:
         used = 0
         dropped_blocks: list[str] = []
         drop_reasons: dict[str, str] = {}
+        dropped_block_details: list[DroppedContextBlockDetail] = []
         included_message_count = 0
         current_turn_excluded = False
 
         for candidate in ordered:
-            if self._is_candidate_boundary_excluded(candidate, task_boundary):
-                dropped_blocks.append(candidate.candidate_id)
-                drop_reasons[candidate.candidate_id] = "boundary_excluded"
+            if self._is_candidate_boundary_excluded(candidate, boundary_id):
+                self._record_dropped_candidate(
+                    candidate=candidate,
+                    reason="boundary_excluded",
+                    dropped_blocks=dropped_blocks,
+                    drop_reasons=drop_reasons,
+                    dropped_block_details=dropped_block_details,
+                )
                 continue
             if self._is_candidate_policy_excluded(candidate, selection_policy):
-                dropped_blocks.append(candidate.candidate_id)
-                drop_reasons[candidate.candidate_id] = "policy_excluded"
+                self._record_dropped_candidate(
+                    candidate=candidate,
+                    reason="policy_excluded",
+                    dropped_blocks=dropped_blocks,
+                    drop_reasons=drop_reasons,
+                    dropped_block_details=dropped_block_details,
+                )
                 continue
             if current_turn_excluded and candidate.source == ContextSourceKind.RECENT:
-                dropped_blocks.append(candidate.candidate_id)
-                drop_reasons[candidate.candidate_id] = "excluded_without_current_turn"
+                self._record_dropped_candidate(
+                    candidate=candidate,
+                    reason="excluded_without_current_turn",
+                    dropped_blocks=dropped_blocks,
+                    drop_reasons=drop_reasons,
+                    dropped_block_details=dropped_block_details,
+                )
                 continue
 
             token_count = self._estimate_candidate_tokens(candidate)
@@ -233,6 +254,7 @@ class ContextPlanner:
                     blocks=blocks,
                     dropped_blocks=dropped_blocks,
                     drop_reasons=drop_reasons,
+                    dropped_block_details=dropped_block_details,
                 )
                 continue
 
@@ -255,21 +277,25 @@ class ContextPlanner:
                 if block.block_type == ContextBlockType.TOOL_SUMMARY
                 else 5
                 if block.block_type == ContextBlockType.MEMORY
-                else 6
+                else 6,
+                block.metadata.get("recent_start_index", -1)
+                if block.metadata.get("source") == ContextSourceKind.RECENT.value
+                else -1,
             )
         )
 
         truncated = max(0, raw_message_count - included_message_count)
-        if truncated > 0:
+        if truncated > 0 and truncation_log_label:
             logger.info(
-                "Context truncated: %d/%d messages included (%d tokens used / %d budget)",
+                "Context trimmed [%s]: %d/%d messages included (%d tokens used / %d budget)",
+                truncation_log_label,
                 included_message_count,
                 raw_message_count,
                 used,
                 budget,
             )
 
-        return blocks, used, dropped_blocks, drop_reasons
+        return blocks, used, dropped_blocks, drop_reasons, dropped_block_details
 
     @staticmethod
     def _is_candidate_policy_excluded(
@@ -278,6 +304,10 @@ class ContextPlanner:
     ) -> bool:
         return (
             (candidate.source == ContextSourceKind.MEMORY and not selection_policy.allow_memory)
+            or (
+                candidate.source == ContextSourceKind.SUMMARY
+                and not selection_policy.allow_summaries
+            )
             or (
                 candidate.source == ContextSourceKind.TOOL_SUMMARY
                 and not selection_policy.allow_tool_summaries
@@ -292,30 +322,22 @@ class ContextPlanner:
         )
 
     @staticmethod
-    def _boundary_metadata(task_boundary: TaskBoundary | None) -> dict[str, Any]:
-        if task_boundary is None:
+    def _boundary_metadata(boundary_id: str | None) -> dict[str, Any]:
+        if not boundary_id:
             return {}
-        return {
-            "task_kind": task_boundary.task_kind,
-            "scope": task_boundary.scope,
-            "boundary_id": task_boundary.boundary_id,
-        }
+        return {"boundary_id": boundary_id}
 
     @staticmethod
     def _is_candidate_boundary_excluded(
         candidate: ContextCandidate,
-        task_boundary: TaskBoundary,
+        boundary_id: str | None,
     ) -> bool:
+        if not boundary_id:
+            return False
         if candidate.source not in {ContextSourceKind.CURRENT_TURN, ContextSourceKind.RECENT}:
             return False
-        candidate_task_kind = candidate.metadata.get("task_kind")
-        candidate_scope = candidate.metadata.get("scope")
         candidate_boundary_id = candidate.metadata.get("boundary_id")
-        if candidate_boundary_id is not None and candidate_boundary_id != task_boundary.boundary_id:
-            return True
-        if candidate_task_kind is not None and candidate_task_kind != task_boundary.task_kind:
-            return True
-        return candidate_scope is not None and candidate_scope != task_boundary.scope
+        return candidate_boundary_id is not None and candidate_boundary_id != boundary_id
 
     def _try_truncate_recent_candidate(
         self,
@@ -340,6 +362,7 @@ class ContextPlanner:
         blocks: list[ContextBlock],
         dropped_blocks: list[str],
         drop_reasons: dict[str, str],
+        dropped_block_details: list[DroppedContextBlockDetail],
     ) -> tuple[int, int, bool]:
         if self._is_recent_message_candidate(candidate):
             selected_messages, selected_tokens = self._try_truncate_recent_candidate(
@@ -360,15 +383,56 @@ class ContextPlanner:
                 )
             if candidate.source == ContextSourceKind.CURRENT_TURN:
                 current_turn_excluded = True
-            dropped_blocks.append(candidate.candidate_id)
-            drop_reasons[candidate.candidate_id] = "truncated_to_fit"
+            self._record_dropped_candidate(
+                candidate=candidate,
+                reason="truncated_to_fit",
+                dropped_blocks=dropped_blocks,
+                drop_reasons=drop_reasons,
+                dropped_block_details=dropped_block_details,
+            )
             return used, included_message_count, current_turn_excluded
 
         if candidate.source == ContextSourceKind.CURRENT_TURN:
             current_turn_excluded = True
-        dropped_blocks.append(candidate.candidate_id)
-        drop_reasons[candidate.candidate_id] = "budget_exceeded"
+        self._record_dropped_candidate(
+            candidate=candidate,
+            reason="budget_exceeded",
+            dropped_blocks=dropped_blocks,
+            drop_reasons=drop_reasons,
+            dropped_block_details=dropped_block_details,
+        )
         return used, included_message_count, current_turn_excluded
+
+    def _record_dropped_candidate(
+        self,
+        *,
+        candidate: ContextCandidate,
+        reason: str,
+        dropped_blocks: list[str],
+        drop_reasons: dict[str, str],
+        dropped_block_details: list[DroppedContextBlockDetail],
+    ) -> None:
+        dropped_blocks.append(candidate.candidate_id)
+        drop_reasons[candidate.candidate_id] = reason
+        dropped_block_details.append(
+            DroppedContextBlockDetail(
+                candidate_id=candidate.candidate_id,
+                block_type=candidate.block_type.value,
+                source=candidate.source.value,
+                token_count=self._estimate_candidate_tokens(candidate),
+                message_count=self._message_count(candidate),
+                pinned=candidate.pinned,
+            )
+        )
+
+    @staticmethod
+    def _message_count(candidate: ContextCandidate) -> int | None:
+        metadata_count = candidate.metadata.get("message_count")
+        if isinstance(metadata_count, int):
+            return metadata_count
+        if isinstance(candidate.content, list):
+            return len(candidate.content)
+        return None
 
     @staticmethod
     def _append_candidate_block(
@@ -440,3 +504,11 @@ class ContextPlanner:
         selected_reversed.reverse()
         selected = [m for m, _ in selected_reversed]
         return selected, total + base_overhead
+
+    @staticmethod
+    def _build_block_breakdown(blocks: list[ContextBlock]) -> dict[str, int]:
+        breakdown: dict[str, int] = {}
+        for block in blocks:
+            key = block.block_type.value
+            breakdown[key] = breakdown.get(key, 0) + block.token_count
+        return breakdown

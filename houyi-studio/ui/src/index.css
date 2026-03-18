@@ -101,10 +101,21 @@ body {
 .markdown-body {
   overflow-wrap: break-word;
   word-break: break-word;
+  max-width: 100%;
 }
 
 .markdown-body pre {
   overflow-x: auto;
+  max-width: 100%;
+}
+
+.markdown-body > * {
+  max-width: 100%;
+}
+
+.markdown-body .hljs-container,
+.markdown-body table,
+.markdown-body .katex-display {
   max-width: 100%;
 }
 

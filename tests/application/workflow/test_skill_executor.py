@@ -1,6 +1,7 @@
 """Tests for SkillExecutor - core skill execution engine."""
 
 import asyncio
+import os
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
@@ -9,6 +10,7 @@ from pydantic import BaseModel, ValidationError
 
 from houyi.application.workflow.skill_executor import SkillExecutionError, SkillExecutor
 from houyi.domain.skill.spec import SkillSpec
+from houyi.infrastructure.config.env_config import ENV_SHELL_CURL_TIMEOUT
 from houyi.infrastructure.observability.context import TraceContext
 from houyi.infrastructure.observability.trace_manager import Span
 from houyi.infrastructure.observability.types import SpanType
@@ -207,6 +209,147 @@ class TestSkillExecutor:
             await executor.execute(skill, {"duration": 0.05})
 
     @pytest.mark.asyncio
+    async def test_curl_command_timeout(self) -> None:
+        class Input(BaseModel):
+            command: str
+
+        class Output(BaseModel):
+            completed: bool
+
+        async def slow_task(input_data: Input) -> Output:
+            _ = input_data
+            await asyncio.sleep(0.01)
+            return Output(completed=True)
+
+        skill = SkillSpec(
+            name="houyi_shell_exec",
+            description="shell exec",
+            input_schema=Input,
+            output_schema=Output,
+            executor=slow_task,
+        )
+
+        executor = SkillExecutor(timeout=15.0)
+        previous = os.environ.get(ENV_SHELL_CURL_TIMEOUT)
+        os.environ[ENV_SHELL_CURL_TIMEOUT] = "0.001"
+        try:
+            with pytest.raises((SkillExecutionError, asyncio.TimeoutError)):
+                await executor.execute(skill, {"command": "curl -s https://example.com"})
+        finally:
+            if previous is None:
+                os.environ.pop(ENV_SHELL_CURL_TIMEOUT, None)
+            else:
+                os.environ[ENV_SHELL_CURL_TIMEOUT] = previous
+
+    @pytest.mark.asyncio
+    async def test_curl_without_retry(self) -> None:
+        class Input(BaseModel):
+            command: str
+
+        class Output(BaseModel):
+            completed: bool
+
+        attempts = {"count": 0}
+
+        async def slow_task(input_data: Input) -> Output:
+            _ = input_data
+            attempts["count"] += 1
+            await asyncio.sleep(0.01)
+            return Output(completed=True)
+
+        skill = SkillSpec(
+            name="houyi_shell_exec",
+            description="shell exec",
+            input_schema=Input,
+            output_schema=Output,
+            executor=slow_task,
+        )
+
+        executor = SkillExecutor(max_retries=3, timeout=15.0)
+        previous = os.environ.get(ENV_SHELL_CURL_TIMEOUT)
+        os.environ[ENV_SHELL_CURL_TIMEOUT] = "0.001"
+        try:
+            with pytest.raises((SkillExecutionError, asyncio.TimeoutError)):
+                await executor.execute(skill, {"command": "curl -s https://example.com | head -20"})
+        finally:
+            if previous is None:
+                os.environ.pop(ENV_SHELL_CURL_TIMEOUT, None)
+            else:
+                os.environ[ENV_SHELL_CURL_TIMEOUT] = previous
+
+        assert attempts["count"] == 1
+
+    def test_curl_timeout(self) -> None:
+        class _Input:
+            def model_dump(self) -> dict[str, object]:
+                return {
+                    "command": 'curl -s --max-time 10 "https://example.com"',
+                    "timeout_seconds": 30,
+                }
+
+        previous = os.environ.get(ENV_SHELL_CURL_TIMEOUT)
+        if previous is None:
+            os.environ.pop(ENV_SHELL_CURL_TIMEOUT, None)
+        try:
+            assert SkillExecutor._effective_timeout_for_input(_Input(), 15.0) == 11.0
+        finally:
+            if previous is None:
+                os.environ.pop(ENV_SHELL_CURL_TIMEOUT, None)
+            else:
+                os.environ[ENV_SHELL_CURL_TIMEOUT] = previous
+
+    def test_curl_with_env_timeout(self) -> None:
+        class _Input:
+            def model_dump(self) -> dict[str, object]:
+                return {
+                    "command": 'curl -s --max-time 10 "https://example.com"',
+                    "timeout_seconds": 30,
+                }
+
+        previous = os.environ.get(ENV_SHELL_CURL_TIMEOUT)
+        os.environ[ENV_SHELL_CURL_TIMEOUT] = "2.5"
+        try:
+            assert SkillExecutor._effective_timeout_for_input(_Input(), 15.0) == 2.5
+        finally:
+            if previous is None:
+                os.environ.pop(ENV_SHELL_CURL_TIMEOUT, None)
+            else:
+                os.environ[ENV_SHELL_CURL_TIMEOUT] = previous
+
+    @pytest.mark.asyncio
+    async def test_curl_no_default_timeout(self) -> None:
+        class Input(BaseModel):
+            command: str
+
+        class Output(BaseModel):
+            completed: bool
+
+        async def quick_task(input_data: Input) -> Output:
+            _ = input_data
+            await asyncio.sleep(0.005)
+            return Output(completed=True)
+
+        skill = SkillSpec(
+            name="houyi_shell_exec",
+            description="shell exec",
+            input_schema=Input,
+            output_schema=Output,
+            executor=quick_task,
+        )
+
+        executor = SkillExecutor(timeout=0.05)
+        previous = os.environ.get(ENV_SHELL_CURL_TIMEOUT)
+        os.environ[ENV_SHELL_CURL_TIMEOUT] = "0.001"
+        try:
+            result = await executor.execute(skill, {"command": "find . -name skill.md"})
+        finally:
+            if previous is None:
+                os.environ.pop(ENV_SHELL_CURL_TIMEOUT, None)
+            else:
+                os.environ[ENV_SHELL_CURL_TIMEOUT] = previous
+        assert result["completed"] is True
+
+    @pytest.mark.asyncio
     async def test_retry_on_failure(self) -> None:
         """Test retry logic on transient failures."""
 
@@ -268,7 +411,7 @@ class TestSkillExecutor:
             await executor.execute(skill, {"value": 1})
 
     @pytest.mark.asyncio
-    async def test_error_message_contains_skill_name(self) -> None:
+    async def test_error_skill_name(self) -> None:
         """Test that error messages include skill name for debugging."""
 
         class Input(BaseModel):
@@ -302,7 +445,7 @@ class TestSkillExecutorRetrySpans:
     """Test that SkillExecutor emits retry spans (Phase 5c v2)."""
 
     @pytest.mark.asyncio
-    async def test_retry_creates_retry_spans(self) -> None:
+    async def test_retry_spans(self) -> None:
         """Each failed attempt should create a RETRY span."""
 
         class Input(BaseModel):
@@ -352,7 +495,7 @@ class TestSkillExecutorRetrySpans:
             assert span.parent_id == root.span_id
 
     @pytest.mark.asyncio
-    async def test_no_retry_spans_on_first_success(self) -> None:
+    async def test_no_retry_spans(self) -> None:
         """No retry spans when skill succeeds on first attempt."""
 
         class Input(BaseModel):

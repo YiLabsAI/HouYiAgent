@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import re
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
@@ -150,6 +151,11 @@ class LLMResponse(BaseModel):
 
         raw_tool_calls = msg.get("tool_calls", [])
         tool_calls = _parse_tool_calls(raw_tool_calls)
+        if not tool_calls:
+            tool_calls = _parse_embedded_tool_calls(
+                reasoning_content if isinstance(reasoning_content, str) else None,
+                content if isinstance(content, str) else None,
+            )
 
         metadata: dict[str, Any] = {}
         if isinstance(reasoning_content, str) and reasoning_content:
@@ -512,8 +518,20 @@ def _extract_known_usage_fields(raw: Any) -> dict[str, Any]:
     source: dict[str, Any] = {}
     for key in (
         "prompt_tokens",
+        "input_tokens",
+        "prompt_token_count",
         "completion_tokens",
+        "output_tokens",
+        "candidates_token_count",
         "total_tokens",
+        "total_token_count",
+        "reasoning_tokens",
+        "thinking_tokens",
+        "thoughts_token_count",
+        "cached_prompt_tokens",
+        "cache_read_input_tokens",
+        "cached_content_token_count",
+        "cache_hit",
         "completion_tokens_details",
         "prompt_tokens_details",
         "prompt_cache_hit_tokens",
@@ -594,3 +612,79 @@ def _parse_tool_calls(raw_tool_calls: list[dict]) -> list[dict]:
 
         tool_calls.append(normalized_tc)
     return tool_calls
+
+
+def _parse_embedded_tool_calls(*sources: str | None) -> list[dict]:
+    embedded_calls: list[dict] = []
+    for source in sources:
+        if not isinstance(source, str) or not source.strip():
+            continue
+        parsed = _parse_dsml_tool_calls(source)
+        if parsed:
+            embedded_calls.extend(parsed)
+            break
+    return embedded_calls
+
+
+def _parse_dsml_tool_calls(raw: str) -> list[dict]:
+    invoke_pattern = re.compile(
+        r"<[｜|]DSML[｜|]invoke\s+name=\"(?P<name>[^\"]+)\"\s*>"
+        r"(?P<body>[\s\S]*?)"
+        r"</[｜|]DSML[｜|]invoke>",
+        flags=re.IGNORECASE,
+    )
+    parameter_pattern = re.compile(
+        r"<[｜|]DSML[｜|]parameter\s+name=\"(?P<name>[^\"]+)\"(?:\s+string=\"(?P<string>[^\"]+)\")?\s*>"
+        r"(?P<value>[\s\S]*?)"
+        r"</[｜|]DSML[｜|]parameter>",
+        flags=re.IGNORECASE,
+    )
+    tool_calls: list[dict] = []
+    for index, match in enumerate(invoke_pattern.finditer(raw)):
+        fn_name = str(match.group("name") or "").strip()
+        if not fn_name:
+            continue
+        arguments: dict[str, Any] = {}
+        body = match.group("body") or ""
+        for parameter_match in parameter_pattern.finditer(body):
+            param_name = str(parameter_match.group("name") or "").strip()
+            if not param_name:
+                continue
+            value_text = str(parameter_match.group("value") or "").strip()
+            keep_string = str(parameter_match.group("string") or "").strip().lower() == "true"
+            arguments[param_name] = (
+                value_text if keep_string else _coerce_embedded_tool_value(value_text)
+            )
+        tool_calls.append(
+            {
+                "id": f"embedded_call_{index + 1}",
+                "type": "function",
+                "function": {
+                    "name": fn_name,
+                    "arguments": arguments,
+                },
+            }
+        )
+    return tool_calls
+
+
+def _coerce_embedded_tool_value(value: str) -> Any:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    with contextlib.suppress(json.JSONDecodeError, TypeError):
+        return json.loads(text)
+    lowered = text.lower()
+    if lowered == "true":
+        return True
+    if lowered == "false":
+        return False
+    if lowered == "null":
+        return None
+    if re.fullmatch(r"-?\d+", text):
+        with contextlib.suppress(ValueError):
+            return int(text)
+    if re.fullmatch(r"-?\d+\.\d+", text):
+        with contextlib.suppress(ValueError):
+            return float(text)
+    return text

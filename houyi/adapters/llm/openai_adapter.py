@@ -14,6 +14,7 @@ from houyi.adapters.llm.base import (
     LLMMessage,
     LLMResponse,
     StreamChunk,
+    _normalize_usage,
 )
 from houyi.adapters.llm.retry import (
     DEFAULT_MAX_RETRIES,
@@ -136,11 +137,7 @@ class OpenAIAdapter(LLMAdapter):
     def _update_stream_usage(self, chunk: Any) -> None:
         if not chunk.usage:
             return
-        self.last_usage = {
-            "prompt_tokens": chunk.usage.prompt_tokens or 0,
-            "completion_tokens": chunk.usage.completion_tokens or 0,
-            "total_tokens": chunk.usage.total_tokens or 0,
-        }
+        self.last_usage = _normalize_usage(chunk.usage)
 
     @staticmethod
     def _extract_tool_calls_delta(delta: Any) -> list[dict] | None:
