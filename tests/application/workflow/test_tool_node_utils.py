@@ -1,5 +1,7 @@
 """TOOL input normalization and schema extraction scenarios."""
 
+from types import SimpleNamespace
+
 from pydantic import BaseModel
 
 from houyi.application.workflow.tool_node_utils import (
@@ -15,19 +17,24 @@ class TestNormalizeToolName:
 
 
 class TestExtractSchemaFields:
-    def test_extract_schema_fields_none(self):
+    def test_extract_schema_fields(self):
         assert extract_schema_fields(None) == set()
 
-    def test_extract_schema_fields_pydantic_v2(self):
+    def test_extract_schema_fields_pydanticv2(self):
         class Input(BaseModel):
             a: int
             b: str
 
         assert extract_schema_fields(Input) == {"a", "b"}
 
+    def test_extract_schema_fields_pydanticv1(self):
+        schema = SimpleNamespace(__fields__={"a": object(), "b": object()})
+
+        assert extract_schema_fields(schema) == {"a", "b"}
+
 
 class TestBuildInputsFromContextValues:
-    def test_build_inputs_from_context_values_prefers_direct_context(self):
+    def test_build_inputs_from_context(self):
         schema_fields = {"a", "b"}
         context_values = {"a": 1, "result": {"a": 2, "b": 3}}
         built = build_inputs_from_context_values(
@@ -36,7 +43,7 @@ class TestBuildInputsFromContextValues:
         )
         assert built == {"a": 1, "b": 3}
 
-    def test_build_inputs_from_context_values_parses_json_result(self):
+    def test_parses_json_result(self):
         schema_fields = {"a"}
         context_values = {"result": '{"a": 5}'}
         built = build_inputs_from_context_values(
@@ -45,7 +52,7 @@ class TestBuildInputsFromContextValues:
         )
         assert built == {"a": 5}
 
-    def test_build_inputs_from_context_values_handles_nested_result(self):
+    def test_handles_nested_result(self):
         schema_fields = {"a"}
         context_values = {"result": {"result": {"a": 7}}}
         built = build_inputs_from_context_values(
@@ -53,3 +60,21 @@ class TestBuildInputsFromContextValues:
             context_values=context_values,
         )
         assert built == {"a": 7}
+
+    def test_invalid_json_result(self):
+        built = build_inputs_from_context_values(
+            schema_fields={"a"},
+            context_values={"result": "{bad json}"},
+        )
+
+        assert built == {}
+
+    def test_empty_schema(self):
+        built = build_inputs_from_context_values(schema_fields=set(), context_values={"a": 1})
+
+        assert built == {}
+
+    def test_empty_context(self):
+        built = build_inputs_from_context_values(schema_fields={"a"}, context_values=None)
+
+        assert built == {}

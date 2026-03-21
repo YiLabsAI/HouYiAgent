@@ -1,11 +1,15 @@
 """Tests for execution/local_executor.py"""
 
+import sys
+import types
+
 import pytest
 from pydantic import BaseModel
 
-from houyi.application.workflow.executor import ExecutionResult, LocalExecutor
+from houyi.application.workflow.executor import ExecutionMetrics, ExecutionResult, LocalExecutor
 from houyi.application.workflow.orchestration.plan import ExecutionPlan, IRNode, NodeType
 from houyi.application.workflow.orchestration.state import SessionState, TaskStatus
+from houyi.assurance.verification.verifier import VerificationRule
 from houyi.domain.skill.spec import SkillSpec
 
 
@@ -116,7 +120,7 @@ async def test_local_executor_parallel():
 
 
 @pytest.mark.asyncio
-async def test_local_executor_circular_dependency():
+async def test_circular_dependency():
     """Test detection of circular dependencies."""
     executor = LocalExecutor()
 
@@ -147,7 +151,7 @@ async def test_local_executor_circular_dependency():
 
 
 @pytest.mark.asyncio
-async def test_local_executor_context_propagation():
+async def test_context_propagation():
     """Test context propagation between nodes."""
     executor = LocalExecutor()
 
@@ -178,7 +182,7 @@ async def test_local_executor_context_propagation():
 
 
 @pytest.mark.asyncio
-async def test_local_executor_empty_plan():
+async def test_empty_plan():
     """Test execution with empty plan."""
     executor = LocalExecutor()
 
@@ -192,7 +196,7 @@ async def test_local_executor_empty_plan():
 
 
 @pytest.mark.asyncio
-async def test_local_executor_result_exposes_compat_and_structured_fields():
+async def test_exposes_compat_and_structured_fields():
     """Test executor result supports legacy and structured fields together."""
     executor = LocalExecutor()
 
@@ -220,7 +224,7 @@ async def test_local_executor_result_exposes_compat_and_structured_fields():
 
 
 @pytest.mark.asyncio
-async def test_local_executor_tool_node_failure_returns_structured_error():
+async def test_tool_node_failure():
     """Test executor returns structured failure details for tool execution errors."""
     executor = LocalExecutor()
 
@@ -262,7 +266,7 @@ async def test_local_executor_tool_node_failure_returns_structured_error():
 
 
 @pytest.mark.asyncio
-async def test_local_executor_tool_node_direct_execution_tracks_metrics():
+async def test_tool_node_direct_execution():
     """Test direct tool execution keeps legacy context behavior and structured metrics."""
     executor = LocalExecutor()
 
@@ -318,7 +322,7 @@ def test_execution_result():
     assert result.metadata["key"] == "value"
 
 
-def test_execution_result_default_metadata():
+def test_default_metadata():
     """Test ExecutionResult with default metadata."""
     state = SessionState(session_id="test_session", agent_id="test_agent")
 
@@ -327,3 +331,381 @@ def test_execution_result_default_metadata():
     assert result.success is False
     assert result.output is None
     assert result.metadata == {}
+
+
+@pytest.mark.asyncio
+async def test_trace_path():
+    class _Span:
+        def __init__(self) -> None:
+            self.attrs = {}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            _ = (exc_type, exc, tb)
+            return False
+
+        def set_attribute(self, key, value):
+            self.attrs[key] = value
+
+    class _Trace:
+        def __init__(self) -> None:
+            self.span = _Span()
+
+        def start_span(self, *args, **kwargs):
+            _ = (args, kwargs)
+            return self.span
+
+    executor = LocalExecutor(trace_manager=_Trace())
+    node = IRNode(node_id="n1", node_type=NodeType.LLM, inputs={"prompt": "x"}, outputs={})
+
+    result = await executor._execute_node(node, {}, ExecutionMetrics())
+
+    assert "answer" in result
+
+
+@pytest.mark.asyncio
+async def test_llm_fallback(monkeypatch):
+    module = types.ModuleType("houyi.adapters.llm.openai_adapter")
+
+    class _OpenAIAdapter:
+        def __init__(self):
+            raise RuntimeError("missing")
+
+    module.OpenAIAdapter = _OpenAIAdapter
+    monkeypatch.setitem(sys.modules, "houyi.adapters.llm.openai_adapter", module)
+
+    base_module = types.ModuleType("houyi.adapters.llm.base")
+
+    class _LLMMessage:
+        def __init__(self, role, content):
+            self.role = role
+            self.content = content
+
+    class _MessageRole:
+        USER = "user"
+
+    base_module.LLMMessage = _LLMMessage
+    base_module.MessageRole = _MessageRole
+    monkeypatch.setitem(sys.modules, "houyi.adapters.llm.base", base_module)
+
+    executor = LocalExecutor()
+    node = IRNode(
+        node_id="n1",
+        node_type=NodeType.LLM,
+        inputs={"task": "hello"},
+        outputs={},
+        metadata={"use_real_llm": True},
+    )
+
+    result = await executor._execute_llm_node(node, {"task": "hello"})
+
+    assert "Mock LLM response" in result["answer"]
+
+
+@pytest.mark.asyncio
+async def test_llm_success(monkeypatch):
+    module = types.ModuleType("houyi.adapters.llm.openai_adapter")
+
+    class _OpenAIAdapter:
+        async def chat(self, messages):
+            _ = messages
+            return types.SimpleNamespace(content="real")
+
+    module.OpenAIAdapter = _OpenAIAdapter
+    monkeypatch.setitem(sys.modules, "houyi.adapters.llm.openai_adapter", module)
+
+    base_module = types.ModuleType("houyi.adapters.llm.base")
+
+    class _LLMMessage:
+        def __init__(self, role, content):
+            self.role = role
+            self.content = content
+
+    class _MessageRole:
+        USER = "user"
+
+    base_module.LLMMessage = _LLMMessage
+    base_module.MessageRole = _MessageRole
+    monkeypatch.setitem(sys.modules, "houyi.adapters.llm.base", base_module)
+
+    executor = LocalExecutor()
+    node = IRNode(
+        node_id="n1", node_type=NodeType.LLM, inputs={}, outputs={}, metadata={"use_real_llm": True}
+    )
+
+    result = await executor._execute_llm_node(node, {"task": "hello"})
+
+    assert result == {"answer": "real"}
+
+
+def test_extract_params_schema():
+    class Input(BaseModel):
+        query: str
+
+    class Output(BaseModel):
+        result: str
+
+    skill = SkillSpec(
+        name="search",
+        description="Search",
+        input_schema=Input,
+        output_schema=Output,
+        executor=lambda query: query,
+    )
+    executor = LocalExecutor()
+
+    params = executor._extract_params_from_task("find docs", skill)
+
+    assert params == {"query": "find docs"}
+
+
+def test_extract_params_func():
+    def _tool(values: list[str]):
+        return values
+
+    class Input(BaseModel):
+        pass
+
+    class Output(BaseModel):
+        result: list[str]
+
+    skill = SkillSpec(
+        name="collect",
+        description="Collect",
+        input_schema=Input,
+        output_schema=Output,
+        executor=_tool,
+    )
+    skill._original_func = _tool  # type: ignore[attr-defined]
+    executor = LocalExecutor()
+
+    params = executor._extract_params_from_task("one", skill)
+
+    assert params == {"values": ["one"]}
+
+
+@pytest.mark.asyncio
+async def test_tool_requires_skill():
+    executor = LocalExecutor()
+    node = IRNode(node_id="n1", node_type=NodeType.TOOL, inputs={}, outputs={})
+
+    with pytest.raises(ValueError, match="has no skill_ref"):
+        await executor._execute_tool_node(node, {})
+
+
+@pytest.mark.asyncio
+async def test_nested_params():
+    class Input(BaseModel):
+        task: str
+
+    class Output(BaseModel):
+        result: str
+
+    skill = SkillSpec(
+        name="echo",
+        description="Echo",
+        input_schema=Input,
+        output_schema=Output,
+        executor=lambda task: {"result": task},
+    )
+    node = IRNode(
+        node_id="n1",
+        node_type=NodeType.TOOL,
+        skill_ref=skill,
+        inputs={},
+        outputs={},
+        metadata={"direct_execution": True},
+    )
+    executor = LocalExecutor()
+
+    result = await executor._execute_tool_node(node, {"params": {"task": 123}})
+
+    assert result == {"result": {"result": "123"}}
+
+
+@pytest.mark.asyncio
+async def test_tool_params():
+    class Input(BaseModel):
+        task: str
+
+    class Output(BaseModel):
+        result: str
+
+    skill = SkillSpec(
+        name="echo",
+        description="Echo",
+        input_schema=Input,
+        output_schema=Output,
+        executor=lambda task: {"result": task},
+    )
+    node = IRNode(
+        node_id="n1",
+        node_type=NodeType.TOOL,
+        skill_ref=skill,
+        inputs={},
+        outputs={},
+        metadata={},
+    )
+    executor = LocalExecutor()
+
+    result = await executor._execute_tool_node(node, {"params": {"task": "hi"}})
+
+    assert result == {"result": {"result": "hi"}}
+
+
+@pytest.mark.asyncio
+async def test_tool_placeholder():
+    class Input(BaseModel):
+        task: str
+
+    class Output(BaseModel):
+        result: str
+
+    skill = SkillSpec(
+        name="echo",
+        description="Echo",
+        input_schema=Input,
+        output_schema=Output,
+        executor=None,
+    )
+    node = IRNode(node_id="n1", node_type=NodeType.TOOL, skill_ref=skill, inputs={}, outputs={})
+    executor = LocalExecutor()
+
+    result = await executor._execute_tool_node(node, {})
+
+    assert result == {"result": "Result from echo"}
+
+
+@pytest.mark.asyncio
+async def test_verify_no_rules():
+    executor = LocalExecutor()
+    node = IRNode(node_id="n1", node_type=NodeType.VERIFY, inputs={}, outputs={})
+
+    result = await executor._execute_verify_node(node, {})
+
+    assert result == {"verified": True}
+
+
+@pytest.mark.asyncio
+async def test_verify_no_output():
+    executor = LocalExecutor()
+    node = IRNode(
+        node_id="n1",
+        node_type=NodeType.VERIFY,
+        verification_rules=[VerificationRule(rule_id="r1", verifier_type="python")],
+        inputs={},
+        outputs={},
+    )
+
+    result = await executor._execute_verify_node(node, {})
+
+    assert result == {"verified": False, "error": "No output to verify"}
+
+
+@pytest.mark.asyncio
+async def test_verify_collects_errors(monkeypatch):
+    verify_module = types.ModuleType("houyi.assurance.verification")
+
+    class _Verifier:
+        async def verify(self, output, rule):
+            _ = output
+            return types.SimpleNamespace(
+                passed=False,
+                rule_id=rule.rule_id,
+                error_type="assertion",
+                error_message="failed",
+            )
+
+    verify_module.ConstraintChecker = _Verifier
+    verify_module.PythonVerifier = _Verifier
+    verify_module.SQLVerifier = _Verifier
+    monkeypatch.setitem(sys.modules, "houyi.assurance.verification", verify_module)
+
+    executor = LocalExecutor()
+    node = IRNode(
+        node_id="n1",
+        node_type=NodeType.VERIFY,
+        verification_rules=[VerificationRule(rule_id="r1", verifier_type="python")],
+        inputs={},
+        outputs={},
+    )
+
+    result = await executor._execute_verify_node(node, {"output": "bad"})
+
+    assert result["verified"] is False
+    assert result["errors"][0]["rule_id"] == "r1"
+
+
+@pytest.mark.asyncio
+async def test_verify_sql(monkeypatch):
+    verify_module = types.ModuleType("houyi.assurance.verification")
+
+    class _Verifier:
+        async def verify(self, output, rule):
+            _ = (output, rule)
+            return types.SimpleNamespace(
+                passed=True, rule_id="sql", error_type=None, error_message=None
+            )
+
+    verify_module.ConstraintChecker = _Verifier
+    verify_module.PythonVerifier = _Verifier
+    verify_module.SQLVerifier = _Verifier
+    monkeypatch.setitem(sys.modules, "houyi.assurance.verification", verify_module)
+
+    executor = LocalExecutor()
+    node = IRNode(
+        node_id="n1",
+        node_type=NodeType.VERIFY,
+        verification_rules=[VerificationRule(rule_id="sql", verifier_type="sql")],
+        inputs={},
+        outputs={},
+    )
+
+    result = await executor._execute_verify_node(node, {"output": "select 1"})
+
+    assert result == {"verified": True, "errors": None}
+
+
+@pytest.mark.asyncio
+async def test_verify_constraint(monkeypatch):
+    verify_module = types.ModuleType("houyi.assurance.verification")
+
+    class _Verifier:
+        async def verify(self, output, rule):
+            _ = (output, rule)
+            return types.SimpleNamespace(
+                passed=False,
+                rule_id="c1",
+                error_type="constraint",
+                error_message="bad",
+            )
+
+    verify_module.ConstraintChecker = _Verifier
+    verify_module.PythonVerifier = _Verifier
+    verify_module.SQLVerifier = _Verifier
+    monkeypatch.setitem(sys.modules, "houyi.assurance.verification", verify_module)
+
+    executor = LocalExecutor()
+    node = IRNode(
+        node_id="n1",
+        node_type=NodeType.VERIFY,
+        verification_rules=[VerificationRule(rule_id="c1", verifier_type="constraint")],
+        inputs={},
+        outputs={},
+    )
+
+    result = await executor._execute_verify_node(node, {"output": "bad"})
+
+    assert result["verified"] is False
+    assert result["errors"][0]["error_type"] == "constraint"
+
+
+@pytest.mark.asyncio
+async def test_node_type_error():
+    executor = LocalExecutor()
+    node = IRNode(node_id="n1", node_type=NodeType.LOGIC, inputs={}, outputs={})
+
+    with pytest.raises(ValueError, match="Unsupported node type"):
+        await executor._execute_node_impl(node, {})
