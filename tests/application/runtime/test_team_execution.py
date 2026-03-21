@@ -1,5 +1,7 @@
 """Tests for Team.run() execution and workflow."""
 
+from unittest.mock import MagicMock
+
 import pytest
 from pydantic import BaseModel
 
@@ -161,6 +163,68 @@ class TestTeamExecution:
         assert team.tasks[0].context is None
         assert team.tasks[1].context == [0]
         assert team.tasks[2].context == [0, 1]
+
+    def test_ready_tasks(self):
+        agent = Agent(role="Worker")
+        task0 = Task(description="Step 0", agent=agent)
+        task1 = Task(description="Step 1", agent=agent, context=[0])
+        team = Team(agents=[agent], tasks=[task0, task1])
+
+        ready = team._get_ready_tasks(task_map={0: task0, 1: task1}, completed_tasks={0})
+
+        assert ready == [(1, task1)]
+
+    def test_run_executes(self):
+        agent = Agent(role="Worker")
+        agent.run = MagicMock(side_effect=["done-1", "done-2"])
+        task0 = Task(description="Step 0", agent=agent)
+        task1 = Task(description="Step 1", agent=agent, context=[0])
+        team = Team(agents=[agent], tasks=[task0, task1])
+
+        result = team.run()
+
+        assert result["tasks_completed"] == 2
+        assert result["results"][0]["result"] == "done-1"
+        assert result["results"][1]["dependencies"] == [0]
+        assert agent.run.call_count == 2
+
+    def test_run_uses_default(self):
+        agent = Agent(role="Worker")
+        agent.run = MagicMock(return_value="done")
+        task = Task(description="Step 0")
+        team = Team(agents=[agent], tasks=[task])
+
+        result = team.run()
+
+        assert result["tasks_completed"] == 1
+        assert result["results"][0]["agent"] == "Worker"
+        agent.run.assert_called_once_with(task)
+
+    def test_run_rejects_empty(self):
+        task = Task(description="Step 0")
+        team = Team(agents=[], tasks=[task])
+
+        with pytest.raises(ValueError, match="No agent available"):
+            team.run()
+
+    def test_run_detects_cycle(self):
+        agent = Agent(role="Worker")
+        task0 = Task(description="Step 0", agent=agent, context=[1])
+        task1 = Task(description="Step 1", agent=agent, context=[0])
+        team = Team(agents=[agent], tasks=[task0, task1])
+
+        with pytest.raises(RuntimeError, match="Circular dependency"):
+            team.run()
+
+    def test_execute_alias(self):
+        agent = Agent(role="Worker")
+        agent.run = MagicMock(return_value="done")
+        task = Task(description="Step 0", agent=agent)
+        team = Team(agents=[agent], tasks=[task])
+
+        result = team.execute()
+
+        assert result["tasks_completed"] == 1
 
 
 class TestTaskConfiguration:

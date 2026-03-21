@@ -462,14 +462,22 @@ class TestProviderRouting:
             settings_store=settings_store,
         )
 
+        class _FakeCompat:
+            def __init__(self, *, api_key=None, base_url=None, model=None):
+                self.api_key = api_key
+                self.base_url = base_url
+                self.model = model
+
+        service._model_adapter_resolver._openai_compat_adapter_cls = _FakeCompat
+
         adapter = service._get_adapter_for_model("moonshotai/Kimi-K2.5")
 
-        assert isinstance(adapter, chat_service_module.OpenAICompatibleAdapter)
+        assert isinstance(adapter, _FakeCompat)
         assert not isinstance(adapter, chat_service_module.SiliconFlowAdapter)
         assert adapter.base_url == "https://api.moonshot.ai/v1"
         assert adapter.model == "moonshotai/Kimi-K2.5"
 
-    def test_uses_siliconflow_adapter_for_custom_siliconflow_endpoint(self, store: JsonStore):
+    def test_uses_siliconflow_adapter(self, store: JsonStore):
         settings = GlobalSettings(
             providers=[
                 ProviderConfig(

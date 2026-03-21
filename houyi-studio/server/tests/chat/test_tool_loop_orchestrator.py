@@ -10,7 +10,6 @@ from houyi_studio.server.chat.types import Message, MessageRole, SendMessageRequ
 
 from houyi.adapters.llm.base import LLMResponse
 from houyi.adapters.llm.models import DEEPSEEK_V3_2
-from houyi.adapters.llm.openai_compat_adapter import OpenAICompatibleAdapter
 from houyi.adapters.llm.siliconflow_adapter import SiliconFlowAdapter
 from houyi.application.tool_calling.orchestrator import (
     ToolLoopOrchestrator as SdkToolLoopOrchestrator,
@@ -204,12 +203,13 @@ class TestToolLoopOrchestrator:
             stage_span=_stage_span,
         )
 
+        class _CompatInner:
+            def __init__(self) -> None:
+                self.base_url = "https://api.siliconflow.cn/v1"
+                self.model = DEEPSEEK_V3_2
+
         wrapped_adapter = SimpleNamespace(
-            _inner=OpenAICompatibleAdapter(
-                api_key="test-key",
-                base_url="https://api.siliconflow.cn/v1",
-                model=DEEPSEEK_V3_2,
-            ),
+            _inner=_CompatInner(),
             chat=MagicMock(),
         )
 

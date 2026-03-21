@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import urllib.error
+import urllib.parse
 from typing import Any
 
 from houyi.skills.location import skill as location_skill
@@ -11,25 +12,25 @@ def _call_get_location(**kwargs: Any) -> dict[str, Any]:
     return func(**kwargs)
 
 
-def test_split_city_country_code_iso_suffix() -> None:
+def test_split_city_country_code() -> None:
     city, code = location_skill._split_city_country_code("beijing, CN")
     assert city == "beijing"
     assert code == "CN"
 
 
-def test_split_city_country_code_non_iso_suffix_kept() -> None:
+def test_split_non_iso_suffix_kept() -> None:
     city, code = location_skill._split_city_country_code("beijing, China")
     assert city == "beijing, China"
     assert code is None
 
 
-def test_build_geocoding_url_with_country_code() -> None:
+def test_geocoding_with_country_code() -> None:
     url = location_skill._build_geocoding_url("beijing", country_code="CN")
     assert "name=beijing" in url
     assert "countryCode=CN" in url
 
 
-def test_get_location_uses_country_code_query(monkeypatch) -> None:
+def test_uses_country_code_query(monkeypatch) -> None:
     seen_urls: list[str] = []
 
     def _fake_fetch(url: str, *args: Any, **kwargs: Any) -> dict[str, Any]:
@@ -54,7 +55,7 @@ def test_get_location_uses_country_code_query(monkeypatch) -> None:
     assert "countryCode=CN" in seen_urls[0]
 
 
-def test_get_location_fallbacks_without_code(monkeypatch) -> None:
+def test_fallbacks_without_code(monkeypatch) -> None:
     seen_urls: list[str] = []
 
     def _fake_fetch(url: str, *args: Any, **kwargs: Any) -> dict[str, Any]:
@@ -82,7 +83,7 @@ def test_get_location_fallbacks_without_code(monkeypatch) -> None:
     assert "countryCode=" not in seen_urls[1]
 
 
-def test_get_location_not_found_after_fallbacks(monkeypatch) -> None:
+def test_not_found_after_fallbacks(monkeypatch) -> None:
     def _fake_fetch(url: str, *args: Any, **kwargs: Any) -> dict[str, Any]:
         return {"results": []}
 
@@ -93,13 +94,13 @@ def test_get_location_not_found_after_fallbacks(monkeypatch) -> None:
     assert out["error"] == "City not found: beijing, CN"
 
 
-def test_sanitize_city_name_handles_invalid_inputs() -> None:
+def test_sanitize_city_name() -> None:
     assert location_skill._sanitize_city_name(None) == "Hangzhou"
     assert location_skill._sanitize_city_name("   ") == "Hangzhou"
     assert location_skill._sanitize_city_name(123) == "Hangzhou"  # type: ignore[arg-type]
 
 
-def test_get_location_handles_network_error(monkeypatch) -> None:
+def test_handles_network_error(monkeypatch) -> None:
     def _raise(*args: Any, **kwargs: Any) -> dict[str, Any]:
         raise urllib.error.URLError("down")
 
@@ -109,7 +110,7 @@ def test_get_location_handles_network_error(monkeypatch) -> None:
     assert out["error"] == "Network error"
 
 
-def test_get_location_handles_coordinates_not_available(monkeypatch) -> None:
+def test_handles_coordinates_not_available(monkeypatch) -> None:
     monkeypatch.setattr(
         location_skill, "_fetch_with_retry", lambda *a, **k: {"results": [{"name": "X"}]}
     )
@@ -118,7 +119,39 @@ def test_get_location_handles_coordinates_not_available(monkeypatch) -> None:
     assert out["error"] == "Coordinates not available"
 
 
-def test_location_post_tool_use_success_summary() -> None:
+def test_rejects_invalid_name(monkeypatch) -> None:
+    def _raise(value: str, safe: str = "") -> str:
+        _ = (value, safe)
+        raise ValueError("bad city")
+
+    monkeypatch.setattr(urllib.parse, "quote", _raise)
+
+    out = _call_get_location(city="Beijing")
+
+    assert out["found"] is False
+    assert out["error"] == "Invalid city name"
+
+
+def test_handles_invalid_payload(monkeypatch) -> None:
+    monkeypatch.setattr(location_skill, "_fetch_with_retry", lambda *a, **k: {"results": [{}]})
+
+    out = _call_get_location(city="Beijing")
+
+    assert out["found"] is False
+    assert "Coordinates not available" in out["error"]
+
+
+def test_pre_tool_use() -> None:
+    class _Ctx:
+        tool_args = {"city": "  Beijing  "}
+
+    result = location_skill._location_pre_tool_use(_Ctx())
+
+    assert result["success"] is True
+    assert "Beijing" in str(result["output"])
+
+
+def test_post_tool_use() -> None:
     class _Ctx:
         tool_result: dict[str, Any] = {
             "found": True,
@@ -132,3 +165,13 @@ def test_location_post_tool_use_success_summary() -> None:
     assert result["success"] is True
     assert "Found: Beijing" in str(result["output"])
     assert result.get("inject_to_prompt") is True
+
+
+def test_post_tool_fallback() -> None:
+    class _Ctx:
+        tool_result: dict[str, Any] = {"found": False, "error": "City not found"}
+
+    result = location_skill._location_post_tool_use(_Ctx())
+
+    assert result["success"] is True
+    assert "Geocoding result" in str(result["output"])
