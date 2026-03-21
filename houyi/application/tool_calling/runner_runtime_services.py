@@ -98,14 +98,14 @@ class _ToolLoopSessionBuilder:
         loop_start: float | None = None
         if timing_enabled:
             loop_start = time.perf_counter()
-            logger.info(
+            logger.debug(
                 "[ToolCallRunner] start: rounds=%s tools=%s messages=%s",
                 max_rounds,
                 len(tools),
                 len(messages),
             )
             if fast_path_enabled:
-                logger.info("[ToolCallRunner] fast_path=enabled")
+                logger.debug("[ToolCallRunner] fast_path=enabled")
 
         exec_span = self._runner._execution_service._start_execution_span(max_rounds, len(tools))
         tool_loop_config = ToolLoopConfig(

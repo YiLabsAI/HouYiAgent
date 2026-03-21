@@ -28,6 +28,7 @@ class OpenAICompatRequest:
     include_stream_usage: bool = True
     enable_thinking: bool = False
     thinking_budget: int | None = None
+    transport: str | None = None
     extra_kwargs: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
@@ -52,6 +53,7 @@ class OpenAICompatRequest:
             payload.pop("enable_thinking", payload.pop("enable_reasoning", False))
         )
         thinking_budget = payload.pop("thinking_budget", payload.pop("reasoning_budget", None))
+        transport = payload.pop("transport", None)
         return cls(
             model=model,
             messages=messages,
@@ -66,6 +68,7 @@ class OpenAICompatRequest:
             include_stream_usage=include_stream_usage,
             enable_thinking=enable_thinking,
             thinking_budget=thinking_budget,
+            transport=str(transport).strip().lower() if transport is not None else None,
             extra_kwargs=payload,
         )
 

@@ -70,4 +70,25 @@ describe('ToolCallBubble', () => {
     expect(wrappedMetaValue).toBeDefined();
     expect(wrappedMetaValue).toHaveClass('min-w-0', 'break-all');
   });
+
+  it('surfaces concise error summary for failed tools', () => {
+    render(
+      <ToolCallBubble
+        message={{
+          message_id: 'm4',
+          role: 'tool',
+          name: 'houyi_find_files',
+          content: JSON.stringify({ error: 'permission_denied', message: 'Workspace access denied for /private/repo' }),
+          metadata: { tool_status: 'error' },
+          created_at: 1,
+        } as any}
+      />,
+    );
+
+    expect(screen.getByText('Error: Workspace access denied for /private/repo')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button'));
+    expect(screen.getByText('Error')).toBeInTheDocument();
+    expect(screen.getAllByText('Workspace access denied for /private/repo').length).toBeGreaterThan(0);
+  });
 });

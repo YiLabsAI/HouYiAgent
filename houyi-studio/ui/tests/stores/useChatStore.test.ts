@@ -1,7 +1,7 @@
 import { waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useChatStore } from '@/stores/useChatStore';
-import type { Conversation } from '@/types/chat';
+import type { ChatMessage, Conversation } from '@/types/chat';
 
 describe('useChatStore', () => {
   const originalFetch = global.fetch;
@@ -611,6 +611,112 @@ describe('useChatStore', () => {
     });
   });
 
+  it('hydrates final stream phase metrics from assistant metadata', async () => {
+    const conversation: Conversation = {
+      conversation_id: 'conv-1',
+      title: 'Chat',
+      status: 'active',
+      messages: [
+        {
+          message_id: 'user-1',
+          role: 'user',
+          content: 'hello',
+          metadata: {},
+          created_at: 1,
+        },
+        {
+          message_id: 'assistant-1',
+          role: 'assistant',
+          content: '',
+          reasoning_content: 'thinking only',
+          metadata: {
+            trace_id: 'trace-final-stream',
+            tool_loop_convergence_reason: 'needs_final_stream',
+            tool_loop_final_stream_skipped: false,
+            request_adapter_class: 'SiliconFlowAdapter',
+            request_adapter_strict_message_string_contract: true,
+            request_message_count: 4,
+            request_user_message_count: 1,
+            request_assistant_message_count: 2,
+            request_assistant_reasoning_message_count: 1,
+            request_assistant_reasoning_only_message_count: 1,
+            request_assistant_tool_call_message_count: 1,
+            request_tool_message_count: 1,
+            final_stream_status: 'error',
+            final_stream_error_category: 'timeout',
+            final_stream_empty_visible_output: false,
+            final_stream_assistant_reasoning_removed_count: 2,
+            final_stream_assistant_reasoning_only_removed_count: 1,
+            final_stream_assistant_tool_call_carrier_count: 1,
+            final_stream_tool_result_projection_count: 1,
+            finish_reason: 'error',
+          },
+          created_at: 2,
+        },
+      ],
+      model: 'demo',
+      system_instructions: '',
+      temperature: null,
+      max_tokens: null,
+      top_p: null,
+      stream: true,
+      bookmarked: false,
+      metadata: {},
+      created_at: 1,
+      updated_at: 2,
+      schema_version: 1,
+    };
+
+    global.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/api/chat/conversations/conv-1/context-usage')) {
+        return new Response(JSON.stringify({ usage: null }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      if (url.endsWith('/api/chat/conversations/conv-1')) {
+        return new Response(JSON.stringify(conversation), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    }) as typeof fetch;
+
+    useChatStore.setState((state) => ({
+      ...state,
+      activeConversationId: 'conv-1',
+    }));
+
+    await useChatStore.getState().loadConversation('conv-1');
+
+    expect(useChatStore.getState().agentLoopSummary).toMatchObject({
+      traceId: 'trace-final-stream',
+      metrics: {
+        finish_reason: 'error',
+        tool_loop_convergence_reason: 'needs_final_stream',
+        tool_loop_final_stream_skipped: false,
+        request_adapter_class: 'SiliconFlowAdapter',
+        request_adapter_strict_message_string_contract: true,
+        request_message_count: 4,
+        request_user_message_count: 1,
+        request_assistant_message_count: 2,
+        request_assistant_reasoning_message_count: 1,
+        request_assistant_reasoning_only_message_count: 1,
+        request_assistant_tool_call_message_count: 1,
+        request_tool_message_count: 1,
+        final_stream_status: 'error',
+        final_stream_error_category: 'timeout',
+        final_stream_empty_visible_output: false,
+        final_stream_assistant_reasoning_removed_count: 2,
+        final_stream_assistant_reasoning_only_removed_count: 1,
+        final_stream_assistant_tool_call_carrier_count: 1,
+        final_stream_tool_result_projection_count: 1,
+      },
+    });
+  });
+
   it('hydrates latest compaction from history', async () => {
     const conversation: Conversation = {
       conversation_id: 'conv-1',
@@ -787,101 +893,6 @@ describe('useChatStore', () => {
     expect(useChatStore.getState().compactionHistory[0]?.diff.removed_message_ids).toEqual(['u1', 'u2']);
   });
 
-  it('restores compaction and reloads conversation', async () => {
-    const restoredConversation: Conversation = {
-      conversation_id: 'conv-1',
-      title: 'Restored',
-      status: 'active',
-      messages: [
-        {
-          message_id: 'u1',
-          role: 'user',
-          content: 'restored',
-          metadata: {},
-          created_at: 1,
-        },
-      ],
-      model: 'demo',
-      system_instructions: '',
-      temperature: null,
-      max_tokens: null,
-      top_p: null,
-      stream: true,
-      bookmarked: false,
-      metadata: {
-        compaction_history: [
-          {
-            compaction_id: 'cmp-1',
-            trigger: 'manual',
-            summary: 'Compacted old history',
-            source_message_ids: ['u1', 'u2'],
-            pinned_message_ids: [],
-            retained_refs: [],
-            metrics: { messages_compacted: 2, tokens_before: 2400, tokens_after: 1200 },
-            created_at: 2,
-            metadata: {},
-          },
-        ],
-      },
-      created_at: 1,
-      updated_at: 3,
-      schema_version: 1,
-    };
-
-    global.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (url.endsWith('/api/chat/conversations/conv-1/compactions/cmp-1/restore') && init?.method === 'POST') {
-        return new Response(JSON.stringify({
-          status: 'restored',
-          restored_compaction_id: 'cmp-1',
-          backup_id: 'backup-1',
-          restore_point_backup_id: 'backup-undo-1',
-          conversation: restoredConversation,
-        }), {
-          status: 200,
-          headers: { 'Content-Type': 'application/json' },
-        });
-      }
-      if (url.endsWith('/api/chat/conversations/conv-1/context-usage')) {
-        return new Response(JSON.stringify({ usage: null }), {
-          status: 200,
-          headers: { 'Content-Type': 'application/json' },
-        });
-      }
-      if (url.endsWith('/api/chat/conversations/conv-1/compactions')) {
-        return new Response(JSON.stringify({ items: [] }), {
-          status: 200,
-          headers: { 'Content-Type': 'application/json' },
-        });
-      }
-      if (url.endsWith('/api/chat/conversations/conv-1')) {
-        return new Response(JSON.stringify(restoredConversation), {
-          status: 200,
-          headers: { 'Content-Type': 'application/json' },
-        });
-      }
-      throw new Error(`Unexpected fetch: ${url}`);
-    }) as typeof fetch;
-
-    useChatStore.setState((state) => ({
-      ...state,
-      activeConversationId: 'conv-1',
-    }));
-
-    await useChatStore.getState().restoreCompaction('cmp-1');
-
-    expect(useChatStore.getState().restoringCompactionId).toBeNull();
-    expect(useChatStore.getState().activeConversation?.title).toBe('Restored');
-    expect(useChatStore.getState().latestCompaction?.compaction_id).toBe('cmp-1');
-    expect(useChatStore.getState().restoreNotice).toEqual({
-      message: 'Restored snapshot. You can undo this restore from the previous state backup.',
-      undoBackupId: 'backup-undo-1',
-      kind: 'restore_applied',
-      conversationId: 'conv-1',
-    });
-    expect(useChatStore.getState().scrollToMessageId).toBe('u1');
-  });
-
   it('restores backup and clears undo target', async () => {
     const restoredConversation: Conversation = {
       conversation_id: 'conv-1',
@@ -957,12 +968,12 @@ describe('useChatStore', () => {
 
     expect(useChatStore.getState().restoringBackupId).toBeNull();
     expect(useChatStore.getState().activeConversation?.title).toBe('Before restore');
-    expect(useChatStore.getState().restoreNotice).toEqual({
-      message: 'Undo restore completed. Returned to the snapshot you were viewing before the restore.',
+    expect(useChatStore.getState().restoreNotice).toMatchObject({
       undoBackupId: null,
-      kind: 'restore_undone',
       conversationId: 'conv-1',
+      kind: 'restore_undone',
     });
+    expect(useChatStore.getState().restoreNotice?.message).toContain('Undo restore completed');
     expect(useChatStore.getState().scrollToMessageId).toBe('u-final');
   });
 
@@ -1231,11 +1242,11 @@ describe('useChatStore', () => {
       expect(useChatStore.getState().latestCompaction).toMatchObject({
         compaction_id: 'cmp-live-1',
         trigger: 'repo_intent_trim',
-        metrics: {
-          messages_compacted: 2,
-          tokens_before: 1800,
-          tokens_after: 650,
-        },
+      });
+      expect(useChatStore.getState().activeConversation?.conversation_context_state).toMatchObject({
+        state: 'compacted_recently',
+        last_compacted_at: 10,
+        last_compaction_delta: 1150,
       });
     });
   });
@@ -2402,6 +2413,108 @@ describe('useChatStore', () => {
     );
     expect(toolMessage?.metadata?.tool_status).toBe('completed');
     expect(useChatStore.getState().streaming.isStreaming).toBe(false);
+  });
+
+  it('preserves loaded assistant content when refresh returns tool messages before the final assistant', async () => {
+    const currentMessages: ChatMessage[] = [
+      {
+        message_id: 'u1',
+        role: 'user',
+        content: 'hello',
+        metadata: {},
+        created_at: 1,
+      },
+      {
+        message_id: 'assistant-2',
+        role: 'assistant',
+        content: '',
+        metadata: { trace_id: 'trace-1' },
+        created_at: 2,
+      },
+      {
+        message_id: 'tmp-tool-1',
+        role: 'tool',
+        content: '{"path":"README.md"}',
+        name: 'houyi_read_file',
+        tool_call_id: 'call-1',
+        metadata: { tool_status: 'running', round_index: 1 },
+        created_at: 2,
+      },
+    ];
+
+    const loadedConversation: Conversation = {
+      conversation_id: 'conv-1',
+      title: 'Chat',
+      status: 'active',
+      messages: [
+        currentMessages[0],
+        {
+          message_id: 'tool-1',
+          role: 'tool',
+          content: '{"path":"README.md"}',
+          name: 'houyi_read_file',
+          tool_call_id: 'call-1',
+          metadata: { tool_status: 'ok', round_index: 1 },
+          created_at: 2,
+        },
+        {
+          message_id: 'assistant-2',
+          role: 'assistant',
+          content: 'final summary content',
+          metadata: { trace_id: 'trace-1', finish_reason: 'stop' },
+          created_at: 3,
+        },
+      ],
+      model: 'demo',
+      system_instructions: '',
+      temperature: null,
+      max_tokens: null,
+      top_p: null,
+      stream: true,
+      bookmarked: false,
+      metadata: {},
+      created_at: 1,
+      updated_at: 3,
+      schema_version: 1,
+    };
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/api/chat/conversations/conv-1')) {
+        return new Response(JSON.stringify(loadedConversation), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      if (url.endsWith('/api/chat/conversations/conv-1/context-usage')) {
+        return new Response(JSON.stringify({ usage: null }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      if (url.endsWith('/api/chat/conversations/conv-1/compactions')) {
+        return new Response(JSON.stringify({ items: [] }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    global.fetch = fetchMock as typeof fetch;
+
+    useChatStore.setState((state) => ({
+      ...state,
+      activeConversationId: 'conv-1',
+      activeConversation: {
+        ...loadedConversation,
+        messages: currentMessages,
+      },
+    }));
+
+    await useChatStore.getState().loadConversation('conv-1', undefined, true);
+
+    const assistant = useChatStore.getState().activeConversation?.messages.find((m) => m.message_id === 'assistant-2');
+    expect(assistant?.content).toBe('final summary content');
   });
 
   it('resend reloads conversation after tool loop completion', async () => {

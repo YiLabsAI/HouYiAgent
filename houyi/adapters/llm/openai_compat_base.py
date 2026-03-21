@@ -15,8 +15,27 @@ from houyi.adapters.llm.base import (
 )
 from houyi.adapters.llm.request_models import OpenAICompatRequest
 from houyi.adapters.llm.retry import RetryController
+from houyi.infrastructure.config.env_config import ENV_PROXY_ENABLED
 
 _ENV_OPENAI_COMPAT_TRANSPORT = "HOUYI_OPENAI_COMPAT_TRANSPORT"
+
+
+def _normalize_transport_name(value: str | None) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized == "sdk":
+        return "client"
+    if normalized in {"client", "httpx"}:
+        return normalized
+    return ""
+
+
+def _is_proxy_enabled() -> bool:
+    return str(os.getenv(ENV_PROXY_ENABLED, "false") or "false").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
 
 
 class OpenAICompatAdapterBase(LLMAdapter):
@@ -53,12 +72,13 @@ class OpenAICompatAdapterBase(LLMAdapter):
         request: OpenAICompatRequest,
         *,
         messages: list[dict[str, Any]] | None = None,
+        tools: list[dict[str, Any]] | None = None,
     ) -> OpenAICompatRequest:
         return OpenAICompatRequest(
             model=request.model,
             messages=request.messages if messages is None else messages,
             temperature=request.temperature,
-            tools=request.tools,
+            tools=request.tools if tools is None else tools,
             top_p=request.top_p,
             top_k=request.top_k,
             frequency_penalty=request.frequency_penalty,
@@ -68,6 +88,7 @@ class OpenAICompatAdapterBase(LLMAdapter):
             include_stream_usage=request.include_stream_usage,
             enable_thinking=request.enable_thinking,
             thinking_budget=request.thinking_budget,
+            transport=request.transport,
             extra_kwargs=dict(request.extra_kwargs),
         )
 
@@ -96,10 +117,13 @@ class OpenAICompatAdapterBase(LLMAdapter):
         )
 
     def _resolve_transport(self, request: OpenAICompatRequest) -> str:
-        route = str(os.getenv(_ENV_OPENAI_COMPAT_TRANSPORT, "auto") or "auto").strip().lower()
-        if route in {"sdk", "httpx"}:
+        request_transport = _normalize_transport_name(request.transport)
+        if request_transport:
+            return request_transport
+        route = _normalize_transport_name(os.getenv(_ENV_OPENAI_COMPAT_TRANSPORT, "auto"))
+        if route:
             return route
-        return "sdk"
+        return "client"
 
     def _with_extra_body(
         self,
@@ -172,9 +196,9 @@ class OpenAICompatAdapterBase(LLMAdapter):
 
     async def _chat_request_httpx(self, request: OpenAICompatRequest) -> LLMResponse:
         payload = self._normalize_httpx_payload(self._encode_chat_request_for_httpx(request))
-        response = await self._execute_chat_httpx(payload)
+        response = await self._execute_chat_httpx(payload, request=request)
         result = LLMResponse.from_raw_dict(
-            self._parse_httpx_chat_response(response),
+            self._parse_httpx_response(response),
             model_fallback=request.model,
         )
         self.last_usage = result.usage
@@ -208,12 +232,17 @@ class OpenAICompatAdapterBase(LLMAdapter):
         delta = getattr(choice, "delta", None)
         content = getattr(delta, "content", None)
         reasoning = getattr(delta, "reasoning_content", None)
+        tool_calls_delta = self._extract_sdk_tool_calls_delta(delta)
         content_text = content if isinstance(content, str) and content else ""
         reasoning_text = reasoning if isinstance(reasoning, str) and reasoning else None
-        if not content_text and not reasoning_text:
+        if not content_text and not reasoning_text and not tool_calls_delta:
             return None, 0, 0
         return (
-            StreamChunk(content_delta=content_text, reasoning_delta=reasoning_text),
+            StreamChunk(
+                content_delta=content_text,
+                reasoning_delta=reasoning_text,
+                tool_calls_delta=tool_calls_delta,
+            ),
             int(bool(content_text)),
             int(bool(reasoning_text)),
         )
@@ -266,6 +295,60 @@ class OpenAICompatAdapterBase(LLMAdapter):
     ) -> None:
         return None
 
+    @staticmethod
+    def _extract_sdk_tool_calls_delta(delta: Any) -> list[dict[str, Any]] | None:
+        raw_tool_calls = getattr(delta, "tool_calls", None)
+        if not isinstance(raw_tool_calls, list) or not raw_tool_calls:
+            return None
+        tc_delta_list: list[dict[str, Any]] = []
+        for index, tool_call in enumerate(raw_tool_calls):
+            tc_delta: dict[str, Any] = {"index": getattr(tool_call, "index", index)}
+            tool_call_id = getattr(tool_call, "id", None)
+            if tool_call_id:
+                tc_delta["id"] = tool_call_id
+            tool_call_type = getattr(tool_call, "type", None)
+            if tool_call_type:
+                tc_delta["type"] = tool_call_type
+            function_payload = getattr(tool_call, "function", None)
+            if function_payload is not None:
+                function_delta: dict[str, Any] = {}
+                function_name = getattr(function_payload, "name", None)
+                if function_name:
+                    function_delta["name"] = function_name
+                function_arguments = getattr(function_payload, "arguments", None)
+                if function_arguments is not None:
+                    function_delta["arguments"] = function_arguments
+                if function_delta:
+                    tc_delta["function"] = function_delta
+            tc_delta_list.append(tc_delta)
+        return tc_delta_list or None
+
+    @staticmethod
+    def _extract_httpx_tool_calls_delta(payload: dict[str, Any]) -> list[dict[str, Any]] | None:
+        tool_calls = payload.get("tool_calls")
+        if not isinstance(tool_calls, list) or not tool_calls:
+            return None
+        tc_delta_list: list[dict[str, Any]] = []
+        for index, tool_call in enumerate(tool_calls):
+            if not isinstance(tool_call, dict):
+                continue
+            tc_delta: dict[str, Any] = {"index": tool_call.get("index", index)}
+            if tool_call.get("id"):
+                tc_delta["id"] = tool_call["id"]
+            if tool_call.get("type"):
+                tc_delta["type"] = tool_call["type"]
+            function_payload = tool_call.get("function")
+            if isinstance(function_payload, dict):
+                function_delta: dict[str, Any] = {}
+                if function_payload.get("name"):
+                    function_delta["name"] = function_payload["name"]
+                if function_payload.get("arguments") is not None:
+                    function_delta["arguments"] = function_payload["arguments"]
+                if function_delta:
+                    tc_delta["function"] = function_delta
+            tc_delta_list.append(tc_delta)
+        return tc_delta_list or None
+
     def _parse_httpx_sse_event(self, line: str) -> dict[str, Any] | None:
         if not line.startswith("data: "):
             return None
@@ -305,47 +388,58 @@ class OpenAICompatAdapterBase(LLMAdapter):
             message_payload.get("reasoning_content"), str
         ):
             reasoning = message_payload.get("reasoning_content")
+        tool_calls_delta = self._extract_httpx_tool_calls_delta(delta_payload)
+        if tool_calls_delta is None:
+            tool_calls_delta = self._extract_httpx_tool_calls_delta(message_payload)
         content_text = content if isinstance(content, str) and content else ""
         reasoning_text = reasoning if isinstance(reasoning, str) and reasoning else None
-        if content_text or reasoning_text:
-            return StreamChunk(content_delta=content_text, reasoning_delta=reasoning_text)
+        if content_text or reasoning_text or tool_calls_delta:
+            return StreamChunk(
+                content_delta=content_text,
+                reasoning_delta=reasoning_text,
+                tool_calls_delta=tool_calls_delta,
+            )
         return None
 
     def _normalize_httpx_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
         return payload
 
-    def _build_httpx_chat_url(self) -> str:
+    def _get_httpx_endpoint(self) -> str:
         base_url = str(getattr(self, "base_url", "") or "")
         return base_url.rstrip("/") + "/chat/completions"
 
-    def _build_httpx_chat_headers(self) -> dict[str, str]:
+    def _get_httpx_headers(self) -> dict[str, str]:
         return {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
             **getattr(self, "default_headers", {}),
         }
 
-    def _get_httpx_chat_proxy_url(self) -> str | None:
+    def _get_httpx_proxy(self) -> str | None:
         return None
 
-    def _chat_retry(self) -> RetryController | None:
+    def _get_httpx_retry_controller(self) -> RetryController | None:
         return None
 
-    def _parse_httpx_chat_response(self, response: Any) -> dict[str, Any]:
+    def _parse_httpx_response(self, response: Any) -> dict[str, Any]:
         response.raise_for_status()
         data = response.json()
         return data if isinstance(data, dict) else {}
 
-    def _chat_transport(
+    def _handle_httpx_transport_error(
         self,
         *,
         exc: Exception,
         retry_controller: RetryController,
+        request: OpenAICompatRequest | None = None,
+        payload: dict[str, Any] | None = None,
     ) -> tuple[bool, float]:
+        _ = request
+        _ = payload
         decision = retry_controller.on_transport_exception(exc, method="POST")
         return decision.retry, decision.delay_seconds
 
-    async def _chat_status(
+    async def _handle_httpx_status(
         self,
         *,
         response: Any,
@@ -368,19 +462,29 @@ class OpenAICompatAdapterBase(LLMAdapter):
         if callable(close):
             await close()
 
-    async def _chat_httpx_client(
+    async def _send_httpx_request(
         self, http_client: Any, *, url: str, payload: dict[str, Any]
     ) -> Any:
-        return await http_client.post(url, json=payload, headers=self._build_httpx_chat_headers())
+        return await http_client.post(url, json=payload, headers=self._get_httpx_headers())
 
-    async def _execute_chat_httpx(self, payload: dict[str, Any]) -> Any:
+    def _get_httpx_chat_timeout(self) -> Any:
+        import httpx
+
+        return httpx.Timeout(60.0, connect=10.0)
+
+    async def _execute_chat_httpx(
+        self,
+        payload: dict[str, Any],
+        *,
+        request: OpenAICompatRequest | None = None,
+    ) -> Any:
         import asyncio
 
         import httpx
 
-        retry_controller = self._chat_retry()
-        proxy_url = self._get_httpx_chat_proxy_url()
-        url = self._build_httpx_chat_url()
+        retry_controller = self._get_httpx_retry_controller()
+        proxy_url = self._get_httpx_proxy()
+        url = self._get_httpx_endpoint()
         last_error: Exception | None = None
 
         while True:
@@ -389,15 +493,17 @@ class OpenAICompatAdapterBase(LLMAdapter):
                 # Retry state lives outside the HTTP client so each attempt can use a fresh connection.
                 async with httpx.AsyncClient(
                     proxy=proxy_url,
-                    timeout=httpx.Timeout(60.0, connect=10.0),
+                    timeout=self._get_httpx_chat_timeout(),
                 ) as client:
-                    response = await self._chat_httpx_client(client, url=url, payload=payload)
+                    response = await self._send_httpx_request(client, url=url, payload=payload)
             except httpx.TransportError as exc:
                 if retry_controller is None:
                     raise
-                should_retry, delay_seconds = self._chat_transport(
+                should_retry, delay_seconds = self._handle_httpx_transport_error(
                     exc=exc,
                     retry_controller=retry_controller,
+                    request=request,
+                    payload=payload,
                 )
                 if should_retry:
                     last_error = exc
@@ -406,7 +512,7 @@ class OpenAICompatAdapterBase(LLMAdapter):
                 raise
 
             if retry_controller is not None:
-                should_retry, last_error = await self._chat_status(
+                should_retry, last_error = await self._handle_httpx_status(
                     response=response,
                     retry_controller=retry_controller,
                 )
@@ -417,7 +523,7 @@ class OpenAICompatAdapterBase(LLMAdapter):
                     continue
 
             if response is None:
-                raise last_error or RuntimeError("HTTP chat failed")
+                raise last_error or RuntimeError("HTTP request failed")
             return response
 
     def _parse_httpx_sse_line(self, line: str) -> tuple[dict[str, Any] | None, bool]:
@@ -460,6 +566,8 @@ class OpenAICompatAdapterBase(LLMAdapter):
         }
 
     def _get_httpx_stream_proxy_url(self) -> str | None:
+        if not _is_proxy_enabled():
+            return None
         from houyi.infrastructure.net.proxy import detect_proxy
 
         return detect_proxy()

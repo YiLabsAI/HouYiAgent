@@ -24,6 +24,7 @@ import re
 # DeepSeek (SiliconFlow)
 DEEPSEEK_V3 = "deepseek-ai/DeepSeek-V3"
 DEEPSEEK_R1 = "deepseek-ai/DeepSeek-R1"
+DEEPSEEK_V3_2 = "deepseek-ai/DeepSeek-V3.2"
 
 # OpenAI
 GPT_4O = "gpt-4o"
@@ -97,6 +98,7 @@ DEFAULT_MODEL: str = DEEPSEEK_V3
 MODEL_CONTEXT_WINDOWS: dict[str, int] = {
     DEEPSEEK_V3: 65_536,
     DEEPSEEK_R1: 65_536,
+    DEEPSEEK_V3_2: 65_536,
     GPT_4O: 128_000,
     GPT_4O_MINI: 128_000,
     GPT_4_TURBO: 128_000,
@@ -122,6 +124,7 @@ MODEL_ID_ALIASES: dict[str, str] = {
 MODEL_CONTEXT_WINDOW_PATTERNS: tuple[tuple[str, int], ...] = (
     (DEEPSEEK_V3.lower(), MODEL_CONTEXT_WINDOWS[DEEPSEEK_V3]),
     (DEEPSEEK_R1.lower(), MODEL_CONTEXT_WINDOWS[DEEPSEEK_R1]),
+    (DEEPSEEK_V3_2.lower(), MODEL_CONTEXT_WINDOWS[DEEPSEEK_V3_2]),
     (GPT_4O_MINI.lower(), MODEL_CONTEXT_WINDOWS[GPT_4O_MINI]),
     (GPT_4O.lower(), MODEL_CONTEXT_WINDOWS[GPT_4O]),
     (GPT_4_TURBO.lower(), MODEL_CONTEXT_WINDOWS[GPT_4_TURBO]),

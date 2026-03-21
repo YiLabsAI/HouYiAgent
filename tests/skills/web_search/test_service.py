@@ -46,11 +46,38 @@ class _Provider:
         return self._results
 
 
-def test_from_env_invalid():
-    """from_env should reject unsupported providers."""
+def test_from_env_invalid_falls_back():
+    """from_env should degrade unsupported providers to a supported fallback."""
 
-    with pytest.raises(ValueError):
-        WebSearchService.from_env(provider="unknown")
+    monkeypatch = pytest.MonkeyPatch()
+    try:
+        monkeypatch.delenv(ENV_SERPER_API_KEY, raising=False)
+        monkeypatch.delenv(ENV_TAVILY_API_KEY, raising=False)
+        monkeypatch.delenv(ENV_BOCHA_API_KEY, raising=False)
+        service = WebSearchService.from_env(provider="unknown")
+        assert service.provider.name == "ddg"
+    finally:
+        monkeypatch.undo()
+
+
+def test_invalid_falls_back(monkeypatch):
+    """Unsupported WEB_SEARCH_PROVIDER env should degrade to auto-detected fallback."""
+
+    monkeypatch.setenv(ENV_WEB_SEARCH_PROVIDER, "google_scholar")
+    monkeypatch.delenv(ENV_SERPER_API_KEY, raising=False)
+    monkeypatch.delenv(ENV_TAVILY_API_KEY, raising=False)
+    monkeypatch.delenv(ENV_BOCHA_API_KEY, raising=False)
+    service = WebSearchService.from_env()
+    assert service.provider.name == "ddg"
+
+
+def test_prefers_detected_provider(monkeypatch):
+    """Unsupported WEB_SEARCH_PROVIDER env should still honor auto-detect priority."""
+
+    monkeypatch.setenv(ENV_WEB_SEARCH_PROVIDER, "google_scholar")
+    monkeypatch.setenv(ENV_SERPER_API_KEY, "test-key")
+    service = WebSearchService.from_env()
+    assert service.provider.name == "serper"
 
 
 def test_from_env_overrides(monkeypatch):

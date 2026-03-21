@@ -16,7 +16,7 @@ class TestBuildCompactionSummary:
     def test_summary_tool_loop(self):
         summary = build_compaction_summary(
             [
-                _message(message_id="u1", role="user", content="搜索文件 skill.md"),
+                _message(message_id="u1", role="user", content="find skill.md"),
                 _message(
                     message_id="a1",
                     role="assistant",

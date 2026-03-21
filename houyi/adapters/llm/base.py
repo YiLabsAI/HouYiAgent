@@ -84,15 +84,48 @@ class LLMResponse(BaseModel):
     @classmethod
     def from_openai(cls, response: Any) -> LLMResponse:
         """Create from OpenAI SDK response object."""
-        choice = response.choices[0]
+        choices = getattr(response, "choices", None) or []
+        if not choices:
+            empty_metadata: dict[str, Any] = {"response_shape": "empty_choices"}
+            provider_error = getattr(response, "error", None)
+            if provider_error is not None:
+                empty_metadata["provider_error"] = provider_error
+            return cls(
+                content="",
+                tool_calls=[],
+                finish_reason="error",
+                usage=_normalize_usage(getattr(response, "usage", {})),
+                model=getattr(response, "model", "unknown"),
+                metadata=empty_metadata,
+            )
+        choice = choices[0]
         message = choice.message
+        content = message.content or ""
+        reasoning_content = getattr(message, "reasoning_content", None)
+        raw_tool_calls = [tc.model_dump() for tc in (message.tool_calls or [])]
+        if not raw_tool_calls:
+            function_call = getattr(message, "function_call", None)
+            compatible_tool_call = _coerce_compatible_function_call(function_call)
+            if compatible_tool_call is not None:
+                raw_tool_calls = [compatible_tool_call]
+        tool_calls = _parse_tool_calls(raw_tool_calls)
+        if not tool_calls:
+            tool_calls = _parse_embedded_tool_calls(
+                reasoning_content if isinstance(reasoning_content, str) else None,
+                content if isinstance(content, str) else None,
+            )
+
+        response_metadata: dict[str, Any] = {}
+        if isinstance(reasoning_content, str) and reasoning_content:
+            response_metadata["reasoning_content"] = reasoning_content
 
         return cls(
-            content=message.content or "",
-            tool_calls=[tc.model_dump() for tc in (message.tool_calls or [])],
+            content=content,
+            tool_calls=tool_calls,
             finish_reason=choice.finish_reason,
             usage=_normalize_usage(response.usage),
             model=response.model,
+            metadata=response_metadata,
         )
 
     @classmethod
@@ -137,19 +170,28 @@ class LLMResponse(BaseModel):
         """
         choices = data.get("choices", [])
         if not choices:
+            empty_metadata: dict[str, Any] = {"response_shape": "empty_choices"}
+            if data.get("error") is not None:
+                empty_metadata["provider_error"] = data.get("error")
             return cls(
                 content="",
                 tool_calls=[],
                 finish_reason="error",
                 usage=_normalize_usage(data.get("usage", {})),
                 model=data.get("model", model_fallback),
+                metadata=empty_metadata,
             )
 
-        msg = choices[0].get("message", {})
+        first_choice = choices[0] if isinstance(choices[0], dict) else {}
+        msg = first_choice.get("message", {}) if isinstance(first_choice, dict) else {}
         content = msg.get("content", "") or ""
         reasoning_content = msg.get("reasoning_content")
 
         raw_tool_calls = msg.get("tool_calls", [])
+        if not raw_tool_calls:
+            compatible_tool_call = _coerce_compatible_function_call(msg.get("function_call"))
+            if compatible_tool_call is not None:
+                raw_tool_calls = [compatible_tool_call]
         tool_calls = _parse_tool_calls(raw_tool_calls)
         if not tool_calls:
             tool_calls = _parse_embedded_tool_calls(
@@ -157,17 +199,19 @@ class LLMResponse(BaseModel):
                 content if isinstance(content, str) else None,
             )
 
-        metadata: dict[str, Any] = {}
+        response_metadata: dict[str, Any] = {}
         if isinstance(reasoning_content, str) and reasoning_content:
-            metadata["reasoning_content"] = reasoning_content
+            response_metadata["reasoning_content"] = reasoning_content
 
         return cls(
             content=content,
             tool_calls=tool_calls,
-            finish_reason=choices[0].get("finish_reason", "stop"),
+            finish_reason=first_choice.get("finish_reason", "stop")
+            if isinstance(first_choice, dict)
+            else "stop",
             usage=_normalize_usage(data.get("usage", {})),
             model=data.get("model", model_fallback),
-            metadata=metadata,
+            metadata=response_metadata,
         )
 
 
@@ -267,12 +311,16 @@ class StreamResponse:
 
     def to_response(self) -> LLMResponse:
         """Convert accumulated stream data to an LLMResponse."""
+        metadata: dict[str, Any] = {}
+        if self.accumulated_reasoning:
+            metadata["reasoning_content"] = self.accumulated_reasoning
         return LLMResponse(
             content=self.accumulated_content,
             tool_calls=self.tool_calls,
             finish_reason=self.finish_reason or "stop",
             usage=self.usage,
             model=self.model or "unknown",
+            metadata=metadata,
         )
 
 
@@ -444,7 +492,6 @@ class LLMAdapter(ABC):
         messages: list[dict],
         *,
         enforce_string_content: bool = True,
-        enforce_tool_call_arguments: bool = True,
     ) -> list[dict]:
         """Normalize provider-compatible request fields to safe strings."""
         sanitized: list[dict] = []
@@ -453,12 +500,12 @@ class LLMAdapter(ABC):
                 continue
 
             normalized = dict(msg)
-            if enforce_string_content:
+            if enforce_string_content and "content" in normalized:
                 normalized["content"] = LLMAdapter._coerce_message_content_to_text(
                     normalized.get("content")
                 )
 
-            if enforce_tool_call_arguments and isinstance(normalized.get("tool_calls"), list):
+            if isinstance(normalized.get("tool_calls"), list):
                 fixed_calls: list[dict] = []
                 for call in normalized["tool_calls"]:
                     fixed = LLMAdapter._sanitize_tool_call(call)
@@ -474,6 +521,39 @@ class LLMAdapter(ABC):
 # ---------------------------------------------------------------------------
 # Private helpers
 # ---------------------------------------------------------------------------
+
+
+def _coerce_compatible_function_call(function_call: Any) -> dict[str, Any] | None:
+    """Normalize old OpenAI-compatible ``function_call`` payloads into ``tool_calls``.
+
+    Some OpenAI-compatible providers still return a single ``message.function_call``
+    object instead of the newer ``message.tool_calls`` list. This helper keeps the
+    parser tolerant to that older response shape by projecting it onto the current
+    function-tool schema used throughout the rest of the stack.
+    """
+    if function_call is None:
+        return None
+    if isinstance(function_call, dict):
+        name = function_call.get("name")
+        arguments = function_call.get("arguments")
+    else:
+        name = getattr(function_call, "name", None)
+        arguments = getattr(function_call, "arguments", None)
+    if not isinstance(name, str) or not name:
+        return None
+    if not isinstance(arguments, str):
+        try:
+            arguments = json.dumps(arguments, ensure_ascii=False)
+        except TypeError:
+            arguments = str(arguments or "")
+    return {
+        "id": f"compatible_{name}",
+        "type": "function",
+        "function": {
+            "name": name,
+            "arguments": arguments,
+        },
+    }
 
 
 def _normalize_usage(raw: Any) -> dict[str, Any]:
@@ -620,6 +700,14 @@ def _parse_embedded_tool_calls(*sources: str | None) -> list[dict]:
         if not isinstance(source, str) or not source.strip():
             continue
         parsed = _parse_dsml_tool_calls(source)
+        if not parsed:
+            parsed = _parse_token_wrapped_tool_calls(source)
+        if not parsed:
+            parsed = _parse_fenced_json_tool_calls(source)
+        if not parsed:
+            parsed = _parse_xml_tool_calls(source)
+        if not parsed:
+            parsed = _parse_bracket_tool_calls(source)
         if parsed:
             embedded_calls.extend(parsed)
             break
@@ -666,6 +754,180 @@ def _parse_dsml_tool_calls(raw: str) -> list[dict]:
             }
         )
     return tool_calls
+
+
+def _parse_token_wrapped_tool_calls(raw: str) -> list[dict]:
+    call_pattern = re.compile(
+        r"<\|tool_call_begin\|>(?P<name>[^:<\s]+(?::[^<\s]+)?)"
+        r"(?:<\|tool_call_argument_begin\|>(?P<arguments>[\s\S]*?))?"
+        r"<\|tool_call_end\|>",
+        flags=re.IGNORECASE,
+    )
+    tool_calls: list[dict] = []
+    for index, match in enumerate(call_pattern.finditer(raw)):
+        raw_name = str(match.group("name") or "").strip()
+        if not raw_name:
+            continue
+        fn_name = raw_name.split(":", 1)[0].strip()
+        if not fn_name:
+            continue
+        arguments_text = str(match.group("arguments") or "").strip()
+        arguments = _coerce_embedded_tool_value(arguments_text) if arguments_text else {}
+        tool_calls.append(
+            {
+                "id": f"embedded_call_{index + 1}",
+                "type": "function",
+                "function": {
+                    "name": fn_name,
+                    "arguments": arguments if isinstance(arguments, dict) else {},
+                },
+            }
+        )
+    return tool_calls
+
+
+def _parse_fenced_json_tool_calls(raw: str) -> list[dict]:
+    fence_pattern = re.compile(
+        r"```(?:json|javascript|js)?\s*(?P<body>[\s\S]*?)```",
+        flags=re.IGNORECASE,
+    )
+    tool_calls: list[dict] = []
+    for index, match in enumerate(fence_pattern.finditer(raw)):
+        body = str(match.group("body") or "").strip()
+        if not body:
+            continue
+        parsed_payload = _coerce_embedded_tool_value(body)
+        for payload in _iter_fenced_tool_call_payloads(parsed_payload):
+            fn_name = str(
+                payload.get("name") or payload.get("tool") or payload.get("tool_name") or ""
+            ).strip()
+            if not fn_name:
+                continue
+            arguments = payload.get("parameters")
+            if arguments is None:
+                arguments = payload.get("arguments")
+            if not isinstance(arguments, dict):
+                continue
+            tool_calls.append(
+                {
+                    "id": f"embedded_call_{index + len(tool_calls) + 1}",
+                    "type": "function",
+                    "function": {
+                        "name": fn_name,
+                        "arguments": arguments,
+                    },
+                }
+            )
+    return tool_calls
+
+
+def _parse_xml_tool_calls(raw: str) -> list[dict]:
+    call_pattern = re.compile(
+        r"<tool_call>(?P<name>[^<]+)(?P<body>[\s\S]*?)</tool_call>",
+        flags=re.IGNORECASE,
+    )
+    pair_pattern = re.compile(
+        r"<arg_key>(?P<key>[\s\S]*?)</arg_key>\s*<arg_value>(?P<value>[\s\S]*?)</arg_value>",
+        flags=re.IGNORECASE,
+    )
+    tool_calls: list[dict] = []
+    for index, match in enumerate(call_pattern.finditer(raw)):
+        fn_name = str(match.group("name") or "").strip()
+        if not fn_name:
+            continue
+        arguments: dict[str, Any] = {}
+        body = str(match.group("body") or "")
+        for pair_match in pair_pattern.finditer(body):
+            key = str(pair_match.group("key") or "").strip()
+            if not key:
+                continue
+            value_text = str(pair_match.group("value") or "").strip()
+            arguments[key] = _coerce_embedded_tool_value(value_text)
+        tool_calls.append(
+            {
+                "id": f"embedded_call_{index + 1}",
+                "type": "function",
+                "function": {
+                    "name": fn_name,
+                    "arguments": arguments,
+                },
+            }
+        )
+    if tool_calls:
+        return tool_calls
+
+    inline_pattern = re.compile(
+        r"(?P<name>[^<\s][^<]*?)"
+        r"(?P<body>(?:\s*<arg_key>[\s\S]*?</arg_key>\s*<arg_value>[\s\S]*?</arg_value>)+)",
+        flags=re.IGNORECASE,
+    )
+    for index, match in enumerate(inline_pattern.finditer(raw)):
+        fn_name = str(match.group("name") or "").strip()
+        if not fn_name or "<" in fn_name or ">" in fn_name:
+            continue
+        inline_arguments: dict[str, Any] = {}
+        body = str(match.group("body") or "")
+        for pair_match in pair_pattern.finditer(body):
+            key = str(pair_match.group("key") or "").strip()
+            if not key:
+                continue
+            value_text = str(pair_match.group("value") or "").strip()
+            inline_arguments[key] = _coerce_embedded_tool_value(value_text)
+        tool_calls.append(
+            {
+                "id": f"embedded_call_{index + 1}",
+                "type": "function",
+                "function": {
+                    "name": fn_name,
+                    "arguments": inline_arguments,
+                },
+            }
+        )
+    return tool_calls
+
+
+def _parse_bracket_tool_calls(raw: str) -> list[dict]:
+    tool_calls: list[dict] = []
+    marker_pattern = re.compile(r"\[tool:(?P<name>[^\]\s]+)\]", flags=re.IGNORECASE)
+    decoder = json.JSONDecoder()
+    for index, match in enumerate(marker_pattern.finditer(raw)):
+        fn_name = str(match.group("name") or "").strip()
+        if not fn_name:
+            continue
+        remainder = raw[match.end() :].lstrip()
+        arguments: Any = {}
+        if remainder.startswith("{"):
+            with contextlib.suppress(json.JSONDecodeError, TypeError, ValueError):
+                arguments, _ = decoder.raw_decode(remainder)
+        if _looks_like_embedded_tool_result_envelope(arguments):
+            continue
+        tool_calls.append(
+            {
+                "id": f"embedded_call_{index + 1}",
+                "type": "function",
+                "function": {
+                    "name": fn_name,
+                    "arguments": arguments if isinstance(arguments, dict) else {},
+                },
+            }
+        )
+    return tool_calls
+
+
+def _looks_like_embedded_tool_result_envelope(value: Any) -> bool:
+    if not isinstance(value, dict):
+        return False
+    has_success = isinstance(value.get("success"), bool)
+    has_projection_payload = isinstance(value.get("data"), dict) or "message" in value
+    return has_success and has_projection_payload
+
+
+def _iter_fenced_tool_call_payloads(value: Any) -> list[dict[str, Any]]:
+    if isinstance(value, dict):
+        return [value]
+    if isinstance(value, list):
+        return [item for item in value if isinstance(item, dict)]
+    return []
 
 
 def _coerce_embedded_tool_value(value: str) -> Any:

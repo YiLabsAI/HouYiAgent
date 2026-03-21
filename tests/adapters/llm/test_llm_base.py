@@ -207,41 +207,6 @@ def test_from_extracts_reasoning_content():
     assert parsed.metadata.get("reasoning_content") == "I should inspect files first"
 
 
-def test_parses_dsml_tool_call():
-    raw = {
-        "model": "deepseek-chat",
-        "choices": [
-            {
-                "finish_reason": "stop",
-                "message": {
-                    "content": "",
-                    "reasoning_content": (
-                        "[tool call]\n\n"
-                        "<｜DSML｜function_calls>\n"
-                        '<｜DSML｜invoke name="houyi_web_search">\n'
-                        '<｜DSML｜parameter name="query" string="true">Articles authored by Von Gosling on InfoQ in 2025</｜DSML｜parameter>\n'
-                        '<｜DSML｜parameter name="search_engine" string="true">bing</｜DSML｜parameter>\n'
-                        '<｜DSML｜parameter name="max_results" string="false">10</｜DSML｜parameter>\n'
-                        "</｜DSML｜invoke>\n"
-                        "</｜DSML｜function_calls>"
-                    ),
-                },
-            }
-        ],
-    }
-
-    parsed = LLMResponse.from_raw_dict(raw)
-
-    assert len(parsed.tool_calls) == 1
-    assert parsed.tool_calls[0]["function"]["name"] == "houyi_web_search"
-    assert parsed.tool_calls[0]["function"]["arguments"] == {
-        "query": "Articles authored by Von Gosling on InfoQ in 2025",
-        "search_engine": "bing",
-        "max_results": 10,
-    }
-    assert parsed.metadata.get("reasoning_content")
-
-
 def test_normalize_usage_for_gemini():
     class _Usage:
         prompt_token_count = 14

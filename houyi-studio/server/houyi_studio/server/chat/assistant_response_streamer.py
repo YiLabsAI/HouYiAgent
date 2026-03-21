@@ -16,7 +16,11 @@ from .sse_adapter import SSEEvent, stream_chat_sse
 logger = logging.getLogger(__name__)
 
 _TOOL_MARKER_RE = re.compile(
-    r"\[tool call\]|<tool_call\b[^>]*>[\s\S]*?</tool_call>|<tool_call\b[^>]*>|</tool_call>|<arg_[^>]+>[\s\S]*?</arg_[^>]+>|<arg_[^>]+>|</arg_[^>]+>|</?think>|<\|tool_calls_section_begin\|>|<\|tool_calls_section_end\|>|<\|tool_call_begin\|>|<\|tool_call_end\|>|<\|tool_call_argument_begin\|>|<\|tool_call_argument_end\|>|<\|tool_[^|]+\|>",
+    r"\[tool call\]|\[tool_call\]|<tool_call\b[^>]*>[\s\S]*?</tool_call>|<tool_call\b[^>]*>|</tool_call>|<arg_[^>]+>[\s\S]*?</arg_[^>]+>|<arg_[^>]+>|</arg_[^>]+>|</?think>|<\|tool_calls_section_begin\|>|<\|tool_calls_section_end\|>|<\|tool_call_begin\|>|<\|tool_call_end\|>|<\|tool_call_argument_begin\|>|<\|tool_call_argument_end\|>|<\|tool_[^|]+\|>|(?:^|\n)\s*tool\s*:\s*[a-zA-Z_][\w.-]*\s*&args\s*:\s*[^\n]*",
+    re.IGNORECASE,
+)
+_PLAIN_TEXT_TOOL_CARRIER_RE = re.compile(
+    r"\btool\s*:\s*[a-zA-Z_][\w.-]*\s*&args\s*:",
     re.IGNORECASE,
 )
 
@@ -24,6 +28,8 @@ _TOOL_MARKER_RE = re.compile(
 def _sanitize_final_stream_text(raw: str | None) -> str:
     text = str(raw or "")
     if not text:
+        return ""
+    if _PLAIN_TEXT_TOOL_CARRIER_RE.search(text):
         return ""
     if not _TOOL_MARKER_RE.search(text):
         return text
@@ -96,6 +102,7 @@ class AssistantResponseStreamer:
         extract_finish_reason: Any,
         finalize_stream_result: Any,
         json_safe: Any,
+        normalize_chat_error: Any,
         normalize_usage_payload: Any,
         stage_span: Any,
     ) -> None:
@@ -105,6 +112,7 @@ class AssistantResponseStreamer:
         self._extract_finish_reason = extract_finish_reason
         self._finalize_stream_result = finalize_stream_result
         self._json_safe = json_safe
+        self._normalize_chat_error = normalize_chat_error
         self._normalize_usage_payload = normalize_usage_payload
         self._stage_span = stage_span
 
@@ -156,6 +164,14 @@ class AssistantResponseStreamer:
             capture.content_parts.append(replay_content)
         if replay_reasoning:
             capture.reasoning_parts.append(replay_reasoning)
+        logger.info(
+            "Chat replay stream: message=%s model=%s content_len=%s reasoning_len=%s finish_reason=%s",
+            assistant_message_id,
+            model,
+            len(replay_content),
+            len(replay_reasoning or ""),
+            finish_reason,
+        )
 
         async def replay_stream() -> AsyncIterator[tuple[str, str | None]]:
             content_chunks = _chunk_replay_text(replay_content)
@@ -190,6 +206,7 @@ class AssistantResponseStreamer:
         assistant_message_id: str,
         context_usage: dict[str, Any],
         chat_span: Span,
+        require_visible_content: bool = False,
     ) -> tuple[
         list[str],
         list[str],
@@ -211,6 +228,7 @@ class AssistantResponseStreamer:
                 context_usage=context_usage,
                 chat_span=chat_span,
                 capture=capture,
+                require_visible_content=require_visible_content,
             )
         ]
         return (
@@ -234,6 +252,7 @@ class AssistantResponseStreamer:
         context_usage: dict[str, Any],
         chat_span: Span,
         capture: FinalStreamCapture,
+        require_visible_content: bool = False,
     ) -> AsyncIterator[str]:
         llm_input_chars = sum(len(str(message.get("content") or "")) for message in llm_messages)
 
@@ -256,6 +275,7 @@ class AssistantResponseStreamer:
             first_token_ms: float | None = None
             llm_chunk_count = 0
             stream_error_content: str | None = None
+            stream_error_info: Any | None = None
             llm_stream = llm_adapter.stream_chat(
                 messages=cast(list[LLMMessage | dict[str, Any]], llm_messages),
                 model=model,
@@ -278,8 +298,16 @@ class AssistantResponseStreamer:
                     yield content_delta, reasoning_delta
 
             def capture_stream_error(exc: Exception) -> str:
-                nonlocal stream_error_content
+                nonlocal stream_error_content, stream_error_info
                 stream_error_content = self._build_stream_error_content(exc)
+                stream_error_info = self._normalize_chat_error(exc)
+                logger.warning(
+                    "Chat final stream error: conversation=%s message=%s model=%s error=%s",
+                    conversation_id,
+                    assistant_message_id,
+                    model,
+                    exc,
+                )
                 if stream_error_content:
                     capture.content_parts.append(stream_error_content)
                 return stream_error_content or ""
@@ -313,15 +341,38 @@ class AssistantResponseStreamer:
                 generation_time_ms=generation_time_ms,
                 chunk_count=llm_chunk_count,
             )
+            logger.info(
+                "Chat final stream complete: conversation=%s message=%s model=%s chunks=%s content_parts=%s reasoning_parts=%s first_token_ms=%s finish_reason=%s errored=%s",
+                conversation_id,
+                assistant_message_id,
+                model,
+                llm_chunk_count,
+                len(capture.content_parts),
+                len(capture.reasoning_parts),
+                round(first_token_ms, 2) if isinstance(first_token_ms, (int, float)) else None,
+                capture.finish_reason,
+                bool(stream_error_content),
+            )
             capture.generation_metadata["final_stream_message_count"] = len(llm_messages)
             capture.generation_metadata["final_stream_input_chars"] = llm_input_chars
             capture.generation_metadata["final_stream_chunk_count"] = llm_chunk_count
             if stream_error_content and not capture.finish_reason:
                 capture.finish_reason = "error"
-            if not capture.content_parts and not capture.reasoning_parts:
+            if (
+                not capture.content_parts
+                and capture.reasoning_parts
+                and not require_visible_content
+            ):
+                capture.generation_metadata["final_stream_status"] = "reasoning_only"
+                capture.generation_metadata["final_stream_empty_visible_output"] = False
+            if not capture.content_parts and (
+                not capture.reasoning_parts or require_visible_content
+            ):
                 empty_stream_content = self._build_empty_stream_content()
                 capture.content_parts.append(empty_stream_content)
                 capture.finish_reason = capture.finish_reason or "error"
+                capture.generation_metadata["final_stream_status"] = "empty_visible_output"
+                capture.generation_metadata["final_stream_empty_visible_output"] = True
                 logger.warning(
                     "Chat final stream returned no visible deltas: conversation=%s, message=%s, model=%s, finish_reason=%s, chunk_count=%s, message_count=%s, usage=%s",
                     conversation_id,
@@ -341,3 +392,19 @@ class AssistantResponseStreamer:
                     },
                     event_id=f"{assistant_message_id}-{llm_chunk_count + 1}",
                 ).encode()
+            if stream_error_content:
+                capture.generation_metadata["final_stream_status"] = "error"
+                capture.generation_metadata["final_stream_empty_visible_output"] = False
+                if stream_error_info is not None:
+                    capture.generation_metadata["final_stream_error_code"] = getattr(
+                        stream_error_info, "error_code", None
+                    )
+                    capture.generation_metadata["final_stream_error_category"] = getattr(
+                        stream_error_info, "category", None
+                    )
+                    capture.generation_metadata["final_stream_error_retryable"] = getattr(
+                        stream_error_info, "retryable", None
+                    )
+            else:
+                capture.generation_metadata.setdefault("final_stream_status", "completed")
+                capture.generation_metadata.setdefault("final_stream_empty_visible_output", False)

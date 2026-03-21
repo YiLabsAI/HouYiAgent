@@ -10,6 +10,7 @@ import pytest
 from houyi.adapters.llm.base import LLMResponse
 from houyi.adapters.llm.openai_compat_adapter import OpenAICompatibleAdapter
 from houyi.adapters.llm.openai_compat_base import OpenAICompatAdapterBase
+from houyi.infrastructure.net import proxy as proxy_module
 
 
 class _FakeChatCompletions:
@@ -49,6 +50,7 @@ class _FakeMessage:
         self.content = content
         self.tool_calls = []
         self.function_call = None
+        self.reasoning_content = None
 
 
 class _FakeChoice:
@@ -75,6 +77,15 @@ class _FakeOpenAIResponse:
         self.model = model
 
 
+class _FakeReasoningOpenAIResponse:
+    def __init__(self, *, content: str, reasoning_content: str, model: str) -> None:
+        choice = _FakeChoice(content)
+        choice.message.reasoning_content = reasoning_content
+        self.choices = [choice]
+        self.usage = _FakeUsage()
+        self.model = model
+
+
 def _build_openai_module(response: object) -> types.SimpleNamespace:
     class _AsyncOpenAI:
         def __init__(self, *args, **kwargs):
@@ -92,9 +103,15 @@ class _FakeStreamUsage:
 
 
 class _FakeStreamDelta:
-    def __init__(self, content: str | None = None, reasoning_content: str | None = None) -> None:
+    def __init__(
+        self,
+        content: str | None = None,
+        reasoning_content: str | None = None,
+        tool_calls: list[object] | None = None,
+    ) -> None:
         self.content = content
         self.reasoning_content = reasoning_content
+        self.tool_calls = tool_calls
 
 
 class _FakeStreamingChoice:
@@ -103,9 +120,14 @@ class _FakeStreamingChoice:
         *,
         content: str | None = None,
         reasoning_content: str | None = None,
+        tool_calls: list[object] | None = None,
         finish_reason: str | None = None,
     ) -> None:
-        self.delta = _FakeStreamDelta(content=content, reasoning_content=reasoning_content)
+        self.delta = _FakeStreamDelta(
+            content=content,
+            reasoning_content=reasoning_content,
+            tool_calls=tool_calls,
+        )
         self.finish_reason = finish_reason
 
 
@@ -129,6 +151,18 @@ class _ReasoningOpenAICompatAdapter(OpenAICompatAdapterBase):
 
     def _build_reasoning_extra_body(self, request) -> dict[str, object] | None:
         return {"reasoning": "on"}
+
+    def _get_httpx_retry_controller(self):
+        return None
+
+
+class _ProxyOpenAICompatAdapter(OpenAICompatAdapterBase):
+    def __init__(self) -> None:
+        self.api_key = "test-key"
+        self.base_url = "https://example.test"
+        self.default_headers = {}
+        self.last_usage = None
+        self.last_finish_reason = None
 
 
 def test_build_request(monkeypatch) -> None:
@@ -196,10 +230,55 @@ def test_resolve_transport(monkeypatch) -> None:
 
     monkeypatch.setenv("HOUYI_OPENAI_COMPAT_TRANSPORT", "httpx")
     assert adapter._resolve_transport(request) == "httpx"
+    monkeypatch.setenv("HOUYI_OPENAI_COMPAT_TRANSPORT", "client")
+    assert adapter._resolve_transport(request) == "client"
     monkeypatch.setenv("HOUYI_OPENAI_COMPAT_TRANSPORT", "sdk")
-    assert adapter._resolve_transport(request) == "sdk"
+    assert adapter._resolve_transport(request) == "client"
     monkeypatch.setenv("HOUYI_OPENAI_COMPAT_TRANSPORT", "auto")
-    assert adapter._resolve_transport(request) == "sdk"
+    assert adapter._resolve_transport(request) == "client"
+
+
+def test_extracts_transport_override(monkeypatch) -> None:
+    response = _FakeOpenAIResponse("ok", "test-model")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://example.test")
+    fake_openai = _build_openai_module(response)
+    monkeypatch.setitem(__import__("sys").modules, "openai", fake_openai)
+
+    adapter = OpenAICompatibleAdapter(model="test-model")
+    request = adapter._build_request(
+        messages=[{"role": "user", "content": "hi"}],
+        tools=None,
+        temperature=0.1,
+        max_tokens=None,
+        enable_streaming=False,
+        kwargs={"transport": "httpx", "top_p": 0.5},
+    )
+
+    assert request.transport == "httpx"
+    assert request.top_p == 0.5
+    assert "transport" not in request.extra_kwargs
+
+
+def test_request_transport_override(monkeypatch) -> None:
+    response = _FakeOpenAIResponse("ok", "test-model")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://example.test")
+    monkeypatch.setenv("HOUYI_OPENAI_COMPAT_TRANSPORT", "client")
+    fake_openai = _build_openai_module(response)
+    monkeypatch.setitem(__import__("sys").modules, "openai", fake_openai)
+
+    adapter = OpenAICompatibleAdapter(model="test-model")
+    request = adapter._build_request(
+        messages=[{"role": "user", "content": "hi"}],
+        tools=None,
+        temperature=0.1,
+        max_tokens=None,
+        enable_streaming=False,
+        kwargs={"transport": "httpx"},
+    )
+
+    assert adapter._resolve_transport(request) == "httpx"
 
 
 def test_encode_request(monkeypatch) -> None:
@@ -293,7 +372,7 @@ def test_encode_request_for_httpx(monkeypatch) -> None:
     assert payload["frequency_penalty"] == 0.2
 
 
-def test_encode_stream_request_for_httpx(monkeypatch) -> None:
+def test_encode_stream_request(monkeypatch) -> None:
     response = _FakeOpenAIResponse("ok", "test-model")
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     monkeypatch.setenv("OPENAI_BASE_URL", "https://example.test")
@@ -381,6 +460,40 @@ def test_build_stream_chunk(monkeypatch) -> None:
     assert adapter.last_usage == {"prompt_tokens": 2, "completion_tokens": 3, "total_tokens": 5}
     assert adapter.last_finish_reason == "stop"
 
+    tool_chunk = adapter._build_stream_chunk_from_httpx_event(
+        {
+            "choices": [
+                {
+                    "delta": {
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {
+                                    "name": "houyi_web_search",
+                                    "arguments": '{"query":"hi"}',
+                                },
+                            }
+                        ]
+                    }
+                }
+            ]
+        }
+    )
+
+    assert tool_chunk is not None
+    assert tool_chunk.content_delta == ""
+    assert tool_chunk.reasoning_delta is None
+    assert tool_chunk.tool_calls_delta == [
+        {
+            "index": 0,
+            "id": "call_1",
+            "type": "function",
+            "function": {"name": "houyi_web_search", "arguments": '{"query":"hi"}'},
+        }
+    ]
+
 
 @pytest.mark.asyncio
 async def test_chat_keeps_usage(monkeypatch) -> None:
@@ -422,7 +535,7 @@ async def test_dispatches_chat_by_transport(monkeypatch) -> None:
             adapter,
             "_chat_request",
             AsyncMock(
-                return_value=LLMResponse(content="sdk", finish_reason="stop", model="test-model")
+                return_value=LLMResponse(content="client", finish_reason="stop", model="test-model")
             ),
         ) as chat,
         patch.object(
@@ -433,12 +546,12 @@ async def test_dispatches_chat_by_transport(monkeypatch) -> None:
             ),
         ) as httpx_chat,
     ):
-        monkeypatch.setenv("HOUYI_OPENAI_COMPAT_TRANSPORT", "sdk")
+        monkeypatch.setenv("HOUYI_OPENAI_COMPAT_TRANSPORT", "client")
         result = await adapter._chat(request)
         monkeypatch.setenv("HOUYI_OPENAI_COMPAT_TRANSPORT", "httpx")
         httpx_result = await adapter._chat(request)
 
-    assert result.content == "sdk"
+    assert result.content == "client"
     assert httpx_result.content == "httpx"
     chat.assert_called_once_with(request)
     httpx_chat.assert_called_once_with(request)
@@ -463,7 +576,7 @@ async def test_dispatches_stream(monkeypatch) -> None:
     )
 
     async def _direct_stream(_request):
-        yield type("Chunk", (), {"content_delta": "sdk", "reasoning_delta": None})()
+        yield type("Chunk", (), {"content_delta": "client", "reasoning_delta": None})()
 
     async def _httpx_stream(_request):
         yield type("Chunk", (), {"content_delta": "httpx", "reasoning_delta": None})()
@@ -472,12 +585,12 @@ async def test_dispatches_stream(monkeypatch) -> None:
         patch.object(adapter, "_stream_request", side_effect=_direct_stream) as direct_stream,
         patch.object(adapter, "_stream_request_httpx", side_effect=_httpx_stream) as httpx_stream,
     ):
-        monkeypatch.setenv("HOUYI_OPENAI_COMPAT_TRANSPORT", "sdk")
+        monkeypatch.setenv("HOUYI_OPENAI_COMPAT_TRANSPORT", "client")
         direct_chunks = [chunk async for chunk in adapter._stream_chat(request)]
         monkeypatch.setenv("HOUYI_OPENAI_COMPAT_TRANSPORT", "httpx")
         httpx_chunks = [chunk async for chunk in adapter._stream_chat(request)]
 
-    assert [chunk.content_delta for chunk in direct_chunks] == ["sdk"]
+    assert [chunk.content_delta for chunk in direct_chunks] == ["client"]
     assert [chunk.content_delta for chunk in httpx_chunks] == ["httpx"]
     direct_stream.assert_called_once_with(request)
     httpx_stream.assert_called_once_with(request)
@@ -517,7 +630,53 @@ async def test_stream_request_updates_usage(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_stream_request_skips_empty(monkeypatch) -> None:
+async def test_stream_request_toolcall_deltas(monkeypatch) -> None:
+    tool_call = types.SimpleNamespace(
+        index=0,
+        id="call_1",
+        type="function",
+        function=types.SimpleNamespace(name="houyi_web_search", arguments='{"query":"hi"}'),
+    )
+    stream = _FakeStream(
+        [
+            _FakeStreamingChunk(
+                [_FakeStreamingChoice(tool_calls=[tool_call], finish_reason="tool_calls")],
+                usage=_FakeStreamUsage(2, 3, 5),
+            ),
+        ]
+    )
+    fake_openai = _build_openai_module(stream)
+    monkeypatch.setitem(__import__("sys").modules, "openai", fake_openai)
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+
+    adapter = OpenAICompatibleAdapter(model="test-model")
+    request = adapter._build_request(
+        messages=[{"role": "user", "content": "hi"}],
+        tools=None,
+        temperature=0.1,
+        max_tokens=None,
+        enable_streaming=True,
+        kwargs={},
+    )
+
+    chunks = [chunk async for chunk in adapter._stream_request(request)]
+
+    assert len(chunks) == 1
+    assert chunks[0].content_delta == ""
+    assert chunks[0].reasoning_delta is None
+    assert chunks[0].tool_calls_delta == [
+        {
+            "index": 0,
+            "id": "call_1",
+            "type": "function",
+            "function": {"name": "houyi_web_search", "arguments": '{"query":"hi"}'},
+        }
+    ]
+    assert adapter.last_finish_reason == "tool_calls"
+
+
+@pytest.mark.asyncio
+async def test_stream_request_skipsempty(monkeypatch) -> None:
     stream = _FakeStream([_FakeStreamingChunk([])])
     fake_openai = _build_openai_module(stream)
     monkeypatch.setitem(__import__("sys").modules, "openai", fake_openai)
@@ -612,6 +771,35 @@ async def test_openai_compat_adapter_chat(monkeypatch) -> None:
     assert isinstance(result, LLMResponse)
     assert result.content == "ok"
     assert adapter.client.chat.completions.calls[0]["max_tokens"] == 10
+
+
+@pytest.mark.asyncio
+async def test_parses_embedded_tool_calls(monkeypatch) -> None:
+    reasoning_content = (
+        "[tool call]\n\n"
+        "<｜DSML｜function_calls>\n"
+        '<｜DSML｜invoke name="houyi_web_search">\n'
+        '<｜DSML｜parameter name="query" string="true">MiniMax tool marker</｜DSML｜parameter>\n'
+        "</｜DSML｜invoke>\n"
+        "</｜DSML｜function_calls>"
+    )
+    response = _FakeReasoningOpenAIResponse(
+        content="",
+        reasoning_content=reasoning_content,
+        model="test-model",
+    )
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://example.test")
+    fake_openai = _build_openai_module(response)
+    monkeypatch.setitem(__import__("sys").modules, "openai", fake_openai)
+
+    adapter = OpenAICompatibleAdapter(model="MiniMax-M2.5")
+    result = await adapter.chat([{"role": "user", "content": "hi"}])
+
+    assert result.content == ""
+    assert result.metadata["reasoning_content"] == reasoning_content
+    assert len(result.tool_calls) == 1
+    assert result.tool_calls[0]["function"]["name"] == "houyi_web_search"
 
 
 @pytest.mark.asyncio
@@ -777,3 +965,21 @@ def test_requires_openai_package(monkeypatch) -> None:
     with patch("builtins.__import__", side_effect=_fake_import):
         with pytest.raises(ImportError):
             OpenAICompatibleAdapter()
+
+
+def test_stream_proxy_disabled(monkeypatch) -> None:
+    monkeypatch.delenv("HOUYI_PROXY_ENABLED", raising=False)
+    adapter = _ProxyOpenAICompatAdapter()
+
+    with patch.object(proxy_module, "detect_proxy") as mock_detect:
+        assert adapter._get_httpx_stream_proxy_url() is None
+
+    mock_detect.assert_not_called()
+
+
+def test_stream_proxy_enabled(monkeypatch) -> None:
+    monkeypatch.setenv("HOUYI_PROXY_ENABLED", "true")
+    adapter = _ProxyOpenAICompatAdapter()
+
+    with patch.object(proxy_module, "detect_proxy", return_value="http://proxy:7890"):
+        assert adapter._get_httpx_stream_proxy_url() == "http://proxy:7890"

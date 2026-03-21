@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from unittest.mock import patch
+
 import pytest
 
 from houyi.application.tool_calling.tool_hooks.web_search import (
@@ -31,6 +33,36 @@ class TestToolCallWebSearchHooks:
             {"tool_name": "web_search", "args": {"query": "q", "provider": "tavily"}}
         )
         assert patch is None
+
+    @pytest.mark.asyncio
+    async def test_provider_falls_back(self) -> None:
+        hook = WebSearchProviderHook(provider="serper")
+        result = await hook.before_tool_call(
+            {"tool_name": "web_search", "args": {"query": "q", "provider": "google"}}
+        )
+        assert result == {"args": {"query": "q", "provider": "serper"}}
+
+    @pytest.mark.asyncio
+    async def test_provider_unknown(self) -> None:
+        hook = WebSearchProviderHook(provider="serper")
+        result = await hook.before_tool_call(
+            {"tool_name": "web_search", "args": {"query": "q", "provider": "bing"}}
+        )
+        assert result == {"args": {"query": "q", "provider": "serper"}}
+
+    @pytest.mark.asyncio
+    async def test_provider_logs_normalization(self) -> None:
+        hook = WebSearchProviderHook(provider="serper")
+        with patch("houyi.application.tool_calling.tool_hooks.web_search.logger.info") as mock_info:
+            result = await hook.before_tool_call(
+                {
+                    "tool_name": "web_search",
+                    "args": {"query": "q", "provider": "google_scholar"},
+                }
+            )
+
+        assert result == {"args": {"query": "q", "provider": "serper"}}
+        mock_info.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_cache_injects(self) -> None:

@@ -216,6 +216,26 @@ const buildStructuredSections = (title: string, content: string, toolArgs: unkno
   return { input, output, rawPayload, preview, showRawPayload: true, outputLooksRedundant: false };
 };
 
+const extractErrorSummary = (content: string): string | null => {
+  const parsed = safeJsonParse(content);
+  if (!parsed || typeof parsed !== 'object') return null;
+  const root = parsed as JsonRecord;
+  const data = root.data && typeof root.data === 'object' ? root.data as JsonRecord : null;
+  const candidates = [
+    root.message,
+    root.error,
+    data?.message,
+    data?.error,
+    data?.stderr,
+  ];
+  for (const candidate of candidates) {
+    if (typeof candidate === 'string' && candidate.trim()) {
+      return textPreview(candidate, 160);
+    }
+  }
+  return null;
+};
+
 const Section: React.FC<{ title: string; entries: ToolSection[] }> = ({ title, entries }) => {
   if (entries.length === 0) return null;
   return (
@@ -278,6 +298,12 @@ export const ToolCallBubble: React.FC<ToolCallBubbleProps> = ({ message }) => {
 
   const title = message.name || message.tool_call_id || 'tool';
   const toolArgs = message.metadata?.tool_args;
+  const errorSummary = React.useMemo(
+    () => (status === 'error'
+      ? extractErrorSummary(typeof message.content === 'string' ? message.content : String(message.content ?? ''))
+      : null),
+    [message.content, status],
+  );
   const sections = React.useMemo(
     () => buildStructuredSections(
       title,
@@ -294,6 +320,7 @@ export const ToolCallBubble: React.FC<ToolCallBubbleProps> = ({ message }) => {
   if (formattedDuration) metaEntries.push({ label: 'Duration', value: formattedDuration });
   if (Number.isFinite(roundIndex) && roundIndex > 0) metaEntries.push({ label: 'Round', value: String(roundIndex) });
   if (parallelGroupId) metaEntries.push({ label: 'Parallel group', value: parallelGroupId });
+  if (errorSummary) metaEntries.push({ label: 'Error', value: errorSummary });
 
   return (
     <div className="min-w-0 w-full max-w-full rounded-md border border-gray-700/80 bg-gray-900/60 px-2.5 py-2">
@@ -315,7 +342,9 @@ export const ToolCallBubble: React.FC<ToolCallBubbleProps> = ({ message }) => {
           {parallelGroupId && <span>Parallel {parallelGroupId}</span>}
         </div>
       )}
-      <div className="mt-1 min-w-0 max-w-full break-words text-[11px] text-gray-400">{sections.preview}</div>
+      <div className="mt-1 min-w-0 max-w-full break-words text-[11px] text-gray-400">
+        {errorSummary ? `Error: ${errorSummary}` : sections.preview}
+      </div>
       {expanded && (
         <div className="mt-2 min-w-0 max-w-full">
           <MetaChips entries={metaEntries} />

@@ -1,4 +1,4 @@
-"""Covers Gemini SDK adapter conversion, auth-mode setup, and SDK error wrapping."""
+"""Covers Gemini adapter conversion, auth-mode setup, and client error wrapping."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ import pytest
 from houyi.adapters.llm import vertex_gemini_adapter as vertex_gemini_adapter_module
 from houyi.adapters.llm.vertex_gemini_adapter import (
     GoogleVertexGeminiAdapter,
+    _build_http_options,
     _build_proxy_http_options,
 )
 
@@ -651,6 +652,29 @@ def test_config_ignores_parallel() -> None:
     assert "parallel_tool_calls" not in config.kwargs
 
 
+def test_ignores_openai_usage_flags() -> None:
+    adapter = _build_adapter()
+
+    class _Config:
+        def __init__(self, **kwargs) -> None:
+            self.kwargs = kwargs
+
+    fake_types = types.SimpleNamespace(GenerateContentConfig=_Config)
+    config = adapter._build_generate_config(
+        fake_types,
+        temperature=0.1,
+        max_tokens=8,
+        tools=None,
+        system_instruction=None,
+        extra_kwargs={
+            "include_stream_usage": False,
+            "stream_options": {"include_usage": True},
+        },
+    )
+    assert "include_stream_usage" not in config.kwargs
+    assert "stream_options" not in config.kwargs
+
+
 @pytest.mark.asyncio
 async def test_stream_skips_text() -> None:
     adapter = _build_adapter()
@@ -926,7 +950,19 @@ def test_init_sets_env(monkeypatch) -> None:
         def __init__(self, **kwargs) -> None:
             created.update(kwargs)
 
-    fake_genai = types.SimpleNamespace(Client=_Client)
+    class _HttpRetryOptions:
+        def __init__(self, **kwargs) -> None:
+            self.__dict__.update(kwargs)
+
+    class _HttpOptions:
+        def __init__(self, **kwargs) -> None:
+            self.__dict__.update(kwargs)
+
+    fake_types = types.SimpleNamespace(
+        HttpRetryOptions=_HttpRetryOptions,
+        HttpOptions=_HttpOptions,
+    )
+    fake_genai = types.SimpleNamespace(Client=_Client, types=fake_types)
     fake_google = types.SimpleNamespace(genai=fake_genai)
     monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", "preexisting.json")
     monkeypatch.setattr(vertex_gemini_adapter_module, "detect_proxy", lambda: None)
@@ -944,9 +980,36 @@ def test_init_sets_env(monkeypatch) -> None:
     assert created["project"] == "proj"
     assert created["location"] == "asia-east1"
     assert os.environ["GOOGLE_APPLICATION_CREDENTIALS"] == "preexisting.json"
+    retry_options = created["http_options"].retry_options
+    assert retry_options.attempts == 5
+    assert retry_options.http_status_codes == [408, 429, 500, 502, 503, 504]
 
 
-def test_init_raises_sdk() -> None:
+def test_http_options_retry() -> None:
+    class _HttpRetryOptions:
+        def __init__(self, **kwargs) -> None:
+            self.__dict__.update(kwargs)
+
+    class _HttpOptions:
+        def __init__(self, **kwargs) -> None:
+            self.__dict__.update(kwargs)
+
+    fake_types = types.SimpleNamespace(
+        HttpRetryOptions=_HttpRetryOptions,
+        HttpOptions=_HttpOptions,
+    )
+
+    options = _build_http_options(fake_types, proxy_url=None)
+
+    assert options.retry_options.attempts == 5
+    assert options.retry_options.initial_delay == 1.0
+    assert options.retry_options.max_delay == 60.0
+    assert options.retry_options.exp_base == 2.0
+    assert options.retry_options.jitter == 1.0
+    assert options.retry_options.http_status_codes == [408, 429, 500, 502, 503, 504]
+
+
+def test_init_raises() -> None:
     original_import = builtins.__import__
 
     def _fake_import(name, globals=None, locals=None, fromlist=(), level=0):
@@ -954,7 +1017,10 @@ def test_init_raises_sdk() -> None:
             raise ImportError("missing google")
 
     with patch("builtins.__import__", side_effect=_fake_import):
-        with pytest.raises(ImportError, match="Google GenAI SDK not installed"):
+        with pytest.raises(
+            ImportError,
+            match=r"Google GenAI client not installed\. Install with: pip install google\-genai",
+        ):
             GoogleVertexGeminiAdapter(model="gemini-test", api_key="test-key")
 
 
@@ -987,6 +1053,38 @@ async def test_chat_wraps_errors() -> None:
 
     with patch.dict("sys.modules", {"google.genai": types.SimpleNamespace(types=fake_types)}):
         with pytest.raises(RuntimeError, match="GOOGLE_API_KEY"):
+            await adapter.chat([{"role": "user", "content": "hi"}])
+
+
+@pytest.mark.asyncio
+async def test_chat_rate_limit_errors() -> None:
+    pytest.importorskip("google.genai")
+
+    class _Part:
+        @staticmethod
+        def from_text(*, text):
+            return {"text": text}
+
+    class _Content:
+        def __init__(self, role=None, parts=None) -> None:
+            self.role = role
+            self.parts = parts
+
+    class _Config:
+        def __init__(self, **kwargs) -> None:
+            self.kwargs = kwargs
+
+    fake_types = types.SimpleNamespace(Content=_Content, Part=_Part, GenerateContentConfig=_Config)
+    adapter = _build_adapter()
+
+    class _Models:
+        async def generate_content(self, **kwargs):
+            raise Exception("429 RESOURCE_EXHAUSTED")
+
+    adapter._client = type("FakeClient", (), {"aio": type("Aio", (), {"models": _Models()})()})()
+
+    with patch.dict("sys.modules", {"google.genai": types.SimpleNamespace(types=fake_types)}):
+        with pytest.raises(RuntimeError, match="retry"):
             await adapter.chat([{"role": "user", "content": "hi"}])
 
 
@@ -1039,13 +1137,13 @@ class TestBuildProxyHttpOptions:
         assert isinstance(opts["httpx_async_client"], httpx.AsyncClient)
 
 
-class TestWrapSdkErrorRegion:
-    """_wrap_sdk_error should explain account-level region restriction."""
+class TestWrapClientErrorRegion:
+    """_wrap_client_error should explain account-level region restriction."""
 
     def test_region_error_vpn(self) -> None:
         adapter = _build_adapter()
         adapter._proxy_url = "http://127.0.0.1:8118"
-        exc = adapter._wrap_sdk_error(
+        exc = adapter._wrap_client_error(
             Exception("400 FAILED_PRECONDITION: User location is not supported")
         )
         msg = str(exc)
@@ -1056,7 +1154,7 @@ class TestWrapSdkErrorRegion:
         adapter = _build_adapter()
         adapter._auth_mode = "vertex_ai"
         adapter._proxy_url = None
-        exc = adapter._wrap_sdk_error(
+        exc = adapter._wrap_client_error(
             Exception("400 FAILED_PRECONDITION: User location is not supported")
         )
         msg = str(exc)
@@ -1064,24 +1162,24 @@ class TestWrapSdkErrorRegion:
 
     def test_401_error_creds(self) -> None:
         adapter = _build_adapter()
-        exc = adapter._wrap_sdk_error(Exception("401 UNAUTHENTICATED"))
+        exc = adapter._wrap_client_error(Exception("401 UNAUTHENTICATED"))
         msg = str(exc)
         assert "GOOGLE_API_KEY" in msg
         assert "AIza" in msg
 
     def test_403_error_perms(self) -> None:
         adapter = _build_adapter()
-        exc = adapter._wrap_sdk_error(Exception("403 PERMISSION_DENIED"))
+        exc = adapter._wrap_client_error(Exception("403 PERMISSION_DENIED"))
         assert "aiplatform.user role" in str(exc)
 
     def test_404_error_model(self) -> None:
         adapter = _build_adapter()
-        exc = adapter._wrap_sdk_error(Exception("404 NOT_FOUND"))
+        exc = adapter._wrap_client_error(Exception("404 NOT_FOUND"))
         assert "GEMINI_MODEL" in str(exc)
 
     def test_other_error_context(self) -> None:
         adapter = _build_adapter()
-        exc = adapter._wrap_sdk_error(Exception("socket closed"))
+        exc = adapter._wrap_client_error(Exception("socket closed"))
         msg = str(exc)
         assert "developer_api" in msg
         assert "test-model" in msg

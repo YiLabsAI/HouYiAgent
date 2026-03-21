@@ -36,7 +36,7 @@ def store(tmp_path: Path) -> JsonStore:
 def test_build_compaction_summary() -> None:
     summary = build_compaction_summary(
         [
-            Message(message_id="u1", role=MessageRole.USER, content="搜索文件 skill.md"),
+            Message(message_id="u1", role=MessageRole.USER, content="find skill.md"),
             Message(
                 message_id="a1",
                 role=MessageRole.ASSISTANT,

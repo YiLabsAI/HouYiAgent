@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 from houyi_studio.server.chat import chat_service as chat_service_module
+from houyi_studio.server.chat.tool_loop_orchestrator import ToolLoopOutcome
 from pydantic import BaseModel
 
 from houyi.adapters.llm.base import StreamChunk
@@ -55,7 +56,7 @@ def app_and_client(tmp_path):
 
 
 class TestSendMessageTooling:
-    def test_streams_tool_loop(self, app_and_client, monkeypatch):
+    def test_streams_toolloop(self, app_and_client, monkeypatch):
         _, client, store = app_and_client
         conv_id = create_conversation_id(client, title="Tool Loop Replay")
         service = get_registered_chat_service()
@@ -90,7 +91,11 @@ class TestSendMessageTooling:
 
         adapter = _AdapterWithStream()
         monkeypatch.setattr(service, "_default_adapter", adapter)
-        monkeypatch.setattr(service, "_get_tool_runner", lambda: _FakeToolRunner())
+        monkeypatch.setattr(
+            service._tool_loop_orchestrator,
+            "_get_tool_runner",
+            lambda *args, **kwargs: _FakeToolRunner(),
+        )
         monkeypatch.setattr(
             chat_service_module.ToolBridge,
             "collect_tool_schemas",
@@ -127,11 +132,13 @@ class TestSendMessageTooling:
         assert metadata["final_stream_messages_reconstructed"] is False
         assert metadata["final_stream_persisted_tool_message_count"] == 0
         assert metadata["final_stream_prepared_message_count"] >= 1
+        assert "final_stream_sanitized_message_count" not in metadata
+        assert "final_stream_status" not in metadata
 
         conv = get_conversation_or_fail(store, conv_id)
         assert_last_message(conv, finish_reason="stop")
 
-    def test_enters_tool_loop(self, app_and_client, monkeypatch):
+    def test_enters_toolloop(self, app_and_client, monkeypatch):
         _, client, _ = app_and_client
         conv_id = create_conversation_id(client, title="Web Search Alias")
         service = get_registered_chat_service()
@@ -172,7 +179,11 @@ class TestSendMessageTooling:
         web_search_skill = build_web_search_skill().model_copy(update={"is_core": True})
         registered_name = DEFAULT_SKILL_REGISTRY.register(web_search_skill, overwrite=True)
         monkeypatch.setattr(service, "_default_adapter", _AdapterWithNoStream())
-        monkeypatch.setattr(service, "_get_tool_runner", lambda *args, **kwargs: runner)
+        monkeypatch.setattr(
+            service._tool_loop_orchestrator,
+            "_get_tool_runner",
+            lambda *args, **kwargs: runner,
+        )
         try:
             resp = assert_status_code(
                 post_message(
@@ -190,7 +201,7 @@ class TestSendMessageTooling:
         assert runner.skill_names == ["web_search"]
         assert runner.schema_names == ["web_search"]
 
-    def test_tool_loop_shows_error(self, app_and_client, monkeypatch):
+    def test_toolloop_shows_error(self, app_and_client, monkeypatch):
         _, client, store = app_and_client
         conv_id = create_conversation_id(client, title="Tool Loop Error")
         service = get_registered_chat_service()
@@ -213,7 +224,11 @@ class TestSendMessageTooling:
                 raise RuntimeError("429 RESOURCE_EXHAUSTED")
 
         monkeypatch.setattr(service, "_default_adapter", _AdapterWithStream())
-        monkeypatch.setattr(service, "_get_tool_runner", lambda: _FailingToolRunner())
+        monkeypatch.setattr(
+            service._tool_loop_orchestrator,
+            "_get_tool_runner",
+            lambda *args, **kwargs: _FailingToolRunner(),
+        )
         monkeypatch.setattr(
             chat_service_module.ToolBridge,
             "collect_tool_schemas",
@@ -293,7 +308,11 @@ class TestSendMessageTooling:
 
         adapter = _AdapterWithStream()
         monkeypatch.setattr(service, "_default_adapter", adapter)
-        monkeypatch.setattr(service, "_get_tool_runner", lambda: _FakeToolRunner())
+        monkeypatch.setattr(
+            service._tool_loop_orchestrator,
+            "_get_tool_runner",
+            lambda *args, **kwargs: _FakeToolRunner(),
+        )
         monkeypatch.setattr(
             chat_service_module.ToolBridge,
             "collect_tool_schemas",
@@ -419,7 +438,11 @@ class TestSendMessageTooling:
 
         adapter = _AdapterWithStream()
         monkeypatch.setattr(service, "_default_adapter", adapter)
-        monkeypatch.setattr(service, "_get_tool_runner", lambda: _FakeToolRunner())
+        monkeypatch.setattr(
+            service._tool_loop_orchestrator,
+            "_get_tool_runner",
+            lambda *args, **kwargs: _FakeToolRunner(),
+        )
         monkeypatch.setattr(
             chat_service_module.ToolBridge,
             "collect_tool_schemas",
@@ -548,7 +571,11 @@ class TestSendMessageTooling:
 
         adapter = _AdapterWithStream()
         monkeypatch.setattr(service, "_default_adapter", adapter)
-        monkeypatch.setattr(service, "_get_tool_runner", lambda: _FakeToolRunner())
+        monkeypatch.setattr(
+            service._tool_loop_orchestrator,
+            "_get_tool_runner",
+            lambda *args, **kwargs: _FakeToolRunner(),
+        )
         monkeypatch.setattr(
             chat_service_module.ToolBridge,
             "collect_tool_schemas",
@@ -641,7 +668,7 @@ class TestSendMessageTooling:
                         content="",
                         tool_calls=[],
                         usage={"prompt_tokens": 8, "completion_tokens": 5, "total_tokens": 13},
-                        metadata={"reasoning_content": "final reasoning only"},
+                        metadata={},
                     ),
                     [
                         {
@@ -658,7 +685,49 @@ class TestSendMessageTooling:
 
         adapter = _AdapterWithNoFinalStream()
         monkeypatch.setattr(service, "_default_adapter", adapter)
-        monkeypatch.setattr(service, "_get_tool_runner", lambda: _FakeToolRunner())
+
+        async def _fake_tool_loop_run(**kwargs):
+            llm_messages = list(kwargs["llm_messages"])
+            persisted_tool_messages = [
+                chat_service_module.Message(
+                    role=chat_service_module.MessageRole.ASSISTANT,
+                    content="",
+                    tool_calls=[
+                        {
+                            "id": "call_reasoning",
+                            "type": "function",
+                            "function": {
+                                "name": "demo",
+                                "arguments": '{"path":"README.md"}',
+                            },
+                        }
+                    ],
+                ),
+                chat_service_module.Message(
+                    role=chat_service_module.MessageRole.TOOL,
+                    content='{"ok":true}',
+                    tool_call_id="call_reasoning",
+                    name="demo",
+                    metadata={
+                        "duration_ms": 123.0,
+                        "parallel_group_id": "round_1",
+                        "round_index": 1,
+                    },
+                ),
+            ]
+            return ToolLoopOutcome(
+                llm_messages=llm_messages,
+                event_chunks=[],
+                persisted_tool_messages=persisted_tool_messages,
+                replay_response=None,
+                usage_payload={"prompt_tokens": 8, "completion_tokens": 5, "total_tokens": 13},
+                response_metadata={},
+                finish_reason="stop",
+                convergence_reason=None,
+                terminal_tool_call_count=0,
+            )
+
+        monkeypatch.setattr(service._tool_loop_orchestrator, "run", _fake_tool_loop_run)
         monkeypatch.setattr(
             chat_service_module.ToolBridge,
             "collect_tool_schemas",
@@ -687,6 +756,15 @@ class TestSendMessageTooling:
         assert_delta_text_contains(events, "final answer after tools")
         metadata = get_complete_metadata(events)
         assert metadata["tool_loop_final_stream_skipped"] is False
+        assert metadata["tool_loop_convergence_reason"] == "needs_final_stream"
+        assert metadata["final_stream_status"] == "completed"
+        assert metadata["final_stream_empty_visible_output"] is False
+        assert metadata["final_stream_sanitized_message_count"] >= 1
+        assert metadata["final_stream_persisted_tool_message_count"] == 2
+        assert (
+            metadata["final_stream_prepared_message_count"]
+            >= metadata["final_stream_sanitized_message_count"]
+        )
 
         conv = get_conversation_or_fail(store, conv_id)
         assert len(conv.messages) == 4
@@ -695,6 +773,73 @@ class TestSendMessageTooling:
         assert final_assistant.role.value == "assistant"
         assert final_assistant.content == "final answer after tools"
         assert final_assistant.reasoning_content == "final reasoning only"
+        assert final_assistant.metadata.get("finish_reason") == "stop"
+
+    def test_tool_loop_empty_error_response_falls_through_to_final_stream_success(
+        self, app_and_client, monkeypatch
+    ):
+        _, client, store = app_and_client
+        conv_id = create_conversation_id(client, title="Tool Loop Empty Response Final Stream")
+        service = get_registered_chat_service()
+
+        class _AdapterWithSuccessfulFinalStream:
+            last_usage = {"prompt_tokens": 6, "completion_tokens": 4, "total_tokens": 10}
+            last_finish_reason = "stop"
+
+            async def stream_chat(self, *args, **kwargs):
+                _ = (args, kwargs)
+                yield StreamChunk(content_delta="final answer after empty tool loop")
+
+        async def _fake_tool_loop_run(**kwargs):
+            return ToolLoopOutcome(
+                llm_messages=list(kwargs["llm_messages"]),
+                event_chunks=[],
+                persisted_tool_messages=[],
+                replay_response=None,
+                usage_payload=None,
+                response_metadata={"finish_reason": "error"},
+                finish_reason="error",
+                convergence_reason=None,
+                terminal_tool_call_count=0,
+            )
+
+        monkeypatch.setattr(service, "_default_adapter", _AdapterWithSuccessfulFinalStream())
+        monkeypatch.setattr(service._tool_loop_orchestrator, "run", _fake_tool_loop_run)
+        monkeypatch.setattr(
+            chat_service_module.ToolBridge,
+            "collect_tool_schemas",
+            lambda self, skill_filter, include_core: [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "demo",
+                        "description": "Demo",
+                        "parameters": {},
+                    },
+                }
+            ],
+        )
+        monkeypatch.setattr(
+            chat_service_module.ToolBridge,
+            "collect_skills",
+            lambda self, skill_filter, include_core: [SimpleNamespace(name="demo")],
+        )
+
+        resp = assert_status_code(
+            post_message(client, conv_id, content="reason please", enable_skills=["demo"])
+        )
+        events = get_sse_events(resp)
+        assert_delta_text_contains(events, "final answer after empty tool loop")
+        metadata = get_complete_metadata(events)
+        assert metadata["tool_loop_final_stream_skipped"] is False
+        assert metadata["tool_loop_convergence_reason"] == "needs_final_stream"
+        assert metadata["final_stream_status"] == "completed"
+        assert metadata["finish_reason"] == "stop"
+
+        conv = get_conversation_or_fail(store, conv_id)
+        final_assistant = conv.messages[-1]
+        assert final_assistant.role.value == "assistant"
+        assert final_assistant.content == "final answer after empty tool loop"
         assert final_assistant.metadata.get("finish_reason") == "stop"
 
     def test_send_orphan_ignored(self, app_and_client, monkeypatch):
@@ -783,6 +928,8 @@ class TestSendMessageTooling:
         events = get_sse_events(resp)
         assert_delta_text_contains(events, "empty final response")
         metadata = get_complete_metadata(events)
+        assert metadata["final_stream_status"] == "empty_visible_output"
+        assert metadata["final_stream_empty_visible_output"] is True
         assert metadata["final_stream_message_count"] >= 1
         assert metadata["final_stream_input_chars"] >= 1
         assert metadata["final_stream_chunk_count"] >= 1
@@ -815,6 +962,9 @@ class TestSendMessageTooling:
         assert "empty final response" not in "".join(
             event["data"].get("content", "") for event in get_events(events, "message.delta")
         )
+        metadata = get_complete_metadata(events)
+        assert metadata["final_stream_status"] == "reasoning_only"
+        assert metadata["final_stream_empty_visible_output"] is False
 
         conv = get_conversation_or_fail(store, conv_id)
         assert_last_message(
@@ -824,7 +974,354 @@ class TestSendMessageTooling:
             finish_reason="stop",
         )
 
-    def test_send_stream_sanitizes_tool_loop(self, app_and_client, monkeypatch):
+    def test_second_identical_send(self, app_and_client, monkeypatch):
+        _, client, store = app_and_client
+        conv_id = create_conversation_id(client, title="Reasoning Only Then Retry")
+        service = get_registered_chat_service()
+
+        class _AdapterWithReasoningThenAnswer:
+            def __init__(self):
+                self.call_count = 0
+                self.last_usage = {"prompt_tokens": 4, "completion_tokens": 3, "total_tokens": 7}
+                self.last_finish_reason = "stop"
+
+            async def stream_chat(self, *args, **kwargs):
+                self.call_count += 1
+                if self.call_count == 1:
+                    yield StreamChunk(reasoning_delta="thinking step 1")
+                    yield StreamChunk(reasoning_delta=" + step 2")
+                    return
+                yield StreamChunk(content_delta="final answer")
+
+        adapter = _AdapterWithReasoningThenAnswer()
+        monkeypatch.setattr(service, "_default_adapter", adapter)
+
+        first_resp = assert_status_code(post_message(client, conv_id, content="hello"))
+        first_events = get_sse_events(first_resp)
+        assert_delta_text(first_events, "")
+        assert_reasoning_text(first_events, "thinking step 1 + step 2")
+        first_metadata = get_complete_metadata(first_events)
+        assert first_metadata["final_stream_status"] == "reasoning_only"
+
+        second_resp = assert_status_code(post_message(client, conv_id, content="hello"))
+        second_events = get_sse_events(second_resp)
+        assert_delta_text(second_events, "final answer")
+        second_metadata = get_complete_metadata(second_events)
+        assert second_metadata["request_adapter_class"] == "_AdapterWithReasoningThenAnswer"
+        assert second_metadata["request_adapter_strict_message_string_contract"] is False
+        assert second_metadata["request_user_message_count"] >= 2
+        assert adapter.call_count == 2
+
+        conv = get_conversation_or_fail(store, conv_id)
+        assert any(
+            message.role == chat_service_module.MessageRole.ASSISTANT
+            and message.reasoning_content == "thinking step 1 + step 2"
+            and message.content == ""
+            for message in conv.messages
+        )
+        assert conv.messages[-1].content == "final answer"
+
+    def test_replay_with_persisted_tools(self, app_and_client, monkeypatch):
+        _, client, store = app_and_client
+        conv_id = create_conversation_id(client, title="Replay Reasoning With Tools")
+        service = get_registered_chat_service()
+
+        class _ReplayOnlyAdapter:
+            last_usage = {"prompt_tokens": 8, "completion_tokens": 5, "total_tokens": 13}
+            last_finish_reason = "stop"
+
+        async def _fake_tool_loop_run(**kwargs):
+            return ToolLoopOutcome(
+                llm_messages=list(kwargs["llm_messages"]),
+                event_chunks=[],
+                persisted_tool_messages=[
+                    chat_service_module.Message(
+                        role=chat_service_module.MessageRole.TOOL,
+                        content='{"ok":true}',
+                        name="demo",
+                        metadata={
+                            "tool_call_id": "call_reasoning",
+                            "tool_name": "demo",
+                            "parallel_group_id": "round_1",
+                            "round_index": 1,
+                            "duration_ms": 123.0,
+                            "tool_args": {"path": "README.md"},
+                        },
+                    )
+                ],
+                replay_response=SimpleNamespace(
+                    content="final answer after tools",
+                    tool_calls=[],
+                    usage={"prompt_tokens": 8, "completion_tokens": 5, "total_tokens": 13},
+                    metadata={"reasoning_content": "final reasoning after tools"},
+                ),
+                usage_payload={"prompt_tokens": 8, "completion_tokens": 5, "total_tokens": 13},
+                response_metadata={"reasoning_content": "final reasoning after tools"},
+                finish_reason="stop",
+                convergence_reason="no_tool_calls_with_replay_payload",
+                terminal_tool_call_count=0,
+            )
+
+        monkeypatch.setattr(service, "_default_adapter", _ReplayOnlyAdapter())
+        monkeypatch.setattr(service._tool_loop_orchestrator, "run", _fake_tool_loop_run)
+        monkeypatch.setattr(
+            chat_service_module.ToolBridge,
+            "collect_tool_schemas",
+            lambda self, skill_filter, include_core: [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "demo",
+                        "description": "Demo",
+                        "parameters": {},
+                    },
+                }
+            ],
+        )
+        monkeypatch.setattr(
+            chat_service_module.ToolBridge,
+            "collect_skills",
+            lambda self, skill_filter, include_core: [SimpleNamespace(name="demo")],
+        )
+
+        resp = assert_status_code(
+            post_message(client, conv_id, content="reason please", enable_skills=["demo"])
+        )
+        events = get_sse_events(resp)
+        assert_reasoning_text(events, "final reasoning after tools")
+        assert_delta_text_contains(events, "final answer after tools")
+        metadata = get_complete_metadata(events)
+        assert metadata["tool_loop_final_stream_skipped"] is True
+        assert metadata["tool_loop_convergence_reason"] == "no_tool_calls_with_replay_payload"
+
+        conv = get_conversation_or_fail(store, conv_id)
+        final_assistant = conv.messages[-1]
+        assert final_assistant.role.value == "assistant"
+        assert final_assistant.content == "final answer after tools"
+        assert final_assistant.reasoning_content == "final reasoning after tools"
+
+    def test_replay_with_persisted_tools_falls(self, app_and_client, monkeypatch):
+        _, client, store = app_and_client
+        conv_id = create_conversation_id(client, title="Reasoning Only Replay With Tools")
+        service = get_registered_chat_service()
+
+        class _AdapterWithFinalStreamAnswer:
+            last_usage = {"prompt_tokens": 8, "completion_tokens": 5, "total_tokens": 13}
+            last_finish_reason = "stop"
+
+            async def stream_chat(self, *args, **kwargs):
+                _ = (args, kwargs)
+                yield StreamChunk(reasoning_delta="final reasoning only")
+                yield StreamChunk(content_delta="final answer after tools")
+
+        async def _fake_tool_loop_run(**kwargs):
+            return ToolLoopOutcome(
+                llm_messages=list(kwargs["llm_messages"]),
+                event_chunks=[],
+                persisted_tool_messages=[
+                    chat_service_module.Message(
+                        role=chat_service_module.MessageRole.TOOL,
+                        content='{"ok":true}',
+                        name="demo",
+                        metadata={
+                            "tool_call_id": "call_reasoning",
+                            "tool_name": "demo",
+                            "parallel_group_id": "round_1",
+                            "round_index": 1,
+                            "duration_ms": 123.0,
+                            "tool_args": {"path": "README.md"},
+                        },
+                    )
+                ],
+                replay_response=None,
+                usage_payload={"prompt_tokens": 8, "completion_tokens": 5, "total_tokens": 13},
+                response_metadata={"reasoning_content": "final reasoning only"},
+                finish_reason="stop",
+                convergence_reason=None,
+                terminal_tool_call_count=0,
+            )
+
+        monkeypatch.setattr(service, "_default_adapter", _AdapterWithFinalStreamAnswer())
+        monkeypatch.setattr(service._tool_loop_orchestrator, "run", _fake_tool_loop_run)
+        monkeypatch.setattr(
+            chat_service_module.ToolBridge,
+            "collect_tool_schemas",
+            lambda self, skill_filter, include_core: [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "demo",
+                        "description": "Demo",
+                        "parameters": {},
+                    },
+                }
+            ],
+        )
+        monkeypatch.setattr(
+            chat_service_module.ToolBridge,
+            "collect_skills",
+            lambda self, skill_filter, include_core: [SimpleNamespace(name="demo")],
+        )
+
+        resp = assert_status_code(
+            post_message(client, conv_id, content="reason please", enable_skills=["demo"])
+        )
+        events = get_sse_events(resp)
+        assert_reasoning_text(events, "final reasoning only")
+        assert_delta_text_contains(events, "final answer after tools")
+        metadata = get_complete_metadata(events)
+        assert metadata["tool_loop_final_stream_skipped"] is False
+        assert metadata["tool_loop_convergence_reason"] == "needs_final_stream"
+        assert metadata["final_stream_status"] == "completed"
+        assert metadata["final_stream_persisted_tool_message_count"] == 1
+
+        conv = get_conversation_or_fail(store, conv_id)
+        final_assistant = conv.messages[-1]
+        assert final_assistant.role.value == "assistant"
+        assert final_assistant.content == "final answer after tools"
+        assert final_assistant.reasoning_content == "final reasoning only"
+
+    def test_replay_without_tools_skips(self, app_and_client, monkeypatch):
+        _, client, store = app_and_client
+        conv_id = create_conversation_id(client, title="Reasoning Only Replay Without Tools")
+        service = get_registered_chat_service()
+
+        class _ReplayOnlyAdapter:
+            last_usage = {"prompt_tokens": 4, "completion_tokens": 0, "total_tokens": 4}
+            last_finish_reason = "stop"
+
+        async def _fake_tool_loop_run(**kwargs):
+            return ToolLoopOutcome(
+                llm_messages=list(kwargs["llm_messages"]),
+                event_chunks=[],
+                persisted_tool_messages=[],
+                replay_response=SimpleNamespace(
+                    content="",
+                    tool_calls=[],
+                    usage={"prompt_tokens": 4, "completion_tokens": 0, "total_tokens": 4},
+                    metadata={"reasoning_content": "thinking only"},
+                ),
+                usage_payload={"prompt_tokens": 4, "completion_tokens": 0, "total_tokens": 4},
+                response_metadata={"reasoning_content": "thinking only"},
+                finish_reason="stop",
+                convergence_reason="no_tool_calls_with_replay_payload",
+                terminal_tool_call_count=0,
+            )
+
+        monkeypatch.setattr(service, "_default_adapter", _ReplayOnlyAdapter())
+        monkeypatch.setattr(service._tool_loop_orchestrator, "run", _fake_tool_loop_run)
+        monkeypatch.setattr(
+            chat_service_module.ToolBridge,
+            "collect_tool_schemas",
+            lambda self, skill_filter, include_core: [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "demo",
+                        "description": "Demo",
+                        "parameters": {},
+                    },
+                }
+            ],
+        )
+        monkeypatch.setattr(
+            chat_service_module.ToolBridge,
+            "collect_skills",
+            lambda self, skill_filter, include_core: [SimpleNamespace(name="demo")],
+        )
+
+        resp = assert_status_code(
+            post_message(client, conv_id, content="reason please", enable_skills=["demo"])
+        )
+        events = get_sse_events(resp)
+        assert_delta_text(events, "")
+        assert_reasoning_text(events, "thinking only")
+        metadata = get_complete_metadata(events)
+        assert metadata["tool_loop_final_stream_skipped"] is True
+        assert metadata["tool_loop_convergence_reason"] == "no_tool_calls_with_replay_payload"
+
+        conv = get_conversation_or_fail(store, conv_id)
+        final_assistant = conv.messages[-1]
+        assert final_assistant.role.value == "assistant"
+        assert final_assistant.content == ""
+        assert final_assistant.reasoning_content == "thinking only"
+
+    def test_final_stream_reasoning(self, app_and_client, monkeypatch):
+        _, client, store = app_and_client
+        conv_id = create_conversation_id(client, title="Reasoning Only Final Stream With Tools")
+        service = get_registered_chat_service()
+
+        class _AdapterWithReasoningOnlyFinalStream:
+            last_usage = {"prompt_tokens": 8, "completion_tokens": 2, "total_tokens": 10}
+            last_finish_reason = "stop"
+
+            async def stream_chat(self, *args, **kwargs):
+                _ = (args, kwargs)
+                yield StreamChunk(reasoning_delta="final reasoning only")
+
+        async def _fake_tool_loop_run(**kwargs):
+            return ToolLoopOutcome(
+                llm_messages=list(kwargs["llm_messages"]),
+                event_chunks=[],
+                persisted_tool_messages=[
+                    chat_service_module.Message(
+                        role=chat_service_module.MessageRole.TOOL,
+                        content='{"ok":true}',
+                        name="demo",
+                        metadata={
+                            "tool_call_id": "call_reasoning_only",
+                            "tool_name": "demo",
+                        },
+                    )
+                ],
+                replay_response=None,
+                usage_payload={"prompt_tokens": 8, "completion_tokens": 2, "total_tokens": 10},
+                response_metadata={"reasoning_content": "final reasoning only"},
+                finish_reason="stop",
+                convergence_reason=None,
+                terminal_tool_call_count=0,
+            )
+
+        monkeypatch.setattr(service, "_default_adapter", _AdapterWithReasoningOnlyFinalStream())
+        monkeypatch.setattr(service._tool_loop_orchestrator, "run", _fake_tool_loop_run)
+        monkeypatch.setattr(
+            chat_service_module.ToolBridge,
+            "collect_tool_schemas",
+            lambda self, skill_filter, include_core: [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "demo",
+                        "description": "Demo",
+                        "parameters": {},
+                    },
+                }
+            ],
+        )
+        monkeypatch.setattr(
+            chat_service_module.ToolBridge,
+            "collect_skills",
+            lambda self, skill_filter, include_core: [SimpleNamespace(name="demo")],
+        )
+
+        resp = assert_status_code(
+            post_message(client, conv_id, content="reason please", enable_skills=["demo"])
+        )
+        events = get_sse_events(resp)
+        assert_reasoning_text(events, "final reasoning only")
+        assert_delta_text_contains(events, "empty final response")
+        metadata = get_complete_metadata(events)
+        assert metadata["tool_loop_final_stream_skipped"] is False
+        assert metadata["final_stream_status"] == "empty_visible_output"
+        assert metadata["final_stream_empty_visible_output"] is True
+
+        conv = get_conversation_or_fail(store, conv_id)
+        final_assistant = conv.messages[-1]
+        assert final_assistant.role.value == "assistant"
+        assert "empty final response" in final_assistant.content
+        assert final_assistant.reasoning_content == "final reasoning only"
+
+    def test_send_stream_sanitizes_toolloop(self, app_and_client, monkeypatch):
         _, client, store = app_and_client
         conv_id = create_conversation_id(client, title="Tool Loop Final Stream Sanitize")
         service = get_registered_chat_service()
@@ -888,7 +1385,44 @@ class TestSendMessageTooling:
                 )
 
         monkeypatch.setattr(service, "_default_adapter", _AdapterWithCapturedStream())
-        monkeypatch.setattr(service, "_get_tool_runner", lambda: _PendingToolRunner())
+
+        async def _fake_tool_loop_run(**kwargs):
+            llm_messages = list(kwargs["llm_messages"])
+            llm_messages.extend(
+                [
+                    {
+                        "role": "assistant",
+                        "content": "",
+                        "reasoning_content": "thinking",
+                        "tool_calls": [
+                            {
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {"name": "demo", "arguments": '{"q":"x"}'},
+                            }
+                        ],
+                    },
+                    {
+                        "role": "tool",
+                        "tool_call_id": "call_1",
+                        "name": "demo",
+                        "content": '{"results":[1]}',
+                    },
+                ]
+            )
+            return ToolLoopOutcome(
+                llm_messages=llm_messages,
+                event_chunks=[],
+                persisted_tool_messages=[],
+                replay_response=None,
+                usage_payload={"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4},
+                response_metadata={},
+                finish_reason=None,
+                convergence_reason="pending_tool_calls_after_tool_loop",
+                terminal_tool_call_count=1,
+            )
+
+        monkeypatch.setattr(service._tool_loop_orchestrator, "run", _fake_tool_loop_run)
         monkeypatch.setattr(
             chat_service_module.ToolBridge,
             "collect_tool_schemas",
@@ -911,7 +1445,16 @@ class TestSendMessageTooling:
         assert metadata["tool_loop_convergence_reason"] == "pending_tool_calls_after_tool_loop"
         assert metadata["tool_loop_terminal_tool_call_count"] == 1
         assert metadata["tool_loop_max_rounds_reached"] is True
+        assert metadata["tool_loop_final_stream_skipped"] is False
+        assert metadata["request_adapter_class"] == "_AdapterWithCapturedStream"
+        assert metadata["request_adapter_strict_message_string_contract"] is False
+        assert metadata["request_message_count"] >= 1
+        assert metadata["request_user_message_count"] >= 1
         assert metadata["final_stream_sanitized_message_count"] >= 1
+        assert metadata["final_stream_assistant_tool_call_carrier_count"] >= 1
+        assert metadata["final_stream_assistant_reasoning_removed_count"] >= 1
+        assert metadata["final_stream_assistant_reasoning_only_removed_count"] >= 1
+        assert metadata["final_stream_tool_result_projection_count"] >= 1
         assert all(not message.get("tool_calls") for message in captured_messages)
         assert all("reasoning_content" not in message for message in captured_messages)
         assert captured_stream_kwargs[-1]["include_stream_usage"] is False
@@ -1092,6 +1635,18 @@ class TestSendMessageTooling:
         conv_id = create_conversation_id(client, title="Tool Iteration Limit")
         service = get_registered_chat_service()
 
+        class _AdapterWithNoStream:
+            last_usage = {"prompt_tokens": 5, "completion_tokens": 4, "total_tokens": 9}
+
+            async def chat(self, *args, **kwargs):
+                _ = (args, kwargs)
+                return SimpleNamespace(content="", tool_calls=[], usage={}, metadata={})
+
+            async def stream_chat(self, *args, **kwargs):
+                _ = (args, kwargs)
+                if False:
+                    yield None
+
         class _CapturedToolRunner:
             def __init__(self):
                 self.max_rounds = None
@@ -1108,8 +1663,13 @@ class TestSendMessageTooling:
                     [],
                 )
 
+        monkeypatch.setattr(service, "_default_adapter", _AdapterWithNoStream())
         runner = _CapturedToolRunner()
-        monkeypatch.setattr(service, "_get_tool_runner", lambda: runner)
+        monkeypatch.setattr(
+            service._tool_loop_orchestrator,
+            "_get_tool_runner",
+            lambda *args, **kwargs: runner,
+        )
         monkeypatch.setattr(
             chat_service_module.ToolBridge,
             "collect_tool_schemas",
@@ -1147,25 +1707,35 @@ class TestSendMessageTooling:
         conv_id = create_conversation_id(client, title="Tool Replay Timing")
         service = get_registered_chat_service()
 
-        class _ReplayTimingRunner:
-            async def run(self, **kwargs):
-                _ = kwargs
-                return (
-                    SimpleNamespace(
-                        content="Replay final answer",
-                        tool_calls=[],
-                        usage={"prompt_tokens": 18, "completion_tokens": 6, "total_tokens": 24},
-                        metadata={
-                            "finish_reason": "stop",
-                            "first_token_ms": 432,
-                            "decode_tokens_per_second": 54,
-                            "end_to_end_tokens_per_second": 37,
-                        },
-                    ),
-                    [],
-                )
+        async def _fake_tool_loop_run(**kwargs):
+            return ToolLoopOutcome(
+                llm_messages=list(kwargs["llm_messages"]),
+                event_chunks=[],
+                persisted_tool_messages=[],
+                replay_response=SimpleNamespace(
+                    content="Replay final answer",
+                    tool_calls=[],
+                    usage={"prompt_tokens": 18, "completion_tokens": 6, "total_tokens": 24},
+                    metadata={
+                        "finish_reason": "stop",
+                        "first_token_ms": 432,
+                        "decode_tokens_per_second": 54,
+                        "end_to_end_tokens_per_second": 37,
+                    },
+                ),
+                usage_payload={"prompt_tokens": 18, "completion_tokens": 6, "total_tokens": 24},
+                response_metadata={
+                    "finish_reason": "stop",
+                    "first_token_ms": 432,
+                    "decode_tokens_per_second": 54,
+                    "end_to_end_tokens_per_second": 37,
+                },
+                finish_reason="stop",
+                convergence_reason="no_tool_calls_with_replay_payload",
+                terminal_tool_call_count=0,
+            )
 
-        monkeypatch.setattr(service, "_get_tool_runner", lambda: _ReplayTimingRunner())
+        monkeypatch.setattr(service._tool_loop_orchestrator, "run", _fake_tool_loop_run)
         monkeypatch.setattr(
             chat_service_module.ToolBridge,
             "collect_tool_schemas",

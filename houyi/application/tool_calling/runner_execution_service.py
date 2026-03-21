@@ -11,6 +11,8 @@ import logging
 import time
 from typing import TYPE_CHECKING, Any
 
+from houyi.adapters.llm.base import DEFAULT_TEMPERATURE
+from houyi.adapters.llm.models import DEEPSEEK_R1, DEEPSEEK_V3_2, normalize_model_id
 from houyi.application.tool_calling.context import ToolCallExecutionContext
 from houyi.application.tool_calling.execution import (
     ToolSkillExecutionRequest,
@@ -25,6 +27,97 @@ if TYPE_CHECKING:
     from houyi.domain.skill.metrics import MetricsStore
 
 logger = logging.getLogger(__name__)
+
+
+def _is_deepseek_tool_model(model: Any) -> bool:
+    normalized = normalize_model_id(str(model or ""))
+    return normalized in {
+        normalize_model_id(DEEPSEEK_R1),
+        normalize_model_id(DEEPSEEK_V3_2),
+    }
+
+
+def _summarize_replay_messages(messages: list[Any]) -> list[dict[str, Any]]:
+    summary: list[dict[str, Any]] = []
+    for index, message in enumerate(messages):
+        if hasattr(message, "model_dump"):
+            message = message.model_dump()
+        if not isinstance(message, dict):
+            summary.append({"index": index, "type": type(message).__name__})
+            continue
+        tool_calls = message.get("tool_calls")
+        content = message.get("content")
+        summary.append(
+            {
+                "index": index,
+                "role": message.get("role"),
+                "keys": sorted(message.keys()),
+                "content_type": type(content).__name__,
+                "content_len": len(content)
+                if isinstance(content, str)
+                else len(str(content or "")),
+                "tool_call_id": message.get("tool_call_id"),
+                "tool_call_count": len(tool_calls) if isinstance(tool_calls, list) else 0,
+                "tool_call_ids": [
+                    str(call.get("id"))
+                    for call in tool_calls
+                    if isinstance(call, dict) and call.get("id") is not None
+                ]
+                if isinstance(tool_calls, list)
+                else [],
+            }
+        )
+    return summary
+
+
+def _summarize_message_tail(messages: list[Any], *, tail: int = 6) -> list[dict[str, Any]]:
+    start = max(len(messages) - tail, 0)
+    tail_summary = _summarize_replay_messages(messages[start:])
+    for item in tail_summary:
+        item["index"] = int(item.get("index", 0)) + start
+    return tail_summary
+
+
+def _summarize_final_provider_payload(
+    adapter: Any,
+    *,
+    chat_messages: list[Any],
+    tools: list[dict[str, Any]],
+    chat_kwargs: dict[str, Any],
+) -> dict[str, Any] | None:
+    build_request = getattr(adapter, "_build_request", None)
+    encode_httpx = getattr(adapter, "_encode_chat_request_for_httpx", None)
+    normalize_httpx_payload = getattr(adapter, "_normalize_httpx_payload", None)
+    if not callable(build_request) or not callable(encode_httpx):
+        return None
+    kwargs = dict(chat_kwargs)
+    temperature = kwargs.pop("temperature", DEFAULT_TEMPERATURE)
+    max_tokens = kwargs.pop("max_tokens", None)
+    try:
+        request = build_request(
+            messages=chat_messages,
+            tools=tools,
+            temperature=float(temperature),
+            max_tokens=max_tokens,
+            enable_streaming=False,
+            kwargs=kwargs,
+        )
+        payload = encode_httpx(request)
+        if callable(normalize_httpx_payload):
+            payload = normalize_httpx_payload(payload)
+    except Exception as exc:
+        return {"error": f"{type(exc).__name__}: {exc}"}
+    messages = payload.get("messages")
+    if not isinstance(messages, list):
+        return {
+            "error": "payload_messages_missing",
+            "payload_type": type(payload).__name__,
+        }
+    return {
+        "message_count": len(messages),
+        "extra_keys": sorted(key for key in payload if key != "messages"),
+        "tail_messages": _summarize_message_tail(messages),
+    }
 
 
 class _ToolCallExecutionService:
@@ -236,6 +329,23 @@ class _ToolCallExecutionService:
             resolved_outputs[tool_call_id] = resolved_value
         resolved_outputs[str(index + 1)] = resolved_value
 
+    @staticmethod
+    def _summarize_tool_payload(payload: Any, *, max_len: int = 200) -> str:
+        if isinstance(payload, dict):
+            message = payload.get("message")
+            error = payload.get("error")
+            result = payload.get("result")
+            if isinstance(message, str) and message.strip():
+                return message.strip()[:max_len]
+            if isinstance(error, str) and error.strip():
+                return error.strip()[:max_len]
+            if isinstance(result, str) and result.strip():
+                return result.strip()[:max_len]
+            text = json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
+            return text[:max_len]
+        text = str(payload or "").strip()
+        return text[:max_len]
+
     def _clone_llm_response(self, response: Any) -> Any:
         if hasattr(response, "model_copy"):
             return response.model_copy(deep=True)
@@ -284,6 +394,32 @@ class _ToolCallExecutionService:
                 _llm_span.set_attribute("llm.cache_hit", True)
                 _llm_span.cache_hit = True
         else:
+            if _is_deepseek_tool_model(requested_model):
+                final_payload_summary = _summarize_final_provider_payload(
+                    adapter,
+                    chat_messages=chat_messages,
+                    tools=tools,
+                    chat_kwargs=chat_kwargs,
+                )
+                logger.debug(
+                    "[ToolCallRunner] round=%s deepseek adapter request model=%s chat_kwargs=%s messages=%s final_payload=%s",
+                    round_index + 1,
+                    requested_model,
+                    {
+                        key: chat_kwargs.get(key)
+                        for key in sorted(chat_kwargs.keys())
+                        if key
+                        in {
+                            "model",
+                            "tool_choice",
+                            "parallel_tool_calls",
+                            "max_parallel_calls",
+                            "transport",
+                        }
+                    },
+                    _summarize_replay_messages(chat_messages),
+                    final_payload_summary,
+                )
             response = await adapter.chat(chat_messages, tools=tools, **chat_kwargs)
             if llm_cache is not None and cache_key:
                 llm_cache[cache_key] = self._clone_llm_response(response)
@@ -639,6 +775,24 @@ class _ToolCallExecutionService:
             tool_result_summary_max_chars=config.tool_loop_result_summary_max_chars,
             tool_result_summary_max_items=config.tool_loop_result_summary_max_items,
         )
+        raw_payload = result.get("raw")
+        is_error = ToolResultBuilder.is_error(result)
+        latency_display = f"{latency_ms:.2f}" if isinstance(latency_ms, (int, float)) else "n/a"
+        log_message = "[ToolCallRunner] tool outcome round=%s tool=%s requested_tool=%s call_id=%s status=%s cache_hit=%s latency_ms=%s summary=%s"
+        log_args = (
+            config.round_index_value,
+            tool_name,
+            requested_tool_name,
+            tool_call_id,
+            "error" if is_error else "ok",
+            cache_hit_for_reporting,
+            latency_display,
+            self._summarize_tool_payload(raw_payload),
+        )
+        if is_error:
+            logger.warning(log_message, *log_args)
+        else:
+            logger.debug(log_message, *log_args)
 
         return config.index, trace_entry, tool_message, tool_elapsed
 

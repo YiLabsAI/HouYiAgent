@@ -9,9 +9,12 @@ from typing import Any
 from houyi.adapters.llm.base import LLMAdapter
 from houyi.adapters.llm.models import (
     CHARS_PER_TOKEN_BLENDED,
+    DEEPSEEK_R1,
+    DEEPSEEK_V3_2,
     DEFAULT_CONTEXT_WINDOW,
     DEFAULT_OUTPUT_RESERVE,
     MODEL_CONTEXT_WINDOWS,
+    normalize_model_id,
 )
 
 logger = logging.getLogger(__name__)
@@ -19,10 +22,22 @@ logger = logging.getLogger(__name__)
 _DEFAULT_TOOL_LOOP_MAX_MESSAGE_CHARS = 12_000
 _MIN_TOOL_LOOP_MAX_MESSAGE_CHARS = 1_000
 _MIN_TOOL_LOOP_MAX_TOTAL_CHARS = 8_000
+_DEFAULT_TOOL_LOOP_MAX_MESSAGES = 48
+_DEFAULT_TOOL_LOOP_CONTEXT_GROUPS_WITH_TOOLS = 8
 _AUTO_TOOL_LOOP_INPUT_BUDGET_RATIO = 0.7
 _AUTO_TOOL_LOOP_MESSAGE_RATIO = 0.1
 _DEFAULT_TOOL_RESULT_SUMMARY_MAX_CHARS = 4_000
 _DEFAULT_TOOL_RESULT_SUMMARY_MAX_ITEMS = 50
+_DEEPSEEK_TOOL_MAX_MESSAGE_CHARS = 6_000
+_DEEPSEEK_TOOL_MAX_TOTAL_CHARS = 48_000
+
+
+def _is_deepseek_tool_model(model_name: str) -> bool:
+    normalized = normalize_model_id(model_name or "")
+    return normalized in {
+        normalize_model_id(DEEPSEEK_R1),
+        normalize_model_id(DEEPSEEK_V3_2),
+    }
 
 
 class MessageBudget:
@@ -224,8 +239,12 @@ def prepare_tool_loop_messages(
     normalized_messages = [
         _truncate_message_for_budget(msg, max_message_chars) for msg in normalized_messages
     ]
-    capped_messages = _cap_total_payload_for_budget(normalized_messages, max_total_chars)
-    return _sanitize_tool_message_structure(capped_messages)
+    structured_messages = _sanitize_tool_message_structure(normalized_messages)
+    capped_messages = _cap_message_count_for_budget(
+        structured_messages,
+        max_messages=_DEFAULT_TOOL_LOOP_MAX_MESSAGES,
+    )
+    return _cap_total_payload_for_budget(capped_messages, max_total_chars)
 
 
 def _truncate_middle_for_budget(text: str, max_chars: int) -> str:
@@ -238,10 +257,11 @@ def _truncate_middle_for_budget(text: str, max_chars: int) -> str:
 
 def _truncate_message_for_budget(message: dict[str, Any], max_chars: int) -> dict[str, Any]:
     normalized = dict(message)
-    normalized["content"] = _truncate_middle_for_budget(
-        LLMAdapter._coerce_message_content_to_text(normalized.get("content")),
-        max_chars,
-    )
+    if "content" in normalized:
+        normalized["content"] = _truncate_middle_for_budget(
+            LLMAdapter._coerce_message_content_to_text(normalized.get("content")),
+            max_chars,
+        )
     tool_calls = normalized.get("tool_calls")
     if not isinstance(tool_calls, list):
         return normalized
@@ -273,17 +293,61 @@ def _cap_total_payload_for_budget(
     non_system = [msg for msg in messages if msg.get("role") != "system"]
     system_chars = sum(_message_payload_chars(msg) for msg in system_messages)
     budget_for_non_system = max(0, max_total_chars - system_chars)
+    if budget_for_non_system <= 0:
+        logger.warning(
+            "ToolCallRunner message budget applied: total_payload=%d -> %d, messages=%d -> %d",
+            total_chars,
+            system_chars,
+            len(messages),
+            len(system_messages),
+        )
+        return system_messages
 
-    kept_non_system: list[dict[str, Any]] = []
+    groups = _group_messages_for_budget(non_system)
+    if not groups:
+        return system_messages
+
+    kept_group_indexes: set[int] = set()
     used = 0
-    for msg in reversed(non_system):
-        payload_chars = _message_payload_chars(msg)
-        if kept_non_system and used + payload_chars > budget_for_non_system:
+    recent_tail_groups = min(2, len(groups))
+    for group_index in range(len(groups) - recent_tail_groups, len(groups)):
+        if group_index < 0:
             continue
-        kept_non_system.append(msg)
-        used += payload_chars
+        group_chars = _group_payload_chars(groups[group_index])
+        if used + group_chars > budget_for_non_system and kept_group_indexes:
+            continue
+        kept_group_indexes.add(group_index)
+        used += group_chars
 
-    trimmed = system_messages + list(reversed(kept_non_system))
+    candidate_indexes = [
+        group_index for group_index in range(len(groups)) if group_index not in kept_group_indexes
+    ]
+    candidate_indexes.sort(
+        key=lambda group_index: (
+            _score_group_for_budget(groups[group_index]),
+            group_index,
+        ),
+        reverse=True,
+    )
+    for group_index in candidate_indexes:
+        group_chars = _group_payload_chars(groups[group_index])
+        if used + group_chars > budget_for_non_system:
+            continue
+        kept_group_indexes.add(group_index)
+        used += group_chars
+
+    if not kept_group_indexes:
+        latest_group_index = len(groups) - 1
+        kept_group_indexes.add(latest_group_index)
+        used = _group_payload_chars(groups[latest_group_index])
+
+    kept_non_system = [
+        message
+        for group_index, group in enumerate(groups)
+        if group_index in kept_group_indexes
+        for message in group
+    ]
+    trimmed = system_messages + kept_non_system
     logger.warning(
         "ToolCallRunner message budget applied: total_payload=%d -> %d, messages=%d -> %d",
         total_chars,
@@ -292,6 +356,152 @@ def _cap_total_payload_for_budget(
         len(trimmed),
     )
     return trimmed
+
+
+def _cap_message_count_for_budget(
+    messages: list[dict[str, Any]],
+    *,
+    max_messages: int,
+) -> list[dict[str, Any]]:
+    if max_messages <= 0:
+        return []
+
+    system_messages = [msg for msg in messages if msg.get("role") == "system"]
+    non_system = [msg for msg in messages if msg.get("role") != "system"]
+    if len(non_system) <= max_messages:
+        return messages
+
+    groups = _group_messages_for_budget(non_system)
+    groups = _prioritize_recent_tool_groups(groups)
+
+    kept_groups: list[list[dict[str, Any]]] = []
+    kept_count = 0
+    for group in reversed(groups):
+        group_size = len(group)
+        if kept_groups and kept_count + group_size > max_messages:
+            continue
+        kept_groups.append(group)
+        kept_count += group_size
+
+    trimmed = system_messages + [item for group in reversed(kept_groups) for item in group]
+    logger.warning(
+        "ToolCallRunner message count cap applied: messages=%d -> %d (non_system=%d -> %d)",
+        len(messages),
+        len(trimmed),
+        len(non_system),
+        len(trimmed) - len(system_messages),
+    )
+    return trimmed
+
+
+def _prioritize_recent_tool_groups(
+    groups: list[list[dict[str, Any]]],
+) -> list[list[dict[str, Any]]]:
+    latest_tool_group_index = _find_latest_tool_group_index(groups)
+    if latest_tool_group_index < 0:
+        return groups
+
+    trailing_groups = groups[latest_tool_group_index:]
+    leading_groups = groups[:latest_tool_group_index]
+    if not leading_groups:
+        return trailing_groups
+
+    return leading_groups[-_DEFAULT_TOOL_LOOP_CONTEXT_GROUPS_WITH_TOOLS:] + trailing_groups
+
+
+def _find_latest_tool_group_index(groups: list[list[dict[str, Any]]]) -> int:
+    for index in range(len(groups) - 1, -1, -1):
+        if _group_contains_tool_context(groups[index]):
+            return index
+    return -1
+
+
+def _group_messages_for_budget(messages: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
+    groups: list[list[dict[str, Any]]] = []
+    index = 0
+    while index < len(messages):
+        message = messages[index]
+        role = str(message.get("role") or "")
+        expected_ids = _expected_tool_call_ids(message)
+        if not expected_ids:
+            if role == "user":
+                group = [message]
+                next_index = index + 1
+                if next_index < len(messages):
+                    candidate = messages[next_index]
+                    candidate_role = str(candidate.get("role") or "")
+                    if candidate_role == "assistant" and not _expected_tool_call_ids(candidate):
+                        group.append(candidate)
+                        next_index += 1
+                groups.append(group)
+                index = next_index
+                continue
+            groups.append([message])
+            index += 1
+            continue
+        group = [message]
+        pending_ids = set(expected_ids)
+        next_index = index + 1
+        while next_index < len(messages):
+            candidate = messages[next_index]
+            if str(candidate.get("role") or "") != "tool":
+                break
+            tool_call_id = str(candidate.get("tool_call_id") or "")
+            if tool_call_id not in pending_ids:
+                break
+            group.append(candidate)
+            pending_ids.remove(tool_call_id)
+            next_index += 1
+            if not pending_ids:
+                break
+        groups.append(group)
+        index = next_index
+    return groups
+
+
+def _group_payload_chars(group: list[dict[str, Any]]) -> int:
+    return sum(_message_payload_chars(message) for message in group)
+
+
+def _score_group_for_budget(group: list[dict[str, Any]]) -> tuple[int, int, int, int]:
+    tool_context_score = 0
+    structured_content_score = 0
+    assistant_or_tool_score = 0
+    for message in group:
+        role = str(message.get("role") or "")
+        if role in {"assistant", "tool"}:
+            assistant_or_tool_score += 1
+        if _expected_tool_call_ids(message) or role == "tool":
+            tool_context_score += 3
+        structured_content_score += _score_message_structure(message)
+    return (
+        tool_context_score,
+        structured_content_score,
+        assistant_or_tool_score,
+        -_group_payload_chars(group),
+    )
+
+
+def _score_message_structure(message: dict[str, Any]) -> int:
+    score = 0
+    content = LLMAdapter._coerce_message_content_to_text(message.get("content"))
+    text = content.strip()
+    if not text:
+        return score
+    if text.startswith("{") or text.startswith("["):
+        score += 3
+    if "\n" in text:
+        score += 1
+    if any(token in text for token in ('{"', '"}:', '"],', '":', "\t", "- ", "1. ")):
+        score += 1
+    return score
+
+
+def _group_contains_tool_context(group: list[dict[str, Any]]) -> bool:
+    return any(
+        _expected_tool_call_ids(message) or str(message.get("role") or "") == "tool"
+        for message in group
+    )
 
 
 def _has_assistant_tool_turn(message: dict[str, Any]) -> bool:
@@ -311,6 +521,32 @@ def _expected_tool_call_ids(message: dict[str, Any]) -> list[str]:
         for call in tool_calls
         if isinstance(call, dict) and str(call.get("id") or "")
     ]
+
+
+def _build_single_tool_assistant_message(
+    message: dict[str, Any],
+    *,
+    tool_call_id: str,
+) -> dict[str, Any] | None:
+    tool_calls = message.get("tool_calls")
+    if not isinstance(tool_calls, list):
+        return None
+    matched_call = next(
+        (
+            call
+            for call in tool_calls
+            if isinstance(call, dict) and str(call.get("id") or "") == tool_call_id
+        ),
+        None,
+    )
+    if matched_call is None:
+        return None
+    single_message: dict[str, Any] = {"role": "assistant", "tool_calls": [matched_call]}
+    if "content" in message:
+        single_message["content"] = message.get("content")
+    if "reasoning_content" in message:
+        single_message["reasoning_content"] = message.get("reasoning_content")
+    return single_message
 
 
 def _is_pending_tool_message(
@@ -461,6 +697,8 @@ def resolve_tool_loop_budget_chars(
     if context_window is None:
         context_window = DEFAULT_CONTEXT_WINDOW
 
+    deepseek_tool_model = _is_deepseek_tool_model(model_name)
+
     input_budget_tokens = max(
         1,
         int(max(0, context_window - DEFAULT_OUTPUT_RESERVE) * _AUTO_TOOL_LOOP_INPUT_BUDGET_RATIO),
@@ -469,6 +707,8 @@ def resolve_tool_loop_budget_chars(
         _MIN_TOOL_LOOP_MAX_TOTAL_CHARS,
         int(input_budget_tokens * CHARS_PER_TOKEN_BLENDED),
     )
+    if deepseek_tool_model:
+        auto_total_chars = min(auto_total_chars, _DEEPSEEK_TOOL_MAX_TOTAL_CHARS)
 
     total_chars = total_chars_override or auto_total_chars
     if message_chars_override is not None:
@@ -481,6 +721,8 @@ def resolve_tool_loop_budget_chars(
             int(total_chars * _AUTO_TOOL_LOOP_MESSAGE_RATIO),
         )
         message_chars = min(message_chars, _DEFAULT_TOOL_LOOP_MAX_MESSAGE_CHARS)
+        if deepseek_tool_model:
+            message_chars = min(message_chars, _DEEPSEEK_TOOL_MAX_MESSAGE_CHARS)
 
     message_chars = min(message_chars, total_chars)
     return message_chars, total_chars

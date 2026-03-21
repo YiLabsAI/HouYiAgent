@@ -18,7 +18,10 @@ from typing import Any
 import pytest
 from pydantic import BaseModel
 
-from houyi.application.tool_calling.budget import prepare_tool_loop_messages
+from houyi.application.tool_calling.budget import (
+    prepare_tool_loop_messages,
+    resolve_tool_loop_budget_chars,
+)
 from houyi.application.tool_calling.runner import ToolCallRunner
 from houyi.domain.skill.exceptions import SkillExecutionError
 from houyi.domain.skill.spec import SkillSpec
@@ -88,6 +91,11 @@ class _DummyExecutor:
         if skill.name == "tool2":
             return {"received": args.get("x")}
         return {"ok": True, **args}
+
+
+class _BudgetAdapter:
+    def __init__(self, model: str) -> None:
+        self.model = model
 
 
 class TestToolCallRunner:
@@ -218,6 +226,29 @@ class TestToolCallRunner:
         )
         assert any(msg.get("role") == "tool" for msg in messages)
 
+    def test_budget_tightens_deepseek(self) -> None:
+        generic = resolve_tool_loop_budget_chars(_BudgetAdapter("gpt-4o"), None, None, "gpt-4o")
+        deepseek = resolve_tool_loop_budget_chars(
+            _BudgetAdapter("deepseek-ai/DeepSeek-R1"),
+            None,
+            None,
+            "deepseek-ai/DeepSeek-R1",
+        )
+
+        assert deepseek[0] < generic[0]
+        assert deepseek[1] < generic[1]
+
+    def test_budget_keeps_override(self) -> None:
+        message_chars, total_chars = resolve_tool_loop_budget_chars(
+            _BudgetAdapter("deepseek-ai/DeepSeek-R1"),
+            7_500,
+            90_000,
+            "deepseek-ai/DeepSeek-R1",
+        )
+
+        assert message_chars == 7_500
+        assert total_chars == 90_000
+
     @pytest.mark.asyncio
     async def test_uses_model_budget(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv(ENV_TOOLCALL_LOOP_MAX_MESSAGE_CHARS, raising=False)
@@ -320,6 +351,60 @@ class TestToolCallRunner:
         assert tool_trace[0]["tool_call_id"] == "call_1"
         assert isinstance(tool_trace[0].get("duration_ms"), (int, float))
         assert tool_trace[0]["duration_ms"] > 0
+
+    @pytest.mark.asyncio
+    async def test_continues_after_tool_execution_to_get_final_answer(self) -> None:
+        class Input(BaseModel):
+            q: str
+
+        class Output(BaseModel):
+            ok: bool
+
+        skill = SkillSpec(
+            name="echo",
+            description="echo",
+            input_schema=Input,
+            output_schema=Output,
+            executor=lambda input_data: Output(ok=bool(input_data.q)),
+        )
+        adapter = _FakeAdapter(
+            [
+                _FakeResponse(
+                    content="",
+                    tool_calls=[
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {"name": "echo", "arguments": '{"q":"skill.md"}'},
+                        }
+                    ],
+                ),
+                _FakeResponse(
+                    content="Found the local skill.md file and added the related web details.",
+                    tool_calls=[],
+                ),
+            ]
+        )
+
+        messages = [
+            {"role": "user", "content": "Find the local skill.md file and add related web details"}
+        ]
+        response, tool_trace = await ToolCallRunner().run(
+            adapter=adapter,
+            messages=messages,
+            tools=[skill.to_tool_schema()],
+            skills=[skill],
+            executor=_DummyExecutor(),
+            max_rounds=2,
+        )
+
+        assert adapter.calls == 2
+        assert response.tool_calls == []
+        assert (
+            response.content == "Found the local skill.md file and added the related web details."
+        )
+        assert len(tool_trace) == 1
+        assert any(msg.get("role") == "tool" for msg in messages)
 
     @pytest.mark.asyncio
     async def test_summarizes_large_results(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -438,6 +523,250 @@ def test_prepare_drops_group() -> None:
     assert prepared[0]["tool_calls"][0]["id"] == "call_3"
     assert prepared[1]["role"] == "tool"
     assert prepared[1]["tool_call_id"] == "call_3"
+
+
+def test_prepare_preserves_missing_content_on_assistant_tool_turn() -> None:
+    messages = [
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "demo", "arguments": {"q": 1}},
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "content": '{"ok":true}',
+            "tool_call_id": "call_1",
+        },
+    ]
+
+    prepared = prepare_tool_loop_messages(messages, max_message_chars=12_000, max_total_chars=8_000)
+
+    assert prepared[0]["role"] == "assistant"
+    assert "content" not in prepared[0]
+    assert prepared[0]["tool_calls"][0]["function"]["arguments"] == '{"q": 1}'
+    assert prepared[1] == {
+        "role": "tool",
+        "content": '{"ok":true}',
+        "tool_call_id": "call_1",
+    }
+
+
+def test_prepare_splits_multi_tool_assistant_turn_into_single_call_turns() -> None:
+    messages = [
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "demo_1", "arguments": {"q": 1}},
+                },
+                {
+                    "id": "call_2",
+                    "type": "function",
+                    "function": {"name": "demo_2", "arguments": {"q": 2}},
+                },
+            ],
+        },
+        {"role": "tool", "content": '{"ok":1}', "tool_call_id": "call_1"},
+        {"role": "tool", "content": '{"ok":2}', "tool_call_id": "call_2"},
+    ]
+
+    prepared = prepare_tool_loop_messages(messages, max_message_chars=12_000, max_total_chars=8_000)
+
+    assert prepared == [
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "demo_1", "arguments": '{"q": 1}'},
+                },
+                {
+                    "id": "call_2",
+                    "type": "function",
+                    "function": {"name": "demo_2", "arguments": '{"q": 2}'},
+                },
+            ],
+        },
+        {"role": "tool", "content": '{"ok":1}', "tool_call_id": "call_1"},
+        {"role": "tool", "content": '{"ok":2}', "tool_call_id": "call_2"},
+    ]
+
+
+def test_prepare_caps_large_history_to_recent_messages() -> None:
+    messages = [{"role": "system", "content": "sys"}]
+    for index in range(60):
+        messages.append({"role": "user", "content": f"u-{index}"})
+        messages.append({"role": "assistant", "content": f"a-{index}"})
+
+    prepared = prepare_tool_loop_messages(
+        messages,
+        max_message_chars=12_000,
+        max_total_chars=1_000_000,
+    )
+
+    assert prepared[0] == {"role": "system", "content": "sys"}
+    assert len(prepared) == 49
+    assert prepared[1]["content"] == "u-36"
+    assert prepared[-1]["content"] == "a-59"
+
+
+def test_prepare_count_cap_preserves_latest_assistant_tool_pair() -> None:
+    messages = [{"role": "system", "content": "sys"}]
+    for index in range(47):
+        messages.append({"role": "user", "content": f"u-{index}"})
+    messages.extend(
+        [
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "id": "call_latest",
+                        "type": "function",
+                        "function": {"name": "demo", "arguments": "{}"},
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "content": '{"ok": true}',
+                "tool_call_id": "call_latest",
+            },
+        ]
+    )
+
+    prepared = prepare_tool_loop_messages(
+        messages,
+        max_message_chars=12_000,
+        max_total_chars=1_000_000,
+    )
+
+    assert prepared[0] == {"role": "system", "content": "sys"}
+    assert prepared[-2]["role"] == "assistant"
+    assert prepared[-2]["tool_calls"][0]["id"] == "call_latest"
+    assert prepared[-1] == {
+        "role": "tool",
+        "content": '{"ok": true}',
+        "tool_call_id": "call_latest",
+    }
+
+
+def test_prioritizes_recent_tool_context() -> None:
+    messages = [{"role": "system", "content": "sys"}]
+    for index in range(60):
+        messages.append({"role": "user", "content": f"u-{index}"})
+        messages.append({"role": "assistant", "content": f"a-{index}"})
+    messages.extend(
+        [
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "id": "call_latest",
+                        "type": "function",
+                        "function": {"name": "demo", "arguments": "{}"},
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "content": '{"ok": true}',
+                "tool_call_id": "call_latest",
+            },
+        ]
+    )
+
+    prepared = prepare_tool_loop_messages(
+        messages,
+        max_message_chars=12_000,
+        max_total_chars=1_000_000,
+    )
+
+    non_system = [message for message in prepared if message["role"] != "system"]
+    assert non_system[0] == {"role": "user", "content": "u-52"}
+    assert non_system[1] == {"role": "assistant", "content": "a-52"}
+    assert non_system[-2]["role"] == "assistant"
+    assert non_system[-2]["tool_calls"][0]["id"] == "call_latest"
+    assert non_system[-1] == {
+        "role": "tool",
+        "content": '{"ok": true}',
+        "tool_call_id": "call_latest",
+    }
+
+
+def test_prepare_count_cap_drops_orphan_leading_assistant_after_trim() -> None:
+    messages = [{"role": "system", "content": "sys"}]
+    for index in range(54):
+        messages.append({"role": "user", "content": f"u-{index}"})
+        messages.append({"role": "assistant", "content": f"a-{index}"})
+    messages.append({"role": "user", "content": "latest"})
+
+    prepared = prepare_tool_loop_messages(
+        messages,
+        max_message_chars=12_000,
+        max_total_chars=1_000_000,
+    )
+
+    non_system = [message for message in prepared if message["role"] != "system"]
+    assert non_system[0] == {"role": "user", "content": "u-31"}
+    assert non_system[1] == {"role": "assistant", "content": "a-31"}
+    assert non_system[-1] == {"role": "user", "content": "latest"}
+    assert all(
+        not (message["role"] == "assistant" and index == 0)
+        for index, message in enumerate(non_system)
+    )
+
+
+def test_keeps_tool_context() -> None:
+    messages = [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "earlier question"},
+        {"role": "assistant", "content": "earlier answer"},
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {
+                    "id": "call_repo",
+                    "type": "function",
+                    "function": {"name": "read_file", "arguments": {"path": "repo.py"}},
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_repo",
+            "content": '{"path":"repo.py","symbols":["A","B","C"],"lines":[1,2,3]}',
+        },
+        {"role": "user", "content": "latest request"},
+        {"role": "assistant", "content": "latest answer"},
+    ]
+
+    prepared = prepare_tool_loop_messages(
+        messages,
+        max_message_chars=12_000,
+        max_total_chars=120,
+    )
+
+    assert prepared[0] == {"role": "system", "content": "sys"}
+    assert any(
+        message.get("role") == "assistant"
+        and isinstance(message.get("tool_calls"), list)
+        and message["tool_calls"][0]["id"] == "call_repo"
+        for message in prepared
+    )
+    assert any(
+        message.get("role") == "tool" and message.get("tool_call_id") == "call_repo"
+        for message in prepared
+    )
+    assert any(message.get("content") == "latest request" for message in prepared)
+    assert not any(message.get("content") == "earlier answer" for message in prepared)
 
 
 class TestToolCallRunnerBehavior:

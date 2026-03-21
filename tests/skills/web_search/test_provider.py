@@ -419,7 +419,7 @@ async def test_ddg_passes_proxy(monkeypatch) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Bocha (博查)
+# Bocha
 # ---------------------------------------------------------------------------
 
 
@@ -460,7 +460,7 @@ async def test_bocha_normalizes(monkeypatch) -> None:
     monkeypatch.setattr(providers_module.request, "urlopen", lambda *a, **k: _Response())
 
     provider = BochaWebSearchProvider(api_key="test-key")
-    results = await provider.search("测试查询", max_results=5)
+    results = await provider.search("test query", max_results=5)
 
     assert len(results) == 1
     assert results[0].title == "Bocha Result"

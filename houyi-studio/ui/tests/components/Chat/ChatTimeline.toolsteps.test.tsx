@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatTimeline } from '@/components/Chat/ChatTimeline';
+import { useSettingsStore } from '@/stores/useSettingsStore';
 
 function buildMessages(count: number) {
   const now = Date.now() / 1000;
@@ -233,6 +234,77 @@ describe('ChatTimeline tool-step association', () => {
     expect(screen.getByText('web_search')).toBeInTheDocument();
   });
 
+  it('filters assistant placeholder turns with underscore tool marker in reasoning only', () => {
+    const now = Date.now() / 1000;
+    render(
+      <ChatTimeline
+        conversationId="c2b"
+        streamingMessageId={null}
+        isWaitingForResponse={false}
+        messages={[
+          {
+            message_id: 'u2b',
+            role: 'user',
+            content: 'search web',
+            metadata: {},
+            created_at: now,
+          },
+          {
+            message_id: 'a2b-placeholder',
+            role: 'assistant',
+            content: '',
+            reasoning_content: '[tool_call]',
+            metadata: {},
+            created_at: now + 1,
+          },
+          {
+            message_id: 'a2b-final',
+            role: 'assistant',
+            content: 'done',
+            metadata: {},
+            created_at: now + 2,
+          },
+        ]}
+      />,
+    );
+
+    expect(screen.queryByText('[tool_call]')).not.toBeInTheDocument();
+    expect(screen.getAllByText('done').length).toBeGreaterThan(0);
+  });
+
+  it('uses global assistant display settings for waiting bubble', () => {
+    const now = Date.now() / 1000;
+    useSettingsStore.setState({
+      display: {
+        user_name: 'You',
+        user_avatar: null,
+        assistant_name: 'HouYi',
+        assistant_avatar: '🐶',
+      },
+      loaded: true,
+    });
+
+    render(
+      <ChatTimeline
+        conversationId="waiting-display"
+        streamingMessageId={null}
+        isWaitingForResponse={true}
+        messages={[
+          {
+            message_id: 'waiting-user-1',
+            role: 'user',
+            content: 'hello',
+            metadata: {},
+            created_at: now,
+          },
+        ]}
+      />,
+    );
+
+    expect(screen.getByText('HouYi')).toBeInTheDocument();
+    expect(screen.getByText('🐶')).toBeInTheDocument();
+  });
+
   it('shows steps when assistant tool_calls carrier has non-empty content', () => {
     const now = Date.now() / 1000;
     render(
@@ -408,11 +480,50 @@ describe('ChatTimeline tool-step association', () => {
       />,
     );
 
-    expect(screen.getByText('done')).toBeInTheDocument();
+    expect(screen.getAllByText('done').length).toBeGreaterThan(0);
     expect(screen.getByRole('button', { name: 'Tool activity 1' })).toBeInTheDocument();
     expect(screen.queryByText(/^houyi_read_file$/)).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Tool activity 1' }));
     expect(screen.getByText('houyi_read_file')).toBeInTheDocument();
+  });
+
+  it('preserves final assistant content when trailing persisted tool messages are attached', () => {
+    const now = Date.now() / 1000;
+    render(
+      <ChatTimeline
+        conversationId="c3d-visible"
+        streamingMessageId={null}
+        isWaitingForResponse={false}
+        messages={[
+          {
+            message_id: 'u3dv',
+            role: 'user',
+            content: 'analyze repo',
+            metadata: {},
+            created_at: now,
+          },
+          {
+            message_id: 'a3dv-final',
+            role: 'assistant',
+            content: '最终总结内容',
+            metadata: { trace_id: 'trace-visible' },
+            created_at: now + 2,
+          },
+          {
+            message_id: 't3dv',
+            role: 'tool',
+            content: '{"path":"README.md"}',
+            name: 'houyi_read_file',
+            tool_call_id: 'call-3dv',
+            metadata: { tool_status: 'ok', round_index: 1 },
+            created_at: now + 3,
+          },
+        ]}
+      />,
+    );
+
+    expect(screen.getByText('最终总结内容')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Tool activity 1' })).toBeInTheDocument();
   });
 
   it('keeps tool activity attached when a system message appears before the final assistant', () => {

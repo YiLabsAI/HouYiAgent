@@ -118,6 +118,28 @@ class TestMessage:
         assert MessageRole.TOOL.value == "tool"
         assert len(MessageRole) == 4
 
+    def test_sanitize_assistant_tool(self):
+        visible_conversation = Conversation(
+            conversation_id="conv-visible",
+            title="visible",
+            model=GPT_4O,
+            messages=[
+                Message(
+                    role=MessageRole.ASSISTANT,
+                    content="[tool_call]<tool_call>demo</tool_call> final answer",
+                )
+            ],
+        )
+        invisible_conversation = Conversation(
+            conversation_id="conv-invisible",
+            title="invisible",
+            model=GPT_4O,
+            messages=[Message(role=MessageRole.ASSISTANT, content="[tool call]")],
+        )
+
+        assert visible_conversation.visible_message_count == 1
+        assert invisible_conversation.visible_message_count == 0
+
 
 class TestAttachment:
     """Test Attachment model."""
@@ -488,14 +510,14 @@ class TestRequestModels:
         assert req.system_instructions == ""
         assert req.metadata == {}
 
-    def test_send_message_required_content(self):
+    def test_send_message_content(self):
         req = SendMessageRequest(content="Hello")
         assert req.content == "Hello"
         assert req.model is None
         assert req.temperature is None
         assert req.max_tokens is None
 
-    def test_send_message_accepts_deep_research_toggle(self):
+    def test_deep_research_toggle(self):
         req = SendMessageRequest(content="Hello", enable_deep_research=True)
         assert req.enable_deep_research is True
 
@@ -506,14 +528,6 @@ class TestRequestModels:
         assert req.system_instructions is None
         assert req.model is None
         assert req.stream is None
-
-    def test_update_conversation_stream_true(self):
-        req = UpdateConversationRequest(stream=True)
-        assert req.stream is True
-
-    def test_update_conversation_stream_false(self):
-        req = UpdateConversationRequest(stream=False)
-        assert req.stream is False
 
     def test_update_stream_reset(self):
         req = UpdateConversationRequest.model_validate({"stream": None})

@@ -1,14 +1,96 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
 from houyi.adapters.llm import LLMAdapter
+from houyi.adapters.llm.models import DEEPSEEK_R1, DEEPSEEK_V3_2, normalize_model_id
+from houyi.application.tool_calling.tool_call_messages import apply_fast_path_tool_choice
 from houyi.infrastructure.observability import Span
 
 from .tool_loop_runtime import build_tool_trace_events, collect_persisted_tool_messages
 from .types import Message, SendMessageRequest
+
+_TOOL_MARKER_RE = re.compile(
+    r"\[tool call\]|\[tool_call\]|<tool_call\b[^>]*>[\s\S]*?</tool_call>|<tool_call\b[^>]*>|</tool_call>|<arg_[^>]+>[\s\S]*?</arg_[^>]+>|<arg_[^>]+>|</arg_[^>]+>|</?think>|<\|tool_calls_section_begin\|>|<\|tool_calls_section_end\|>|<\|tool_call_begin\|>|<\|tool_call_end\|>|<\|tool_call_argument_begin\|>|<\|tool_call_argument_end\|>|<\|tool_[^|]+\|>",
+    re.IGNORECASE,
+)
+_DEEPSEEK_TOOL_LOOP_MODELS = frozenset(
+    {normalize_model_id(DEEPSEEK_R1), normalize_model_id(DEEPSEEK_V3_2)}
+)
+
+
+def _unwrap_adapter(adapter: Any) -> Any:
+    current = adapter
+    visited: set[int] = set()
+    while current is not None and id(current) not in visited:
+        visited.add(id(current))
+        next_adapter = None
+        for attr_name in ("_inner", "inner", "_adapter", "adapter", "_wrapped", "wrapped"):
+            candidate = getattr(current, attr_name, None)
+            if candidate is not None and candidate is not current:
+                next_adapter = candidate
+                break
+        if next_adapter is None:
+            return current
+        current = next_adapter
+    return current
+
+
+def _is_siliconflow_runtime_adapter(adapter: Any) -> bool:
+    resolved = _unwrap_adapter(adapter)
+    adapter_name = type(resolved).__name__.strip().lower()
+    if adapter_name == "siliconflowadapter":
+        return True
+    base_url = str(getattr(resolved, "base_url", "") or "").strip().lower()
+    if "siliconflow" in base_url:
+        return True
+    provider_name = (
+        str(getattr(resolved, "provider", "") or getattr(resolved, "provider_id", "") or "")
+        .strip()
+        .lower()
+    )
+    return provider_name == "siliconflow"
+
+
+def _should_relax_tool_loop_for_siliconflow_deepseek(llm_adapter: Any, model: str) -> bool:
+    model_name = normalize_model_id(model)
+    return _is_siliconflow_runtime_adapter(llm_adapter) and model_name in _DEEPSEEK_TOOL_LOOP_MODELS
+
+
+def _sanitize_replay_text(raw: Any) -> str:
+    text = str(raw or "")
+    if not text:
+        return ""
+    if not _TOOL_MARKER_RE.search(text):
+        return text.strip()
+    return (
+        _TOOL_MARKER_RE.sub(" ", text)
+        .replace("\r", "")
+        .replace("\t", " ")
+        .replace("  ", " ")
+        .replace("\n\n\n", "\n\n")
+        .strip()
+    )
+
+
+def _has_visible_replay_payload(
+    response: Any,
+    *,
+    allow_reasoning_only: bool = True,
+) -> bool:
+    replay_content = _sanitize_replay_text(getattr(response, "content", ""))
+    if replay_content:
+        return True
+    if not allow_reasoning_only:
+        return False
+    metadata = getattr(response, "metadata", None)
+    if not isinstance(metadata, dict):
+        return False
+    replay_reasoning = _sanitize_replay_text(metadata.get("reasoning_content"))
+    return bool(replay_reasoning)
 
 
 @dataclass
@@ -148,13 +230,27 @@ class ToolLoopOrchestrator:
             tool_runner = self._get_tool_runner()
         tool_loop_messages = self._sanitize_tool_loop_messages(list(llm_messages))
         max_tool_iterations = request.max_tool_iterations or self._default_chat_max_tool_iterations
+        relax_siliconflow_deepseek = _should_relax_tool_loop_for_siliconflow_deepseek(
+            llm_adapter,
+            model,
+        )
         tool_chat_kwargs = self._build_chat_kwargs(
             max_tokens=llm_kwargs.get("max_tokens"),
             temperature=llm_kwargs.get("temperature"),
-            parallel_tool_calls=True,
+            parallel_tool_calls=not relax_siliconflow_deepseek,
             max_parallel_calls=None,
             prompt_cache_key=None,
         )
+        explicit_tool_choice = llm_kwargs.get("tool_choice")
+        resolved_tool_choice = apply_fast_path_tool_choice(
+            fast_path_enabled=not relax_siliconflow_deepseek,
+            tool_choice=explicit_tool_choice or None,
+        )
+        if resolved_tool_choice is not None:
+            tool_chat_kwargs["tool_choice"] = resolved_tool_choice
+        if relax_siliconflow_deepseek:
+            tool_chat_kwargs.pop("max_parallel_calls", None)
+            tool_chat_kwargs.pop("parallel_tool_calls", None)
         tool_chat_kwargs["model"] = model
         tool_executor = self._skill_executor_factory()
         tool_loop_response, tool_trace = await tool_runner.run(
@@ -203,8 +299,14 @@ class ToolLoopOrchestrator:
         replay_response: Any | None = None
         convergence_reason: str | None = None
         terminal_tool_call_count = len(list(getattr(tool_loop_response, "tool_calls", []) or []))
-        replay_content = str(getattr(tool_loop_response, "content", "") or "")
-        if tool_loop_response and terminal_tool_call_count == 0 and replay_content:
+        if (
+            tool_loop_response
+            and terminal_tool_call_count == 0
+            and _has_visible_replay_payload(
+                tool_loop_response,
+                allow_reasoning_only=not bool(persisted_tool_messages),
+            )
+        ):
             replay_response = tool_loop_response
             convergence_reason = "no_tool_calls_with_replay_payload"
         elif terminal_tool_call_count > 0:

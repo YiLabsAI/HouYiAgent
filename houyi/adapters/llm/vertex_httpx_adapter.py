@@ -24,6 +24,7 @@ from houyi.adapters.llm.base import (
     StreamChunk,
 )
 from houyi.adapters.llm.openai_compat_base import OpenAICompatAdapterBase
+from houyi.adapters.llm.request_models import OpenAICompatRequest
 from houyi.adapters.llm.retry import (
     DEFAULT_MAX_RETRIES,
     DEFAULT_RETRY_BASE_DELAY,
@@ -537,50 +538,40 @@ class VertexAIAdapter(OpenAICompatAdapterBase):
             },
         )
 
-    def _build_httpx_chat_url(self) -> str:
+    def _get_httpx_endpoint(self) -> str:
         return f"{self._get_openai_base_url()}/chat/completions"
 
     def _build_httpx_stream_url(self) -> str:
         return f"{self._get_openai_base_url()}/chat/completions"
 
-    def _build_httpx_chat_headers(self) -> dict[str, str]:
+    def _get_httpx_headers(self) -> dict[str, str]:
         token = self._request_access_token or ""
         return {
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
         }
 
-    def _build_httpx_stream_headers(self) -> dict[str, str]:
-        token = self._request_access_token or ""
-        return {
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json",
-        }
-
-    def _get_httpx_chat_proxy_url(self) -> str | None:
+    def _get_httpx_proxy(self) -> str | None:
         from houyi.infrastructure.net.proxy import detect_proxy
 
         return detect_proxy()
+
+    def _get_httpx_retry_controller(self) -> RetryController:
+        return self._new_retry_controller()
 
     def _get_httpx_stream_proxy_url(self) -> str | None:
         from houyi.infrastructure.net.proxy import detect_proxy
 
         return detect_proxy()
 
-    def _chat_retry(self) -> RetryController | None:
-        return self._new_retry_controller()
-
-    def _stream_retry(self) -> RetryController | None:
-        return self._new_retry_controller(stream=True)
-
-    async def _chat_httpx_client(
+    async def _send_httpx_request(
         self, http_client: Any, *, url: str, payload: dict[str, Any]
     ) -> Any:
         access_token = await self._get_access_token()
         if not access_token:
             raise _VertexAuthError("Failed to authenticate with Vertex AI")
         self._request_access_token = access_token
-        return await http_client.post(url, json=payload, headers=self._build_httpx_chat_headers())
+        return await http_client.post(url, json=payload, headers=self._get_httpx_headers())
 
     async def _chat_request_httpx(self, request: Any) -> LLMResponse:
         if not self.project_id or not self._sa:
@@ -605,19 +596,26 @@ class VertexAIAdapter(OpenAICompatAdapterBase):
         finally:
             self._request_access_token = None
 
-    def _parse_httpx_chat_response(self, response: Any) -> dict[str, Any]:
+    def _parse_httpx_response(self, response: Any) -> dict[str, Any]:
         status_code = int(getattr(response, "status_code", 200))
         self._reset_token_if_unauthorized(status_code)
         if status_code >= 400:
-            raise RuntimeError(f"Vertex AI HTTP {status_code}: {response.text[:1000]}")
+            raise self._wrap_httpx_status_error(response)
         data = response.json()
         return data if isinstance(data, dict) else {}
 
-    def _chat_transport(
+    def _wrap_httpx_status_error(self, response: Any) -> RuntimeError:
+        status_code = int(getattr(response, "status_code", 500))
+        body_text = str(getattr(response, "text", "") or "")[:2000]
+        return RuntimeError(f"Vertex AI HTTP {status_code}: {body_text}")
+
+    def _handle_httpx_transport_error(
         self,
         *,
         exc: Exception,
         retry_controller: RetryController,
+        request: OpenAICompatRequest | None = None,
+        payload: dict[str, Any] | None = None,
     ) -> tuple[bool, float]:
         decision = retry_controller.on_transport_exception(exc, method="POST")
         if decision.retry:
@@ -631,7 +629,7 @@ class VertexAIAdapter(OpenAICompatAdapterBase):
             )
         return decision.retry, decision.delay_seconds
 
-    async def _chat_status(
+    async def _handle_httpx_status(
         self,
         *,
         response: Any,
@@ -703,7 +701,7 @@ class VertexAIAdapter(OpenAICompatAdapterBase):
     ) -> AsyncIterator[StreamChunk]:
         import httpx
 
-        retry_controller = self._stream_retry()
+        retry_controller = self._stream_retry() or self._new_retry_controller(stream=True)
         proxy_url = self._get_httpx_stream_proxy_url()
         url = self._build_httpx_stream_url()
         self.last_usage = None

@@ -220,6 +220,24 @@ function deriveAgentLoopSummaryFromConversation(conversation: Conversation | nul
     || meta.tokens_per_second
     || meta.budget
     || meta.finish_reason
+    || meta.tool_loop_convergence_reason
+    || meta.tool_loop_final_stream_skipped !== undefined
+    || meta.final_stream_status
+    || meta.final_stream_error_category
+    || meta.final_stream_empty_visible_output !== undefined
+    || meta.final_stream_assistant_reasoning_removed_count
+    || meta.final_stream_assistant_reasoning_only_removed_count
+    || meta.final_stream_assistant_tool_call_carrier_count
+    || meta.final_stream_tool_result_projection_count
+    || meta.request_adapter_class
+    || meta.request_adapter_strict_message_string_contract !== undefined
+    || meta.request_message_count
+    || meta.request_user_message_count
+    || meta.request_assistant_message_count
+    || meta.request_assistant_reasoning_message_count
+    || meta.request_assistant_reasoning_only_message_count
+    || meta.request_assistant_tool_call_message_count
+    || meta.request_tool_message_count
   ) {
     metrics = {
       finish_reason: meta.finish_reason,
@@ -230,6 +248,24 @@ function deriveAgentLoopSummaryFromConversation(conversation: Conversation | nul
       decode_tokens_per_second: meta.decode_tokens_per_second,
       end_to_end_tokens_per_second: meta.end_to_end_tokens_per_second,
       tokens_per_second: meta.tokens_per_second,
+      tool_loop_convergence_reason: meta.tool_loop_convergence_reason,
+      tool_loop_final_stream_skipped: meta.tool_loop_final_stream_skipped,
+      final_stream_status: meta.final_stream_status,
+      final_stream_error_category: meta.final_stream_error_category,
+      final_stream_empty_visible_output: meta.final_stream_empty_visible_output,
+      final_stream_assistant_reasoning_removed_count: meta.final_stream_assistant_reasoning_removed_count,
+      final_stream_assistant_reasoning_only_removed_count: meta.final_stream_assistant_reasoning_only_removed_count,
+      final_stream_assistant_tool_call_carrier_count: meta.final_stream_assistant_tool_call_carrier_count,
+      final_stream_tool_result_projection_count: meta.final_stream_tool_result_projection_count,
+      request_adapter_class: meta.request_adapter_class,
+      request_adapter_strict_message_string_contract: meta.request_adapter_strict_message_string_contract,
+      request_message_count: meta.request_message_count,
+      request_user_message_count: meta.request_user_message_count,
+      request_assistant_message_count: meta.request_assistant_message_count,
+      request_assistant_reasoning_message_count: meta.request_assistant_reasoning_message_count,
+      request_assistant_reasoning_only_message_count: meta.request_assistant_reasoning_only_message_count,
+      request_assistant_tool_call_message_count: meta.request_assistant_tool_call_message_count,
+      request_tool_message_count: meta.request_tool_message_count,
     };
   }
 
@@ -936,9 +972,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
           streamDone = true;
           break;
         }
+
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split('\n');
         buffer = lines.pop() || '';
+
         for (const line of lines) {
           if (line.startsWith('event: ')) {
             eventType = line.slice(7).trim();
@@ -1386,7 +1424,40 @@ function handleSSEEvent(
     case 'context.compacted': {
       if (!isViewingStream) break;
       const evt = data as SSEContextCompacted;
-      set(() => ({ latestCompaction: evt.compaction }));
+      set((state) => {
+        const activeConversation = state.activeConversation;
+        if (!activeConversation) {
+          return { latestCompaction: evt.compaction };
+        }
+        const releasedUnits = Math.max(
+          0,
+          Number(evt.compaction?.metrics?.tokens_before || 0)
+            - Number(evt.compaction?.metrics?.tokens_after || 0),
+        );
+        const currentUsedUnits = Math.max(
+          0,
+          Number(activeConversation.conversation_context_state?.used_units || 0),
+        );
+        const nextUsedUnits = Math.max(0, currentUsedUnits - releasedUnits);
+        return {
+          latestCompaction: evt.compaction,
+          activeConversation: {
+            ...activeConversation,
+            conversation_context_state: {
+              conversation_id: activeConversation.conversation_context_state?.conversation_id
+                || activeConversation.conversation_id,
+              used_units: nextUsedUnits,
+              max_units: activeConversation.conversation_context_state?.max_units || 0,
+              state: 'compacted_recently',
+              last_compacted_at: evt.compaction?.created_at || null,
+              last_compaction_delta: releasedUnits,
+              updated_at: evt.compaction?.created_at
+                || activeConversation.conversation_context_state?.updated_at
+                || Date.now() / 1000,
+            },
+          },
+        };
+      });
       break;
     }
 
@@ -1696,6 +1767,24 @@ function handleSSEEvent(
           decode_tokens_per_second: evt.metadata?.decode_tokens_per_second,
           end_to_end_tokens_per_second: evt.metadata?.end_to_end_tokens_per_second,
           tokens_per_second: evt.metadata?.tokens_per_second,
+          tool_loop_convergence_reason: evt.metadata?.tool_loop_convergence_reason,
+          tool_loop_final_stream_skipped: evt.metadata?.tool_loop_final_stream_skipped,
+          final_stream_status: evt.metadata?.final_stream_status,
+          final_stream_error_category: evt.metadata?.final_stream_error_category,
+          final_stream_empty_visible_output: evt.metadata?.final_stream_empty_visible_output,
+          final_stream_assistant_reasoning_removed_count: evt.metadata?.final_stream_assistant_reasoning_removed_count,
+          final_stream_assistant_reasoning_only_removed_count: evt.metadata?.final_stream_assistant_reasoning_only_removed_count,
+          final_stream_assistant_tool_call_carrier_count: evt.metadata?.final_stream_assistant_tool_call_carrier_count,
+          final_stream_tool_result_projection_count: evt.metadata?.final_stream_tool_result_projection_count,
+          request_adapter_class: evt.metadata?.request_adapter_class,
+          request_adapter_strict_message_string_contract: evt.metadata?.request_adapter_strict_message_string_contract,
+          request_message_count: evt.metadata?.request_message_count,
+          request_user_message_count: evt.metadata?.request_user_message_count,
+          request_assistant_message_count: evt.metadata?.request_assistant_message_count,
+          request_assistant_reasoning_message_count: evt.metadata?.request_assistant_reasoning_message_count,
+          request_assistant_reasoning_only_message_count: evt.metadata?.request_assistant_reasoning_only_message_count,
+          request_assistant_tool_call_message_count: evt.metadata?.request_assistant_tool_call_message_count,
+          request_tool_message_count: evt.metadata?.request_tool_message_count,
         };
 
         if (!isViewingStream || !state.activeConversation) {

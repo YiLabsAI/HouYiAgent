@@ -26,6 +26,7 @@ from houyi.adapters.llm import (
     SiliconFlowAdapter,
     create_vertex_adapter,
 )
+from houyi.adapters.llm.openai_compat_adapter import OpenAICompatibleAdapter
 from houyi.adapters.memory import MemoryStore
 from houyi.application.context.context_lifecycle import (
     ContextLifecycleHookService as ChatContextHookService,
@@ -332,6 +333,7 @@ _WEB_INTENT_KEYWORDS = (
     "search web",
     "search the web",
     "web search",
+    "online search",
     "browse web",
     "browse the web",
     "search online",
@@ -366,7 +368,7 @@ _REPO_INTENT_REGEXES = (
     re.compile(r"https?://(?:www\.)?github\.com/[^\s]+", re.IGNORECASE),
     re.compile(r"\bgithub\.com/[^\s]+\b", re.IGNORECASE),
 )
-_REPO_TOOL_SKILLS = frozenset({_WEB_SEARCH_SKILL_NAME})
+_REPO_TOOL_SKILLS = _CHAT_BUILTIN_TOOL_NAMES
 _WEB_TOOL_SKILLS = frozenset({_WEB_SEARCH_SKILL_NAME})
 
 
@@ -481,6 +483,21 @@ def _looks_like_web_intent(user_content: str) -> bool:
     lowered = user_content.lower()
     if _looks_like_repo_intent(user_content):
         return True
+    if "http://" in lowered or "https://" in lowered:
+        return True
+    if any(
+        phrase in lowered
+        for phrase in (
+            "summarize this url",
+            "summarize this link",
+            "总结这个链接",
+            "总结这个网页",
+            "读取这个链接",
+            "打开这个链接",
+            "访问这个链接",
+        )
+    ):
+        return True
     return any(keyword in lowered for keyword in _WEB_INTENT_KEYWORDS)
 
 
@@ -566,12 +583,16 @@ def _sanitize_tool_loop_messages(messages: list[dict[str, Any]]) -> list[dict[st
     """Return a copy with string ``content`` fields for tool-loop chat calls."""
     base_sanitized = LLMAdapter._sanitize_messages(messages)
     sanitized: list[dict[str, Any]] = []
-    for msg in base_sanitized:
+    for original, msg in zip(messages, base_sanitized, strict=False):
         normalized = dict(msg)
-        normalized["content"] = _truncate_middle(
-            _coerce_text_content(normalized.get("content")),
-            _TOOL_LOOP_MAX_MESSAGE_CHARS,
-        )
+        has_original_content = isinstance(original, dict) and "content" in original
+        if has_original_content:
+            normalized["content"] = _truncate_middle(
+                _coerce_text_content(normalized.get("content")),
+                _TOOL_LOOP_MAX_MESSAGE_CHARS,
+            )
+        else:
+            normalized.pop("content", None)
         normalized = _truncate_tool_call_arguments(normalized, _TOOL_LOOP_MAX_MESSAGE_CHARS)
         sanitized.append(normalized)
     capped = _cap_total_payload_chars(sanitized, _TOOL_LOOP_MAX_TOTAL_CHARS)
@@ -625,23 +646,54 @@ def _sanitize_tool_loop_structure(messages: list[dict[str, Any]]) -> list[dict[s
     return normalized
 
 
-def _sanitize_final_stream_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _sanitize_context_history_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     sanitized = _sanitize_tool_loop_structure(messages)
     normalized: list[dict[str, Any]] = []
     for message in sanitized:
         role = str(message.get("role") or "")
+        if role == MessageRole.ASSISTANT.value and "reasoning_content" in message:
+            cleaned = dict(message)
+            cleaned.pop("reasoning_content", None)
+            has_content = bool(str(cleaned.get("content") or "").strip())
+            has_tool_calls = bool(cleaned.get("tool_calls"))
+            if not has_content and not has_tool_calls:
+                continue
+            normalized.append(cleaned)
+            continue
+        normalized.append(dict(message))
+    return normalized
+
+
+def _sanitize_final_stream_messages(
+    messages: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    sanitized = _sanitize_tool_loop_structure(messages)
+    normalized: list[dict[str, Any]] = []
+    stats = {
+        "assistant_tool_call_carrier_count": 0,
+        "assistant_reasoning_removed_count": 0,
+        "assistant_reasoning_only_removed_count": 0,
+        "tool_result_projection_count": 0,
+    }
+    for message in sanitized:
+        role = str(message.get("role") or "")
         if role == MessageRole.ASSISTANT.value and message.get("tool_calls"):
             cleaned = dict(message)
-            if cleaned.get("content") == "":
-                cleaned["content"] = "[tool call]"
+            stats["assistant_tool_call_carrier_count"] += 1
             cleaned.pop("tool_calls", None)
             cleaned.pop("tool_call_id", None)
+            if "reasoning_content" in cleaned:
+                stats["assistant_reasoning_removed_count"] += 1
+                if not str(cleaned.get("content") or "").strip():
+                    stats["assistant_reasoning_only_removed_count"] += 1
             cleaned.pop("reasoning_content", None)
-            normalized.append(cleaned)
+            if str(cleaned.get("content") or "").strip():
+                normalized.append(cleaned)
             continue
         if role == MessageRole.TOOL.value:
             tool_name = str(message.get("name") or "tool")
             tool_content = str(message.get("content") or "")
+            stats["tool_result_projection_count"] += 1
             normalized.append(
                 {
                     "role": MessageRole.USER.value,
@@ -651,11 +703,44 @@ def _sanitize_final_stream_messages(messages: list[dict[str, Any]]) -> list[dict
             continue
         if role == MessageRole.ASSISTANT.value and "reasoning_content" in message:
             cleaned = dict(message)
+            stats["assistant_reasoning_removed_count"] += 1
+            if not str(cleaned.get("content") or "").strip():
+                stats["assistant_reasoning_only_removed_count"] += 1
             cleaned.pop("reasoning_content", None)
             normalized.append(cleaned)
             continue
         normalized.append(dict(message))
-    return normalized
+    return normalized, stats
+
+
+def _summarize_message_shapes(messages: list[dict[str, Any]]) -> dict[str, int]:
+    stats = {
+        "message_count": len(messages),
+        "assistant_message_count": 0,
+        "assistant_reasoning_message_count": 0,
+        "assistant_reasoning_only_message_count": 0,
+        "assistant_tool_call_message_count": 0,
+        "tool_message_count": 0,
+        "user_message_count": 0,
+    }
+    for message in messages:
+        role = str(message.get("role") or "")
+        if role == MessageRole.ASSISTANT.value:
+            stats["assistant_message_count"] += 1
+            if (
+                isinstance(message.get("reasoning_content"), str)
+                and str(message.get("reasoning_content") or "").strip()
+            ):
+                stats["assistant_reasoning_message_count"] += 1
+                if not str(message.get("content") or "").strip():
+                    stats["assistant_reasoning_only_message_count"] += 1
+            if isinstance(message.get("tool_calls"), list) and message.get("tool_calls"):
+                stats["assistant_tool_call_message_count"] += 1
+        elif role == MessageRole.TOOL.value:
+            stats["tool_message_count"] += 1
+        elif role == MessageRole.USER.value:
+            stats["user_message_count"] += 1
+    return stats
 
 
 def _flatten_span_tree(root: Span) -> list[Span]:
@@ -781,6 +866,7 @@ class ChatService:
                 provider_id, provider_url
             ),
             create_vertex_adapter=lambda: create_vertex_adapter(),
+            openai_compat_adapter_cls=OpenAICompatibleAdapter,
             siliconflow_adapter_cls=SiliconFlowAdapter,
         )
         self._adapter_cache = self._model_adapter_resolver.adapter_cache
@@ -795,7 +881,7 @@ class ChatService:
         self._context_runtime = ChatContextAdapter(
             memory_store=memory_store,
             is_vision_model=is_vision_model,
-            sanitize_tool_loop_structure=_sanitize_tool_loop_structure,
+            sanitize_tool_loop_structure=_sanitize_context_history_messages,
             hook_service=self._context_hooks,
         )
         self._llm_request_options_resolver = LLMRequestOptionsResolver(
@@ -993,7 +1079,7 @@ class ChatService:
             json_safe=_json_safe,
             normalize_usage_payload=normalize_usage_payload,
             null_hook_span_factory=_NullHookSpan,
-            sanitize_tool_loop_messages=_sanitize_tool_loop_structure,
+            sanitize_tool_loop_messages=_sanitize_tool_loop_messages,
             tool_bridge_factory=lambda: ToolBridge(DEFAULT_SKILL_REGISTRY),
             build_chat_kwargs=build_chat_kwargs,
             skill_executor_factory=lambda: SkillExecutor(max_retries=2, timeout=30.0),
@@ -1008,6 +1094,7 @@ class ChatService:
             extract_finish_reason=_extract_finish_reason,
             finalize_stream_result=_finalize_stream_result,
             json_safe=_json_safe,
+            normalize_chat_error=normalize_chat_error,
             normalize_usage_payload=normalize_usage_payload,
             stage_span=_stage_span,
         )
@@ -1134,21 +1221,60 @@ class ChatService:
             and decision.reason.startswith("heuristic_")
         ):
             if decision.reason == "heuristic_web_intent" and decision.enabled_skills:
+                logger.info(
+                    "Chat tool-loop gate: model=%s mode=%s reason=%s enabled_skills=%s strategy=%s context_utilization=%.4f compression_threshold=%.4f",
+                    getattr(request, "model", None) or "(conversation-default)",
+                    "enabled_under_pressure",
+                    "context_pressure_preserve_web_search",
+                    decision.enabled_skills,
+                    request.tool_call_strategy or _TOOL_CALL_STRATEGY_BALANCED,
+                    utilization,
+                    threshold,
+                )
                 return _ToolLoopGateDecision(
                     decision.enabled_skills,
                     "enabled_under_pressure",
                     "context_pressure_preserve_web_search",
                 )
+            logger.info(
+                "Chat tool-loop gate: model=%s mode=%s reason=%s enabled_skills=%s strategy=%s context_utilization=%.4f compression_threshold=%.4f",
+                getattr(request, "model", None) or "(conversation-default)",
+                "disabled_by_pressure",
+                "context_pressure_near_compaction",
+                [],
+                request.tool_call_strategy or _TOOL_CALL_STRATEGY_BALANCED,
+                utilization,
+                threshold,
+            )
             return _ToolLoopGateDecision(
                 [],
                 "disabled_by_pressure",
                 "context_pressure_near_compaction",
             )
-        return _ToolLoopGateDecision(
+        final_decision = _ToolLoopGateDecision(
             decision.enabled_skills,
             decision.mode,
             decision.reason,
         )
+        logger.info(
+            "Chat tool-loop gate: model=%s mode=%s reason=%s enabled_skills=%s strategy=%s enable_tool_calls=%s enable_web_search=%s explicit_skills=%s content_len=%s used_tokens=%s max_context_tokens=%s",
+            getattr(request, "model", None) or "(conversation-default)",
+            final_decision.mode,
+            final_decision.reason,
+            final_decision.enabled_skills,
+            request.tool_call_strategy or _TOOL_CALL_STRATEGY_BALANCED,
+            request.enable_tool_calls,
+            request.enable_web_search,
+            [
+                skill
+                for skill in (request.enable_skills or [])
+                if isinstance(skill, str) and skill.strip()
+            ],
+            len(str(request.content or "")),
+            used_tokens,
+            max_context_tokens,
+        )
+        return final_decision
 
     def _get_adapter_for_model(self, model: str) -> LLMAdapter:
         """Get the LLM adapter for a given model by looking up its provider.
@@ -1293,6 +1419,30 @@ class ChatService:
             context_usage = prepared.context_usage
             llm_adapter = self._get_adapter_for_model(prepared.model)
             generation_metadata: dict[str, Any] = {}
+            generation_metadata["request_adapter_class"] = llm_adapter.__class__.__name__
+            generation_metadata["request_adapter_strict_message_string_contract"] = bool(
+                getattr(llm_adapter, "strict_message_string_contract", False)
+            )
+            request_message_shape = _summarize_message_shapes(llm_messages)
+            generation_metadata["request_message_count"] = request_message_shape["message_count"]
+            generation_metadata["request_user_message_count"] = request_message_shape[
+                "user_message_count"
+            ]
+            generation_metadata["request_assistant_message_count"] = request_message_shape[
+                "assistant_message_count"
+            ]
+            generation_metadata["request_assistant_reasoning_message_count"] = (
+                request_message_shape["assistant_reasoning_message_count"]
+            )
+            generation_metadata["request_assistant_reasoning_only_message_count"] = (
+                request_message_shape["assistant_reasoning_only_message_count"]
+            )
+            generation_metadata["request_assistant_tool_call_message_count"] = (
+                request_message_shape["assistant_tool_call_message_count"]
+            )
+            generation_metadata["request_tool_message_count"] = request_message_shape[
+                "tool_message_count"
+            ]
 
             if isinstance(prepared.compaction_event, dict) and prepared.compaction_event:
                 yield SSEEvent(
@@ -1350,6 +1500,16 @@ class ChatService:
                     visible_error = build_stream_error_content(exc)
                     normalized_error = normalize_chat_error(exc)
                     public_error = normalized_error.public_message
+                    logger.warning(
+                        "Chat tool-loop failed: conversation=%s message=%s model=%s error_code=%s status_code=%s provider_code=%s internal=%s",
+                        conversation_id,
+                        assistant_msg.message_id,
+                        prepared.model,
+                        normalized_error.error_code,
+                        normalized_error.status_code,
+                        normalized_error.provider_code,
+                        normalized_error.internal_message,
+                    )
                     if visible_error:
                         yield SSEEvent(
                             event="message.delta",
@@ -1442,10 +1602,15 @@ class ChatService:
             reasoning_parts: list[str] = []
             usage_payload: dict[str, Any] | None = None
             finish_reason: str | None = tool_outcome.finish_reason
-            if tool_outcome.convergence_reason:
-                generation_metadata["tool_loop_convergence_reason"] = (
-                    tool_outcome.convergence_reason
-                )
+            generation_metadata["tool_loop_convergence_reason"] = (
+                tool_outcome.convergence_reason
+                if tool_outcome.convergence_reason
+                in {
+                    "no_tool_calls_with_replay_payload",
+                    "pending_tool_calls_after_tool_loop",
+                }
+                else "needs_final_stream"
+            )
             generation_metadata["tool_loop_final_stream_skipped"] = (
                 tool_outcome.replay_response is not None
             )
@@ -1471,8 +1636,21 @@ class ChatService:
                     }
                 )
             if tool_outcome.replay_response is not None:
+                logger.info(
+                    "Chat stream phase: conversation=%s message=%s phase=replay convergence_reason=%s persisted_tool_messages=%s final_stream_skipped=%s",
+                    conversation_id,
+                    assistant_msg.message_id,
+                    tool_outcome.convergence_reason,
+                    len(persisted_tool_messages),
+                    True,
+                )
                 with _stage_span(chat_span, "chat.stream.replay"):
                     replay_capture = ReplayStreamCapture()
+                    replay_metadata = getattr(tool_outcome.replay_response, "metadata", None)
+                    replay_has_reasoning = bool(
+                        isinstance(replay_metadata, dict)
+                        and str(replay_metadata.get("reasoning_content") or "").strip()
+                    )
                     async for sse_chunk in self._response_streamer.iter_replay_chunks(
                         replay_response=tool_outcome.replay_response,
                         assistant_message_id=assistant_msg.message_id,
@@ -1480,16 +1658,41 @@ class ChatService:
                         context_usage=context_usage,
                         finish_reason=finish_reason,
                         capture=replay_capture,
-                        stream_reasoning=not bool(persisted_tool_messages),
+                        stream_reasoning=(not bool(persisted_tool_messages))
+                        or replay_has_reasoning,
                     ):
                         yield sse_chunk
                     content_parts = replay_capture.content_parts
                     reasoning_parts = replay_capture.reasoning_parts
                 usage_payload = tool_outcome.usage_payload
             else:
-                final_stream_messages = _sanitize_final_stream_messages(llm_messages)
+                final_stream_messages, final_stream_sanitize_stats = (
+                    _sanitize_final_stream_messages(llm_messages)
+                )
+                logger.info(
+                    "Chat stream phase: conversation=%s message=%s phase=final_stream convergence_reason=%s prepared_messages=%s sanitized_messages=%s reconstructed=%s persisted_tool_messages=%s",
+                    conversation_id,
+                    assistant_msg.message_id,
+                    tool_outcome.convergence_reason or "needs_final_stream",
+                    len(llm_messages),
+                    len(final_stream_messages),
+                    final_stream_messages_reconstructed,
+                    len(persisted_tool_messages),
+                )
                 generation_metadata["final_stream_sanitized_message_count"] = len(
                     final_stream_messages
+                )
+                generation_metadata["final_stream_assistant_tool_call_carrier_count"] = (
+                    final_stream_sanitize_stats["assistant_tool_call_carrier_count"]
+                )
+                generation_metadata["final_stream_assistant_reasoning_removed_count"] = (
+                    final_stream_sanitize_stats["assistant_reasoning_removed_count"]
+                )
+                generation_metadata["final_stream_assistant_reasoning_only_removed_count"] = (
+                    final_stream_sanitize_stats["assistant_reasoning_only_removed_count"]
+                )
+                generation_metadata["final_stream_tool_result_projection_count"] = (
+                    final_stream_sanitize_stats["tool_result_projection_count"]
                 )
                 prior_generation_metadata = dict(generation_metadata)
                 final_stream_capture = FinalStreamCapture()
@@ -1503,6 +1706,7 @@ class ChatService:
                     context_usage=context_usage,
                     chat_span=chat_span,
                     capture=final_stream_capture,
+                    require_visible_content=bool(persisted_tool_messages),
                 ):
                     yield sse_chunk
                 content_parts = final_stream_capture.content_parts

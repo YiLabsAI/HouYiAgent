@@ -19,6 +19,7 @@ import React from 'react';
 import { MessageCircle } from 'lucide-react';
 import type { ChatMessage } from '@/types/chat';
 import { useChatStore } from '@/stores/useChatStore';
+import { useSettingsStore } from '@/stores/useSettingsStore';
 import { MessageBubble } from './MessageBubble';
 import { TypingIndicator } from './TypingIndicator';
 import { Bot } from 'lucide-react';
@@ -173,10 +174,11 @@ const sliceTimelineItemsByPrimaryCount = (
 };
 
 const sanitizeAssistantToolMarkers = (raw: string): string => {
-  const hasToolMarker = /\[tool call\]|<\|tool_[^|]+\|>|<tool_call\b|<\/tool_call>|<arg_[^>]+>|<\/?think>/i.test(raw);
+  const hasToolMarker = /\[tool_call\]|\[tool call\]|<\|tool_[^|]+\|>|<tool_call\b|<\/tool_call>|<arg_[^>]+>|<\/?think>|(?:^|\n)\s*tool\s*:\s*[a-zA-Z_][\w.-]*\s*&args\s*:/i.test(raw);
   if (!hasToolMarker) return raw;
 
   const stripped = raw
+    .replace(/\[tool_call\]/gi, ' ')
     .replace(/\[tool call\]/gi, ' ')
     .replace(/<tool_call[^>]*>[\s\S]*?<\/tool_call>/gi, ' ')
     .replace(/<tool_call[^>]*>/gi, ' ')
@@ -190,6 +192,7 @@ const sanitizeAssistantToolMarkers = (raw: string): string => {
     .replace(/<\|tool_call_argument_begin\|>/gi, ' ')
     .replace(/<\|tool_call_argument_end\|>/gi, ' ')
     .replace(/<\|tool_[^|]+\|>/gi, ' ')
+    .replace(/(?:^|\n)\s*tool\s*:\s*[a-zA-Z_][\w.-]*\s*&args\s*:\s*[^\n]*/gi, ' ')
     .replace(/[ \t]{2,}/g, ' ')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
@@ -197,6 +200,7 @@ const sanitizeAssistantToolMarkers = (raw: string): string => {
   if (stripped) return stripped;
 
   return raw
+    .replace(/\[tool_call\]/gi, ' ')
     .replace(/\[tool call\]/gi, ' ')
     .replace(/<tool_call[^>]*>/gi, ' ')
     .replace(/<\/tool_call>/gi, ' ')
@@ -210,6 +214,7 @@ const sanitizeAssistantToolMarkers = (raw: string): string => {
     .replace(/<\|tool_call_argument_begin\|>/gi, ' ')
     .replace(/<\|tool_call_argument_end\|>/gi, ' ')
     .replace(/<\|tool_[^|]+\|>/gi, ' ')
+    .replace(/(?:^|\n)\s*tool\s*:\s*[a-zA-Z_][\w.-]*\s*&args\s*:\s*[^\n]*/gi, ' ')
     .replace(/[ \t]{2,}/g, ' ')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
@@ -347,12 +352,12 @@ const buildTimelineItems = (
       const lastIndex = items.length - 1;
       if (lastIndex >= 0 && items[lastIndex].message.message_id === latestAssistantCarrier.message_id) {
         items[lastIndex] = {
-          message: collapseAssistantToolCarrier(items[lastIndex].message),
+          message: collapseAssistantToolCarrierIfNeeded(items[lastIndex].message),
           toolSteps: [...items[lastIndex].toolSteps, ...pendingToolSteps],
         };
       } else {
         items.push({
-          message: collapseAssistantToolCarrier(latestAssistantCarrier),
+          message: collapseAssistantToolCarrierIfNeeded(latestAssistantCarrier),
           toolSteps: pendingToolSteps,
         });
       }
@@ -370,6 +375,17 @@ const collapseAssistantToolCarrier = (message: ChatMessage): ChatMessage => ({
   ...message,
   content: '',
 });
+
+const collapseAssistantToolCarrierIfNeeded = (message: ChatMessage): ChatMessage => {
+  const hasStructuredToolCalls = Array.isArray(message.tool_calls) && message.tool_calls.length > 0;
+  const hasVisibleContent = typeof message.content === 'string' && sanitizeAssistantToolMarkers(message.content).trim().length > 0;
+  const hasVisibleReasoning = typeof message.reasoning_content === 'string'
+    && sanitizeAssistantToolMarkers(message.reasoning_content).trim().length > 0;
+  if (!hasStructuredToolCalls && (hasVisibleContent || hasVisibleReasoning)) {
+    return message;
+  }
+  return collapseAssistantToolCarrier(message);
+};
 
 const formatDateDivider = (timestamp: number): string => {
   return new Date(timestamp * 1000).toLocaleDateString(undefined, {
@@ -424,6 +440,9 @@ export const ChatTimeline: React.FC<ChatTimelineProps> = ({
       ? s.streaming.reasoningBuffer.length
       : 0
   ));
+  const displaySettings = useSettingsStore((s) => s.display);
+  const assistantLabel = displaySettings.assistant_name?.trim() || 'Assistant';
+  const assistantAvatar = displaySettings.assistant_avatar?.trim() || null;
 
   // Cheap fingerprint: first message ID + length.  Changes when the store
   // replaces activeConversation with data from a different conversation.
@@ -889,12 +908,12 @@ export const ChatTimeline: React.FC<ChatTimelineProps> = ({
         {/* Ghost assistant bubble: shown after user sends a message but before
             the first SSE event arrives (no assistant message in the list yet) */}
         {isWaitingForResponse && (
-          <div className="flex gap-3 px-4 py-3" data-testid="typing-indicator">
-            <div className="shrink-0 w-7 h-7 rounded-full flex items-center justify-center bg-gray-600">
-              <Bot size={14} />
+          <div className="flex w-full min-w-0 gap-3 overflow-x-hidden px-4 py-3 justify-start">
+            <div className="shrink-0 w-7 h-7 rounded-full bg-gray-600 flex items-center justify-center">
+              {assistantAvatar ? <span className="text-[14px] leading-none">{assistantAvatar}</span> : <Bot size={14} />}
             </div>
             <div className="flex flex-col items-start">
-              <span className="text-[10px] text-gray-500 mb-1">Assistant</span>
+              <span className="text-[10px] text-gray-500 mb-1">{assistantLabel}</span>
               <div className="px-3 py-2 rounded-lg bg-gray-700">
                 <TypingIndicator />
               </div>

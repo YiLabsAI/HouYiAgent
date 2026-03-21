@@ -1,4 +1,4 @@
-"""Google Gemini adapter using google-genai SDK (REST-based).
+"""Google Gemini adapter using the primary google-genai transport (REST-based).
 
 Two API modes:
 
@@ -9,8 +9,8 @@ Two API modes:
    ``generativelanguage.googleapis.com``.  Auth: AI Studio API key
    (``AIza...``).
 
-Uses the google-genai SDK which communicates via REST API,
-making it compatible with HTTP proxies (unlike the gRPC-based vertexai SDK).
+Uses the default google-genai client over REST,
+making it compatible with HTTP proxies (unlike the gRPC-based vertexai client).
 
 Proxy handling:
     Uses ``houyi.infrastructure.net.proxy.detect_proxy()`` for cross-platform system
@@ -45,12 +45,43 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+_GEMINI_RETRY_ATTEMPTS = 5
+_GEMINI_RETRY_INITIAL_DELAY = 1.0
+_GEMINI_RETRY_MAX_DELAY = 60.0
+_GEMINI_RETRY_EXP_BASE = 2.0
+_GEMINI_RETRY_JITTER = 1.0
+_GEMINI_RETRY_STATUS_CODES = [408, 429, 500, 502, 503, 504]
+_GEMINI_RATE_LIMIT_SIGNALS = ("429", "RESOURCE_EXHAUSTED")
+_GEMINI_REGION_SIGNALS = ("location is not supported", "FAILED_PRECONDITION")
+_GEMINI_AUTH_SIGNALS = ("401", "UNAUTHENTICATED")
+_GEMINI_PERMISSION_SIGNALS = ("403", "PERMISSION_DENIED")
+_GEMINI_NOT_FOUND_SIGNALS = ("404", "NOT_FOUND")
+
+
+def _contains_error_signal(exc_str: str, signals: tuple[str, ...]) -> bool:
+    return any(signal in exc_str for signal in signals)
+
+
+def _classify_client_error(exc: Exception) -> str:
+    exc_str = str(exc)
+    if _contains_error_signal(exc_str, _GEMINI_RATE_LIMIT_SIGNALS):
+        return "rate_limit"
+    if _contains_error_signal(exc_str, _GEMINI_REGION_SIGNALS):
+        return "region"
+    if _contains_error_signal(exc_str, _GEMINI_AUTH_SIGNALS):
+        return "auth"
+    if _contains_error_signal(exc_str, _GEMINI_PERMISSION_SIGNALS):
+        return "permission"
+    if _contains_error_signal(exc_str, _GEMINI_NOT_FOUND_SIGNALS):
+        return "not_found"
+    return "unknown"
+
 
 def _build_proxy_http_options(proxy_url: str) -> HttpOptionsDict:
     """Build ``http_options`` dict with custom httpx clients that use *proxy_url*.
 
     Passing custom ``httpx`` clients via ``http_options`` to ``genai.Client``
-    guarantees the proxy is used for every request — the SDK's default
+    guarantees the proxy is used for every request — the default
     ``aiohttp`` streaming path is bypassed in favour of ``httpx``, which has
     more reliable HTTP CONNECT tunnel proxy support.
     """
@@ -69,6 +100,29 @@ def _build_proxy_http_options(proxy_url: str) -> HttpOptionsDict:
             ),
         },
     )
+
+
+def _build_http_options(types: Any, *, proxy_url: str | None) -> Any:
+    """Build client-level google-genai HttpOptions with explicit retry settings.
+
+    The default client already has a tenacity-based retry layer. We configure it explicitly
+    so stream/non-stream Gemini calls use the same documented retry envelope for
+    429/5xx responses, while still preserving any custom proxy-backed httpx
+    clients we inject for enterprise network environments.
+    """
+    http_options_kwargs: dict[str, Any] = {
+        "retry_options": types.HttpRetryOptions(
+            attempts=_GEMINI_RETRY_ATTEMPTS,
+            initial_delay=_GEMINI_RETRY_INITIAL_DELAY,
+            max_delay=_GEMINI_RETRY_MAX_DELAY,
+            exp_base=_GEMINI_RETRY_EXP_BASE,
+            jitter=_GEMINI_RETRY_JITTER,
+            http_status_codes=list(_GEMINI_RETRY_STATUS_CODES),
+        )
+    }
+    if proxy_url:
+        http_options_kwargs.update(_build_proxy_http_options(proxy_url))
+    return types.HttpOptions(**http_options_kwargs)
 
 
 def _parse_json_object(raw_value: Any, fallback_key: str) -> dict[str, Any]:
@@ -209,8 +263,59 @@ def _has_function_call_parts(parts: list[Any]) -> bool:
     return any(getattr(part, "function_call", None) is not None for part in parts)
 
 
+def _extract_thought_signature(part: Any) -> str | None:
+    raw_signature = getattr(part, "thought_signature", None)
+    if raw_signature is None:
+        raw_signature = getattr(part, "thoughtSignature", None)
+    if not raw_signature:
+        return None
+    if isinstance(raw_signature, bytes):
+        return base64.b64encode(raw_signature).decode("ascii")
+    if isinstance(raw_signature, str):
+        return raw_signature
+    return None
+
+
+def _decode_thought_signature(raw_signature: Any) -> bytes | None:
+    if isinstance(raw_signature, bytes):
+        return raw_signature
+    if not isinstance(raw_signature, str) or not raw_signature:
+        return None
+    try:
+        return base64.b64decode(raw_signature)
+    except Exception:
+        return raw_signature.encode("utf-8")
+
+
+def _convert_openai_tools_to_vertex(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    declarations: list[dict[str, Any]] = []
+    for tool in tools:
+        function_payload = tool.get("function") if isinstance(tool, dict) else None
+        if not function_payload:
+            continue
+        declarations.append(
+            {
+                "name": function_payload.get("name"),
+                "description": function_payload.get("description"),
+                "parameters": function_payload.get("parameters"),
+            }
+        )
+    if not declarations:
+        return []
+    return [{"function_declarations": declarations}]
+
+
+def _convert_openai_tool_choice_to_vertex(tool_choice: Any) -> dict[str, Any]:
+    mode = "AUTO"
+    if isinstance(tool_choice, dict) or tool_choice in {"required", "any"}:
+        mode = "ANY"
+    elif tool_choice in {"none"}:
+        mode = "NONE"
+    return {"function_calling_config": {"mode": mode}}
+
+
 class GoogleVertexGeminiAdapter(LLMAdapter):
-    """Adapter for Google Gemini via google-genai SDK (REST).
+    """Adapter for Google Gemini via the primary google-genai client (REST).
 
     Two API modes:
 
@@ -243,14 +348,15 @@ class GoogleVertexGeminiAdapter(LLMAdapter):
 
         try:
             from google import genai
+            from google.genai import types
         except ImportError as exc:
             raise ImportError(
-                "Google GenAI SDK not installed. Install with: pip install google-genai"
+                "Google GenAI client not installed. Install with: pip install google-genai"
             ) from exc
 
         # ── Proxy detection (cross-platform) ──────────────────────────
         self._proxy_url = detect_proxy()
-        http_options = _build_proxy_http_options(self._proxy_url) if self._proxy_url else None
+        http_options = _build_http_options(types, proxy_url=self._proxy_url)
 
         if self.project:
             # ── Vertex AI mode ───────────────────────────────────────
@@ -290,6 +396,19 @@ class GoogleVertexGeminiAdapter(LLMAdapter):
 
         else:
             raise ValueError("Either GOOGLE_CLOUD_PROJECT or GOOGLE_API_KEY must be set for Gemini")
+
+        retry_options = getattr(http_options, "retry_options", None)
+        logger.info(
+            "Gemini retry config: auth_mode=%s model=%s attempts=%s initial_delay=%s max_delay=%s exp_base=%s jitter=%s status_codes=%s",
+            self._auth_mode,
+            self.model,
+            getattr(retry_options, "attempts", None),
+            getattr(retry_options, "initial_delay", None),
+            getattr(retry_options, "max_delay", None),
+            getattr(retry_options, "exp_base", None),
+            getattr(retry_options, "jitter", None),
+            getattr(retry_options, "http_status_codes", None),
+        )
 
     @classmethod
     def from_env(cls) -> GoogleVertexGeminiAdapter:
@@ -338,7 +457,7 @@ class GoogleVertexGeminiAdapter(LLMAdapter):
             args=tool_args,
         )
         if thought_signature:
-            signature_bytes = self._decode_thought_signature(thought_signature)
+            signature_bytes = _decode_thought_signature(thought_signature)
             if signature_bytes:
                 return types.Part(
                     function_call=function_call,
@@ -544,6 +663,11 @@ class GoogleVertexGeminiAdapter(LLMAdapter):
         system_instruction: str | None,
         extra_kwargs: dict[str, Any],
     ) -> Any:
+        # API contract note:
+        # ``extra_kwargs`` comes from the shared chat pipeline and may include
+        # OpenAI/OpenAI-compatible request fields. Gemini's
+        # ``types.GenerateContentConfig`` has a strict schema (extra_forbidden),
+        # so we must explicitly strip non-Gemini keys before constructing config.
         config_kwargs: dict[str, Any] = {"temperature": temperature}
         if max_tokens is not None:
             config_kwargs["max_output_tokens"] = max_tokens
@@ -564,6 +688,11 @@ class GoogleVertexGeminiAdapter(LLMAdapter):
         extra_kwargs.pop("parallel_tool_calls", None)
         extra_kwargs.pop("max_parallel_calls", None)
         extra_kwargs.pop("prompt_cache_key", None)
+        # Shared final-stream logic may inject OpenAI stream usage controls.
+        # Gemini config does not support these keys, and forwarding them causes
+        # pydantic ``extra_forbidden`` validation errors at runtime.
+        extra_kwargs.pop("include_stream_usage", None)
+        extra_kwargs.pop("stream_options", None)
         tool_choice = extra_kwargs.pop("tool_choice", None)
         if tool_choice:
             config_kwargs["tool_config"] = self._convert_tool_choice(tool_choice)
@@ -648,7 +777,7 @@ class GoogleVertexGeminiAdapter(LLMAdapter):
                 "name": function_name,
                 "arguments": args if isinstance(args, str) else str(args or ""),
             }
-            thought_signature = self._extract_thought_signature(part)
+            thought_signature = _extract_thought_signature(part)
             if thought_signature:
                 function_payload["thought_signature"] = thought_signature
             tool_calls_delta.append(
@@ -673,7 +802,7 @@ class GoogleVertexGeminiAdapter(LLMAdapter):
             from google.genai import types
         except ImportError as exc:
             raise ImportError(
-                "Google GenAI SDK not installed. Install with: pip install google-genai"
+                "Google GenAI client not installed. Install with: pip install google-genai"
             ) from exc
 
         system_instruction, contents = self._prepare_contents_and_system(types, messages)
@@ -694,7 +823,7 @@ class GoogleVertexGeminiAdapter(LLMAdapter):
                 config=config,
             )
         except Exception as exc:
-            raise self._wrap_sdk_error(exc) from exc
+            raise self._wrap_client_error(exc) from exc
         return self._normalize_response(response)
 
     # ── Streaming (execution engine + chat) ───────────────────────
@@ -718,7 +847,7 @@ class GoogleVertexGeminiAdapter(LLMAdapter):
             from google.genai import types
         except ImportError as exc:
             raise ImportError(
-                "Google GenAI SDK not installed. Install with: pip install google-genai"
+                "Google GenAI client not installed. Install with: pip install google-genai"
             ) from exc
 
         system_instruction, contents = self._prepare_contents_and_system(types, messages)
@@ -777,7 +906,7 @@ class GoogleVertexGeminiAdapter(LLMAdapter):
                     self.last_usage,
                 )
         except Exception as exc:
-            raise self._wrap_sdk_error(exc) from exc
+            raise self._wrap_client_error(exc) from exc
 
     # ── Response normalization ────────────────────────────────────
 
@@ -800,7 +929,7 @@ class GoogleVertexGeminiAdapter(LLMAdapter):
                 "name": function_name,
                 "arguments": args,
             }
-            thought_signature = self._extract_thought_signature(part)
+            thought_signature = _extract_thought_signature(part)
             if thought_signature:
                 function_payload["thought_signature"] = thought_signature
             tool_calls.append(
@@ -896,66 +1025,30 @@ class GoogleVertexGeminiAdapter(LLMAdapter):
         text_parts, _ = _extract_text_and_reasoning_from_parts(parts)
         return text_parts
 
-    @staticmethod
-    def _extract_thought_signature(part: Any) -> str | None:
-        raw_signature = getattr(part, "thought_signature", None)
-        if raw_signature is None:
-            raw_signature = getattr(part, "thoughtSignature", None)
-        if not raw_signature:
-            return None
-        if isinstance(raw_signature, bytes):
-            return base64.b64encode(raw_signature).decode("ascii")
-        if isinstance(raw_signature, str):
-            return raw_signature
-        return None
-
-    @staticmethod
-    def _decode_thought_signature(raw_signature: Any) -> bytes | None:
-        if isinstance(raw_signature, bytes):
-            return raw_signature
-        if not isinstance(raw_signature, str) or not raw_signature:
-            return None
-        try:
-            return base64.b64decode(raw_signature)
-        except Exception:
-            return raw_signature.encode("utf-8")
-
     def _convert_tools(self, tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Convert OpenAI tool schema to Vertex function declarations."""
-        declarations: list[dict[str, Any]] = []
-        for tool in tools:
-            function_payload = tool.get("function") if isinstance(tool, dict) else None
-            if not function_payload:
-                continue
-            declarations.append(
-                {
-                    "name": function_payload.get("name"),
-                    "description": function_payload.get("description"),
-                    "parameters": function_payload.get("parameters"),
-                }
-            )
-        if not declarations:
-            return []
-        return [{"function_declarations": declarations}]
+        return _convert_openai_tools_to_vertex(tools)
 
     def _convert_tool_choice(self, tool_choice: Any) -> dict[str, Any]:
         """Map OpenAI tool_choice to Vertex function calling config."""
-        mode = "AUTO"
-        if isinstance(tool_choice, dict) or tool_choice in {"required", "any"}:
-            mode = "ANY"
-        elif tool_choice in {"none"}:
-            mode = "NONE"
-        return {"function_calling_config": {"mode": mode}}
+        return _convert_openai_tool_choice_to_vertex(tool_choice)
 
-    def _wrap_sdk_error(self, exc: Exception) -> Exception:
-        """Wrap google-genai SDK errors with actionable diagnostic messages."""
-        exc_str = str(exc)
+    def _wrap_client_error(self, exc: Exception) -> Exception:
+        """Wrap client errors with actionable diagnostic messages."""
+        error_kind = _classify_client_error(exc)
+
+        if error_kind == "rate_limit":
+            return RuntimeError(
+                f"Gemini API rate limited (auth_mode={self._auth_mode}, model={self.model}). "
+                f"The google-genai client may retry transient 429s automatically, but this request still failed after retry. "
+                f"Please retry in a moment or reduce request rate/concurrency."
+            )
 
         # 400 location not supported — Developer API blocks VPN/proxy/datacenter IPs
-        if "location is not supported" in exc_str or "FAILED_PRECONDITION" in exc_str:
+        if error_kind == "region":
             if self._auth_mode == "developer_api":
                 return RuntimeError(
-                    f"Gemini Developer API: region not supported "
+                    f"Developer API: region not supported "
                     f"(model={self.model}). "
                     f"Google blocks requests from VPN/proxy/datacenter IPs "
                     f"and restricted regions. This cannot be bypassed with "
@@ -971,7 +1064,7 @@ class GoogleVertexGeminiAdapter(LLMAdapter):
             )
 
         # 401 UNAUTHENTICATED
-        if "401" in exc_str or "UNAUTHENTICATED" in exc_str:
+        if error_kind == "auth":
             if self._auth_mode == "developer_api":
                 return RuntimeError(
                     f"Gemini Developer API 401 (model={self.model}). "
@@ -986,14 +1079,14 @@ class GoogleVertexGeminiAdapter(LLMAdapter):
             )
 
         # 403 PERMISSION_DENIED
-        if "403" in exc_str or "PERMISSION_DENIED" in exc_str:
+        if error_kind == "permission":
             return RuntimeError(
                 f"Gemini API 403 (auth_mode={self._auth_mode}, model={self.model}). "
                 f"Check: Vertex AI API enabled + aiplatform.user role granted."
             )
 
         # 404 NOT_FOUND
-        if "404" in exc_str or "NOT_FOUND" in exc_str:
+        if error_kind == "not_found":
             return RuntimeError(f"Gemini API 404 (model={self.model}). Check GEMINI_MODEL in .env.")
 
         # Pass through with context

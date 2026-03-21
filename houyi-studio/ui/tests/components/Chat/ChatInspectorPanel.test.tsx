@@ -87,6 +87,54 @@ describe('ChatInspectorPanel', () => {
     expect(screen.queryByText('context.compaction')).not.toBeInTheDocument();
   });
 
+  it('shows a red health tone when compacted context is still near full', () => {
+    render(
+      <ChatInspectorPanel
+        conversationContext={{
+          conversation_id: 'conv-1',
+          used_units: 995,
+          max_units: 1000,
+          state: 'compacted_recently',
+          last_compacted_at: 1710000000,
+          last_compaction_delta: 5,
+          updated_at: 1710000100,
+        }}
+        contextUsage={null}
+        latestCompaction={null}
+        activePins={[]}
+        usage={null}
+        onUpdatePinnedContextStatus={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('Compacted')).toHaveClass('text-red-200');
+  });
+
+  it('keeps a green health tone when compacted context is back to a safe level', () => {
+    render(
+      <ChatInspectorPanel
+        conversationContext={{
+          conversation_id: 'conv-1',
+          used_units: 420,
+          max_units: 1000,
+          state: 'compacted_recently',
+          last_compacted_at: 1710000000,
+          last_compaction_delta: 580,
+          updated_at: 1710000100,
+        }}
+        contextUsage={null}
+        latestCompaction={null}
+        activePins={[]}
+        usage={null}
+        onUpdatePinnedContextStatus={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('Compacted')).toHaveClass('text-emerald-200');
+  });
+
   it('renders human-readable labels for additional trim reasons', () => {
     render(
       <ChatInspectorPanel

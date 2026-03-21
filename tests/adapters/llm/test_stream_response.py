@@ -114,7 +114,7 @@ class TestStreamResponseToolCallsAccumulation:
     """StreamResponse base-layer tool_calls delta accumulation."""
 
     @pytest.mark.asyncio
-    async def test_accumulates_single_tool_call(self) -> None:
+    async def test_accumulates_single_toolcall(self) -> None:
         """Single tool call across multiple delta chunks."""
         tc_chunks: list[StreamChunk] = [
             StreamChunk(
@@ -143,7 +143,7 @@ class TestStreamResponseToolCallsAccumulation:
         assert stream.model == "fake-model"
 
     @pytest.mark.asyncio
-    async def test_accumulates_parallel_tool_calls(self) -> None:
+    async def test_accumulates_parallel_toolcalls(self) -> None:
         """Multiple tool calls (parallel) across delta chunks."""
         tc_chunks: list[StreamChunk] = [
             StreamChunk(
@@ -172,7 +172,7 @@ class TestStreamResponseToolCallsAccumulation:
         assert stream.tool_calls[1]["function"]["name"] == "read"
 
     @pytest.mark.asyncio
-    async def test_no_tool_calls(self) -> None:
+    async def test_no_toolcalls(self) -> None:
         adapter = _FakeStreamAdapter(
             [StreamChunk(content_delta="done")],
             usage={"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4},
@@ -187,7 +187,7 @@ class TestStreamResponseToolCallsAccumulation:
         assert stream.finish_reason == "stop"
 
     @pytest.mark.asyncio
-    async def test_finalize_missing_attributes_safe(self) -> None:
+    async def test_finalize_missing_attributes(self) -> None:
         """finalize() should not crash if adapter lacks last_* attributes."""
 
         class _BareAdapter(LLMAdapter):
@@ -221,7 +221,7 @@ class TestStreamResponseToResponse:
     """to_response() should produce a correct LLMResponse from accumulated data."""
 
     @pytest.mark.asyncio
-    async def test_to_response_after_finalize(self) -> None:
+    async def test_response_after_finalize(self) -> None:
         chunks: list[StreamChunk] = [
             StreamChunk(content_delta="result: "),
             StreamChunk(
@@ -251,7 +251,7 @@ class TestStreamResponseToResponse:
         assert resp.model == "fake-model"
 
     @pytest.mark.asyncio
-    async def test_to_response_without_finalize(self) -> None:
+    async def test_response_without_finalize(self) -> None:
         """to_response() should work even without finalize, using defaults."""
         adapter = _FakeStreamAdapter([StreamChunk(content_delta="hello")])
         stream = StreamResponse(adapter.stream_chat([]))
@@ -262,6 +262,36 @@ class TestStreamResponseToResponse:
         assert resp.content == "hello"
         assert resp.tool_calls == []
         assert resp.finish_reason == "stop"
+        assert resp.usage == {}
+        assert resp.model == "unknown"
+
+    @pytest.mark.asyncio
+    async def test_response_keeps_reasoning_metadata(self) -> None:
+        adapter = _FakeStreamAdapter(
+            [StreamChunk(content_delta="answer", reasoning_delta="step 1")]
+        )
+        stream = StreamResponse(adapter.stream_chat([]))
+        async for _chunk in stream:
+            pass
+        stream.finalize(adapter)
+
+        resp = stream.to_response()
+
+        assert resp.content == "answer"
+        assert resp.metadata["reasoning_content"] == "step 1"
+
+    @pytest.mark.asyncio
+    async def test_response_reasoning_only_metadata(self) -> None:
+        adapter = _FakeStreamAdapter([StreamChunk(reasoning_delta="step only")])
+        stream = StreamResponse(adapter.stream_chat([]))
+        async for _chunk in stream:
+            pass
+        stream.finalize(adapter)
+
+        resp = stream.to_response()
+
+        assert resp.content == ""
+        assert resp.metadata["reasoning_content"] == "step only"
 
 
 # ---------------------------------------------------------------------------
@@ -273,7 +303,7 @@ class TestStreamResponseEdgeCases:
     """Edge-case coverage for StreamResponse."""
 
     @pytest.mark.asyncio
-    async def test_empty_content_chunks_not_accumulated(self) -> None:
+    async def test_empty_content_chunks(self) -> None:
         """Empty-string content should not pollute accumulated_content."""
         chunks: list[StreamChunk] = [
             StreamChunk(),
@@ -289,7 +319,7 @@ class TestStreamResponseEdgeCases:
         assert stream.accumulated_reasoning == "r"
 
     @pytest.mark.asyncio
-    async def test_finalize_twice_is_idempotent(self) -> None:
+    async def test_finalize_twice_idempotent(self) -> None:
         """finalize called twice does not duplicate tool_calls."""
         chunks: list[StreamChunk] = [
             StreamChunk(
@@ -331,7 +361,7 @@ class TestStreamResponseEdgeCases:
         assert stream.usage == {}  # not pulled from adapter
 
     @pytest.mark.asyncio
-    async def test_stream_completion_yields_two_tuples(self) -> None:
+    async def test_stream_completion(self) -> None:
         """LLMAdapter.stream_completion() should yield StreamChunk objects."""
         adapter = _FakeStreamAdapter([StreamChunk(content_delta="prompt reply")])
         collected = []
@@ -340,7 +370,7 @@ class TestStreamResponseEdgeCases:
         assert collected == [("prompt reply", None)]
 
     @pytest.mark.asyncio
-    async def test_tool_call_args_json_parse_failure_keeps_string(self) -> None:
+    async def test_toolcall_args(self) -> None:
         """If arguments is not valid JSON, finalize keeps it as a string."""
         chunks: list[StreamChunk] = [
             StreamChunk(

@@ -83,6 +83,20 @@ class ChatToolLoopPolicy:
             strategy = self._balanced_strategy
         user_content = str(request.content or "").strip()
         if request.enable_web_search:
+            if self._looks_like_repo_intent(user_content) or self._looks_like_tool_intent(
+                user_content
+            ):
+                mixed_skills = [
+                    skill_name
+                    for skill_name in resolved_skills
+                    if skill_name in self._web_tool_skills or skill_name in self._repo_tool_skills
+                ]
+                if mixed_skills:
+                    return ToolLoopGateDecision(
+                        mixed_skills,
+                        "enabled",
+                        "explicit_web_search_mixed_intent",
+                    )
             web_skills = [
                 skill_name for skill_name in resolved_skills if skill_name in self._web_tool_skills
             ]
@@ -114,18 +128,32 @@ class ChatToolLoopPolicy:
                 "disabled_by_gating",
                 "strategy_conservative_requires_explicit",
             )
+        if self._looks_like_web_intent(user_content):
+            if self._looks_like_repo_intent(user_content) or self._looks_like_tool_intent(
+                user_content
+            ):
+                mixed_skills = [
+                    skill_name
+                    for skill_name in resolved_skills
+                    if skill_name in self._web_tool_skills or skill_name in self._repo_tool_skills
+                ]
+                if mixed_skills:
+                    return ToolLoopGateDecision(
+                        mixed_skills,
+                        "enabled",
+                        "heuristic_mixed_intent",
+                    )
+            web_skills = [
+                skill_name for skill_name in resolved_skills if skill_name in self._web_tool_skills
+            ]
+            if web_skills:
+                return ToolLoopGateDecision(web_skills, "enabled", "heuristic_web_intent")
         if self._looks_like_repo_intent(user_content):
             repo_skills = [
                 skill_name for skill_name in resolved_skills if skill_name in self._repo_tool_skills
             ]
             if repo_skills:
                 return ToolLoopGateDecision(repo_skills, "enabled", "heuristic_repo_intent")
-        if self._looks_like_web_intent(user_content):
-            web_skills = [
-                skill_name for skill_name in resolved_skills if skill_name in self._web_tool_skills
-            ]
-            if web_skills:
-                return ToolLoopGateDecision(web_skills, "enabled", "heuristic_web_intent")
         if self._looks_like_tool_intent(user_content):
             return ToolLoopGateDecision(resolved_skills, "enabled", "heuristic_tool_intent")
         return ToolLoopGateDecision([], "disabled_by_gating", "heuristic_no_tool_intent")

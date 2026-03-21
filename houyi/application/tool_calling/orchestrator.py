@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 from typing import Any
 
@@ -22,6 +23,11 @@ from houyi.application.tool_calling.context import (
 from houyi.application.tool_calling.tool_call_messages import build_assistant_tool_message
 
 logger = logging.getLogger(__name__)
+
+_TEXTUAL_TOOL_MARKER_RE = re.compile(
+    r"\[tool(?::| call\])|<tool_call\b|<\|tool_",
+    re.IGNORECASE,
+)
 
 
 class ToolLoopOrchestrator:
@@ -51,20 +57,46 @@ class ToolLoopOrchestrator:
                 services.llm_response_cache,
                 round_index,
             )
+            response_content = str(getattr(response, "content", "") or "")
+            response_metadata = getattr(response, "metadata", None)
+            response_reasoning = (
+                str(response_metadata.get("reasoning_content") or "")
+                if isinstance(response_metadata, dict)
+                else ""
+            )
+            tool_call_count = len(response.tool_calls or [])
+            contains_textual_tool_markers = bool(
+                _TEXTUAL_TOOL_MARKER_RE.search(response_content)
+                or _TEXTUAL_TOOL_MARKER_RE.search(response_reasoning)
+            )
+            logger.debug(
+                "[ToolCallRunner] round=%s response_shape tool_calls=%s content_len=%s reasoning_len=%s finish_reason=%s textual_tool_markers=%s",
+                round_index + 1,
+                tool_call_count,
+                len(response_content),
+                len(response_reasoning),
+                getattr(response, "finish_reason", None),
+                contains_textual_tool_markers,
+            )
+            if tool_call_count == 0 and contains_textual_tool_markers:
+                logger.warning(
+                    "[ToolCallRunner] round=%s response contained textual tool markers without structured tool_calls",
+                    round_index + 1,
+                )
             if config.tool_loop_enable_timing:
                 chat_elapsed = time.perf_counter() - chat_start
-                logger.info(
+                logger.debug(
                     "[ToolCallRunner] round=%s chat=%.3fs tool_calls=%s",
                     round_index + 1,
                     chat_elapsed,
-                    len(response.tool_calls or []),
+                    tool_call_count,
                 )
             if not response.tool_calls:
                 if (
                     config.tool_loop_enable_timing
                     and state.tool_loop_started_at_monotonic is not None
                 ):
-                    logger.info(
+                    logger.debug(
                         "[ToolCallRunner] completed: rounds_used=%s total=%.3fs",
                         round_index + 1,
                         time.perf_counter() - state.tool_loop_started_at_monotonic,
@@ -151,13 +183,13 @@ class ToolLoopOrchestrator:
             state.tool_loop_invoked_tool_names,
         ):
             if config.tool_loop_enable_timing:
-                logger.info(
+                logger.debug(
                     "[ToolCallRunner] fast_path=early_exit round=%s", config.round_index + 1
                 )
             return True
 
         if config.tool_loop_enable_fast_path and config.tool_loop_enable_timing:
-            logger.info(
+            logger.debug(
                 "[ToolCallRunner] fast_path=continue round=%s tool_calls=%s max_rounds=%s",
                 config.round_index + 1,
                 len(parsed_tool_calls),
@@ -165,7 +197,7 @@ class ToolLoopOrchestrator:
             )
         if config.tool_loop_enable_timing:
             tool_phase_elapsed = time.perf_counter() - tool_phase_start
-            logger.info(
+            logger.debug(
                 "[ToolCallRunner] round=%s tools=%.3fs sum=%.3fs max=%.3fs parallel=%s",
                 config.round_index + 1,
                 tool_phase_elapsed,
@@ -173,7 +205,7 @@ class ToolLoopOrchestrator:
                 max(tool_durations, default=0.0),
                 allow_parallel and len(parsed_tool_calls) > 1,
             )
-            logger.info(
+            logger.debug(
                 "[ToolCallRunner] round=%s total=%.3fs",
                 config.round_index + 1,
                 time.perf_counter() - state.tool_round_started_at_monotonic,

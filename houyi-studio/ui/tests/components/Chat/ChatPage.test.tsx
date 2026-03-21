@@ -358,12 +358,83 @@ describe('ChatPage', () => {
 
     expect(screen.getByTestId('compaction-notice')).toBeInTheDocument();
     expect(screen.getByText('Trimmed request context before send')).toBeInTheDocument();
-    expect(screen.getByText('Saved 1,200 tokens')).toBeInTheDocument();
-    expect(screen.getByTestId('compaction-saved-badge')).toHaveAttribute('title', '4,000 → 2,800 tokens after compaction.');
+    expect(screen.getByText('Latest save 1,200 tokens')).toBeInTheDocument();
+    expect(screen.getByTestId('compaction-saved-badge')).toHaveAttribute('title', 'Latest compaction: 4,000 → 2,800 tokens.');
     expect(screen.getByText('Pins protected')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Details' })).toBeInTheDocument();
     expect(screen.queryByText('Kept only the newest repo-scoped turns.')).not.toBeInTheDocument();
     expect(screen.queryByText('2 msgs')).not.toBeInTheDocument();
+  });
+
+  it('renders latest compaction delta with reduced rolling usage', () => {
+    mockUseChatStore.mockImplementation((selector?: (state: MockChatStore) => unknown) => {
+      const store: MockChatStore = {
+        activeConversationId: 'conv-1',
+        activeConversation: {
+          conversation_id: 'conv-1',
+          conversation_context_state: {
+            conversation_id: 'conv-1',
+            used_units: 271995,
+            max_units: 272000,
+            state: 'compacted_recently',
+            last_compacted_at: 1710000000,
+            last_compaction_delta: 5,
+            updated_at: 1710000001,
+          },
+          messages: [
+            { message_id: 'u1', role: 'user', content: 'hello', metadata: {}, created_at: 1 },
+          ],
+        },
+        isLoadingConversation: false,
+        streaming: {
+          isStreaming: false,
+          messageId: null,
+          streamConversationId: null,
+        },
+        contextUsage: null,
+        latestCompaction: {
+          compaction_id: 'cmp-1',
+          trigger: 'overflow_recovery',
+          summary: 'Recovered context budget',
+          metrics: {
+            messages_compacted: 1,
+            tokens_before: 272000,
+            tokens_after: 271995,
+            pin_violation_count: 0,
+          },
+        },
+        compactionHistory: [],
+        isLoadingCompactions: false,
+        restoringCompactionId: null,
+        restoringBackupId: null,
+        restoreNotice: null,
+        activePins: [],
+        agentLoopSummary: {
+          rounds: 0,
+          toolCalls: 0,
+          traceId: null,
+          usage: null,
+          metrics: null,
+        },
+        error: null,
+        sendMessage: vi.fn(),
+        stopStreaming: vi.fn(),
+        fetchCompactions: vi.fn(),
+        restoreCompaction: vi.fn(),
+        restoreBackup: vi.fn(),
+        updatePinnedContextStatus: vi.fn(),
+        clearRestoreNotice: vi.fn(),
+        clearError: vi.fn(),
+      };
+      return selector ? selector(store) : store;
+    });
+
+    render(<ChatPage />);
+
+    expect(screen.getByText('Recovered rolling context capacity')).toBeInTheDocument();
+    expect(screen.getByText('Latest save 5 tokens')).toBeInTheDocument();
+    expect(screen.getByText('271,995 / 272,000')).toBeInTheDocument();
+    expect(screen.getByTestId('conversation-state-indicator')).toHaveClass('bg-red-400');
   });
 
   it('dismisses compaction notice', () => {
@@ -774,7 +845,7 @@ describe('ChatPage', () => {
     expect(within(screen.getByTestId('conversation-summary')).getByText('504 / 272,000')).toBeInTheDocument();
     expect(screen.queryByText('minimax-m1')).not.toBeInTheDocument();
     expect(screen.queryByText('16,163 / 1,000,000')).not.toBeInTheDocument();
-    expect(screen.getByText('Saved 727,911 tokens')).toBeInTheDocument();
+    expect(screen.getByText('Latest save 727,911 tokens')).toBeInTheDocument();
   });
 
   it('shows inspect as the only this-turn details entry point', () => {
@@ -1025,7 +1096,7 @@ describe('ChatPage', () => {
     expect(within(detailsPanel).getByText('Token Accounting')).toBeInTheDocument();
     expect(within(detailsPanel).getByText('Compaction')).toBeInTheDocument();
     expect(within(detailsPanel).getByText('Compaction history')).toBeInTheDocument();
-    expect(within(detailsPanel).getByText('Compaction diff')).toBeInTheDocument();
+    expect(within(detailsPanel).getByText('Latest compaction details')).toBeInTheDocument();
     expect(within(detailsPanel).getByText('Show trimmed details')).toBeInTheDocument();
     expect(within(detailsPanel).getByText('Trimmed to fit request budget')).toBeInTheDocument();
     expect(within(detailsPanel).getByText('The request hit budget limits before this block could be included.')).toBeInTheDocument();

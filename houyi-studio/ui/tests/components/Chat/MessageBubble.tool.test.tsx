@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { MessageBubble } from '@/components/Chat/MessageBubble';
+import { useSettingsStore } from '@/stores/useSettingsStore';
 
 vi.mock('@/stores/useChatStore', async () => {
   const actual = await vi.importActual<typeof import('@/stores/useChatStore')>('@/stores/useChatStore');
@@ -16,6 +17,60 @@ vi.mock('@/stores/useChatStore', async () => {
 const { useChatStore } = await import('@/stores/useChatStore');
 
 describe('MessageBubble(tool)', () => {
+  it('renders assistant label and avatar from global display settings', () => {
+    useSettingsStore.setState({
+      display: {
+        user_name: 'You',
+        user_avatar: null,
+        assistant_name: 'HouYi',
+        assistant_avatar: '🐶',
+      },
+      loaded: true,
+    });
+
+    render(
+      <MessageBubble
+        message={{
+          message_id: 'assistant-display-1',
+          role: 'assistant',
+          content: 'done',
+          metadata: {},
+          created_at: Date.now() / 1000,
+        }}
+      />,
+    );
+
+    expect(screen.getByText('HouYi')).toBeInTheDocument();
+    expect(screen.getByText('🐶')).toBeInTheDocument();
+  });
+
+  it('renders user label and avatar from global display settings', () => {
+    useSettingsStore.setState({
+      display: {
+        user_name: 'Von',
+        user_avatar: '🧑🏻‍💻',
+        assistant_name: 'HouYi',
+        assistant_avatar: '🐶',
+      },
+      loaded: true,
+    });
+
+    render(
+      <MessageBubble
+        message={{
+          message_id: 'user-display-1',
+          role: 'user',
+          content: 'hello',
+          metadata: {},
+          created_at: Date.now() / 1000,
+        }}
+      />,
+    );
+
+    expect(screen.getByText('Von')).toBeInTheDocument();
+    expect(screen.getByText('🧑🏻‍💻')).toBeInTheDocument();
+  });
+
   it('renders ToolCallBubble for tool role message', () => {
     render(
       <MessageBubble
@@ -88,6 +143,26 @@ describe('MessageBubble(tool)', () => {
     );
 
     expect(screen.queryByText('[tool call]')).not.toBeInTheDocument();
+  });
+
+  it('does not render underscore tool-call marker in assistant thinking', () => {
+    render(
+      <MessageBubble
+        message={{
+          message_id: 'assistant-tool-carrier-underscore-1',
+          role: 'assistant',
+          content: '',
+          reasoning_content: '[tool_call]\n先搜索，再总结。',
+          metadata: {},
+          created_at: Date.now() / 1000,
+        }}
+      />,
+    );
+
+    expect(screen.queryByText('[tool_call]')).not.toBeInTheDocument();
+    expect(screen.getByText('Thinking')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /thinking/i }));
+    expect(screen.getByText('先搜索，再总结。')).toBeInTheDocument();
   });
 
   it('renders embedded tool steps and trace action on assistant message', () => {
@@ -219,6 +294,39 @@ describe('MessageBubble(tool)', () => {
     expect(screen.getByText('Truncation note')).toBeInTheDocument();
   });
 
+  it('shows concise failed tool reason in tool activity details', () => {
+    render(
+      <MessageBubble
+        message={{
+          message_id: 'assistant-tools-error',
+          role: 'assistant',
+          content: 'failed',
+          metadata: {},
+          created_at: Date.now() / 1000,
+        }}
+        toolSteps={[
+          {
+            message_id: 'tool-step-error-1',
+            role: 'tool',
+            content: JSON.stringify({
+              error: 'permission_denied',
+              message: 'Workspace access denied for /private/repo',
+            }),
+            name: 'houyi_find_files',
+            metadata: { tool_status: 'error', round_index: 1 },
+            created_at: Date.now() / 1000,
+          },
+        ]}
+      />,
+    );
+
+    expect(screen.getByText('Workspace access denied for /private/repo')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Tool activity 1' }));
+    fireEvent.click(screen.getByRole('button', { name: /houyi_find_files/i }));
+    expect(screen.getByText('Error: Workspace access denied for /private/repo')).toBeInTheDocument();
+    expect(screen.getAllByText('Workspace access denied for /private/repo').length).toBeGreaterThan(0);
+  });
+
   it('renders assistant latency and throughput stats', () => {
     vi.useFakeTimers();
     render(
@@ -248,6 +356,67 @@ describe('MessageBubble(tool)', () => {
     expect(screen.getByText(/First token\s+187 ms/i)).toBeInTheDocument();
     expect(screen.getByText(/Throughput\s+22 tokens\/s/i)).toBeInTheDocument();
     vi.useRealTimers();
+  });
+
+  it('does not render flow or convergence chips at message level', () => {
+    render(
+      <>
+        <MessageBubble
+          message={{
+            message_id: 'assistant-phase-1',
+            role: 'assistant',
+            content: '',
+            reasoning_content: 'thinking only',
+            metadata: {
+              tool_loop_convergence_reason: 'needs_final_stream',
+              final_stream_status: 'error',
+              final_stream_error_category: 'timeout',
+              final_stream_empty_visible_output: false,
+            },
+            created_at: Date.now() / 1000,
+          }}
+        />
+        <MessageBubble
+          message={{
+            message_id: 'assistant-phase-2',
+            role: 'assistant',
+            content: '',
+            reasoning_content: 'thinking only',
+            metadata: {
+              final_stream_status: 'reasoning_only',
+            },
+            created_at: Date.now() / 1000,
+          }}
+        />
+      </>,
+    );
+
+    expect(screen.queryByText('Final stream · timeout')).not.toBeInTheDocument();
+    expect(screen.queryByText('needs_final_stream')).not.toBeInTheDocument();
+    expect(screen.queryByText('Reasoning only')).not.toBeInTheDocument();
+  });
+
+  it('keeps persisted reasoning-only assistant messages collapsed by default', () => {
+    render(
+      <MessageBubble
+        message={{
+          message_id: 'assistant-reasoning-only',
+          role: 'assistant',
+          content: '',
+          reasoning_content: 'thinking only result',
+          metadata: {
+            final_stream_status: 'reasoning_only',
+          },
+          created_at: Date.now() / 1000,
+        }}
+      />,
+    );
+
+    expect(screen.getByText('Thinking')).toBeInTheDocument();
+    expect(screen.queryByText('thinking only result')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /thinking/i }));
+    expect(screen.getByText('thinking only result')).toBeInTheDocument();
   });
 
   it('restores tooltip timing stats from usage metadata fallback fields', () => {
@@ -524,6 +693,16 @@ describe('MessageBubble(tool)', () => {
   });
 
   it('renders user input token stats', () => {
+    useSettingsStore.setState({
+      display: {
+        user_name: 'Von',
+        user_avatar: null,
+        assistant_name: 'HouYi',
+        assistant_avatar: null,
+      },
+      loaded: true,
+    });
+
     render(
       <MessageBubble
         message={{
@@ -538,7 +717,7 @@ describe('MessageBubble(tool)', () => {
       />,
     );
 
-    expect(screen.getAllByText('You')).toHaveLength(1);
+    expect(screen.getAllByText('Von')).toHaveLength(1);
     expect(screen.getByText('Tokens: 12')).toBeInTheDocument();
   });
 

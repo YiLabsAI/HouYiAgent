@@ -1,10 +1,28 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Any
 
-_ALLOWED_WEB_SEARCH_PROVIDERS = {"ddg", "serper", "tavily", "bocha"}
+from houyi.skills.web_search.provider_resolution import (
+    normalize_web_search_provider_name,
+    resolve_supported_web_search_provider,
+)
+
 _WEB_SEARCH_TOOL_NAMES = frozenset({"web_search", "houyi_web_search"})
+
+logger = logging.getLogger(__name__)
+
+
+def _normalize_provider_name(provider: Any) -> str:
+    return normalize_web_search_provider_name(str(provider or ""))
+
+
+def _resolve_supported_provider(requested_provider: Any, configured_provider: Any) -> str:
+    return resolve_supported_web_search_provider(
+        str(requested_provider or ""),
+        configured_provider=str(configured_provider or ""),
+    )
 
 
 @dataclass(frozen=True)
@@ -17,18 +35,20 @@ class WebSearchProviderHook:
         args = tool_call.get("args")
         if not isinstance(args, dict):
             return None
-        requested_provider = args.get("provider", self.provider)
-        normalized_provider = str(requested_provider or "").strip().lower()
-        if not normalized_provider:
+        requested_provider = args.get("provider")
+        resolved_provider = _resolve_supported_provider(requested_provider, self.provider)
+        if not resolved_provider:
             return None
-        if normalized_provider not in _ALLOWED_WEB_SEARCH_PROVIDERS:
-            raise ValueError(
-                "Unsupported web_search provider "
-                f"'{normalized_provider}'. Allowed providers: ddg, serper, tavily, bocha"
+        if _normalize_provider_name(requested_provider) != resolved_provider:
+            logger.info(
+                "web_search provider normalized: requested=%s resolved=%s configured=%s",
+                _normalize_provider_name(requested_provider),
+                resolved_provider,
+                _normalize_provider_name(self.provider),
             )
-        if args.get("provider") == normalized_provider:
+        if _normalize_provider_name(args.get("provider")) == resolved_provider:
             return None
-        return {"args": {**args, "provider": normalized_provider}}
+        return {"args": {**args, "provider": resolved_provider}}
 
 
 @dataclass(frozen=True)

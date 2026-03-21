@@ -49,6 +49,29 @@ const conversationStateMeta: Record<NonNullable<ConversationContextState['state'
   compacted_recently: { label: 'Compacted', toneClassName: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200' },
 };
 
+function resolveConversationStateMeta(
+  conversationContext: ConversationContextState | null | undefined,
+) {
+  if (!conversationContext) return conversationStateMeta.healthy;
+  if (conversationContext.state !== 'compacted_recently' || conversationContext.max_units <= 0) {
+    return conversationStateMeta[conversationContext.state];
+  }
+  const ratio = conversationContext.used_units / conversationContext.max_units;
+  if (ratio >= 0.9) {
+    return {
+      label: 'Compacted',
+      toneClassName: 'border-red-500/30 bg-red-500/10 text-red-200',
+    };
+  }
+  if (ratio >= 0.7) {
+    return {
+      label: 'Compacted',
+      toneClassName: 'border-amber-500/30 bg-amber-500/10 text-amber-200',
+    };
+  }
+  return conversationStateMeta.compacted_recently;
+}
+
 const compactionTriggerLabels: Record<string, string> = {
   pre_request_pressure: 'Compacted conversation context for this request',
   overflow_recovery: 'Recovered rolling context capacity',
@@ -322,9 +345,7 @@ export const ChatInspectorPanel: React.FC<ChatInspectorPanelProps> = ({
   const tokensBefore = Number(latestCompaction?.metrics?.tokens_before || 0);
   const tokensAfter = Number(latestCompaction?.metrics?.tokens_after || 0);
   const tokensSaved = Math.max(0, tokensBefore - tokensAfter);
-  const conversationState = conversationContext
-    ? conversationStateMeta[conversationContext.state]
-    : conversationStateMeta.healthy;
+  const conversationState = resolveConversationStateMeta(conversationContext);
   const compactionTriggerLabel = latestCompaction
     ? (compactionTriggerLabels[latestCompaction.trigger] ?? 'Compacted conversation context')
     : 'Compacted conversation context';

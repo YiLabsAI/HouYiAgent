@@ -16,6 +16,7 @@ import { TypingIndicator } from './TypingIndicator';
 import { ImageLightbox } from './ImageLightbox';
 import { ToolCallBubble } from './ToolCallBubble';
 import { useTypewriter } from '@/hooks/useTypewriter';
+import { useSettingsStore } from '@/stores/useSettingsStore';
 
 const formatDurationMs = (durationMs: number | null): string | null => {
   if (!Number.isFinite(durationMs) || !durationMs || durationMs <= 0) return null;
@@ -36,10 +37,11 @@ const resolveTimingMetric = (...candidates: unknown[]): number => {
 };
 
 const sanitizeAssistantToolMarkers = (raw: string): string => {
-  const hasToolMarker = /\[tool call\]|<\|tool_[^|]+\|>|<tool_call\b|<\/tool_call>|<arg_[^>]+>|<\/?think>/i.test(raw);
+  const hasToolMarker = /\[tool_call\]|\[tool call\]|<\|tool_[^|]+\|>|<tool_call\b|<\/tool_call>|<arg_[^>]+>|<\/?think>|(?:^|\n)\s*tool\s*:\s*[a-zA-Z_][\w.-]*\s*&args\s*:/i.test(raw);
   if (!hasToolMarker) return raw;
 
   const stripped = raw
+    .replace(/\[tool_call\]/gi, ' ')
     .replace(/\[tool call\]/gi, ' ')
     .replace(/<tool_call[^>]*>[\s\S]*?<\/tool_call>/gi, ' ')
     .replace(/<tool_call[^>]*>/gi, ' ')
@@ -53,6 +55,7 @@ const sanitizeAssistantToolMarkers = (raw: string): string => {
     .replace(/<\|tool_call_argument_begin\|>/gi, ' ')
     .replace(/<\|tool_call_argument_end\|>/gi, ' ')
     .replace(/<\|tool_[^|]+\|>/gi, ' ')
+    .replace(/(?:^|\n)\s*tool\s*:\s*[a-zA-Z_][\w.-]*\s*&args\s*:\s*[^\n]*/gi, ' ')
     .replace(/[ \t]{2,}/g, ' ')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
@@ -60,6 +63,7 @@ const sanitizeAssistantToolMarkers = (raw: string): string => {
   if (stripped) return stripped;
 
   return raw
+    .replace(/\[tool_call\]/gi, ' ')
     .replace(/\[tool call\]/gi, ' ')
     .replace(/<tool_call[^>]*>/gi, ' ')
     .replace(/<\/tool_call>/gi, ' ')
@@ -73,6 +77,7 @@ const sanitizeAssistantToolMarkers = (raw: string): string => {
     .replace(/<\|tool_call_argument_begin\|>/gi, ' ')
     .replace(/<\|tool_call_argument_end\|>/gi, ' ')
     .replace(/<\|tool_[^|]+\|>/gi, ' ')
+    .replace(/(?:^|\n)\s*tool\s*:\s*[a-zA-Z_][\w.-]*\s*&args\s*:\s*[^\n]*/gi, ' ')
     .replace(/[ \t]{2,}/g, ' ')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
@@ -171,13 +176,14 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
   const [editText, setEditText] = React.useState('');
   const editRef = React.useRef<HTMLTextAreaElement>(null);
   const reasoningContentRef = React.useRef<HTMLDivElement>(null);
-  const metricsTooltipTimerRef = React.useRef<number | null>(null);
   const metricsAnchorRef = React.useRef<HTMLDivElement>(null);
+  const metricsTooltipTimerRef = React.useRef<number | null>(null);
   const editMessage = useChatStore((s) => s.editMessage);
   const sendMessage = useChatStore((s) => s.sendMessage);
   const streamingReasoning = useChatStore((s) =>
     isStreaming ? s.streaming.reasoningBuffer : '',
   );
+  const displaySettings = useSettingsStore((s) => s.display);
   const isUser = message.role === 'user';
   const isAssistant = message.role === 'assistant';
   const isTool = message.role === 'tool';
@@ -206,6 +212,10 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
   const normalizedStreamingReasoning = isAssistant
     ? sanitizeAssistantToolMarkers(streamingReasoning)
     : streamingReasoning;
+  const userLabel = displaySettings.user_name?.trim() || 'You';
+  const userAvatar = displaySettings.user_avatar?.trim() || null;
+  const assistantLabel = displaySettings.assistant_name?.trim() || 'Assistant';
+  const assistantAvatar = displaySettings.assistant_avatar?.trim() || null;
   const shouldRenderAssistantContent = !isAssistant
     || Boolean(normalizedAssistantContent.trim())
     || (isStreaming && !normalizedStreamingReasoning);
@@ -249,7 +259,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
     throughputTokensPerSecond > 0,
   ].filter(Boolean).length;
   const shouldShowMetaPanel = isAssistant
-    && (traceId || assistantMetricCount > 0 || canRevealToolSteps);
+    && (traceId || assistantMetricCount > 0 || canRevealToolSteps || budgetGuardrailApplied);
   const shouldShowUserMetaPanel = isUser && usageInputTokens > 0;
   const roundCount = effectiveToolSteps.length > 0
     ? new Set(effectiveToolSteps.map((step) => Number(step.metadata?.round_index || 0)).filter((v) => Number.isFinite(v) && v > 0)).size
@@ -276,6 +286,30 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
     : toolActivityStatus === 'running'
       ? 'text-amber-300 border-amber-500/30 bg-amber-500/10'
       : 'text-emerald-300 border-emerald-500/30 bg-emerald-500/10';
+  const toolActivityErrorSummary = React.useMemo(() => {
+    if (!hasErroredTool) return null;
+    for (const step of effectiveToolSteps) {
+      const rawStatus = String(step.metadata?.tool_status || '').trim().toLowerCase();
+      if (rawStatus !== 'error' && rawStatus !== 'failed') continue;
+      try {
+        const parsed = JSON.parse(String(step.content || '')) as Record<string, unknown>;
+        const data = parsed.data && typeof parsed.data === 'object'
+          ? parsed.data as Record<string, unknown>
+          : null;
+        const candidates = [parsed.message, parsed.error, data?.message, data?.error, data?.stderr];
+        for (const candidate of candidates) {
+          if (typeof candidate === 'string' && candidate.trim()) {
+            const compact = candidate.replace(/\s+/g, ' ').trim();
+            return compact.length > 72 ? `${compact.slice(0, 72)}…` : compact;
+          }
+        }
+      } catch {
+        const compact = String(step.content || '').replace(/\s+/g, ' ').trim();
+        if (compact) return compact.length > 72 ? `${compact.slice(0, 72)}…` : compact;
+      }
+    }
+    return null;
+  }, [effectiveToolSteps, hasErroredTool]);
   const totalToolDurationMs = effectiveToolSteps.reduce((sum, step) => {
     const durationMs = Number(step.metadata?.duration_ms);
     return Number.isFinite(durationMs) && durationMs > 0 ? sum + durationMs : sum;
@@ -425,12 +459,12 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
       >
         {!isUser && (
           <div className={`shrink-0 w-7 h-7 rounded-full flex items-center justify-center ${isTool ? 'bg-cyan-700' : 'bg-gray-600'}`}>
-            {isTool ? <ChevronRight size={14} /> : <Bot size={14} />}
+            {isTool ? <ChevronRight size={14} /> : assistantAvatar ? <span className="text-[14px] leading-none">{assistantAvatar}</span> : <Bot size={14} />}
           </div>
         )}
 
         <div className={`flex min-w-0 max-w-[min(100%,72rem)] flex-col ${isUser ? 'items-end' : 'items-start'}`}>
-          <span className="text-[10px] text-gray-500 mb-1">{isUser ? 'You' : isTool ? 'Tool' : 'Assistant'}</span>
+          <span className="text-[10px] text-gray-500 mb-1">{isUser ? userLabel : isTool ? 'Tool' : assistantLabel}</span>
 
           {(message.attachments?.length ?? 0) > 0 && !isTool && (
             <AttachmentGallery attachments={message.attachments || []} isUser={isUser} />
@@ -521,6 +555,9 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
                   <span className={`shrink-0 rounded border px-1.5 py-0.5 text-[10px] uppercase tracking-wide ${toolActivityStatusClass}`}>
                     {toolActivityStatus}
                   </span>
+                  {toolActivityErrorSummary && (
+                    <span className="min-w-0 break-words text-[11px] text-red-300/90">{toolActivityErrorSummary}</span>
+                  )}
                   {hasRunningTool && <span className="inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400 animate-pulse" />}
                 </span>
                 {showToolSteps ? <ChevronDown size={14} className="shrink-0 text-gray-500" /> : <ChevronRight size={14} className="shrink-0 text-gray-500" />}
@@ -560,7 +597,6 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
                   </span>
                 </div>
               )}
-              {roundCount > 0 && <span className="shrink-0 rounded-md border border-violet-500/30 bg-violet-500/10 px-1.5 py-0.5 text-violet-200">Rounds {roundCount}</span>}
               {budgetGuardrailApplied && <span className="shrink-0 rounded-md border border-rose-500/30 bg-rose-500/10 px-1.5 py-0.5 text-rose-200">Guardrail</span>}
               {traceId && onOpenTrace && (
                 <button
@@ -582,7 +618,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
 
         {isUser && (
           <div className="shrink-0 w-7 h-7 rounded-full flex items-center justify-center bg-blue-700">
-            <User size={14} />
+            {userAvatar ? <span className="text-[14px] leading-none">{userAvatar}</span> : <User size={14} />}
           </div>
         )}
       </div>

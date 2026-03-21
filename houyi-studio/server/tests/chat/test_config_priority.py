@@ -441,3 +441,56 @@ class TestProviderRouting:
 
         assert adapter == "vertex-adapter"
         mocked.assert_called_once()
+
+    def test_uses_generic_openai_compat(self, store: JsonStore):
+        settings = GlobalSettings(
+            providers=[
+                ProviderConfig(
+                    id="moonshot-custom",
+                    name="Moonshot",
+                    api_key="test-key",
+                    base_url="https://api.moonshot.ai/v1",
+                    models=["moonshotai/Kimi-K2.5"],
+                    enabled=True,
+                )
+            ]
+        )
+        settings_store = SimpleNamespace(get=lambda: settings)
+        service = ChatService(
+            json_store=store,
+            default_model=GLOBAL_MODEL,
+            settings_store=settings_store,
+        )
+
+        adapter = service._get_adapter_for_model("moonshotai/Kimi-K2.5")
+
+        assert isinstance(adapter, chat_service_module.OpenAICompatibleAdapter)
+        assert not isinstance(adapter, chat_service_module.SiliconFlowAdapter)
+        assert adapter.base_url == "https://api.moonshot.ai/v1"
+        assert adapter.model == "moonshotai/Kimi-K2.5"
+
+    def test_uses_siliconflow_adapter_for_custom_siliconflow_endpoint(self, store: JsonStore):
+        settings = GlobalSettings(
+            providers=[
+                ProviderConfig(
+                    id="deepseek-custom",
+                    name="DeepSeek Mirror",
+                    api_key="test-key",
+                    base_url="https://api.siliconflow.cn/v1",
+                    models=["deepseek-ai/DeepSeek-R1"],
+                    enabled=True,
+                )
+            ]
+        )
+        settings_store = SimpleNamespace(get=lambda: settings)
+        service = ChatService(
+            json_store=store,
+            default_model=GLOBAL_MODEL,
+            settings_store=settings_store,
+        )
+
+        adapter = service._get_adapter_for_model("deepseek-ai/DeepSeek-R1")
+
+        assert isinstance(adapter, chat_service_module.SiliconFlowAdapter)
+        assert adapter.base_url == "https://api.siliconflow.cn/v1"
+        assert adapter.model == "deepseek-ai/DeepSeek-R1"

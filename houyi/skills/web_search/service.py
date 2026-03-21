@@ -30,6 +30,10 @@ from houyi.skills.web_search.errors import (
     ProviderTimeoutError,
     WebSearchError,
 )
+from houyi.skills.web_search.provider_resolution import (
+    normalize_web_search_provider_name,
+    resolve_supported_web_search_provider,
+)
 from houyi.skills.web_search.providers import (
     DEFAULT_PROVIDER_TIMEOUT,
     BochaWebSearchProvider,
@@ -95,6 +99,10 @@ def _reset_global_cache_for_tests() -> None:
 
 def _is_truthy(value: str | None) -> bool:
     return (value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _normalize_provider_name(value: str | None) -> str:
+    return normalize_web_search_provider_name(value)
 
 
 @dataclass(slots=True)
@@ -210,6 +218,7 @@ class WebSearchService:
         env_provider = (os.getenv(ENV_WEB_SEARCH_PROVIDER) or "").strip()
         auto_detected = not bool(explicit_provider or env_provider)
         provider_name = explicit_provider or env_provider or cls._auto_detect_provider()
+        provider_name = cls._resolve_supported_provider_name(provider_name)
         provider_source = "tool_input" if explicit_provider else ("env" if env_provider else "auto")
         cache_ttl = cls._resolve_cache_ttl()
         cache = cls._resolve_cache(cache_ttl)
@@ -234,6 +243,23 @@ class WebSearchService:
         if os.getenv(ENV_BOCHA_API_KEY):
             return "bocha"
         return "ddg"
+
+    @classmethod
+    def _resolve_supported_provider_name(cls, provider_name: str | None) -> str:
+        normalized = _normalize_provider_name(provider_name)
+        fallback = resolve_supported_web_search_provider(
+            normalized,
+            fallback_provider=cls._auto_detect_provider(),
+        )
+        if normalized == fallback:
+            return fallback
+
+        logger.warning(
+            "web_search provider '%s' is unsupported; falling back to '%s'",
+            normalized or "(empty)",
+            fallback,
+        )
+        return fallback
 
     @staticmethod
     def _resolve_cache_ttl() -> int:

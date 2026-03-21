@@ -82,6 +82,393 @@ class TestLLMResponse:
         assert response.model == "gpt-4"
         assert response.usage["total_tokens"] == 8
 
+    def test_openai_empty_choices(self) -> None:
+        mock_response = MagicMock()
+        mock_response.choices = []
+        mock_response.usage.prompt_tokens = 5
+        mock_response.usage.completion_tokens = 0
+        mock_response.usage.total_tokens = 5
+        mock_response.model = "deepseek-ai/DeepSeek-R1"
+
+        response = LLMResponse.from_openai(mock_response)
+
+        assert response.content == ""
+        assert response.tool_calls == []
+        assert response.finish_reason == "error"
+        assert response.model == "deepseek-ai/DeepSeek-R1"
+        assert response.usage["total_tokens"] == 5
+        assert response.metadata["response_shape"] == "empty_choices"
+
+    def test_raw_empty_choices(self) -> None:
+        response = LLMResponse.from_raw_dict(
+            {
+                "model": "deepseek-ai/DeepSeek-V3.2",
+                "choices": [],
+                "usage": {"prompt_tokens": 5, "completion_tokens": 0, "total_tokens": 5},
+                "error": {"message": "provider returned no choices"},
+            }
+        )
+
+        assert response.content == ""
+        assert response.tool_calls == []
+        assert response.finish_reason == "error"
+        assert response.model == "deepseek-ai/DeepSeek-V3.2"
+        assert response.metadata["response_shape"] == "empty_choices"
+        assert response.metadata["provider_error"] == {"message": "provider returned no choices"}
+
+    def test_openai_preserves_reasoning(self) -> None:
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = ""
+        mock_response.choices[0].message.reasoning_content = "I should inspect files first"
+        mock_response.choices[0].message.tool_calls = [
+            MagicMock(
+                model_dump=MagicMock(
+                    return_value={
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {
+                            "name": "houyi_grep",
+                            "arguments": '{"query":"tool loop"}',
+                        },
+                    }
+                )
+            )
+        ]
+        mock_response.choices[0].finish_reason = "tool_calls"
+        mock_response.usage.prompt_tokens = 5
+        mock_response.usage.completion_tokens = 3
+        mock_response.usage.total_tokens = 8
+        mock_response.model = "gpt-4"
+
+        response = LLMResponse.from_openai(mock_response)
+
+        assert response.metadata["reasoning_content"] == "I should inspect files first"
+        assert response.tool_calls[0]["function"]["name"] == "houyi_grep"
+
+    def test_compatible_function_call(self) -> None:
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = ""
+        mock_response.choices[0].message.reasoning_content = None
+        mock_response.choices[0].message.tool_calls = None
+        mock_response.choices[0].message.function_call = type(
+            "LegacyFunctionCall",
+            (),
+            {
+                "name": "houyi_web_search",
+                "arguments": '{"query":"deepseek tool loop"}',
+            },
+        )
+        mock_response.choices[0].finish_reason = "function_call"
+        mock_response.usage.prompt_tokens = 5
+        mock_response.usage.completion_tokens = 3
+        mock_response.usage.total_tokens = 8
+        mock_response.model = "gpt-4"
+
+        response = LLMResponse.from_openai(mock_response)
+
+        assert len(response.tool_calls) == 1
+        assert response.tool_calls[0]["function"]["name"] == "houyi_web_search"
+        assert response.tool_calls[0]["function"]["arguments"] == {"query": "deepseek tool loop"}
+
+    def test_raw_compatible_function_call(self) -> None:
+        response = LLMResponse.from_raw_dict(
+            {
+                "model": "deepseek-ai/DeepSeek-R1",
+                "choices": [
+                    {
+                        "finish_reason": "function_call",
+                        "message": {
+                            "content": "",
+                            "function_call": {
+                                "name": "houyi_web_search",
+                                "arguments": '{"query":"siliconflow deepseek"}',
+                            },
+                        },
+                    }
+                ],
+            }
+        )
+
+        assert len(response.tool_calls) == 1
+        assert response.tool_calls[0]["function"]["name"] == "houyi_web_search"
+        assert response.tool_calls[0]["function"]["arguments"] == {"query": "siliconflow deepseek"}
+
+    def test_raw_token_wrapped_toolcall(self) -> None:
+        response = LLMResponse.from_raw_dict(
+            {
+                "model": "deepseek-ai/DeepSeek-V3.2",
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {
+                            "content": (
+                                "<|tool_calls_section_begin|><|tool_call_begin|>functions.houyi_list_dir:20"
+                                '<|tool_call_argument_begin|>{"path": ".houyi/skills", "max_results": 50}'
+                                "<|tool_call_end|><|tool_calls_section_end|>"
+                            )
+                        },
+                    }
+                ],
+            }
+        )
+
+        assert len(response.tool_calls) == 1
+        assert response.tool_calls[0]["function"]["name"] == "functions.houyi_list_dir"
+        assert response.tool_calls[0]["function"]["arguments"] == {
+            "path": ".houyi/skills",
+            "max_results": 50,
+        }
+
+    def test_raw_xml_toolcall(self) -> None:
+        response = LLMResponse.from_raw_dict(
+            {
+                "model": "deepseek-ai/DeepSeek-R1",
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {
+                            "content": (
+                                "<tool_call>houyi_read_file"
+                                "<arg_key>path</arg_key><arg_value>houyi/application/workflow/orchestration/plan.py</arg_value>"
+                                "<arg_key>start_line</arg_key><arg_value>1</arg_value>"
+                                "<arg_key>end_line</arg_key><arg_value>150</arg_value>"
+                                "</tool_call>"
+                            )
+                        },
+                    }
+                ],
+            }
+        )
+
+        assert len(response.tool_calls) == 1
+        assert response.tool_calls[0]["function"]["name"] == "houyi_read_file"
+        assert response.tool_calls[0]["function"]["arguments"] == {
+            "path": "houyi/application/workflow/orchestration/plan.py",
+            "start_line": 1,
+            "end_line": 150,
+        }
+
+    def test_raw_multiple_xml_toolcalls(self) -> None:
+        response = LLMResponse.from_raw_dict(
+            {
+                "model": "deepseek-ai/DeepSeek-V3.2",
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {
+                            "content": (
+                                "<tool_call>houyi_read_file"
+                                "<arg_key>path</arg_key><arg_value>./houyi/domain/skill/schema.py</arg_value>"
+                                "</tool_call>"
+                                "<tool_call>houyi_read_file"
+                                "<arg_key>path</arg_key><arg_value>./houyi/domain/skill/spec.py</arg_value>"
+                                "</tool_call>"
+                            )
+                        },
+                    }
+                ],
+            }
+        )
+
+        assert len(response.tool_calls) == 2
+        assert response.tool_calls[0]["function"]["name"] == "houyi_read_file"
+        assert response.tool_calls[0]["function"]["arguments"] == {
+            "path": "./houyi/domain/skill/schema.py"
+        }
+        assert response.tool_calls[1]["function"]["name"] == "houyi_read_file"
+        assert response.tool_calls[1]["function"]["arguments"] == {
+            "path": "./houyi/domain/skill/spec.py"
+        }
+
+    def test_raw_bracket_toolcall(self) -> None:
+        response = LLMResponse.from_raw_dict(
+            {
+                "model": "deepseek-ai/DeepSeek-V3.2",
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {
+                            "content": (
+                                "[tool:houyi_shell_exec] "
+                                '{"command": "find /Users/von/workspace/HouYiAgent -name \\"*.md\\"", '
+                                '"cwd": "/Users/von/workspace/HouYiAgent", "timeout_seconds": 30}'
+                            )
+                        },
+                    }
+                ],
+            }
+        )
+
+        assert len(response.tool_calls) == 1
+        assert response.tool_calls[0]["function"]["name"] == "houyi_shell_exec"
+        assert response.tool_calls[0]["function"]["arguments"] == {
+            "command": 'find /Users/von/workspace/HouYiAgent -name "*.md"',
+            "cwd": "/Users/von/workspace/HouYiAgent",
+            "timeout_seconds": 30,
+        }
+
+    def test_raw_bracket_tool_result_envelope_is_not_toolcall(self) -> None:
+        response = LLMResponse.from_raw_dict(
+            {
+                "model": "deepseek-ai/DeepSeek-V3.2",
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {
+                            "content": (
+                                "[tool:houyi_shell_exec] "
+                                '{"data": {"command": "find /Users/von/workspace/HouYiAgent -name \\"readme.md\\""}, '
+                                '"message": "", "success": true}'
+                            )
+                        },
+                    }
+                ],
+            }
+        )
+
+        assert response.tool_calls == []
+
+    def test_parses_embedded_toolcall(self) -> None:
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = ""
+        mock_response.choices[0].message.reasoning_content = (
+            "[tool call]\n\n"
+            "<｜DSML｜function_calls>\n"
+            '<｜DSML｜invoke name="houyi_web_search">\n'
+            '<｜DSML｜parameter name="query" string="true">Articles authored by Von Gosling on InfoQ in 2025</｜DSML｜parameter>\n'
+            '<｜DSML｜parameter name="search_engine" string="true">bing</｜DSML｜parameter>\n'
+            '<｜DSML｜parameter name="max_results" string="false">10</｜DSML｜parameter>\n'
+            "</｜DSML｜invoke>\n"
+            "</｜DSML｜function_calls>"
+        )
+        mock_response.choices[0].message.tool_calls = None
+        mock_response.choices[0].finish_reason = "stop"
+        mock_response.usage.prompt_tokens = 5
+        mock_response.usage.completion_tokens = 3
+        mock_response.usage.total_tokens = 8
+        mock_response.model = "gpt-4"
+
+        response = LLMResponse.from_openai(mock_response)
+
+        assert len(response.tool_calls) == 1
+        assert response.tool_calls[0]["function"]["name"] == "houyi_web_search"
+        assert response.tool_calls[0]["function"]["arguments"] == {
+            "query": "Articles authored by Von Gosling on InfoQ in 2025",
+            "search_engine": "bing",
+            "max_results": 10,
+        }
+
+    def test_parses_token_wrapped_toolcall(self) -> None:
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = (
+            "<|tool_calls_section_begin|><|tool_call_begin|>functions.houyi_list_dir:20"
+            '<|tool_call_argument_begin|>{"path": ".houyi/skills", "max_results": 50}'
+            "<|tool_call_end|><|tool_calls_section_end|>"
+        )
+        mock_response.choices[0].message.reasoning_content = None
+        mock_response.choices[0].message.tool_calls = None
+        mock_response.choices[0].finish_reason = "stop"
+        mock_response.usage.prompt_tokens = 5
+        mock_response.usage.completion_tokens = 3
+        mock_response.usage.total_tokens = 8
+        mock_response.model = "gpt-4"
+
+        response = LLMResponse.from_openai(mock_response)
+
+        assert len(response.tool_calls) == 1
+        assert response.tool_calls[0]["function"]["name"] == "functions.houyi_list_dir"
+        assert response.tool_calls[0]["function"]["arguments"] == {
+            "path": ".houyi/skills",
+            "max_results": 50,
+        }
+
+    def test_parses_xml_toolcall(self) -> None:
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = (
+            "<tool_call>houyi_read_file"
+            "<arg_key>path</arg_key><arg_value>houyi/application/workflow/orchestration/plan.py</arg_value>"
+            "<arg_key>start_line</arg_key><arg_value>1</arg_value>"
+            "<arg_key>end_line</arg_key><arg_value>150</arg_value>"
+            "</tool_call>"
+        )
+        mock_response.choices[0].message.reasoning_content = None
+        mock_response.choices[0].message.tool_calls = None
+        mock_response.choices[0].finish_reason = "stop"
+        mock_response.usage.prompt_tokens = 5
+        mock_response.usage.completion_tokens = 3
+        mock_response.usage.total_tokens = 8
+        mock_response.model = "gpt-4"
+
+        response = LLMResponse.from_openai(mock_response)
+
+        assert len(response.tool_calls) == 1
+        assert response.tool_calls[0]["function"]["name"] == "houyi_read_file"
+        assert response.tool_calls[0]["function"]["arguments"] == {
+            "path": "houyi/application/workflow/orchestration/plan.py",
+            "start_line": 1,
+            "end_line": 150,
+        }
+
+    def test_parses_multiple_xml_toolcalls(self) -> None:
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = (
+            "<tool_call>houyi_read_file"
+            "<arg_key>path</arg_key><arg_value>./houyi/domain/skill/schema.py</arg_value>"
+            "</tool_call>"
+            "<tool_call>houyi_read_file"
+            "<arg_key>path</arg_key><arg_value>./houyi/domain/skill/spec.py</arg_value>"
+            "</tool_call>"
+        )
+        mock_response.choices[0].message.reasoning_content = None
+        mock_response.choices[0].message.tool_calls = None
+        mock_response.choices[0].finish_reason = "stop"
+        mock_response.usage.prompt_tokens = 5
+        mock_response.usage.completion_tokens = 3
+        mock_response.usage.total_tokens = 8
+        mock_response.model = "gpt-4"
+
+        response = LLMResponse.from_openai(mock_response)
+
+        assert len(response.tool_calls) == 2
+        assert response.tool_calls[0]["function"]["arguments"] == {
+            "path": "./houyi/domain/skill/schema.py"
+        }
+        assert response.tool_calls[1]["function"]["arguments"] == {
+            "path": "./houyi/domain/skill/spec.py"
+        }
+
+    def test_parses_bracket_toolcall(self) -> None:
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = (
+            "[tool:houyi_shell_exec] "
+            '{"command": "find /Users/von/workspace/HouYiAgent -name \\"*.md\\"", '
+            '"cwd": "/Users/von/workspace/HouYiAgent", "timeout_seconds": 30}'
+        )
+        mock_response.choices[0].message.reasoning_content = None
+        mock_response.choices[0].message.tool_calls = None
+        mock_response.choices[0].finish_reason = "stop"
+        mock_response.usage.prompt_tokens = 5
+        mock_response.usage.completion_tokens = 3
+        mock_response.usage.total_tokens = 8
+        mock_response.model = "gpt-4"
+
+        response = LLMResponse.from_openai(mock_response)
+
+        assert len(response.tool_calls) == 1
+        assert response.tool_calls[0]["function"]["name"] == "houyi_shell_exec"
+        assert response.tool_calls[0]["function"]["arguments"] == {
+            "command": 'find /Users/von/workspace/HouYiAgent -name "*.md"',
+            "cwd": "/Users/von/workspace/HouYiAgent",
+            "timeout_seconds": 30,
+        }
+
     def test_from_anthropic(self) -> None:
         """Test creating response from Anthropic format."""
         # Mock Anthropic response
@@ -105,7 +492,7 @@ class TestLLMResponse:
 class TestOpenAIAdapter:
     """Test OpenAIAdapter."""
 
-    def test_adapter_init_with_api_key(self) -> None:
+    def test_adapter_with_apikey(self) -> None:
         """Test adapter initialization with API key."""
         pytest.importorskip("openai")
         adapter = OpenAIAdapter(api_key="test-key", model="gpt-3.5-turbo")
@@ -113,14 +500,14 @@ class TestOpenAIAdapter:
         assert adapter.api_key == "test-key"
         assert adapter.model == "gpt-3.5-turbo"
 
-    def test_adapter_init_without_api_key(self) -> None:
+    def test_adapter_without_apikey(self) -> None:
         """Test adapter initialization without API key raises error."""
         pytest.importorskip("openai")
         with patch.dict("os.environ", {}, clear=True):
             with pytest.raises(ValueError, match="OpenAI API key not provided"):
                 OpenAIAdapter()
 
-    def test_adapter_init_from_env(self) -> None:
+    def test_adapter_from_env(self) -> None:
         """Test adapter initialization from environment variable."""
         pytest.importorskip("openai")
         with patch.dict("os.environ", {"OPENAI_API_KEY": "env-key"}):
@@ -206,7 +593,7 @@ class TestOpenAIAdapter:
 class TestAnthropicAdapter:
     """Test AnthropicAdapter."""
 
-    def test_adapter_init_with_api_key(self) -> None:
+    def test_adapter_with_apikey(self) -> None:
         """Test adapter initialization with API key."""
         pytest.importorskip("anthropic")
         adapter = AnthropicAdapter(api_key="test-key", model="claude-3-opus")
@@ -214,14 +601,14 @@ class TestAnthropicAdapter:
         assert adapter.api_key == "test-key"
         assert adapter.model == "claude-3-opus"
 
-    def test_adapter_init_without_api_key(self) -> None:
+    def test_adapter_without_apikey(self) -> None:
         """Test adapter initialization without API key raises error."""
         pytest.importorskip("anthropic")
         with patch.dict("os.environ", {}, clear=True):
             with pytest.raises(ValueError, match="Anthropic API key not provided"):
                 AnthropicAdapter()
 
-    def test_adapter_init_from_env(self) -> None:
+    def test_adapter_from_env(self) -> None:
         """Test adapter initialization from environment variable."""
         pytest.importorskip("anthropic")
         with patch.dict("os.environ", {"ANTHROPIC_API_KEY": "env-key"}):

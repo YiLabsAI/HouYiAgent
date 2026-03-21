@@ -27,6 +27,44 @@ const compactionTriggerLabels: Record<string, string> = {
   repo_intent_trim: 'Trimmed request context before send',
 };
 
+function resolveConversationStateMeta(
+  state: 'healthy' | 'elevated' | 'near_compaction' | 'compacted_recently',
+  ratio: number,
+) {
+  if (state === 'compacted_recently') {
+    if (ratio >= 0.9) {
+      return {
+        barClassName: 'bg-red-500',
+        indicatorClassName: 'bg-red-400',
+      };
+    }
+    if (ratio >= 0.7) {
+      return {
+        barClassName: 'bg-amber-500',
+        indicatorClassName: 'bg-amber-400',
+      };
+    }
+  }
+  return {
+    healthy: {
+      barClassName: 'bg-sky-500',
+      indicatorClassName: 'bg-sky-400',
+    },
+    elevated: {
+      barClassName: 'bg-amber-500',
+      indicatorClassName: 'bg-amber-400',
+    },
+    near_compaction: {
+      barClassName: 'bg-red-500',
+      indicatorClassName: 'bg-red-400',
+    },
+    compacted_recently: {
+      barClassName: 'bg-emerald-500',
+      indicatorClassName: 'bg-emerald-400',
+    },
+  }[state];
+}
+
 const compactionDismissStorageKey = 'houyi.chat.compactionNoticeDismissals';
 
 function readCompactionDismissals(): Record<string, string> {
@@ -145,27 +183,9 @@ export const ChatPage: React.FC = () => {
   const dismissedCompactionId = activeConversationId
     ? dismissedCompactions[activeConversationId] ?? null
     : null;
-  const conversationStateMeta = {
-    healthy: {
-      barClassName: 'bg-sky-500',
-      indicatorClassName: 'bg-sky-400',
-    },
-    elevated: {
-      barClassName: 'bg-amber-500',
-      indicatorClassName: 'bg-amber-400',
-    },
-    near_compaction: {
-      barClassName: 'bg-red-500',
-      indicatorClassName: 'bg-red-400',
-    },
-    compacted_recently: {
-      barClassName: 'bg-emerald-500',
-      indicatorClassName: 'bg-emerald-400',
-    },
-  } as const;
   const conversationState = conversationContext
-    ? conversationStateMeta[conversationContext.state]
-    : conversationStateMeta.healthy;
+    ? resolveConversationStateMeta(conversationContext.state, conversationRatio)
+    : resolveConversationStateMeta('healthy', 0);
   const openChatInspector = () => {
     setTracePanelId(null);
     setChatInspectorOpen(true);
@@ -270,10 +290,10 @@ export const ChatPage: React.FC = () => {
               {compactionSavedTokens > 0 && (
                 <span
                   className="max-w-full rounded border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[10px] text-amber-200"
-                  title={`${compactionTokensBefore.toLocaleString()} → ${compactionTokensAfter.toLocaleString()} tokens after compaction.`}
+                  title={`Latest compaction: ${compactionTokensBefore.toLocaleString()} → ${compactionTokensAfter.toLocaleString()} tokens.`}
                   data-testid="compaction-saved-badge"
                 >
-                  Saved {compactionSavedTokens.toLocaleString()} tokens
+                  Latest save {compactionSavedTokens.toLocaleString()} tokens
                 </span>
               )}
               <span

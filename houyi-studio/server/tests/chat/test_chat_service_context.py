@@ -217,6 +217,74 @@ class TestChatServiceContextMessages:
         assert llm_messages == [{"role": "user", "content": "latest user turn"}]
         assert context_usage["used_tokens"] > 0
 
+    def test_context_history_drops_reasoning_only_assistant_turns(self):
+        service = ChatService(json_store=MagicMock())
+        conversation = SimpleNamespace(
+            messages=[
+                Message(role=MessageRole.USER, content="first"),
+                Message(
+                    role=MessageRole.ASSISTANT,
+                    content="",
+                    reasoning_content="internal chain of thought",
+                ),
+                Message(role=MessageRole.USER, content="latest user turn"),
+            ]
+        )
+
+        class _Span:
+            def __init__(self):
+                self.attributes = {}
+
+            def set_attribute(self, key, value):
+                self.attributes[key] = value
+
+        llm_messages, _ = service._build_context_messages(
+            conversation=conversation,
+            model="test-model",
+            sys_instructions="Sys",
+            span=_Span(),
+            input_budget=256,
+        )
+
+        assert llm_messages == [
+            {"role": "system", "content": "Sys"},
+            {"role": "user", "content": "first"},
+            {"role": "user", "content": "latest user turn"},
+        ]
+
+    def test_context_history_strips_reasoning_from_assistant_content_turns(self):
+        service = ChatService(json_store=MagicMock())
+        conversation = SimpleNamespace(
+            messages=[
+                Message(role=MessageRole.USER, content="first"),
+                Message(
+                    role=MessageRole.ASSISTANT,
+                    content="visible answer",
+                    reasoning_content="hidden reasoning",
+                ),
+                Message(role=MessageRole.USER, content="latest user turn"),
+            ]
+        )
+
+        class _Span:
+            def __init__(self):
+                self.attributes = {}
+
+            def set_attribute(self, key, value):
+                self.attributes[key] = value
+
+        llm_messages, _ = service._build_context_messages(
+            conversation=conversation,
+            model="test-model",
+            sys_instructions="Sys",
+            span=_Span(),
+            input_budget=256,
+        )
+
+        assistant_messages = [m for m in llm_messages if m.get("role") == "assistant"]
+        assert assistant_messages == [{"role": "assistant", "content": "visible answer"}]
+        assert all("reasoning_content" not in message for message in llm_messages)
+
     def test_active_pins(
         self,
     ):

@@ -368,6 +368,8 @@ class Conversation(BaseModel):
         has_tool_marker = any(
             marker in raw
             for marker in (
+                "[tool_call]",
+                "[tool call]",
                 "<tool_call",
                 "</tool_call>",
                 "<|tool_",
@@ -381,6 +383,8 @@ class Conversation(BaseModel):
 
         stripped = raw
         replacements = (
+            (r"\[tool_call\]", " "),
+            (r"\[tool call\]", " "),
             (r"<tool_call[^>]*>[\s\S]*?</tool_call>", " "),
             (r"<tool_call[^>]*>", " "),
             (r"</tool_call>", " "),
@@ -405,6 +409,8 @@ class Conversation(BaseModel):
 
         fallback = raw
         fallback_replacements = (
+            (r"\[tool_call\]", " "),
+            (r"\[tool call\]", " "),
             (r"<tool_call[^>]*>", " "),
             (r"</tool_call>", " "),
             (r"<arg_[^>]+>", " "),
