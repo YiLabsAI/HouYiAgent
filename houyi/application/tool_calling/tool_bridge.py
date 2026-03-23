@@ -52,6 +52,27 @@ def _simplify_schema(schema: dict[str, Any]) -> dict[str, Any]:
     return cleaned
 
 
+def _to_minimal_parameter_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    cleaned = _simplify_schema(schema)
+    properties = cleaned.get("properties")
+    if not isinstance(properties, dict) or not properties:
+        return cleaned
+
+    required_fields = [str(item) for item in cleaned.get("required", []) if isinstance(item, str)]
+    selected_names = required_fields[:]
+    for name in properties:
+        if len(selected_names) >= 3:
+            break
+        if name not in selected_names:
+            selected_names.append(name)
+
+    minimal_properties = {name: properties[name] for name in selected_names if name in properties}
+    cleaned["properties"] = minimal_properties
+    if required_fields:
+        cleaned["required"] = [name for name in required_fields if name in minimal_properties]
+    return cleaned
+
+
 def _schema_from_input_model(input_model: Any) -> dict[str, Any]:
     if not input_model:
         return {}
@@ -89,6 +110,22 @@ def build_tool_definitions_for_skill(skill: Any) -> list[dict[str, Any]]:
             },
         }
     ]
+
+
+def _apply_schema_exposure(
+    schema: dict[str, Any],
+    *,
+    schema_exposure: str,
+) -> dict[str, Any]:
+    if schema_exposure == "minimal":
+        function_payload = dict(schema.get("function", {}))
+        parameters = function_payload.get("parameters")
+        if isinstance(parameters, dict):
+            function_payload["parameters"] = _to_minimal_parameter_schema(parameters)
+        exposed = dict(schema)
+        exposed["function"] = function_payload
+        return exposed
+    return schema
 
 
 class ToolBridge:
@@ -137,6 +174,7 @@ class ToolBridge:
         include_core: bool = True,
         relevance_hint: str | None = None,
         usage_counts: dict[str, int] | None = None,
+        schema_exposure: str = "full",
     ) -> list[dict[str, Any]]:
         selected_skills = self.collect_skills(skill_filter=skill_filter, include_core=include_core)
         if not selected_skills:
@@ -146,7 +184,10 @@ class ToolBridge:
 
         schemas: list[dict[str, Any]] = []
         for skill in relevant_skills:
-            schemas.extend(self._schemas_for_skill(skill))
+            schemas.extend(
+                _apply_schema_exposure(schema, schema_exposure=schema_exposure)
+                for schema in self._schemas_for_skill(skill)
+            )
 
         if usage_counts:
             schemas.sort(

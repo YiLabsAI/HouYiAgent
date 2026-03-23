@@ -109,12 +109,6 @@ class ChatToolLoopPolicy:
                 for skill_name in resolved_skills
                 if skill_name in explicit_requested or skill_name == self._web_search_skill_name
             ]
-            if self._looks_like_web_intent(user_content):
-                filtered_skills = [
-                    skill_name
-                    for skill_name in filtered_skills
-                    if skill_name in self._web_tool_skills
-                ]
             return ToolLoopGateDecision(filtered_skills, "enabled", "explicit_skill_request")
         if strategy == self._aggressive_strategy:
             return ToolLoopGateDecision(

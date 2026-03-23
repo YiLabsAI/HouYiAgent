@@ -71,9 +71,12 @@ class TestToolCallResultPresenter:
         assert trace_entry["duration_ms"] == 125.0
         assert trace_entry["args"] == {"x": 1}
         assert trace_entry["tool_override"] is None
+        assert trace_entry["presentation"]["footer_attached"] is True
+        assert trace_entry["presentation"]["is_binary"] is False
         assert tool_message["name"] == "tool1"
-        assert tool_message["content"] == ToolResultBuilder.format(result)
+        assert "duration_ms=125.00" in str(tool_message["content"])
         assert tool_message["metadata"]["duration_ms"] == 125.0
+        assert tool_message["metadata"]["presentation"]["footer_attached"] is True
 
     def test_unapplied_override(self) -> None:
         presenter = _ToolCallResultPresenter()
@@ -172,6 +175,8 @@ class TestToolCallResultPresenter:
         assert result["metadata"]["result_summarized"] is True
         assert result["metadata"]["result_summary_max_chars"] == 250
         assert result["metadata"]["result_summary_max_items"] == 3
+        assert trace_entry["presentation"]["result_summarized"] is True
+        assert tool_message["metadata"]["presentation"]["result_summarized"] is True
 
     def test_summary_disabled(self) -> None:
         presenter = _ToolCallResultPresenter()
@@ -199,5 +204,91 @@ class TestToolCallResultPresenter:
             )
         )
 
-        assert tool_message["content"] == original_content
+        assert original_content in str(tool_message["content"])
         assert "result_summarized" not in result.get("metadata", {})
+
+    def test_error_detail(self) -> None:
+        presenter = _ToolCallResultPresenter()
+        result = ToolResultBuilder.build(
+            {
+                "error": "tool_execution_failed",
+                "message": "validation failed",
+                "cause": "field 'path' is required",
+            },
+            call_id="call_err",
+        )
+
+        trace_entry, tool_message = presenter.build_trace_and_message(
+            _ToolCallPresentationRequest(
+                tool_name="reader",
+                requested_tool_name="reader",
+                tool_call_id="call_err",
+                round_index_value=1,
+                parallel_group_id=None,
+                duration_ms=10.0,
+                args={},
+                result=result,
+                attempted_tool_name=None,
+                allow_tool_replace=False,
+                tool_result_summary_enabled=False,
+                tool_result_summary_max_chars=500,
+                tool_result_summary_max_items=5,
+            )
+        )
+
+        assert "validation failed" in str(tool_message["content"])
+        assert trace_entry["presentation"]["error_detail_attached"] is True
+
+    def test_binary_like_result(self) -> None:
+        presenter = _ToolCallResultPresenter()
+        result = ToolResultBuilder.build({"blob": b"\x00\x01\x02"}, call_id="call_bin")
+
+        trace_entry, tool_message = presenter.build_trace_and_message(
+            _ToolCallPresentationRequest(
+                tool_name="reader",
+                requested_tool_name="reader",
+                tool_call_id="call_bin",
+                round_index_value=1,
+                parallel_group_id=None,
+                duration_ms=None,
+                args={},
+                result=result,
+                attempted_tool_name=None,
+                allow_tool_replace=False,
+                tool_result_summary_enabled=False,
+                tool_result_summary_max_chars=500,
+                tool_result_summary_max_items=5,
+            )
+        )
+
+        assert tool_message["content"] == "Binary-like tool result omitted from inline expansion."
+        assert trace_entry["presentation"]["is_binary"] is True
+
+    def test_footer_marks_large_result(self) -> None:
+        presenter = _ToolCallResultPresenter()
+        result = ToolResultBuilder.build(
+            {"items": [{"idx": i, "payload": "z" * 80} for i in range(8)]},
+            call_id="call_artifact",
+        )
+
+        trace_entry, tool_message = presenter.build_trace_and_message(
+            _ToolCallPresentationRequest(
+                tool_name="search",
+                requested_tool_name="search",
+                tool_call_id="call_artifact",
+                round_index_value=2,
+                parallel_group_id="grp-1",
+                duration_ms=42.0,
+                args={"q": "abc"},
+                result=result,
+                attempted_tool_name=None,
+                allow_tool_replace=False,
+                tool_result_summary_enabled=False,
+                tool_result_summary_max_chars=120,
+                tool_result_summary_max_items=3,
+            )
+        )
+
+        assert trace_entry["presentation"]["result_artifact_candidate"] is True
+        assert tool_message["metadata"]["presentation"]["result_artifact_candidate"] is True
+        assert "parallel_group_id=grp-1" in str(tool_message["content"])

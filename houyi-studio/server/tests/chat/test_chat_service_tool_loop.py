@@ -310,10 +310,53 @@ class TestChatServiceToolLoopGating:
             request=SendMessageRequest(content="hi", enable_skills=["houyi_web_search"]),
             resolved_skills=["houyi_grep", "houyi_web_search"],
         )
+        assert decision.reason == "explicit_skill_request"
+        assert decision.enabled_skills == ["houyi_web_search"]
+
+    def test_explicit_repo_skills_with_plain_english_prompt(self):
+        service = ChatService(json_store=MagicMock())
+        decision = service._gate_tool_loop(
+            request=SendMessageRequest(
+                content=(
+                    "Use local tools to inspect the current workspace and find the most relevant "
+                    "skill definition file for web search."
+                ),
+                enable_skills=["houyi_find_files", "houyi_grep", "houyi_read_file"],
+                tool_call_strategy="aggressive",
+            ),
+            resolved_skills=[
+                "houyi_find_files",
+                "houyi_grep",
+                "houyi_list_dir",
+                "houyi_read_file",
+            ],
+        )
 
         assert decision.mode == "enabled"
         assert decision.reason == "explicit_skill_request"
-        assert decision.enabled_skills == ["houyi_web_search"]
+        assert decision.enabled_skills == [
+            "houyi_find_files",
+            "houyi_grep",
+            "houyi_read_file",
+        ]
+
+    def test_explicit_mixed_skills_keep_local_and_web(self):
+        service = ChatService(json_store=MagicMock())
+        decision = service._gate_tool_loop(
+            request=SendMessageRequest(
+                content=(
+                    "Use local tools to inspect the current workspace and also do a web search "
+                    "for the same topic."
+                ),
+                enable_skills=["houyi_find_files", "houyi_web_search"],
+                tool_call_strategy="aggressive",
+            ),
+            resolved_skills=["houyi_find_files", "houyi_grep", "houyi_web_search"],
+        )
+
+        assert decision.mode == "enabled"
+        assert decision.reason == "explicit_skill_request"
+        assert decision.enabled_skills == ["houyi_find_files", "houyi_web_search"]
 
     def test_web_search_filters(self):
         service = ChatService(json_store=MagicMock())

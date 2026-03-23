@@ -777,6 +777,31 @@ class _ToolCallExecutionService:
         )
         raw_payload = result.get("raw")
         is_error = ToolResultBuilder.is_error(result)
+        result_meta = dict(result.get("metadata") or {})
+        raw_payload_chars = (
+            len(ToolResultBuilder.serialize(raw_payload)) if raw_payload is not None else 0
+        )
+        presented_content_chars = len(str(tool_message.get("content") or ""))
+        trace_entry.update(
+            {
+                "status": "error" if is_error else "ok",
+                "cache_hit": bool(result_meta.get("cache_hit")),
+                "raw_payload_chars": raw_payload_chars,
+                "presented_content_chars": presented_content_chars,
+                "result_summarized": bool(result_meta.get("result_summarized")),
+                "result_artifact_candidate": bool(result_meta.get("result_artifact_candidate")),
+            }
+        )
+        metadata = tool_message.get("metadata")
+        if isinstance(metadata, dict):
+            metadata.update(
+                {
+                    "status": trace_entry["status"],
+                    "cache_hit": trace_entry["cache_hit"],
+                    "raw_payload_chars": raw_payload_chars,
+                    "presented_content_chars": presented_content_chars,
+                }
+            )
         latency_display = f"{latency_ms:.2f}" if isinstance(latency_ms, (int, float)) else "n/a"
         log_message = "[ToolCallRunner] tool outcome round=%s tool=%s requested_tool=%s call_id=%s status=%s cache_hit=%s latency_ms=%s summary=%s"
         log_args = (

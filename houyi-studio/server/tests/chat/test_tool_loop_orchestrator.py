@@ -947,3 +947,43 @@ class TestSdkToolLoopOrchestratorLogging:
             "textual tool markers without structured tool_calls" in record.message
             for record in caplog.records
         )
+
+    @pytest.mark.asyncio
+    async def test_exits_on_plain_pseudocode(self):
+        response = LLMResponse(
+            content=(
+                "```python\nimport os\nfor root, dirs, files in os.walk('.'):\n    print(root)\n```"
+            ),
+            tool_calls=[],
+            metadata={},
+            finish_reason="stop",
+            model="test-model",
+        )
+        runner = SimpleNamespace(
+            _call_llm_with_cache=AsyncMock(return_value=(response, None)),
+        )
+        ctx = SimpleNamespace(
+            runner=runner,
+            config=SimpleNamespace(
+                tool_loop_max_rounds=3,
+                tool_loop_enable_timing=False,
+                tool_loop_max_message_chars=1000,
+                tool_loop_max_total_chars=2000,
+            ),
+            state=SimpleNamespace(
+                tool_loop_messages=[{"role": "user", "content": "find skill.md"}],
+                tool_loop_started_at_monotonic=None,
+            ),
+            services=SimpleNamespace(
+                model_adapter=SimpleNamespace(),
+                available_tool_schemas=[{"name": "houyi_find_files"}],
+                model_request_options={},
+                llm_response_cache=None,
+            ),
+        )
+
+        result = await SdkToolLoopOrchestrator.execute_rounds(ctx)
+
+        assert result is response
+        runner._call_llm_with_cache.assert_awaited_once()
+        assert ctx.state.tool_loop_messages == [{"role": "user", "content": "find skill.md"}]

@@ -25,6 +25,7 @@ def test_build_tools_names() -> None:
         "houyi_list_dir",
         "houyi_grep",
         "houyi_shell_exec",
+        "houyi_local_cli",
     ]
 
 
@@ -38,6 +39,7 @@ def test_build_tools_policies() -> None:
     assert tools["houyi_shell_exec"].invocation_policy.model_auto_invoke == (
         ModelAutoInvoke.ALLOW_WITH_CONSENT
     )
+    assert tools["houyi_local_cli"].invocation_policy.model_auto_invoke == ModelAutoInvoke.ALLOW
 
 
 def test_register_tools() -> None:
@@ -45,12 +47,12 @@ def test_register_tools() -> None:
 
     registered = local_tools.register_builtin_local_tools(registry)
 
-    assert len(registered) == 6
+    assert len(registered) == 7
     assert all(registry.get(name) is not None for name in registered)
 
 
 @pytest.mark.asyncio
-async def test_read_file_line_range(workspace_root: Path) -> None:
+async def test_read_file_line(workspace_root: Path) -> None:
     target = workspace_root / "a.txt"
     target.write_text("one\ntwo\nthree\n", encoding="utf-8")
 
@@ -61,7 +63,7 @@ async def test_read_file_line_range(workspace_root: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_write_file_creates_parents(workspace_root: Path) -> None:
+async def test_write_file(workspace_root: Path) -> None:
     result = await local_tools._write_file_executor(
         path="nested/target.txt",
         content="hello",
@@ -85,7 +87,7 @@ async def test_find_files_pattern(workspace_root: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_find_files_iterative_exact_match(workspace_root: Path) -> None:
+async def test_find_files_iterative(workspace_root: Path) -> None:
     nested = workspace_root / "src" / "skills"
     nested.mkdir(parents=True)
     (nested / "skill.md").write_text("# skill", encoding="utf-8")
@@ -100,8 +102,7 @@ async def test_find_files_iterative_exact_match(workspace_root: Path) -> None:
 
     assert result["success"] is True
     assert any(
-        Path(item).parts[-3:] == ("src", "skills", "skill.md")
-        for item in result["data"]["matches"]
+        Path(item).parts[-3:] == ("src", "skills", "skill.md") for item in result["data"]["matches"]
     )
     assert result["data"]["iterative_subdirs"] is True
     assert any(Path(path).name == "src" for path in result["data"]["searched_dirs"])
@@ -128,7 +129,7 @@ async def test_find_files_max_depth(
 
 
 @pytest.mark.asyncio
-async def test_find_files_default_contains_mode(workspace_root: Path) -> None:
+async def test_find_files_contains_mode(workspace_root: Path) -> None:
     (workspace_root / "skill.md").write_text("x", encoding="utf-8")
 
     result = await local_tools._find_files_executor(root_path=".", pattern="skill")
@@ -178,7 +179,7 @@ async def test_grep_matches_lines(workspace_root: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_shell_exec_blocks_dangerous_command(workspace_root: Path) -> None:
+async def test_blocks_dangerous_command(workspace_root: Path) -> None:
     result = await local_tools._shell_exec_executor(command="sudo ls", cwd=".")
 
     assert result["success"] is False
@@ -186,7 +187,7 @@ async def test_shell_exec_blocks_dangerous_command(workspace_root: Path) -> None
 
 
 @pytest.mark.asyncio
-async def test_shell_exec_runs_safe_command(workspace_root: Path) -> None:
+async def test_runs_safe_command(workspace_root: Path) -> None:
     result = await local_tools._shell_exec_executor(command="echo hello", cwd=".")
 
     assert result["success"] is True
@@ -194,7 +195,7 @@ async def test_shell_exec_runs_safe_command(workspace_root: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_executors_reject_outside_workspace(workspace_root: Path) -> None:
+async def test_reject_outside_workspace(workspace_root: Path) -> None:
     outside_path = str(workspace_root.parent / "outside.txt")
 
     read_result = await local_tools._read_file_executor(path=outside_path)
@@ -204,3 +205,24 @@ async def test_executors_reject_outside_workspace(workspace_root: Path) -> None:
     assert write_result["success"] is False
     assert "workspace root" in read_result["message"]
     assert "workspace root" in write_result["message"]
+
+
+@pytest.mark.asyncio
+async def test_read_dispatch(workspace_root: Path) -> None:
+    target = workspace_root / "a.txt"
+    target.write_text("one\ntwo\n", encoding="utf-8")
+
+    result = await local_tools._local_cli_executor(command="read", path="a.txt", start_line=2)
+
+    assert result["success"] is True
+    assert result["data"]["content"] == "two"
+
+
+@pytest.mark.asyncio
+async def test_grep_requires_query(workspace_root: Path) -> None:
+    _ = workspace_root
+
+    result = await local_tools._local_cli_executor(command="grep", path=".")
+
+    assert result["success"] is False
+    assert "query is required" in result["message"]

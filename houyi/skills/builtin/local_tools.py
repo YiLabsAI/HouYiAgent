@@ -1,12 +1,13 @@
 """Built-in local tools for workspace development workflows.
 
-This module defines six core tools:
+This module defines core local tools:
 - houyi_read_file
 - houyi_write_file
 - houyi_find_files
 - houyi_list_dir
 - houyi_grep
 - houyi_shell_exec
+- houyi_local_cli
 """
 
 from __future__ import annotations
@@ -95,6 +96,22 @@ class ShellExecInput(BaseModel):
     timeout_seconds: int = Field(
         default=DEFAULT_SHELL_TIMEOUT_SECONDS, ge=1, le=MAX_SHELL_TIMEOUT_SECONDS
     )
+
+
+class LocalCliInput(BaseModel):
+    command: Literal["read", "list", "find", "grep"]
+    path: str = "."
+    start_line: int | None = Field(default=None, ge=1)
+    end_line: int | None = Field(default=None, ge=1)
+    pattern: str | None = None
+    query: str | None = None
+    search_mode: Literal["glob", "contains", "exact"] = "contains"
+    recursive: bool = False
+    iterative_subdirs: bool = False
+    case_sensitive: bool = False
+    max_depth: int = Field(default=16, ge=0, le=64)
+    max_results: int = Field(default=DEFAULT_MAX_RESULTS, ge=1, le=1000)
+    max_entries: int = Field(default=DEFAULT_MAX_RESULTS, ge=1, le=1000)
 
 
 def _workspace_root() -> Path:
@@ -435,6 +452,50 @@ async def _shell_exec_executor(
     ).model_dump()
 
 
+async def _local_cli_executor(
+    *,
+    command: Literal["read", "list", "find", "grep"],
+    path: str = ".",
+    start_line: int | None = None,
+    end_line: int | None = None,
+    pattern: str | None = None,
+    query: str | None = None,
+    search_mode: Literal["glob", "contains", "exact"] = "contains",
+    recursive: bool = False,
+    iterative_subdirs: bool = False,
+    case_sensitive: bool = False,
+    max_depth: int = 16,
+    max_results: int = DEFAULT_MAX_RESULTS,
+    max_entries: int = DEFAULT_MAX_RESULTS,
+) -> dict[str, Any]:
+    if command == "read":
+        return await _read_file_executor(path=path, start_line=start_line, end_line=end_line)
+    if command == "list":
+        return await _list_dir_executor(path=path, recursive=recursive, max_entries=max_entries)
+    if command == "find":
+        effective_pattern = pattern or "*"
+        return await _find_files_executor(
+            root_path=path,
+            pattern=effective_pattern,
+            search_mode=search_mode,
+            iterative_subdirs=iterative_subdirs,
+            max_depth=max_depth,
+            max_results=max_results,
+        )
+    effective_query = query or pattern
+    if not effective_query:
+        return ToolResponse(
+            success=False,
+            message="query is required for grep command",
+        ).model_dump()
+    return await _grep_executor(
+        path=path,
+        query=effective_query,
+        case_sensitive=case_sensitive,
+        max_results=max_results,
+    )
+
+
 def _policy_allow_filesystem_read() -> InvocationPolicy:
     return InvocationPolicy(
         model_auto_invoke=ModelAutoInvoke.ALLOW, side_effect=SideEffect.FILESYSTEM
@@ -449,7 +510,7 @@ def _policy_allow_with_consent(side_effect: SideEffect) -> InvocationPolicy:
 
 
 def build_builtin_local_tools() -> list[SkillSpec]:
-    """Build six built-in local tool specs."""
+    """Build built-in local tool specs."""
     return [
         SkillSpec(
             name="houyi_read_file",
@@ -516,6 +577,17 @@ def build_builtin_local_tools() -> list[SkillSpec]:
             invocation_policy=_policy_allow_with_consent(SideEffect.EXEC),
             permissions=Permissions(exec=ExecPerm(enabled=True)),
             metadata={"tags": ["shell", "command", "execution"]},
+        ),
+        SkillSpec(
+            name="houyi_local_cli",
+            description="Run a read-only local CLI-style command for read, list, find, or grep workflows.",
+            input_schema=LocalCliInput,
+            output_schema=ToolResponse,
+            executor=_local_cli_executor,
+            is_core=True,
+            invocation_policy=_policy_allow_filesystem_read(),
+            permissions=Permissions(filesystem=FilesystemPerm(read=True)),
+            metadata={"tags": ["cli", "read", "list", "find", "grep", "workspace"]},
         ),
     ]
 

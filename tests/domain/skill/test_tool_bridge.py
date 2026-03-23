@@ -19,6 +19,13 @@ class _InputB(BaseModel):
     path: str
 
 
+class _InputRich(BaseModel):
+    path: str
+    pattern: str
+    recursive: bool = False
+    limit: int = 20
+
+
 class _Output(BaseModel):
     ok: bool = True
 
@@ -30,12 +37,13 @@ def _make_skill(
     version: str = "1.0.0",
     is_core: bool = False,
     tags: list[str] | None = None,
+    input_schema: type[BaseModel] = _InputA,
 ) -> SkillSpec:
     metadata = {"tags": tags or []}
     return SkillSpec(
         name=name,
         description=description,
-        input_schema=_InputA,
+        input_schema=input_schema,
         output_schema=_Output,
         version=version,
         is_core=is_core,
@@ -135,3 +143,40 @@ class TestToolBridgeCollection:
         second = bridge.collect_tool_schemas(skill_filter=["search_docs"])
 
         assert second[0]["function"]["description"] == "Search docs"
+
+    def test_collect_tool_schemas_minimal_exposure(self) -> None:
+        registry = SkillRegistry()
+        registry.register(
+            _make_skill(
+                "search_docs",
+                "Search docs",
+                input_schema=_InputRich,
+            )
+        )
+        bridge = ToolBridge(registry)
+
+        schemas = bridge.collect_tool_schemas(
+            skill_filter=["search_docs"],
+            schema_exposure="minimal",
+        )
+
+        parameters = schemas[0]["function"]["parameters"]
+        assert set(parameters["properties"].keys()) <= {"path", "pattern", "recursive", "limit"}
+        assert len(parameters["properties"]) <= 3
+        assert parameters["required"] == ["path", "pattern"]
+
+    def test_collect_tool_schemas_full_exposure_by_default(self) -> None:
+        registry = SkillRegistry()
+        registry.register(
+            _make_skill(
+                "search_docs",
+                "Search docs",
+                input_schema=_InputRich,
+            )
+        )
+        bridge = ToolBridge(registry)
+
+        schemas = bridge.collect_tool_schemas(skill_filter=["search_docs"])
+
+        parameters = schemas[0]["function"]["parameters"]
+        assert set(parameters["properties"].keys()) == {"path", "pattern", "recursive", "limit"}

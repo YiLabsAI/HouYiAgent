@@ -11,8 +11,10 @@ These tests focus on core tool-calling loop behavior, including:
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -33,6 +35,7 @@ from houyi.infrastructure.config.env_config import (
     ENV_TOOLCALL_RESULT_SUMMARY_MAX_ITEMS,
     ENV_TOOLCALL_TIMING,
 )
+from houyi.skills.builtin import local_tools
 
 
 @dataclass
@@ -62,12 +65,16 @@ class _FakeAdapter:
         self.model = "fake-model"
         self.base_url = "http://fake.local"
         self.chat_payloads: list[list[dict[str, Any]]] = []
+        self.tool_payloads: list[list[dict[str, Any]] | None] = []
 
     async def chat(
         self, _messages: list[Any], tools: list[dict[str, Any]] | None = None, **_kwargs: Any
     ) -> _FakeResponse:
         self.calls += 1
         self.chat_payloads.append(json.loads(json.dumps(_messages)))
+        self.tool_payloads.append(
+            json.loads(json.dumps(tools)) if isinstance(tools, list) else None
+        )
         assert tools is None or isinstance(tools, list)
         if self._responses:
             return self._responses.pop(0)
@@ -93,9 +100,48 @@ class _DummyExecutor:
         return {"ok": True, **args}
 
 
+class _DirectSkillExecutor:
+    def __init__(self) -> None:
+        self.max_retries = 1
+        self.timeout = 10.0
+
+    async def execute(self, skill: SkillSpec, args: dict[str, Any]) -> dict[str, Any]:
+        result = skill.executor(**args)
+        if inspect.isawaitable(result):
+            result = await result
+        return result
+
+
 class _BudgetAdapter:
     def __init__(self, model: str) -> None:
         self.model = model
+
+
+def _collect_trace_metrics(
+    *, tool_trace: list[dict[str, Any]], tool_payloads: list[list[dict[str, Any]] | None]
+) -> dict[str, int]:
+    return {
+        "llm_round_count": len(tool_payloads),
+        "tool_round_count": len(
+            {
+                entry.get("round_index")
+                for entry in tool_trace
+                if isinstance(entry.get("round_index"), int)
+            }
+        ),
+        "tool_call_count": len(tool_trace),
+        "raw_payload_chars_total": sum(
+            int(entry.get("raw_payload_chars") or 0) for entry in tool_trace
+        ),
+        "presented_content_chars_total": sum(
+            int(entry.get("presented_content_chars") or 0) for entry in tool_trace
+        ),
+        "schema_chars_total": sum(
+            len(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+            for payload in tool_payloads
+            if isinstance(payload, list)
+        ),
+    }
 
 
 class TestToolCallRunner:
@@ -351,9 +397,13 @@ class TestToolCallRunner:
         assert tool_trace[0]["tool_call_id"] == "call_1"
         assert isinstance(tool_trace[0].get("duration_ms"), (int, float))
         assert tool_trace[0]["duration_ms"] > 0
+        assert tool_trace[0]["status"] == "ok"
+        assert tool_trace[0]["raw_payload_chars"] > 0
+        assert tool_trace[0]["presented_content_chars"] > 0
+        assert tool_trace[0]["presentation"]["footer_attached"] is True
 
     @pytest.mark.asyncio
-    async def test_continues_after_tool_execution_to_get_final_answer(self) -> None:
+    async def test_get_final_answer(self) -> None:
         class Input(BaseModel):
             q: str
 
@@ -472,6 +522,479 @@ class TestToolCallRunner:
             or '"_truncated": true' in tool_message["content"].lower()
         )
 
+    @pytest.mark.asyncio
+    async def test_local_cli_large_read(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("HOUYI_WORKSPACE_ROOT", str(tmp_path))
+        monkeypatch.setenv(ENV_TOOLCALL_LOOP_MAX_MESSAGE_CHARS, "40000")
+        monkeypatch.setenv(ENV_TOOLCALL_LOOP_MAX_TOTAL_CHARS, "120000")
+        monkeypatch.setenv(ENV_TOOLCALL_RESULT_SUMMARY_ENABLED, "1")
+        monkeypatch.setenv(ENV_TOOLCALL_RESULT_SUMMARY_MAX_CHARS, "600")
+        monkeypatch.setenv(ENV_TOOLCALL_RESULT_SUMMARY_MAX_ITEMS, "5")
+
+        target = tmp_path / "docs" / "large.txt"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(
+            "".join(f"line-{idx}: {'x' * 120}\n" for idx in range(2500)), encoding="utf-8"
+        )
+
+        local_cli_skill = next(
+            skill
+            for skill in local_tools.build_builtin_local_tools()
+            if skill.name == "houyi_local_cli"
+        )
+        adapter = _FakeAdapter(
+            [
+                _FakeResponse(
+                    content="",
+                    tool_calls=[
+                        {
+                            "id": "call_local_read_large",
+                            "type": "function",
+                            "function": {
+                                "name": "houyi_local_cli",
+                                "arguments": json.dumps(
+                                    {"command": "read", "path": "docs/large.txt"}
+                                ),
+                            },
+                        }
+                    ],
+                ),
+                _FakeResponse(content="done", tool_calls=[]),
+            ]
+        )
+
+        response, tool_trace = await ToolCallRunner().run(
+            adapter=adapter,
+            messages=[{"role": "user", "content": "read the large local file"}],
+            tools=[local_cli_skill.to_tool_schema()],
+            skills=[local_cli_skill],
+            executor=_DirectSkillExecutor(),
+            max_rounds=2,
+        )
+
+        assert response.content == "done"
+        assert len(tool_trace) == 1
+        assert tool_trace[0]["tool_name"] == "houyi_local_cli"
+        assert tool_trace[0]["status"] == "ok"
+        assert tool_trace[0]["result_summarized"] is True
+        assert tool_trace[0]["result_artifact_candidate"] is True
+        assert tool_trace[0]["presentation"]["result_summarized"] is True
+        assert tool_trace[0]["presentation"]["result_artifact_candidate"] is True
+        assert tool_trace[0]["raw_payload_chars"] > tool_trace[0]["presented_content_chars"]
+
+        second_round_payload = adapter.chat_payloads[-1]
+        tool_message = next(msg for msg in second_round_payload if msg.get("role") == "tool")
+        assert len(str(tool_message["content"])) < 2000
+        assert (
+            "[truncated" in str(tool_message["content"])
+            or '"_truncated": true' in str(tool_message["content"]).lower()
+        )
+
+    @pytest.mark.asyncio
+    async def test_local_cli_invalid_grep(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("HOUYI_WORKSPACE_ROOT", str(tmp_path))
+
+        local_cli_skill = next(
+            skill
+            for skill in local_tools.build_builtin_local_tools()
+            if skill.name == "houyi_local_cli"
+        )
+        adapter = _FakeAdapter(
+            [
+                _FakeResponse(
+                    content="",
+                    tool_calls=[
+                        {
+                            "id": "call_local_grep_invalid",
+                            "type": "function",
+                            "function": {
+                                "name": "houyi_local_cli",
+                                "arguments": json.dumps({"command": "grep", "path": "."}),
+                            },
+                        }
+                    ],
+                ),
+                _FakeResponse(content="done", tool_calls=[]),
+            ]
+        )
+
+        response, tool_trace = await ToolCallRunner().run(
+            adapter=adapter,
+            messages=[{"role": "user", "content": "grep the workspace"}],
+            tools=[local_cli_skill.to_tool_schema()],
+            skills=[local_cli_skill],
+            executor=_DirectSkillExecutor(),
+            max_rounds=2,
+        )
+
+        assert response.content == "done"
+        assert len(tool_trace) == 1
+        assert tool_trace[0]["result"]["raw"]["success"] is False
+        assert "query is required" in tool_trace[0]["result"]["raw"]["message"]
+        assert tool_trace[0]["status"] == "ok"
+        assert tool_trace[0]["presentation"]["error_detail_attached"] is False
+        assert tool_trace[0]["presentation"]["recovery_guidance_attached"] is False
+
+    @pytest.mark.asyncio
+    async def test_local_cli_missing_file(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("HOUYI_WORKSPACE_ROOT", str(tmp_path))
+
+        local_cli_skill = next(
+            skill
+            for skill in local_tools.build_builtin_local_tools()
+            if skill.name == "houyi_local_cli"
+        )
+        adapter = _FakeAdapter(
+            [
+                _FakeResponse(
+                    content="",
+                    tool_calls=[
+                        {
+                            "id": "call_local_read_missing",
+                            "type": "function",
+                            "function": {
+                                "name": "houyi_local_cli",
+                                "arguments": json.dumps(
+                                    {"command": "read", "path": "docs/missing.txt"}
+                                ),
+                            },
+                        }
+                    ],
+                ),
+                _FakeResponse(content="done", tool_calls=[]),
+            ]
+        )
+
+        response, tool_trace = await ToolCallRunner().run(
+            adapter=adapter,
+            messages=[{"role": "user", "content": "read a missing file"}],
+            tools=[local_cli_skill.to_tool_schema()],
+            skills=[local_cli_skill],
+            executor=_DirectSkillExecutor(),
+            max_rounds=2,
+        )
+
+        assert response.content == "done"
+        assert len(tool_trace) == 1
+        assert tool_trace[0]["result"]["raw"]["success"] is False
+        assert "File not found" in tool_trace[0]["result"]["raw"]["message"]
+        assert tool_trace[0]["status"] == "ok"
+        assert tool_trace[0]["presentation"]["error_detail_attached"] is False
+        assert tool_trace[0]["presentation"]["recovery_guidance_attached"] is False
+
+    @pytest.mark.asyncio
+    async def test_local_cli_large_grep(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("HOUYI_WORKSPACE_ROOT", str(tmp_path))
+        monkeypatch.setenv(ENV_TOOLCALL_LOOP_MAX_MESSAGE_CHARS, "40000")
+        monkeypatch.setenv(ENV_TOOLCALL_LOOP_MAX_TOTAL_CHARS, "120000")
+        monkeypatch.setenv(ENV_TOOLCALL_RESULT_SUMMARY_ENABLED, "1")
+        monkeypatch.setenv(ENV_TOOLCALL_RESULT_SUMMARY_MAX_CHARS, "600")
+        monkeypatch.setenv(ENV_TOOLCALL_RESULT_SUMMARY_MAX_ITEMS, "5")
+
+        docs_dir = tmp_path / "docs"
+        docs_dir.mkdir(parents=True, exist_ok=True)
+        for idx in range(60):
+            (docs_dir / f"match_{idx}.txt").write_text(
+                "".join(f"alpha result line {line_idx} {'y' * 80}\n" for line_idx in range(8)),
+                encoding="utf-8",
+            )
+
+        local_cli_skill = next(
+            skill
+            for skill in local_tools.build_builtin_local_tools()
+            if skill.name == "houyi_local_cli"
+        )
+        adapter = _FakeAdapter(
+            [
+                _FakeResponse(
+                    content="",
+                    tool_calls=[
+                        {
+                            "id": "call_local_grep_large",
+                            "type": "function",
+                            "function": {
+                                "name": "houyi_local_cli",
+                                "arguments": json.dumps(
+                                    {"command": "grep", "path": "docs", "query": "alpha"}
+                                ),
+                            },
+                        }
+                    ],
+                ),
+                _FakeResponse(content="done", tool_calls=[]),
+            ]
+        )
+
+        response, tool_trace = await ToolCallRunner().run(
+            adapter=adapter,
+            messages=[{"role": "user", "content": "grep a lot of local files"}],
+            tools=[local_cli_skill.to_tool_schema()],
+            skills=[local_cli_skill],
+            executor=_DirectSkillExecutor(),
+            max_rounds=2,
+        )
+
+        assert response.content == "done"
+        assert len(tool_trace) == 1
+        assert tool_trace[0]["status"] == "ok"
+        assert tool_trace[0]["result"]["raw"]["success"] is True
+        assert tool_trace[0]["result"]["raw"]["data"]["truncated"] is True
+        assert tool_trace[0]["result_summarized"] is True
+        assert tool_trace[0]["result_artifact_candidate"] is True
+        assert tool_trace[0]["raw_payload_chars"] > tool_trace[0]["presented_content_chars"]
+
+        second_round_payload = adapter.chat_payloads[-1]
+        tool_message = next(msg for msg in second_round_payload if msg.get("role") == "tool")
+        assert len(str(tool_message["content"])) < 2000
+        assert (
+            "[truncated" in str(tool_message["content"])
+            or '"_truncated": true' in str(tool_message["content"]).lower()
+        )
+
+    @pytest.mark.asyncio
+    async def test_pipeline_list(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("HOUYI_WORKSPACE_ROOT", str(tmp_path))
+
+        skills_dir = tmp_path / "houyi" / "skills"
+        (skills_dir / "web_search").mkdir(parents=True, exist_ok=True)
+        (skills_dir / "planning").mkdir(parents=True, exist_ok=True)
+        (skills_dir / "weather").mkdir(parents=True, exist_ok=True)
+        (skills_dir / "web_search" / "SKILL.md").write_text(
+            "# Web Search\nweb search local pipeline target\nline-3\nline-4\n",
+            encoding="utf-8",
+        )
+        (skills_dir / "planning" / "SKILL.md").write_text(
+            "# Planning\nplanning skill\n",
+            encoding="utf-8",
+        )
+        (skills_dir / "weather" / "SKILL.md").write_text(
+            "# Weather\nweather skill\n",
+            encoding="utf-8",
+        )
+
+        skill_map = {skill.name: skill for skill in local_tools.build_builtin_local_tools()}
+        typed_skills = [
+            skill_map["houyi_list_dir"],
+            skill_map["houyi_find_files"],
+            skill_map["houyi_grep"],
+            skill_map["houyi_read_file"],
+        ]
+        local_cli_skill = skill_map["houyi_local_cli"]
+
+        typed_adapter = _FakeAdapter(
+            [
+                _FakeResponse(
+                    content="",
+                    tool_calls=[
+                        {
+                            "id": "typed_list",
+                            "type": "function",
+                            "function": {
+                                "name": "houyi_list_dir",
+                                "arguments": json.dumps({"path": "houyi/skills"}),
+                            },
+                        }
+                    ],
+                ),
+                _FakeResponse(
+                    content="",
+                    tool_calls=[
+                        {
+                            "id": "typed_find",
+                            "type": "function",
+                            "function": {
+                                "name": "houyi_find_files",
+                                "arguments": json.dumps(
+                                    {
+                                        "root_path": "houyi/skills",
+                                        "pattern": "SKILL.md",
+                                        "search_mode": "exact",
+                                    }
+                                ),
+                            },
+                        }
+                    ],
+                ),
+                _FakeResponse(
+                    content="",
+                    tool_calls=[
+                        {
+                            "id": "typed_grep",
+                            "type": "function",
+                            "function": {
+                                "name": "houyi_grep",
+                                "arguments": json.dumps(
+                                    {"path": "houyi/skills", "query": "web search"}
+                                ),
+                            },
+                        }
+                    ],
+                ),
+                _FakeResponse(
+                    content="",
+                    tool_calls=[
+                        {
+                            "id": "typed_read",
+                            "type": "function",
+                            "function": {
+                                "name": "houyi_read_file",
+                                "arguments": json.dumps(
+                                    {
+                                        "path": "houyi/skills/web_search/SKILL.md",
+                                        "start_line": 1,
+                                        "end_line": 20,
+                                    }
+                                ),
+                            },
+                        }
+                    ],
+                ),
+                _FakeResponse(content="done", tool_calls=[]),
+            ]
+        )
+        local_cli_adapter = _FakeAdapter(
+            [
+                _FakeResponse(
+                    content="",
+                    tool_calls=[
+                        {
+                            "id": "cli_list",
+                            "type": "function",
+                            "function": {
+                                "name": "houyi_local_cli",
+                                "arguments": json.dumps(
+                                    {"command": "list", "path": "houyi/skills"}
+                                ),
+                            },
+                        }
+                    ],
+                ),
+                _FakeResponse(
+                    content="",
+                    tool_calls=[
+                        {
+                            "id": "cli_find",
+                            "type": "function",
+                            "function": {
+                                "name": "houyi_local_cli",
+                                "arguments": json.dumps(
+                                    {
+                                        "command": "find",
+                                        "path": "houyi/skills",
+                                        "pattern": "SKILL.md",
+                                        "search_mode": "exact",
+                                    }
+                                ),
+                            },
+                        }
+                    ],
+                ),
+                _FakeResponse(
+                    content="",
+                    tool_calls=[
+                        {
+                            "id": "cli_grep",
+                            "type": "function",
+                            "function": {
+                                "name": "houyi_local_cli",
+                                "arguments": json.dumps(
+                                    {
+                                        "command": "grep",
+                                        "path": "houyi/skills",
+                                        "query": "web search",
+                                    }
+                                ),
+                            },
+                        }
+                    ],
+                ),
+                _FakeResponse(
+                    content="",
+                    tool_calls=[
+                        {
+                            "id": "cli_read",
+                            "type": "function",
+                            "function": {
+                                "name": "houyi_local_cli",
+                                "arguments": json.dumps(
+                                    {
+                                        "command": "read",
+                                        "path": "houyi/skills/web_search/SKILL.md",
+                                        "start_line": 1,
+                                        "end_line": 20,
+                                    }
+                                ),
+                            },
+                        }
+                    ],
+                ),
+                _FakeResponse(content="done", tool_calls=[]),
+            ]
+        )
+
+        typed_response, typed_trace = await ToolCallRunner().run(
+            adapter=typed_adapter,
+            messages=[
+                {"role": "user", "content": "find the local web search skill and preview it"}
+            ],
+            tools=[skill.to_tool_schema() for skill in typed_skills],
+            skills=typed_skills,
+            executor=_DirectSkillExecutor(),
+            max_rounds=5,
+        )
+        local_cli_response, local_cli_trace = await ToolCallRunner().run(
+            adapter=local_cli_adapter,
+            messages=[
+                {"role": "user", "content": "find the local web search skill and preview it"}
+            ],
+            tools=[local_cli_skill.to_tool_schema()],
+            skills=[local_cli_skill],
+            executor=_DirectSkillExecutor(),
+            max_rounds=5,
+        )
+
+        typed_metrics = _collect_trace_metrics(
+            tool_trace=typed_trace,
+            tool_payloads=typed_adapter.tool_payloads,
+        )
+        local_cli_metrics = _collect_trace_metrics(
+            tool_trace=local_cli_trace,
+            tool_payloads=local_cli_adapter.tool_payloads,
+        )
+
+        assert typed_response.content == "done"
+        assert local_cli_response.content == "done"
+        assert typed_metrics["llm_round_count"] == local_cli_metrics["llm_round_count"] == 5
+        assert typed_metrics["tool_round_count"] == local_cli_metrics["tool_round_count"] == 4
+        assert typed_metrics["tool_call_count"] == local_cli_metrics["tool_call_count"] == 4
+        assert local_cli_metrics["schema_chars_total"] < typed_metrics["schema_chars_total"]
+        assert local_cli_metrics["presented_content_chars_total"] <= (
+            typed_metrics["presented_content_chars_total"] + 400
+        )
+        assert local_cli_metrics["raw_payload_chars_total"] <= (
+            typed_metrics["raw_payload_chars_total"] + 400
+        )
+
 
 def test_prepare_drops_group() -> None:
     messages = [
@@ -525,7 +1048,7 @@ def test_prepare_drops_group() -> None:
     assert prepared[1]["tool_call_id"] == "call_3"
 
 
-def test_prepare_preserves_missing_content_on_assistant_tool_turn() -> None:
+def test_preserves_missing_content() -> None:
     messages = [
         {
             "role": "assistant",
@@ -556,51 +1079,7 @@ def test_prepare_preserves_missing_content_on_assistant_tool_turn() -> None:
     }
 
 
-def test_prepare_splits_multi_tool_assistant_turn_into_single_call_turns() -> None:
-    messages = [
-        {
-            "role": "assistant",
-            "tool_calls": [
-                {
-                    "id": "call_1",
-                    "type": "function",
-                    "function": {"name": "demo_1", "arguments": {"q": 1}},
-                },
-                {
-                    "id": "call_2",
-                    "type": "function",
-                    "function": {"name": "demo_2", "arguments": {"q": 2}},
-                },
-            ],
-        },
-        {"role": "tool", "content": '{"ok":1}', "tool_call_id": "call_1"},
-        {"role": "tool", "content": '{"ok":2}', "tool_call_id": "call_2"},
-    ]
-
-    prepared = prepare_tool_loop_messages(messages, max_message_chars=12_000, max_total_chars=8_000)
-
-    assert prepared == [
-        {
-            "role": "assistant",
-            "tool_calls": [
-                {
-                    "id": "call_1",
-                    "type": "function",
-                    "function": {"name": "demo_1", "arguments": '{"q": 1}'},
-                },
-                {
-                    "id": "call_2",
-                    "type": "function",
-                    "function": {"name": "demo_2", "arguments": '{"q": 2}'},
-                },
-            ],
-        },
-        {"role": "tool", "content": '{"ok":1}', "tool_call_id": "call_1"},
-        {"role": "tool", "content": '{"ok":2}', "tool_call_id": "call_2"},
-    ]
-
-
-def test_prepare_caps_large_history_to_recent_messages() -> None:
+def test_caps_large_history() -> None:
     messages = [{"role": "system", "content": "sys"}]
     for index in range(60):
         messages.append({"role": "user", "content": f"u-{index}"})
@@ -618,7 +1097,7 @@ def test_prepare_caps_large_history_to_recent_messages() -> None:
     assert prepared[-1]["content"] == "a-59"
 
 
-def test_prepare_count_cap_preserves_latest_assistant_tool_pair() -> None:
+def test_latest_assistant_tool() -> None:
     messages = [{"role": "system", "content": "sys"}]
     for index in range(47):
         messages.append({"role": "user", "content": f"u-{index}"})
@@ -658,7 +1137,7 @@ def test_prepare_count_cap_preserves_latest_assistant_tool_pair() -> None:
     }
 
 
-def test_prioritizes_recent_tool_context() -> None:
+def test_prioritizes_recent_toolcontext() -> None:
     messages = [{"role": "system", "content": "sys"}]
     for index in range(60):
         messages.append({"role": "user", "content": f"u-{index}"})
@@ -701,7 +1180,7 @@ def test_prioritizes_recent_tool_context() -> None:
     }
 
 
-def test_prepare_count_cap_drops_orphan_leading_assistant_after_trim() -> None:
+def test_drops_orphan_assistant() -> None:
     messages = [{"role": "system", "content": "sys"}]
     for index in range(54):
         messages.append({"role": "user", "content": f"u-{index}"})
@@ -888,6 +1367,8 @@ class TestToolCallRunnerBehavior:
         assert len(tool_trace) == 2
         assert tool_trace[0]["result"]["raw"]["error"] == "tool_name_missing"
         assert tool_trace[1]["result"]["raw"]["error"].startswith("tool_not_found")
+        assert tool_trace[0]["result"]["raw"]["recovery_guidance"]["code"] == "missing_tool"
+        assert tool_trace[1]["result"]["raw"]["recovery_guidance"]["similar_tools"] == []
 
     @pytest.mark.asyncio
     async def test_llm_cache_skips(self) -> None:
@@ -1538,6 +2019,32 @@ class TestToolCallRunnerMetrics:
         metrics = metrics_store.aggregate("timeout_tool")
         assert metrics is not None
         assert metrics.reliability.timeout_count >= 1
+
+        response, tool_trace = await runner.run(
+            adapter=_FakeAdapter(
+                [
+                    _FakeResponse(
+                        content="",
+                        tool_calls=[
+                            {
+                                "id": "c2",
+                                "type": "function",
+                                "function": {"name": "timeout_tool", "arguments": "{}"},
+                            }
+                        ],
+                    )
+                ]
+            ),
+            messages=[{"role": "user", "content": "hi"}],
+            tools=[skill.to_tool_schema()],
+            skills=[skill],
+            executor=_DummyExecutor(timeout=True),
+            max_rounds=1,
+        )
+
+        assert response is not None
+        assert tool_trace[0]["result"]["raw"]["recovery_guidance"]["code"] == "execution_timeout"
+        assert tool_trace[0]["presentation"]["recovery_guidance_attached"] is True
 
     @pytest.mark.asyncio
     async def test_get_skill_metrics(self) -> None:
