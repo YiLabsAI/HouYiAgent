@@ -17,6 +17,10 @@ _TOOL_MARKER_RE = re.compile(
     r"\[tool call\]|\[tool_call\]|<tool_call\b[^>]*>[\s\S]*?</tool_call>|<tool_call\b[^>]*>|</tool_call>|<arg_[^>]+>[\s\S]*?</arg_[^>]+>|<arg_[^>]+>|</arg_[^>]+>|</?think>|<\|tool_calls_section_begin\|>|<\|tool_calls_section_end\|>|<\|tool_call_begin\|>|<\|tool_call_end\|>|<\|tool_call_argument_begin\|>|<\|tool_call_argument_end\|>|<\|tool_[^|]+\|>",
     re.IGNORECASE,
 )
+_PLAIN_TEXT_TOOL_CARRIER_RE = re.compile(
+    r"(?:\btool\s*:\s*[a-zA-Z_][\w.-]*\s*&args\s*:|^\s*tool\s+calls\s+requested\s*:)",
+    re.IGNORECASE,
+)
 _DEEPSEEK_TOOL_LOOP_MODELS = frozenset(
     {normalize_model_id(DEEPSEEK_R1), normalize_model_id(DEEPSEEK_V3_2)}
 )
@@ -63,6 +67,8 @@ def _should_relax_tool_loop_for_siliconflow_deepseek(llm_adapter: Any, model: st
 def _sanitize_replay_text(raw: Any) -> str:
     text = str(raw or "")
     if not text:
+        return ""
+    if _PLAIN_TEXT_TOOL_CARRIER_RE.search(text):
         return ""
     if not _TOOL_MARKER_RE.search(text):
         return text.strip()
@@ -213,14 +219,29 @@ class ToolLoopOrchestrator:
             return ToolLoopOutcome(llm_messages=llm_messages)
 
         tool_bridge = self._tool_bridge_factory()
-        tool_schemas = tool_bridge.collect_tool_schemas(
-            skill_filter=enabled_chat_skills,
-            include_core=True,
-        )
-        tool_specs = tool_bridge.collect_skills(
-            skill_filter=enabled_chat_skills,
-            include_core=True,
-        )
+        schema_exposure = str(getattr(request, "schema_exposure", None) or "full").strip().lower()
+        try:
+            tool_schemas = tool_bridge.collect_tool_schemas(
+                skill_filter=enabled_chat_skills,
+                include_core=True,
+                schema_exposure=schema_exposure,
+            )
+        except TypeError:
+            tool_schemas = tool_bridge.collect_tool_schemas(
+                skill_filter=enabled_chat_skills,
+                include_core=True,
+            )
+        try:
+            tool_specs = tool_bridge.collect_skills(
+                skill_filter=enabled_chat_skills,
+                include_core=True,
+                schema_exposure=schema_exposure,
+            )
+        except TypeError:
+            tool_specs = tool_bridge.collect_skills(
+                skill_filter=enabled_chat_skills,
+                include_core=True,
+            )
         if not tool_schemas or not tool_specs or not hasattr(llm_adapter, "chat"):
             return ToolLoopOutcome(llm_messages=llm_messages)
 
@@ -264,10 +285,19 @@ class ToolLoopOrchestrator:
             allow_tool_replace=False,
         )
 
+        response_metadata: dict[str, Any] | None = None
+        if isinstance(getattr(tool_loop_response, "metadata", None), dict):
+            response_metadata = dict(tool_loop_response.metadata)
+
         event_chunks = build_tool_trace_events(
             tool_trace=tool_trace,
             assistant_message_id=assistant_message_id,
             trace_id=trace_id,
+            round_summaries=(
+                response_metadata.get("tool_loop_round_summaries")
+                if isinstance(response_metadata, dict)
+                else None
+            ),
         )
 
         intermediate_messages = [
@@ -292,10 +322,6 @@ class ToolLoopOrchestrator:
         usage_payload: dict[str, Any] | None = None
         if isinstance(getattr(tool_loop_response, "usage", None), dict):
             usage_payload = self._normalize_usage_payload(self._json_safe(tool_loop_response.usage))
-        response_metadata: dict[str, Any] | None = None
-        if isinstance(getattr(tool_loop_response, "metadata", None), dict):
-            response_metadata = dict(tool_loop_response.metadata)
-
         replay_response: Any | None = None
         convergence_reason: str | None = None
         terminal_tool_call_count = len(list(getattr(tool_loop_response, "tool_calls", []) or []))

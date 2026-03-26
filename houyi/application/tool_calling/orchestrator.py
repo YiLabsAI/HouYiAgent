@@ -34,6 +34,83 @@ class ToolLoopOrchestrator:
     """Application-layer helpers that drive per-round tool execution."""
 
     @staticmethod
+    def _round_summary(response: Any, round_index: int) -> dict[str, Any]:
+        response_usage = getattr(response, "usage", None)
+        return {
+            "round_index": round_index + 1,
+            "usage": dict(response_usage) if isinstance(response_usage, dict) else None,
+        }
+
+    @staticmethod
+    def _attach_round_summaries(response: Any, round_summaries: list[dict[str, Any]]) -> None:
+        if hasattr(response, "metadata") and isinstance(response.metadata, dict):
+            response.metadata["tool_loop_round_summaries"] = list(round_summaries)
+            return
+        if hasattr(response, "metadata"):
+            response.metadata = {"tool_loop_round_summaries": list(round_summaries)}
+
+    @staticmethod
+    def _log_round_response(
+        *,
+        response: Any,
+        round_index: int,
+        chat_start: float,
+        enable_timing: bool,
+    ) -> None:
+        response_content = str(getattr(response, "content", "") or "")
+        response_metadata = getattr(response, "metadata", None)
+        response_reasoning = (
+            str(response_metadata.get("reasoning_content") or "")
+            if isinstance(response_metadata, dict)
+            else ""
+        )
+        tool_call_count = len(response.tool_calls or [])
+        contains_textual_tool_markers = bool(
+            _TEXTUAL_TOOL_MARKER_RE.search(response_content)
+            or _TEXTUAL_TOOL_MARKER_RE.search(response_reasoning)
+        )
+        logger.debug(
+            "[ToolCallRunner] round=%s response_shape tool_calls=%s content_len=%s reasoning_len=%s finish_reason=%s textual_tool_markers=%s",
+            round_index + 1,
+            tool_call_count,
+            len(response_content),
+            len(response_reasoning),
+            getattr(response, "finish_reason", None),
+            contains_textual_tool_markers,
+        )
+        if tool_call_count == 0 and contains_textual_tool_markers:
+            logger.warning(
+                "[ToolCallRunner] round=%s response contained textual tool markers without structured tool_calls",
+                round_index + 1,
+            )
+        if enable_timing:
+            chat_elapsed = time.perf_counter() - chat_start
+            logger.debug(
+                "[ToolCallRunner] round=%s chat=%.3fs tool_calls=%s",
+                round_index + 1,
+                chat_elapsed,
+                tool_call_count,
+            )
+
+    @staticmethod
+    def _complete_without_tools(
+        *,
+        response: Any,
+        round_index: int,
+        round_summaries: list[dict[str, Any]],
+        enable_timing: bool,
+        started_at_monotonic: float | None,
+    ) -> Any:
+        if enable_timing and started_at_monotonic is not None:
+            logger.debug(
+                "[ToolCallRunner] completed: rounds_used=%s total=%.3fs",
+                round_index + 1,
+                time.perf_counter() - started_at_monotonic,
+            )
+        ToolLoopOrchestrator._attach_round_summaries(response, round_summaries)
+        return response
+
+    @staticmethod
     async def execute_rounds(ctx: ToolLoopContext) -> Any:
         runner = ctx.runner
         config = ctx.config
@@ -41,6 +118,7 @@ class ToolLoopOrchestrator:
         services = ctx.services
 
         response: Any = None
+        round_summaries: list[dict[str, Any]] = []
         for round_index in range(config.tool_loop_max_rounds):
             round_start = time.perf_counter() if config.tool_loop_enable_timing else 0.0
             chat_start = time.perf_counter() if config.tool_loop_enable_timing else 0.0
@@ -57,51 +135,21 @@ class ToolLoopOrchestrator:
                 services.llm_response_cache,
                 round_index,
             )
-            response_content = str(getattr(response, "content", "") or "")
-            response_metadata = getattr(response, "metadata", None)
-            response_reasoning = (
-                str(response_metadata.get("reasoning_content") or "")
-                if isinstance(response_metadata, dict)
-                else ""
+            round_summaries.append(ToolLoopOrchestrator._round_summary(response, round_index))
+            ToolLoopOrchestrator._log_round_response(
+                response=response,
+                round_index=round_index,
+                chat_start=chat_start,
+                enable_timing=config.tool_loop_enable_timing,
             )
-            tool_call_count = len(response.tool_calls or [])
-            contains_textual_tool_markers = bool(
-                _TEXTUAL_TOOL_MARKER_RE.search(response_content)
-                or _TEXTUAL_TOOL_MARKER_RE.search(response_reasoning)
-            )
-            logger.debug(
-                "[ToolCallRunner] round=%s response_shape tool_calls=%s content_len=%s reasoning_len=%s finish_reason=%s textual_tool_markers=%s",
-                round_index + 1,
-                tool_call_count,
-                len(response_content),
-                len(response_reasoning),
-                getattr(response, "finish_reason", None),
-                contains_textual_tool_markers,
-            )
-            if tool_call_count == 0 and contains_textual_tool_markers:
-                logger.warning(
-                    "[ToolCallRunner] round=%s response contained textual tool markers without structured tool_calls",
-                    round_index + 1,
-                )
-            if config.tool_loop_enable_timing:
-                chat_elapsed = time.perf_counter() - chat_start
-                logger.debug(
-                    "[ToolCallRunner] round=%s chat=%.3fs tool_calls=%s",
-                    round_index + 1,
-                    chat_elapsed,
-                    tool_call_count,
-                )
             if not response.tool_calls:
-                if (
-                    config.tool_loop_enable_timing
-                    and state.tool_loop_started_at_monotonic is not None
-                ):
-                    logger.debug(
-                        "[ToolCallRunner] completed: rounds_used=%s total=%.3fs",
-                        round_index + 1,
-                        time.perf_counter() - state.tool_loop_started_at_monotonic,
-                    )
-                return response
+                return ToolLoopOrchestrator._complete_without_tools(
+                    response=response,
+                    round_index=round_index,
+                    round_summaries=round_summaries,
+                    enable_timing=config.tool_loop_enable_timing,
+                    started_at_monotonic=state.tool_loop_started_at_monotonic,
+                )
 
             assistant_tool_message = build_assistant_tool_message(response)
             state.tool_loop_messages.append(assistant_tool_message)
@@ -115,8 +163,10 @@ class ToolLoopOrchestrator:
                 )
             )
             if should_stop:
+                ToolLoopOrchestrator._attach_round_summaries(response, round_summaries)
                 return response
-
+        if response is not None:
+            ToolLoopOrchestrator._attach_round_summaries(response, round_summaries)
         return response
 
     @staticmethod

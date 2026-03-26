@@ -313,7 +313,7 @@ class TestChatServiceToolLoopGating:
         assert decision.reason == "explicit_skill_request"
         assert decision.enabled_skills == ["houyi_web_search"]
 
-    def test_explicit_repo_skills_with_plain_english_prompt(self):
+    def test_explicit_repo_skills(self):
         service = ChatService(json_store=MagicMock())
         decision = service._gate_tool_loop(
             request=SendMessageRequest(
@@ -340,7 +340,7 @@ class TestChatServiceToolLoopGating:
             "houyi_read_file",
         ]
 
-    def test_explicit_mixed_skills_keep_local_and_web(self):
+    def test_explicit_mixed_skills(self):
         service = ChatService(json_store=MagicMock())
         decision = service._gate_tool_loop(
             request=SendMessageRequest(

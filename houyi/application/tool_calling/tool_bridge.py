@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from houyi.domain.skill.registry import SkillRegistry
+from houyi.skills.builtin.local_tools import build_local_cli_projected_skills
 
 _RELEVANCE_TOKEN_PATTERN = re.compile(r"[a-zA-Z0-9_]{3,}")
 _SKILL_NAME_ALIASES = {
@@ -73,6 +74,83 @@ def _to_minimal_parameter_schema(schema: dict[str, Any]) -> dict[str, Any]:
     return cleaned
 
 
+def _to_minimal_chain_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    cleaned = _simplify_schema(schema)
+    properties = cleaned.get("properties")
+    if not isinstance(properties, dict):
+        return cleaned
+    if "steps" not in properties:
+        return _to_minimal_parameter_schema(cleaned)
+    cleaned["properties"] = {"steps": properties["steps"]}
+    cleaned["required"] = []
+    return cleaned
+
+
+def _to_default_chain_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    cleaned = _simplify_schema(schema)
+    properties = cleaned.get("properties")
+    if not isinstance(properties, dict):
+        return cleaned
+    selected_names = [
+        "mode",
+        "workflow_id",
+        "continuation_token",
+        "resume_from_step_index",
+        "failed_step_index",
+        "repair_action",
+        "steps",
+    ]
+    cleaned["properties"] = {
+        name: properties[name] for name in selected_names if name in properties
+    }
+    steps_schema = cleaned["properties"].get("steps")
+    if isinstance(steps_schema, dict):
+        items = steps_schema.get("items")
+        if isinstance(items, dict):
+            item_properties = items.get("properties")
+            if isinstance(item_properties, dict):
+                step_selected_names = [
+                    "operator",
+                    "command",
+                    "path",
+                    "pattern",
+                    "query",
+                    "start_line",
+                    "end_line",
+                ]
+                items["properties"] = {
+                    name: item_properties[name]
+                    for name in step_selected_names
+                    if name in item_properties
+                }
+                items["required"] = [
+                    name for name in (items.get("required") or []) if name in items["properties"]
+                ]
+    cleaned["required"] = []
+    return cleaned
+
+
+def _use_projected_local_cli(schema_exposure: str) -> bool:
+    return schema_exposure in {"projected", "projected_minimal"}
+
+
+def _use_minimal_schema(schema_exposure: str) -> bool:
+    return schema_exposure in {"minimal", "projected_minimal"}
+
+
+def _expand_projected_skills(skills: list[Any], *, schema_exposure: str) -> list[Any]:
+    if not _use_projected_local_cli(schema_exposure):
+        return skills
+
+    expanded: list[Any] = []
+    for skill in skills:
+        if str(getattr(skill, "name", "")) == "houyi_local_cli":
+            expanded.extend(build_local_cli_projected_skills())
+            continue
+        expanded.append(skill)
+    return expanded
+
+
 def _schema_from_input_model(input_model: Any) -> dict[str, Any]:
     if not input_model:
         return {}
@@ -117,7 +195,18 @@ def _apply_schema_exposure(
     *,
     schema_exposure: str,
 ) -> dict[str, Any]:
-    if schema_exposure == "minimal":
+    function_payload = dict(schema.get("function", {}))
+    parameters = function_payload.get("parameters")
+    function_name = str(function_payload.get("name", "") or "")
+    if isinstance(parameters, dict) and function_name == "houyi_local_cli_chain":
+        function_payload["parameters"] = _to_default_chain_schema(parameters)
+        exposed = dict(schema)
+        exposed["function"] = function_payload
+        if _use_minimal_schema(schema_exposure):
+            function_payload["parameters"] = _to_minimal_chain_schema(parameters)
+            exposed["function"] = function_payload
+        return exposed
+    if _use_minimal_schema(schema_exposure):
         function_payload = dict(schema.get("function", {}))
         parameters = function_payload.get("parameters")
         if isinstance(parameters, dict):
@@ -139,6 +228,7 @@ class ToolBridge:
         self,
         skill_filter: list[str] | None = None,
         include_core: bool = True,
+        schema_exposure: str = "full",
     ) -> list[Any]:
         if skill_filter:
             seen: set[int] = set()
@@ -152,12 +242,15 @@ class ToolBridge:
                     continue
                 seen.add(marker)
                 selected.append(skill)
-            return selected
+            return _expand_projected_skills(selected, schema_exposure=schema_exposure)
 
         all_skills = self._registry.list()
         if include_core:
-            return list(all_skills)
-        return [skill for skill in all_skills if not getattr(skill, "is_core", False)]
+            return _expand_projected_skills(list(all_skills), schema_exposure=schema_exposure)
+        return _expand_projected_skills(
+            [skill for skill in all_skills if not getattr(skill, "is_core", False)],
+            schema_exposure=schema_exposure,
+        )
 
     def _resolve_skill(self, skill_name: str) -> Any | None:
         skill = self._registry.get(skill_name)
@@ -176,7 +269,11 @@ class ToolBridge:
         usage_counts: dict[str, int] | None = None,
         schema_exposure: str = "full",
     ) -> list[dict[str, Any]]:
-        selected_skills = self.collect_skills(skill_filter=skill_filter, include_core=include_core)
+        selected_skills = self.collect_skills(
+            skill_filter=skill_filter,
+            include_core=include_core,
+            schema_exposure=schema_exposure,
+        )
         if not selected_skills:
             return []
 

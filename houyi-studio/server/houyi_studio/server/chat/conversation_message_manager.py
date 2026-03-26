@@ -2,9 +2,23 @@ from __future__ import annotations
 
 import time
 from collections.abc import AsyncIterator, Callable
+from dataclasses import dataclass
 
 from .json_store import JsonStore
 from .types import EditMessageRequest, Message, MessageRole, SendMessageRequest
+
+
+@dataclass(frozen=True)
+class RewriteResult:
+    message: Message | None
+    conversation: object
+    context_state_event: dict | None = None
+
+
+@dataclass(frozen=True)
+class RegenerationPreparation:
+    last_user_content: str
+    context_state_event: dict | None = None
 
 
 class ConversationMessageManager:
@@ -13,16 +27,20 @@ class ConversationMessageManager:
         *,
         json_store: JsonStore,
         send_message: Callable[[str, SendMessageRequest], AsyncIterator[str]],
+        context_state_updater: object,
+        default_model: str,
     ) -> None:
         self._json_store = json_store
         self._send_message = send_message
+        self._context_state_updater = context_state_updater
+        self._default_model = default_model
 
     async def edit_message(
         self,
         conversation_id: str,
         message_id: str,
         request: EditMessageRequest,
-    ) -> Message:
+    ) -> RewriteResult:
         conv_lock = await self._json_store.lock(conversation_id)
         async with conv_lock:
             conversation = self._json_store.get(conversation_id)
@@ -39,10 +57,15 @@ class ConversationMessageManager:
             message.metadata["edited"] = True
             message.metadata["edited_at"] = time.time()
             conversation.updated_at = time.time()
+            context_state_event = self._recompute_state(conversation)
             self._json_store.update(conversation)
-            return message
+            return RewriteResult(
+                message=message,
+                conversation=conversation,
+                context_state_event=context_state_event,
+            )
 
-    async def delete_message(self, conversation_id: str, message_id: str) -> None:
+    async def delete_message(self, conversation_id: str, message_id: str) -> RewriteResult:
         conv_lock = await self._json_store.lock(conversation_id)
         async with conv_lock:
             conversation = self._json_store.get(conversation_id)
@@ -63,22 +86,40 @@ class ConversationMessageManager:
                 item for item in conversation.messages if item.message_id not in to_remove_ids
             ]
             conversation.updated_at = time.time()
+            context_state_event = self._recompute_state(conversation)
             self._json_store.update(conversation)
+            return RewriteResult(
+                message=None,
+                conversation=conversation,
+                context_state_event=context_state_event,
+            )
 
     async def regenerate_message(
         self,
         conversation_id: str,
         message_id: str,
     ) -> AsyncIterator[str]:
-        last_user_content = await self._prepare_regeneration(
+        preparation = await self._prepare_regeneration(
             conversation_id=conversation_id,
             message_id=message_id,
         )
-        request = SendMessageRequest(content=last_user_content)
+        request = SendMessageRequest(content=preparation.last_user_content)
         async for chunk in self._send_message(conversation_id, request):
             yield chunk
 
-    async def _prepare_regeneration(self, *, conversation_id: str, message_id: str) -> str:
+    async def prepare_regeneration(
+        self,
+        *,
+        conversation_id: str,
+        message_id: str,
+    ) -> RegenerationPreparation:
+        return await self._prepare_regeneration(
+            conversation_id=conversation_id, message_id=message_id
+        )
+
+    async def _prepare_regeneration(
+        self, *, conversation_id: str, message_id: str
+    ) -> RegenerationPreparation:
         conv_lock = await self._json_store.lock(conversation_id)
         async with conv_lock:
             conversation = self._json_store.get(conversation_id)
@@ -105,8 +146,24 @@ class ConversationMessageManager:
             if conversation.messages and conversation.messages[-1].role == MessageRole.USER:
                 conversation.messages.pop()
             conversation.updated_at = time.time()
+            context_state_event = self._recompute_state(conversation)
             self._json_store.update(conversation)
-            return last_user_content
+            return RegenerationPreparation(
+                last_user_content=last_user_content,
+                context_state_event=context_state_event,
+            )
+
+    def _recompute_state(self, conversation: object) -> dict | None:
+        model = getattr(conversation, "model", None) or self._default_model
+        result = self._context_state_updater.apply(
+            conversation=conversation,
+            request=self._context_state_updater.request_cls(
+                mode="recompute",
+                reason="rewrite_messages",
+                model=model,
+            ),
+        )
+        return getattr(result, "event_payload", None)
 
     def _find_preceding_user_content(self, messages: list[Message], *, before_index: int) -> str:
         for idx in range(before_index - 1, -1, -1):

@@ -99,6 +99,43 @@ class TestSendMessageMainline:
         assert conv.messages[1].metadata["post_stream_persist_ms"] >= 0
         assert conv.messages[1].metadata["tokens_per_second"] > 0
 
+    def test_regenerate_emits_rewrite_context_state_before_new_deltas(self, app_and_client):
+        _, client, store = app_and_client
+        conv_id = create_conversation_id(client, title="Regenerate Rewrite Event")
+
+        conv = get_conversation_or_fail(store, conv_id)
+        conv.messages = [
+            chat_service_module.Message(
+                message_id="u1",
+                role=chat_service_module.MessageRole.USER,
+                content="Original question",
+            ),
+            chat_service_module.Message(
+                message_id="a1",
+                role=chat_service_module.MessageRole.ASSISTANT,
+                content="Original answer",
+            ),
+        ]
+        store.update(conv)
+
+        resp = assert_status_code(
+            client.post(f"/api/chat/conversations/{conv_id}/messages/a1/regenerate")
+        )
+        events = get_sse_events(resp)
+        assert_event_names_present(
+            events,
+            ["context.state.updated", "message.delta", "message.complete"],
+        )
+        assert_event_order(events, "context.state.updated", "message.delta")
+        rewrite_state_event = get_event(events, "context.state.updated")
+        assert rewrite_state_event["data"]["conversation_id"] == conv_id
+        assert rewrite_state_event["data"]["reason"] == "rewrite_messages"
+        assert rewrite_state_event["data"]["source"] == "recompute"
+
+        persisted = get_conversation_or_fail(store, conv_id)
+        assert persisted.messages[-1].role == chat_service_module.MessageRole.ASSISTANT
+        assert persisted.messages[-1].content
+
     def test_send_message_finish(self, app_and_client, monkeypatch):
         _, client, store = app_and_client
         conv_id = create_conversation_id(client, title="Finish Reason")
@@ -395,9 +432,11 @@ class TestSendMessageMainline:
         )
         events = get_sse_events(resp)
         assert_event_names_present(
-            events, ["context.compacted", "message.delta", "message.complete"]
+            events,
+            ["context.compacted", "context.state.updated", "message.delta", "message.complete"],
         )
         assert_event_order(events, "context.compacted", "message.delta")
+        assert_event_order(events, "context.state.updated", "message.delta")
         assert_delta_text(
             events,
             "I will continue summarizing the current progress in Chinese; even if you switch to English in this turn, tool results, stale English summaries, or compressed context residue will not steer me away.",
@@ -766,7 +805,7 @@ class TestLanguageEnforcementContextAssembly:
         )
 
         events = get_sse_events(resp)
-        assert_event_names_present(events, ["context.compacted"])
+        assert_event_names_present(events, ["context.compacted", "context.state.updated"])
         assert_compaction_event(
             events,
             trigger="overflow_recovery",

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import time
+from dataclasses import dataclass
 from typing import Any
 
 from houyi.infrastructure.observability import Span
@@ -11,12 +12,18 @@ from .types import Message
 logger = logging.getLogger(__name__)
 
 
+@dataclass(frozen=True)
+class PersistResult:
+    persisted: bool
+    context_state_event: dict[str, Any] | None = None
+
+
 class AssistantTurnPersistence:
     """Persists the assistant turn and applies conversation state updates."""
 
-    def __init__(self, *, json_store: Any, conversation_context: Any) -> None:
+    def __init__(self, *, json_store: Any, context_state_updater: Any) -> None:
         self._json_store = json_store
-        self._conversation_context = conversation_context
+        self._context_state_updater = context_state_updater
 
     async def persist(
         self,
@@ -34,7 +41,7 @@ class AssistantTurnPersistence:
         completion_emitted_at: float | None,
         chat_span: Span,
         model: str,
-    ) -> bool:
+    ) -> PersistResult:
         assistant_msg.content = "".join(content_parts)
         if reasoning_parts:
             assistant_msg.reasoning_content = "".join(reasoning_parts)
@@ -46,8 +53,9 @@ class AssistantTurnPersistence:
                 conversation_id,
                 assistant_msg.message_id,
             )
-            return False
+            return PersistResult(persisted=False)
 
+        context_state_event: dict[str, Any] | None = None
         async with conv_lock:
             if isinstance(usage_payload, dict) and usage_payload:
                 assistant_msg.metadata["usage"] = usage_payload
@@ -69,11 +77,18 @@ class AssistantTurnPersistence:
                     conversation.messages.extend(persisted_tool_messages)
                 conversation.messages.append(assistant_msg)
                 conversation.updated_at = time.time()
-                self._conversation_context.apply_appended_messages(
-                    conversation,
-                    messages=[*persisted_tool_messages, assistant_msg],
-                    model=model,
+                # Persisted assistant/tool messages are the authoritative append
+                # point for rolling context state during the main chat stream.
+                update_result = self._context_state_updater.apply(
+                    conversation=conversation,
+                    request=self._context_state_updater.request_cls(
+                        mode="append",
+                        reason="assistant_persist",
+                        model=model,
+                        messages=[*persisted_tool_messages, assistant_msg],
+                    ),
                 )
+                context_state_event = update_result.event_payload
                 self._json_store.update(conversation)
 
         chat_span.set_attribute("chat.response_content_len", len(assistant_msg.content))
@@ -84,4 +99,4 @@ class AssistantTurnPersistence:
             assistant_msg.message_id,
             len(assistant_msg.content),
         )
-        return True
+        return PersistResult(persisted=True, context_state_event=context_state_event)

@@ -15,17 +15,38 @@ def build_tool_trace_events(
     tool_trace: list[dict[str, Any]] | None,
     assistant_message_id: str,
     trace_id: str,
+    round_summaries: list[dict[str, Any]] | None = None,
 ) -> list[str]:
     entries = [entry for entry in (tool_trace or []) if isinstance(entry, dict)]
     event_chunks: list[str] = []
+    normalized_round_summaries = [
+        item for item in (round_summaries or []) if isinstance(item, dict)
+    ]
     round_indexes = sorted(
         {
+            round_index
+            for round_index in (item.get("round_index") for item in normalized_round_summaries)
+            if isinstance(round_index, int)
+        }
+        or {
             round_index
             for round_index in (entry.get("round_index") for entry in entries)
             if isinstance(round_index, int)
         }
     )
     for round_index in round_indexes:
+        iteration_entry = next(
+            (item for item in normalized_round_summaries if item.get("round_index") == round_index),
+            next(
+                (
+                    entry
+                    for entry in entries
+                    if entry.get("round_index") == round_index
+                    and not str(entry.get("tool_call_id") or "").strip()
+                ),
+                {},
+            ),
+        )
         event_chunks.append(
             SSEEvent(
                 event="agent.iteration",
@@ -33,12 +54,17 @@ def build_tool_trace_events(
                     "message_id": assistant_message_id,
                     "trace_id": trace_id,
                     "round_index": round_index,
+                    "usage": iteration_entry.get("usage")
+                    if isinstance(iteration_entry, dict)
+                    else None,
                 },
             ).encode()
         )
 
     for entry in entries:
         tool_call_id = entry.get("tool_call_id")
+        if not isinstance(tool_call_id, str) or not tool_call_id:
+            continue
         tool_name = entry.get("tool_name")
         requested_tool_name = entry.get("requested_tool_name")
         parallel_group_id = entry.get("parallel_group_id")

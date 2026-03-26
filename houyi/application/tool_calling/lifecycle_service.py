@@ -118,9 +118,15 @@ class _ToolCallLifecycleService:
             return
         from houyi.domain.skill.hooks import HookContext, HookEvent
 
+        tool_call_entries = [
+            entry
+            for entry in tool_trace
+            if isinstance(entry, dict) and str(entry.get("tool_call_id") or "").strip()
+        ]
+
         stop_ctx = HookContext(
             tool_name="__session__",
-            tool_args={"tool_trace_length": len(tool_trace)},
+            tool_args={"tool_trace_length": len(tool_call_entries)},
         )
         try:
             await self._runner.skill_hooks_manager.trigger_hook(HookEvent.STOP, stop_ctx)

@@ -73,6 +73,7 @@ from .chat_tool_loop_policy import ChatToolLoopPolicy
 from .context_compressor import SummaryBuildResult
 from .conversation_compaction_coordinator import ConversationCompactionCoordinator
 from .conversation_context_adapter import ConversationContextAdapter
+from .conversation_context_state_updater import ConversationContextStateUpdater
 from .conversation_message_manager import ConversationMessageManager
 from .conversation_streaming_state_manager import ConversationStreamingStateManager
 from .json_store import JsonStore
@@ -877,6 +878,9 @@ class ChatService:
             rolling_capacity=_ROLLING_CONTEXT_CAPACITY,
             is_vision_model=is_vision_model,
         )
+        self._context_state_updater = ConversationContextStateUpdater(
+            conversation_context=self._conversation_context,
+        )
         self._context_hooks = ChatContextHookService()
         self._context_runtime = ChatContextAdapter(
             memory_store=memory_store,
@@ -906,7 +910,7 @@ class ChatService:
             json_store=json_store,
             default_model=self.default_model,
             is_vision_model=is_vision_model,
-            apply_conversation_context_delta=self._conversation_context.apply_delta,
+            context_state_updater=self._context_state_updater,
             repo_intent_detector=_looks_like_repo_intent,
             hook_service=self._context_hooks,
             get_adapter_for_model=lambda model: self._get_adapter_for_model(model),
@@ -924,6 +928,8 @@ class ChatService:
                 conversation_id,
                 request,
             ),
+            context_state_updater=self._context_state_updater,
+            default_model=self.default_model,
         )
 
     def build_initial_conversation_context_state(
@@ -1058,53 +1064,6 @@ class ChatService:
         self.json_store.update(conversation)
         return message.model_dump(mode="json")
 
-    def _build_request_preparation(self, json_store: JsonStore) -> ChatRequestPreparation:
-        return ChatRequestPreparation(
-            json_store=json_store,
-            default_model=self.default_model,
-            default_system_instructions=self.default_system_instructions,
-            conversation_context=self._conversation_context,
-            resolve_llm_kwargs=self._resolve_llm_kwargs,
-            resolve_runtime_profile=self._resolve_runtime_profile,
-            context_compressor=self._context_compressor,
-            build_context_messages=self._build_context_messages,
-        )
-
-    def _build_tool_loop_orchestrator(self) -> ToolLoopOrchestrator:
-        return ToolLoopOrchestrator(
-            default_chat_max_tool_iterations=_DEFAULT_CHAT_MAX_TOOL_ITERATIONS,
-            get_tool_runner=lambda *args, **kwargs: self._get_tool_runner(*args, **kwargs),
-            context_hooks=self._context_hooks,
-            extract_finish_reason=_extract_finish_reason,
-            json_safe=_json_safe,
-            normalize_usage_payload=normalize_usage_payload,
-            null_hook_span_factory=_NullHookSpan,
-            sanitize_tool_loop_messages=_sanitize_tool_loop_messages,
-            tool_bridge_factory=lambda: ToolBridge(DEFAULT_SKILL_REGISTRY),
-            build_chat_kwargs=build_chat_kwargs,
-            skill_executor_factory=lambda: SkillExecutor(max_retries=2, timeout=30.0),
-            stage_span=_stage_span,
-        )
-
-    def _build_response_streamer(self) -> AssistantResponseStreamer:
-        return AssistantResponseStreamer(
-            build_stream_error_content=build_stream_error_content,
-            build_public_stream_error_message=build_public_stream_error_message,
-            build_empty_stream_content=_build_empty_stream_content,
-            extract_finish_reason=_extract_finish_reason,
-            finalize_stream_result=_finalize_stream_result,
-            json_safe=_json_safe,
-            normalize_chat_error=normalize_chat_error,
-            normalize_usage_payload=normalize_usage_payload,
-            stage_span=_stage_span,
-        )
-
-    def _build_turn_persistence(self, json_store: JsonStore) -> AssistantTurnPersistence:
-        return AssistantTurnPersistence(
-            json_store=json_store,
-            conversation_context=self._conversation_context,
-        )
-
     def ensure_conversation_context_state(
         self,
         conversation: Conversation,
@@ -1158,6 +1117,54 @@ class ChatService:
     def invalidate_adapter_cache(self) -> None:
         """Clear cached adapters. Call when provider settings change."""
         self._model_adapter_resolver.invalidate_adapter_cache()
+
+    def _build_request_preparation(self, json_store: JsonStore) -> ChatRequestPreparation:
+        return ChatRequestPreparation(
+            json_store=json_store,
+            default_model=self.default_model,
+            default_system_instructions=self.default_system_instructions,
+            conversation_context=self._conversation_context,
+            context_state_updater=self._context_state_updater,
+            resolve_llm_kwargs=self._resolve_llm_kwargs,
+            resolve_runtime_profile=self._resolve_runtime_profile,
+            context_compressor=self._context_compressor,
+            build_context_messages=self._build_context_messages,
+        )
+
+    def _build_tool_loop_orchestrator(self) -> ToolLoopOrchestrator:
+        return ToolLoopOrchestrator(
+            default_chat_max_tool_iterations=_DEFAULT_CHAT_MAX_TOOL_ITERATIONS,
+            get_tool_runner=lambda *args, **kwargs: self._get_tool_runner(*args, **kwargs),
+            context_hooks=self._context_hooks,
+            extract_finish_reason=_extract_finish_reason,
+            json_safe=_json_safe,
+            normalize_usage_payload=normalize_usage_payload,
+            null_hook_span_factory=_NullHookSpan,
+            sanitize_tool_loop_messages=_sanitize_tool_loop_messages,
+            tool_bridge_factory=lambda: ToolBridge(DEFAULT_SKILL_REGISTRY),
+            build_chat_kwargs=build_chat_kwargs,
+            skill_executor_factory=lambda: SkillExecutor(max_retries=2, timeout=30.0),
+            stage_span=_stage_span,
+        )
+
+    def _build_response_streamer(self) -> AssistantResponseStreamer:
+        return AssistantResponseStreamer(
+            build_stream_error_content=build_stream_error_content,
+            build_public_stream_error_message=build_public_stream_error_message,
+            build_empty_stream_content=_build_empty_stream_content,
+            extract_finish_reason=_extract_finish_reason,
+            finalize_stream_result=_finalize_stream_result,
+            json_safe=_json_safe,
+            normalize_chat_error=normalize_chat_error,
+            normalize_usage_payload=normalize_usage_payload,
+            stage_span=_stage_span,
+        )
+
+    def _build_turn_persistence(self, json_store: JsonStore) -> AssistantTurnPersistence:
+        return AssistantTurnPersistence(
+            json_store=json_store,
+            context_state_updater=self._context_state_updater,
+        )
 
     def _get_tool_runner(self, parent_span: Span | None = None) -> ToolCallRunner:
         """Build a ToolCallRunner with governance components from SkillService."""
@@ -1444,12 +1451,33 @@ class ChatService:
                 "tool_message_count"
             ]
 
+            if isinstance(prepared.context_state_event, dict) and prepared.context_state_event:
+                yield SSEEvent(
+                    event="context.state.updated",
+                    data={
+                        "message_id": assistant_msg.message_id,
+                        **prepared.context_state_event,
+                    },
+                ).encode()
+
             if isinstance(prepared.compaction_event, dict) and prepared.compaction_event:
                 yield SSEEvent(
                     event="context.compacted",
                     data={
                         "message_id": assistant_msg.message_id,
                         **prepared.compaction_event,
+                    },
+                ).encode()
+
+            if (
+                isinstance(prepared.compaction_state_event, dict)
+                and prepared.compaction_state_event
+            ):
+                yield SSEEvent(
+                    event="context.state.updated",
+                    data={
+                        "message_id": assistant_msg.message_id,
+                        **prepared.compaction_state_event,
                     },
                 ).encode()
 
@@ -1545,7 +1573,7 @@ class ChatService:
                         },
                     ).encode()
                     completion_emitted_at = time.perf_counter()
-                    await self._turn_persistence.persist(
+                    persist_result = await self._turn_persistence.persist(
                         conversation_id=conversation_id,
                         conv_lock=prepared.conv_lock,
                         assistant_msg=assistant_msg,
@@ -1560,6 +1588,17 @@ class ChatService:
                         chat_span=chat_span,
                         model=prepared.model,
                     )
+                    if (
+                        isinstance(persist_result.context_state_event, dict)
+                        and persist_result.context_state_event
+                    ):
+                        yield SSEEvent(
+                            event="context.state.updated",
+                            data={
+                                "message_id": assistant_msg.message_id,
+                                **persist_result.context_state_event,
+                            },
+                        ).encode()
                     return
                 final_stream_skipped = tool_outcome.replay_response is not None
                 tool_loop_span.set_attribute(
@@ -1743,7 +1782,7 @@ class ChatService:
             ).encode()
 
             with _stage_span(chat_span, "chat.persist"):
-                assistant_persisted = await self._turn_persistence.persist(
+                persist_result = await self._turn_persistence.persist(
                     conversation_id=conversation_id,
                     conv_lock=prepared.conv_lock,
                     assistant_msg=assistant_msg,
@@ -1758,6 +1797,18 @@ class ChatService:
                     chat_span=chat_span,
                     model=prepared.model,
                 )
+                assistant_persisted = persist_result.persisted
+                if (
+                    isinstance(persist_result.context_state_event, dict)
+                    and persist_result.context_state_event
+                ):
+                    yield SSEEvent(
+                        event="context.state.updated",
+                        data={
+                            "message_id": assistant_msg.message_id,
+                            **persist_result.context_state_event,
+                        },
+                    ).encode()
 
         except Exception as e:
             chat_span.set_status("error", str(e))
@@ -1813,18 +1864,21 @@ class ChatService:
         self,
         conversation_id: str,
         message_id: str,
-    ) -> None:
+    ) -> Any:
         """Delete a single message from a conversation.
 
         Args:
             conversation_id: Target conversation.
             message_id: Message to delete.
 
+        Returns:
+            The result of the delete operation.
+
         Raises:
             FileNotFoundError: If conversation not found.
             ValueError: If message not found.
         """
-        await self._message_manager.delete_message(conversation_id, message_id)
+        return await self._message_manager.delete_message(conversation_id, message_id)
 
     async def regenerate_message(
         self,
@@ -1847,8 +1901,18 @@ class ChatService:
             FileNotFoundError: If conversation not found.
             ValueError: If message not found or not an assistant message.
         """
-        async for chunk in self._message_manager.regenerate_message(
-            conversation_id,
-            message_id,
-        ):
+        preparation = await self._message_manager.prepare_regeneration(
+            conversation_id=conversation_id,
+            message_id=message_id,
+        )
+        if isinstance(preparation.context_state_event, dict) and preparation.context_state_event:
+            yield SSEEvent(
+                event="context.state.updated",
+                data={
+                    "message_id": message_id,
+                    **preparation.context_state_event,
+                },
+            ).encode()
+        request = SendMessageRequest(content=preparation.last_user_content)
+        async for chunk in self.send_message(conversation_id, request):
             yield chunk

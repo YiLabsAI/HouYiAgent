@@ -630,6 +630,14 @@ class SendMessageRequest(BaseModel):
     enable_web_search: bool | None = None
     enable_deep_research: bool | None = None
     enable_skills: list[str] | None = None
+    # full: expose the original tool schemas as registered.
+    # minimal: expose truncated schemas to reduce schema surface area.
+    # projected: expose command-aware facade tools over the unified backend.
+    # projected_minimal: expose the projected facades with their minimal schema surface.
+    schema_exposure: str | None = Field(
+        default=None,
+        pattern=r"^(minimal|full|projected|projected_minimal)$",
+    )
     max_tool_iterations: int | None = Field(default=None, ge=1, le=50)
 
 

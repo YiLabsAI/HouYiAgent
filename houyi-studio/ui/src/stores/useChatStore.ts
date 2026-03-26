@@ -18,6 +18,7 @@ import type {
   SendMessageRequest,
   SSEAgentIteration,
   SSEContextCompacted,
+  SSEContextStateUpdated,
   SSEMessageDelta,
   SSEMessageFinish,
   SSEMessageComplete,
@@ -150,140 +151,82 @@ function emptyAgentLoopSummary(): AgentLoopSummary {
   return { rounds: 0, toolCalls: 0, traceId: null, usage: null, metrics: null, status: 'idle' };
 }
 
-function deriveAgentLoopSummaryFromConversation(conversation: Conversation | null): AgentLoopSummary {
-  if (!conversation) return emptyAgentLoopSummary();
-  const messages = conversation.messages;
-  let anchorAssistantIndex = -1;
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    if (messages[index].role === 'assistant') {
-      anchorAssistantIndex = index;
-      break;
-    }
-  }
-  if (anchorAssistantIndex < 0) return emptyAgentLoopSummary();
-
-  const anchorAssistant = messages[anchorAssistantIndex];
-  let rounds = 0;
-  let toolCalls = 0;
-  const seenToolCallIds = new Set<string>();
-  let traceId: string | null =
-    typeof anchorAssistant.metadata?.trace_id === 'string' ? anchorAssistant.metadata.trace_id : null;
-  const usage: Record<string, any> | null = anchorAssistant.metadata?.usage ?? null;
-  let metrics: Record<string, any> | null = null;
-
-  for (let index = anchorAssistantIndex - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (message.role === 'tool') {
-      const toolCallId = typeof message.tool_call_id === 'string' && message.tool_call_id
-        ? message.tool_call_id
-        : `tool:${message.message_id}`;
-      if (!seenToolCallIds.has(toolCallId)) {
-        seenToolCallIds.add(toolCallId);
-        toolCalls += 1;
-      }
-      const roundIndex = Number(message.metadata?.round_index || 0);
-      if (Number.isFinite(roundIndex) && roundIndex > rounds) {
-        rounds = roundIndex;
-      }
-      const toolTraceId = typeof message.metadata?.trace_id === 'string' ? message.metadata.trace_id : null;
-      traceId = traceId ?? toolTraceId;
-      continue;
-    }
-    if (message.role === 'assistant' && Array.isArray(message.tool_calls) && message.tool_calls.length > 0) {
-      message.tool_calls.forEach((toolCall, toolCallIndex) => {
-        const toolCallId = toolCall && typeof toolCall === 'object' && typeof (toolCall as Record<string, any>).id === 'string'
-          ? String((toolCall as Record<string, any>).id)
-          : `assistant:${message.message_id}:${toolCallIndex}`;
-        if (!seenToolCallIds.has(toolCallId)) {
-          seenToolCallIds.add(toolCallId);
-          toolCalls += 1;
-        }
-      });
-      const roundIndex = Number(message.metadata?.round_index || 0);
-      if (Number.isFinite(roundIndex) && roundIndex > rounds) {
-        rounds = roundIndex;
-      }
-      const toolTraceId = typeof message.metadata?.trace_id === 'string' ? message.metadata.trace_id : null;
-      traceId = traceId ?? toolTraceId;
-      continue;
-    }
-    break;
-  }
-
-  const meta = anchorAssistant.metadata ?? {};
-  if (
-    meta.usage
-    || meta.first_token_latency_ms
-    || meta.first_token_ms
-    || meta.decode_tokens_per_second
-    || meta.end_to_end_tokens_per_second
-    || meta.tokens_per_second
-    || meta.budget
-    || meta.finish_reason
-    || meta.tool_loop_convergence_reason
-    || meta.tool_loop_final_stream_skipped !== undefined
-    || meta.final_stream_status
-    || meta.final_stream_error_category
-    || meta.final_stream_empty_visible_output !== undefined
-    || meta.final_stream_assistant_reasoning_removed_count
-    || meta.final_stream_assistant_reasoning_only_removed_count
-    || meta.final_stream_assistant_tool_call_carrier_count
-    || meta.final_stream_tool_result_projection_count
-    || meta.request_adapter_class
-    || meta.request_adapter_strict_message_string_contract !== undefined
-    || meta.request_message_count
-    || meta.request_user_message_count
-    || meta.request_assistant_message_count
-    || meta.request_assistant_reasoning_message_count
-    || meta.request_assistant_reasoning_only_message_count
-    || meta.request_assistant_tool_call_message_count
-    || meta.request_tool_message_count
-  ) {
-    metrics = {
-      finish_reason: meta.finish_reason,
-      budget: meta.budget,
-      first_token_latency_ms: meta.first_token_latency_ms,
-      first_token_ms: meta.first_token_ms,
-      generation_time_ms: meta.generation_time_ms,
-      decode_tokens_per_second: meta.decode_tokens_per_second,
-      end_to_end_tokens_per_second: meta.end_to_end_tokens_per_second,
-      tokens_per_second: meta.tokens_per_second,
-      tool_loop_convergence_reason: meta.tool_loop_convergence_reason,
-      tool_loop_final_stream_skipped: meta.tool_loop_final_stream_skipped,
-      final_stream_status: meta.final_stream_status,
-      final_stream_error_category: meta.final_stream_error_category,
-      final_stream_empty_visible_output: meta.final_stream_empty_visible_output,
-      final_stream_assistant_reasoning_removed_count: meta.final_stream_assistant_reasoning_removed_count,
-      final_stream_assistant_reasoning_only_removed_count: meta.final_stream_assistant_reasoning_only_removed_count,
-      final_stream_assistant_tool_call_carrier_count: meta.final_stream_assistant_tool_call_carrier_count,
-      final_stream_tool_result_projection_count: meta.final_stream_tool_result_projection_count,
-      request_adapter_class: meta.request_adapter_class,
-      request_adapter_strict_message_string_contract: meta.request_adapter_strict_message_string_contract,
-      request_message_count: meta.request_message_count,
-      request_user_message_count: meta.request_user_message_count,
-      request_assistant_message_count: meta.request_assistant_message_count,
-      request_assistant_reasoning_message_count: meta.request_assistant_reasoning_message_count,
-      request_assistant_reasoning_only_message_count: meta.request_assistant_reasoning_only_message_count,
-      request_assistant_tool_call_message_count: meta.request_assistant_tool_call_message_count,
-      request_tool_message_count: meta.request_tool_message_count,
-    };
-  }
-
-  return {
-    rounds,
-    toolCalls,
-    traceId,
-    usage,
-    metrics,
-    status: rounds > 0 || toolCalls > 0 || traceId ? 'done' : 'idle',
-  };
-}
-
 function deriveLatestCompaction(conversation: Conversation | null): CompactionRecord | null {
   const history = conversation?.metadata?.compaction_history;
   if (!Array.isArray(history) || history.length === 0) return null;
   const latest = history[history.length - 1];
-  return latest && typeof latest === 'object' ? (latest as CompactionRecord) : null;
+  return latest && typeof latest === 'object' ? latest as CompactionRecord : null;
+}
+
+function deriveAgentLoopSummary(conversation: Conversation | null): AgentLoopSummary {
+  const allMessages = conversation?.messages ?? [];
+  const rounds = allMessages.reduce((maxRound, message) => {
+    const roundIndex = Number(message?.metadata?.round_index ?? 0);
+    return Number.isFinite(roundIndex) ? Math.max(maxRound, roundIndex) : maxRound;
+  }, 0);
+  const toolCallIds = new Set<string>();
+  allMessages.forEach((message) => {
+    if (message.role === 'tool' && typeof message.tool_call_id === 'string' && message.tool_call_id) {
+      toolCallIds.add(message.tool_call_id);
+    }
+    if (message.role !== 'assistant' || !Array.isArray(message.tool_calls)) return;
+    message.tool_calls.forEach((toolCall) => {
+      if (!toolCall || typeof toolCall !== 'object') return;
+      const callId = typeof (toolCall as Record<string, any>).id === 'string'
+        ? String((toolCall as Record<string, any>).id)
+        : '';
+      if (callId) toolCallIds.add(callId);
+    });
+  });
+  const toolCalls = toolCallIds.size;
+  const assistantMessages = (conversation?.messages ?? []).filter((message) => message.role === 'assistant');
+  for (let index = assistantMessages.length - 1; index >= 0; index -= 1) {
+    const metadata = assistantMessages[index]?.metadata;
+    if (!metadata || typeof metadata !== 'object') continue;
+    const traceId = typeof metadata.trace_id === 'string' ? metadata.trace_id : null;
+    const usage = metadata.usage && typeof metadata.usage === 'object' ? metadata.usage as Record<string, any> : null;
+    const metrics = {
+      finish_reason: metadata.finish_reason,
+      budget: metadata.budget,
+      first_token_latency_ms: metadata.first_token_latency_ms,
+      first_token_ms: metadata.first_token_ms,
+      generation_time_ms: metadata.generation_time_ms,
+      decode_tokens_per_second: metadata.decode_tokens_per_second,
+      end_to_end_tokens_per_second: metadata.end_to_end_tokens_per_second,
+      tokens_per_second: metadata.tokens_per_second,
+      tool_loop_convergence_reason: metadata.tool_loop_convergence_reason,
+      tool_loop_final_stream_skipped: metadata.tool_loop_final_stream_skipped,
+      final_stream_status: metadata.final_stream_status,
+      final_stream_error_category: metadata.final_stream_error_category,
+      final_stream_empty_visible_output: metadata.final_stream_empty_visible_output,
+      final_stream_assistant_reasoning_removed_count: metadata.final_stream_assistant_reasoning_removed_count,
+      final_stream_assistant_reasoning_only_removed_count: metadata.final_stream_assistant_reasoning_only_removed_count,
+      final_stream_assistant_tool_call_carrier_count: metadata.final_stream_assistant_tool_call_carrier_count,
+      final_stream_tool_result_projection_count: metadata.final_stream_tool_result_projection_count,
+      request_adapter_class: metadata.request_adapter_class,
+      request_adapter_strict_message_string_contract: metadata.request_adapter_strict_message_string_contract,
+      request_message_count: metadata.request_message_count,
+      request_user_message_count: metadata.request_user_message_count,
+      request_assistant_message_count: metadata.request_assistant_message_count,
+      request_assistant_reasoning_message_count: metadata.request_assistant_reasoning_message_count,
+      request_assistant_reasoning_only_message_count: metadata.request_assistant_reasoning_only_message_count,
+      request_assistant_tool_call_message_count: metadata.request_assistant_tool_call_message_count,
+      request_tool_message_count: metadata.request_tool_message_count,
+    };
+    const hasMetrics = Object.values(metrics).some((value) => value !== undefined && value !== null);
+    if (traceId || usage || hasMetrics) {
+      return {
+        ...emptyAgentLoopSummary(),
+        rounds,
+        toolCalls,
+        traceId,
+        usage,
+        metrics: hasMetrics ? metrics : null,
+        status: 'done',
+      };
+    }
+  }
+  return emptyAgentLoopSummary();
 }
 
 function deriveActivePins(conversation: Conversation | null): PinnedContextRecord[] {
@@ -295,6 +238,22 @@ function deriveActivePins(conversation: Conversation | null): PinnedContextRecor
     && typeof (pin as PinnedContextRecord).pin_id === 'string'
     && (pin as PinnedContextRecord).status === 'active'
   ));
+}
+
+function applyAuthoritativeContextState(
+  state: ChatState,
+  conversationId: string,
+  conversationContextState: Conversation['conversation_context_state'] | null | undefined,
+): Partial<ChatState> {
+  if (!state.activeConversation || state.activeConversation.conversation_id !== conversationId) {
+    return {};
+  }
+  return {
+    activeConversation: {
+      ...state.activeConversation,
+      conversation_context_state: conversationContextState ?? null,
+    },
+  };
 }
 
 function mergeMessagesForRefresh(
@@ -601,7 +560,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         restoringCompactionId: null,
         restoringBackupId: null,
         activePins: deriveActivePins(conversationData),
-        agentLoopSummary: deriveAgentLoopSummaryFromConversation(conversationData),
+        agentLoopSummary: deriveAgentLoopSummary(conversationData),
         scrollToMessageId: scrollToMessageId ?? null,
         error: null,
         restoreNotice: get().restoreNotice?.conversationId === conversationId
@@ -1087,6 +1046,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         backup_id: string;
         restored_compaction_id: string;
         restore_point_backup_id?: string | null;
+        conversation_context_state?: Conversation['conversation_context_state'] | null;
         conversation: Conversation;
       }>(
         `/conversations/${activeConversationId}/compactions/${compactionId}/restore`,
@@ -1097,6 +1057,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
       const latestMessageId = restoredMessages.length > 0
         ? restoredMessages[restoredMessages.length - 1]?.message_id ?? null
         : null;
+      set((state) => applyAuthoritativeContextState(
+        state,
+        activeConversationId,
+        data.conversation_context_state ?? restoredConversation.conversation_context_state,
+      ));
       await get().loadConversation(activeConversationId, latestMessageId ?? undefined);
       set({
         restoringCompactionId: null,
@@ -1122,6 +1087,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       const data = await apiFetch<{
         status: string;
         backup_id: string;
+        conversation_context_state?: Conversation['conversation_context_state'] | null;
         conversation: Conversation;
       }>(
         `/conversations/${activeConversationId}/backups/${backupId}/restore`,
@@ -1132,6 +1098,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
       const latestMessageId = restoredMessages.length > 0
         ? restoredMessages[restoredMessages.length - 1]?.message_id ?? null
         : null;
+      set((state) => applyAuthoritativeContextState(
+        state,
+        activeConversationId,
+        data.conversation_context_state ?? restoredConversation.conversation_context_state,
+      ));
       await get().loadConversation(activeConversationId, latestMessageId ?? undefined);
       set({
         restoringBackupId: null,
@@ -1156,10 +1127,18 @@ export const useChatStore = create<ChatState>((set, get) => ({
     if (!activeConversationId) return;
     set({ error: null });
     try {
-      await apiFetch(`/conversations/${activeConversationId}/messages/${messageId}`, {
+      const data = await apiFetch<{
+        conversation_id: string;
+        conversation_context_state?: Conversation['conversation_context_state'] | null;
+      }>(`/conversations/${activeConversationId}/messages/${messageId}`, {
         method: 'PUT',
         body: JSON.stringify({ content }),
       });
+      set((state) => applyAuthoritativeContextState(
+        state,
+        data.conversation_id ?? activeConversationId,
+        data.conversation_context_state,
+      ));
       await get().loadConversation(activeConversationId);
     } catch (e: any) {
       set({ error: e.message });
@@ -1180,9 +1159,17 @@ export const useChatStore = create<ChatState>((set, get) => ({
     });
 
     try {
-      await apiFetch(`/conversations/${activeConversationId}/messages/${messageId}`, {
+      const data = await apiFetch<{
+        conversation_id: string;
+        conversation_context_state?: Conversation['conversation_context_state'] | null;
+      }>(`/conversations/${activeConversationId}/messages/${messageId}`, {
         method: 'DELETE',
       });
+      set((state) => applyAuthoritativeContextState(
+        state,
+        data.conversation_id ?? activeConversationId,
+        data.conversation_context_state,
+      ));
       await get().loadConversation(activeConversationId);
       await get().fetchConversations();
     } catch (e: any) {
@@ -1424,37 +1411,22 @@ function handleSSEEvent(
     case 'context.compacted': {
       if (!isViewingStream) break;
       const evt = data as SSEContextCompacted;
+      set(() => ({ latestCompaction: evt.compaction }));
+      break;
+    }
+
+    case 'context.state.updated': {
+      if (!isViewingStream) break;
+      const evt = data as SSEContextStateUpdated;
       set((state) => {
         const activeConversation = state.activeConversation;
-        if (!activeConversation) {
-          return { latestCompaction: evt.compaction };
+        if (!activeConversation || activeConversation.conversation_id !== evt.conversation_id) {
+          return {};
         }
-        const releasedUnits = Math.max(
-          0,
-          Number(evt.compaction?.metrics?.tokens_before || 0)
-            - Number(evt.compaction?.metrics?.tokens_after || 0),
-        );
-        const currentUsedUnits = Math.max(
-          0,
-          Number(activeConversation.conversation_context_state?.used_units || 0),
-        );
-        const nextUsedUnits = Math.max(0, currentUsedUnits - releasedUnits);
         return {
-          latestCompaction: evt.compaction,
           activeConversation: {
             ...activeConversation,
-            conversation_context_state: {
-              conversation_id: activeConversation.conversation_context_state?.conversation_id
-                || activeConversation.conversation_id,
-              used_units: nextUsedUnits,
-              max_units: activeConversation.conversation_context_state?.max_units || 0,
-              state: 'compacted_recently',
-              last_compacted_at: evt.compaction?.created_at || null,
-              last_compaction_delta: releasedUnits,
-              updated_at: evt.compaction?.created_at
-                || activeConversation.conversation_context_state?.updated_at
-                || Date.now() / 1000,
-            },
+            conversation_context_state: evt.conversation_context_state,
           },
         };
       });

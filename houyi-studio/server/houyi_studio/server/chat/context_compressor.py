@@ -35,6 +35,7 @@ from .types import Conversation, Message, MessageRole
 class CompactionOutcome:
     conversation_snapshot: Conversation
     compaction_event: dict[str, Any] | None = None
+    context_state_event: dict[str, Any] | None = None
     record: CompactionRecord | None = None
 
 
@@ -46,13 +47,43 @@ class SummaryBuildResult:
     mode: str = "heuristic"
 
 
+@dataclass(slots=True)
+class _LegacyContextStateRequest:
+    mode: str
+    reason: str
+    model: str | None = None
+    released_units: int = 0
+    compacted_at: float | None = None
+    compaction_delta: int | None = None
+    compacted_message_count: int | None = None
+
+
+class _LegacyContextStateUpdater:
+    request_cls = _LegacyContextStateRequest
+
+    def __init__(self, *, apply_conversation_context_delta: Any) -> None:
+        self._apply_conversation_context_delta = apply_conversation_context_delta
+
+    def apply(self, *, conversation: Any, request: _LegacyContextStateRequest) -> Any:
+        if request.mode == "release":
+            self._apply_conversation_context_delta(
+                conversation,
+                released_units=request.released_units,
+                compacted_at=request.compacted_at,
+                compaction_delta=request.compaction_delta,
+                compacted_message_count=request.compacted_message_count,
+            )
+        return type("_LegacyUpdateResult", (), {"event_payload": None})()
+
+
 class ContextCompressor:
     def __init__(
         self,
         *,
         json_store: Any,
         is_vision_model: Callable[[str | None], bool],
-        apply_conversation_context_delta: Callable[..., Any],
+        context_state_updater: Any | None = None,
+        apply_conversation_context_delta: Any | None = None,
         repo_intent_detector: Callable[[str], bool] | None = None,
         summary_builder: Callable[..., Any] | None = None,
         hook_service: ChatContextHookService | None = None,
@@ -64,7 +95,14 @@ class ContextCompressor:
     ) -> None:
         self._json_store = json_store
         self._is_vision_model = is_vision_model
-        self._apply_conversation_context_delta = apply_conversation_context_delta
+        if context_state_updater is None:
+            if apply_conversation_context_delta is None:
+                raise TypeError("context_state_updater is required")
+            self._context_state_updater = _LegacyContextStateUpdater(
+                apply_conversation_context_delta=apply_conversation_context_delta,
+            )
+        else:
+            self._context_state_updater = context_state_updater
         self._repo_intent_detector = repo_intent_detector or _looks_like_repo_intent
         self._summary_builder = summary_builder or build_compaction_summary
         self._hook_service = hook_service or ChatContextHookService()
@@ -333,6 +371,7 @@ class ContextCompressor:
             record.metadata["target_low_watermark_met"] = post_utilization_ratio <= float(
                 trigger["low_watermark"]
             )
+            context_state_event: dict[str, Any] | None = None
             try:
                 with stage_span(active_parent, "context.compaction.commit") as commit_span:
                     self._json_store.attach_backup_record(
@@ -347,13 +386,19 @@ class ContextCompressor:
                             history.append(record.model_dump(mode="json"))
                             conversation.metadata["compaction_history"] = history[-20:]
                             conversation.updated_at = time.time()
-                            self._apply_conversation_context_delta(
-                                conversation,
-                                released_units=released_units,
-                                compacted_at=record.created_at,
-                                compaction_delta=released_units,
-                                compacted_message_count=len(conversation.messages),
+                            update_result = self._context_state_updater.apply(
+                                conversation=conversation,
+                                request=self._context_state_updater.request_cls(
+                                    mode="release",
+                                    reason="compaction_commit",
+                                    model=model,
+                                    released_units=released_units,
+                                    compacted_at=record.created_at,
+                                    compaction_delta=released_units,
+                                    compacted_message_count=len(conversation.messages),
+                                ),
                             )
+                            context_state_event = update_result.event_payload
                             self._json_store.update(conversation)
                     commit_target = _MirrorSpan(
                         primary=commit_span or active_parent,
@@ -386,6 +431,7 @@ class ContextCompressor:
             return CompactionOutcome(
                 conversation_snapshot=next_snapshot,
                 compaction_event={"compaction": record.model_dump(mode="json")},
+                context_state_event=context_state_event,
                 record=record,
             )
 

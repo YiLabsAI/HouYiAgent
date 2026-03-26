@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 from pathlib import Path
+from types import MethodType
 
 import pytest
 
@@ -9,6 +10,7 @@ from houyi.rag.config import EmbeddingConfig, GraphConfig, IndexedConfig
 from houyi.rag.indexed.document import loaders as loaders_module
 from houyi.rag.indexed.document import splitters as splitters_module
 from houyi.rag.indexed.graph import extractor as extractor_module
+from houyi.rag.indexed.models import RetrievalTaskResult
 from houyi.rag.types import (
     RAGMode,
     RetrievalStrategy,
@@ -126,6 +128,68 @@ class TestRRFFusion:
 
 
 class TestIndexedModeSearch:
+    @pytest.mark.asyncio
+    async def test_search_parallel_and_sequential_share_same_retrieval_surface(self) -> None:
+        from houyi.rag.indexed.mode import IndexedMode
+
+        task_results = [
+            RetrievalTaskResult(
+                strategy=RetrievalStrategy.BM25,
+                strategy_name="bm25",
+                results=[SearchResult(chunk_id="c1", content="Python local search", score=0.9)],
+                success=True,
+                duration_ms=3.0,
+            ),
+            RetrievalTaskResult(
+                strategy=RetrievalStrategy.GRAPH,
+                strategy_name="graph",
+                results=[SearchResult(chunk_id="c1", content="Python local search", score=0.7)],
+                success=True,
+                duration_ms=4.0,
+            ),
+        ]
+
+        async def _analyze_query_noop(self, query: str, metadata: dict[str, object]) -> None:
+            metadata["query_analysis"] = {"query": query}
+
+        async def _return_task_results(self, query: str, k: int) -> list[RetrievalTaskResult]:
+            assert query == "python local search"
+            assert k == 5
+            return task_results
+
+        results_by_mode: dict[str, object] = {}
+        for parallel_retrieval in (True, False):
+            mode = IndexedMode(
+                config=IndexedConfig(
+                    strategies=[RetrievalStrategy.BM25, RetrievalStrategy.GRAPH],
+                    parallel_retrieval=parallel_retrieval,
+                    top_k=5,
+                    use_rerank=False,
+                ),
+                knowledge_dir="/tmp/test-indexed-mode",
+                embedding_config=EmbeddingConfig(provider="openai", model="test", dimension=16),
+                graph_config=GraphConfig(enabled=True),
+            )
+            mode._analyze_query = MethodType(_analyze_query_noop, mode)
+            if parallel_retrieval:
+                mode._execute_parallel_retrieval = MethodType(_return_task_results, mode)
+            else:
+                mode._execute_sequential_retrieval = MethodType(_return_task_results, mode)
+
+            result = await mode.search("python local search")
+            results_by_mode["parallel" if parallel_retrieval else "sequential"] = result
+
+        parallel_result = results_by_mode["parallel"]
+        sequential_result = results_by_mode["sequential"]
+
+        assert parallel_result.mode_used == sequential_result.mode_used == RAGMode.INDEXED
+        assert parallel_result.answer == sequential_result.answer
+        assert [item.chunk_id for item in parallel_result.search_results] == [
+            item.chunk_id for item in sequential_result.search_results
+        ]
+        assert parallel_result.strategies_used == sequential_result.strategies_used
+        assert parallel_result.metadata["retrieval"] == sequential_result.metadata["retrieval"]
+
     @pytest.mark.asyncio
     async def test_search_bm25_only(self) -> None:
         pytest.importorskip("bm25s")

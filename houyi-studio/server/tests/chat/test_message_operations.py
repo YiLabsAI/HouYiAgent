@@ -45,11 +45,14 @@ class TestEditMessage:
     async def test_edit_user_message(self, service: ChatService, store: JsonStore):
         conv = _make_conversation(store)
         req = EditMessageRequest(content="Updated hello")
-        msg = await service.edit_message(conv.conversation_id, "u1", req)
+        result = await service.edit_message(conv.conversation_id, "u1", req)
 
-        assert msg.content == "Updated hello"
-        assert msg.metadata.get("edited") is True
-        assert "edited_at" in msg.metadata
+        assert result.message is not None
+        assert result.message.content == "Updated hello"
+        assert result.message.metadata.get("edited") is True
+        assert "edited_at" in result.message.metadata
+        assert result.context_state_event is not None
+        assert result.context_state_event["conversation_id"] == conv.conversation_id
 
         # Verify persisted
         reloaded = store.get(conv.conversation_id)
@@ -83,19 +86,22 @@ class TestDeleteMessage:
     @pytest.mark.asyncio
     async def test_delete_user_message(self, service: ChatService, store: JsonStore):
         conv = _make_conversation(store)
-        await service.delete_message(conv.conversation_id, "u1")
+        result = await service.delete_message(conv.conversation_id, "u1")
 
         reloaded = store.get(conv.conversation_id)
         assert len(reloaded.messages) == 3
         assert all(m.message_id != "u1" for m in reloaded.messages)
+        assert result.context_state_event is not None
+        assert result.context_state_event["conversation_id"] == conv.conversation_id
 
     @pytest.mark.asyncio
     async def test_delete_assistant_message(self, service: ChatService, store: JsonStore):
         conv = _make_conversation(store)
-        await service.delete_message(conv.conversation_id, "a2")
+        result = await service.delete_message(conv.conversation_id, "a2")
 
         reloaded = store.get(conv.conversation_id)
         assert len(reloaded.messages) == 3
+        assert result.context_state_event is not None
 
     @pytest.mark.asyncio
     async def test_delete_assistant_cascades_tools(
@@ -112,12 +118,13 @@ class TestDeleteMessage:
         ]
         created = store.create(conv)
 
-        await service.delete_message(created.conversation_id, "a1")
+        result = await service.delete_message(created.conversation_id, "a1")
 
         reloaded = store.get(created.conversation_id)
         assert reloaded is not None
         remaining_ids = [m.message_id for m in reloaded.messages]
         assert remaining_ids == ["u1"]
+        assert result.context_state_event is not None
 
     @pytest.mark.asyncio
     async def test_delete_assistant_removes_carrier(
@@ -150,12 +157,13 @@ class TestDeleteMessage:
         ]
         created = store.create(conv)
 
-        await service.delete_message(created.conversation_id, "a-final")
+        result = await service.delete_message(created.conversation_id, "a-final")
 
         reloaded = store.get(created.conversation_id)
         assert reloaded is not None
         remaining_ids = [m.message_id for m in reloaded.messages]
         assert remaining_ids == ["u1"]
+        assert result.context_state_event is not None
 
     @pytest.mark.asyncio
     async def test_delete_nonexistent_message(self, service: ChatService, store: JsonStore):

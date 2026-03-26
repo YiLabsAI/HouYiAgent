@@ -34,7 +34,7 @@ class ConversationCompactionCoordinator:
         json_store: JsonStore,
         default_model: str,
         is_vision_model: Any,
-        apply_conversation_context_delta: Any,
+        context_state_updater: Any,
         repo_intent_detector: Any,
         hook_service: Any,
         get_adapter_for_model: Any,
@@ -49,7 +49,7 @@ class ConversationCompactionCoordinator:
         self._context_compressor = ContextCompressor(
             json_store=json_store,
             is_vision_model=is_vision_model,
-            apply_conversation_context_delta=apply_conversation_context_delta,
+            context_state_updater=context_state_updater,
             repo_intent_detector=repo_intent_detector,
             summary_builder=self.build_compaction_summary,
             hook_service=hook_service,

@@ -55,6 +55,7 @@ export interface ConversationContextState {
   state: ConversationContextHealth;
   last_compacted_at?: number | null;
   last_compaction_delta?: number | null;
+  last_compacted_message_count?: number | null;
   updated_at: number;
 }
 
@@ -243,6 +244,14 @@ export interface SSEContextUsage {
 export interface SSEContextCompacted {
   message_id: string;
   compaction: CompactionRecord;
+}
+
+export interface SSEContextStateUpdated {
+  message_id: string;
+  conversation_id: string;
+  conversation_context_state: ConversationContextState;
+  source: string;
+  reason: string;
 }
 
 export interface SSEAgentIteration {

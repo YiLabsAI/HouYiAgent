@@ -394,6 +394,106 @@ class TestToolLoopOrchestrator:
         assert outcome.finish_reason == "stop"
 
     @pytest.mark.asyncio
+    async def test_plain_text_tool_carrier(self):
+        runner = SimpleNamespace(
+            run=AsyncMock(
+                return_value=(
+                    SimpleNamespace(
+                        content='tool: houyi_local_cli &args: {"path": "houyi/skills"}',
+                        tool_calls=[],
+                        usage={"prompt_tokens": 4},
+                        metadata={},
+                    ),
+                    [],
+                )
+            )
+        )
+        tool_bridge = SimpleNamespace(
+            collect_tool_schemas=MagicMock(return_value=[{"type": "function"}]),
+            collect_skills=MagicMock(return_value=[SimpleNamespace(name="demo")]),
+        )
+        orchestrator = ToolLoopOrchestrator(
+            default_chat_max_tool_iterations=3,
+            get_tool_runner=lambda *_args, **_kwargs: runner,
+            context_hooks=SimpleNamespace(run_tool_result=lambda messages, trace, span: messages),
+            extract_finish_reason=lambda *args: "stop",
+            json_safe=lambda value: value,
+            normalize_usage_payload=lambda value: value,
+            null_hook_span_factory=lambda: None,
+            sanitize_tool_loop_messages=lambda messages: messages,
+            tool_bridge_factory=lambda: tool_bridge,
+            build_chat_kwargs=lambda **kwargs: kwargs,
+            skill_executor_factory=lambda: None,
+            stage_span=_stage_span,
+        )
+
+        outcome = await orchestrator.run(
+            llm_adapter=SimpleNamespace(chat=MagicMock()),
+            model="test-model",
+            llm_messages=[{"role": "user", "content": "hi"}],
+            llm_kwargs={"max_tokens": 64},
+            request=SendMessageRequest(content="hi"),
+            runtime_profile=SimpleNamespace(tool_result_max_tokens=128, per_tool_quota=4),
+            assistant_message_id="msg-1",
+            trace_id="trace-1",
+            enabled_chat_skills=["demo"],
+        )
+
+        assert outcome.replay_response is None
+        assert outcome.convergence_reason is None
+        assert outcome.finish_reason == "stop"
+
+    @pytest.mark.asyncio
+    async def test_tool_calls_summary(self):
+        runner = SimpleNamespace(
+            run=AsyncMock(
+                return_value=(
+                    SimpleNamespace(
+                        content='Tool calls requested:\n1. houyi_local_cli_list {"path": "houyi/skills"}',
+                        tool_calls=[],
+                        usage={"prompt_tokens": 4},
+                        metadata={},
+                    ),
+                    [],
+                )
+            )
+        )
+        tool_bridge = SimpleNamespace(
+            collect_tool_schemas=MagicMock(return_value=[{"type": "function"}]),
+            collect_skills=MagicMock(return_value=[SimpleNamespace(name="demo")]),
+        )
+        orchestrator = ToolLoopOrchestrator(
+            default_chat_max_tool_iterations=3,
+            get_tool_runner=lambda *_args, **_kwargs: runner,
+            context_hooks=SimpleNamespace(run_tool_result=lambda messages, trace, span: messages),
+            extract_finish_reason=lambda *args: "stop",
+            json_safe=lambda value: value,
+            normalize_usage_payload=lambda value: value,
+            null_hook_span_factory=lambda: None,
+            sanitize_tool_loop_messages=lambda messages: messages,
+            tool_bridge_factory=lambda: tool_bridge,
+            build_chat_kwargs=lambda **kwargs: kwargs,
+            skill_executor_factory=lambda: None,
+            stage_span=_stage_span,
+        )
+
+        outcome = await orchestrator.run(
+            llm_adapter=SimpleNamespace(chat=MagicMock()),
+            model="test-model",
+            llm_messages=[{"role": "user", "content": "hi"}],
+            llm_kwargs={"max_tokens": 64},
+            request=SendMessageRequest(content="hi"),
+            runtime_profile=SimpleNamespace(tool_result_max_tokens=128, per_tool_quota=4),
+            assistant_message_id="msg-1",
+            trace_id="trace-1",
+            enabled_chat_skills=["demo"],
+        )
+
+        assert outcome.replay_response is None
+        assert outcome.convergence_reason is None
+        assert outcome.finish_reason == "stop"
+
+    @pytest.mark.asyncio
     async def test_payload_without_tools_replays(self):
         runner = SimpleNamespace(
             run=AsyncMock(

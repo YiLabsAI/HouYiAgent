@@ -19,7 +19,9 @@ class PreparedSendContext:
     llm_kwargs: dict[str, Any]
     runtime_profile: Any
     budget_metadata: dict[str, Any] | None = None
+    context_state_event: dict[str, Any] | None = None
     compaction_event: dict[str, Any] | None = None
+    compaction_state_event: dict[str, Any] | None = None
 
 
 class ChatRequestPreparation:
@@ -32,6 +34,7 @@ class ChatRequestPreparation:
         default_model: str,
         default_system_instructions: str,
         conversation_context: Any,
+        context_state_updater: Any,
         resolve_llm_kwargs: Callable[..., tuple[dict[str, Any], dict[str, Any] | None]],
         resolve_runtime_profile: Callable[[SendMessageRequest], Any],
         context_compressor: Any,
@@ -41,6 +44,7 @@ class ChatRequestPreparation:
         self._default_model = default_model
         self._default_system_instructions = default_system_instructions
         self._conversation_context = conversation_context
+        self._context_state_updater = context_state_updater
         self._resolve_llm_kwargs = resolve_llm_kwargs
         self._resolve_runtime_profile = resolve_runtime_profile
         self._context_compressor = context_compressor
@@ -55,6 +59,7 @@ class ChatRequestPreparation:
     ) -> PreparedSendContext:
         conv_lock = await self._json_store.lock(conversation_id)
         conversation_snapshot: Any | None = None
+        context_state_event: dict[str, Any] | None = None
         async with conv_lock:
             conversation = self._json_store.get(conversation_id)
             if conversation is None:
@@ -81,11 +86,16 @@ class ChatRequestPreparation:
             }
             conversation.messages.append(user_msg)
             conversation.updated_at = time.time()
-            self._conversation_context.apply_appended_messages(
-                conversation,
-                messages=[user_msg],
-                model=model,
+            update_result = self._context_state_updater.apply(
+                conversation=conversation,
+                request=self._context_state_updater.request_cls(
+                    mode="append",
+                    reason="user_append",
+                    model=model,
+                    messages=[user_msg],
+                ),
             )
+            context_state_event = update_result.event_payload
             self._json_store.update(conversation)
             llm_kwargs, budget_metadata = self._resolve_llm_kwargs(
                 model=model,
@@ -128,6 +138,7 @@ class ChatRequestPreparation:
         )
         conversation_snapshot = compaction_outcome.conversation_snapshot
         compaction_event = compaction_outcome.compaction_event
+        compaction_state_event = compaction_outcome.context_state_event
 
         llm_messages, context_usage = self._build_context_messages(
             conversation=conversation_snapshot,
@@ -150,5 +161,7 @@ class ChatRequestPreparation:
             llm_kwargs=llm_kwargs,
             runtime_profile=runtime_profile,
             budget_metadata=budget_metadata,
+            context_state_event=context_state_event,
             compaction_event=compaction_event,
+            compaction_state_event=compaction_state_event,
         )

@@ -21,7 +21,13 @@ from houyi.adapters.llm.base import (
     StreamChunk,
     _parse_bracket_tool_calls,
 )
-from houyi.adapters.llm.models import DEEPSEEK_R1, DEEPSEEK_V3_2, KIMI_K2_5, normalize_model_id
+from houyi.adapters.llm.models import (
+    DEEPSEEK_R1,
+    DEEPSEEK_V3,
+    DEEPSEEK_V3_2,
+    KIMI_K2_5,
+    normalize_model_id,
+)
 from houyi.adapters.llm.openai_compat_base import (
     OpenAICompatAdapterBase,
     _is_proxy_enabled,
@@ -51,6 +57,7 @@ def _is_deepseek_tool_model(model: str | None) -> bool:
     normalized = normalize_model_id(model or "")
     return normalized in {
         normalize_model_id(DEEPSEEK_R1),
+        normalize_model_id(DEEPSEEK_V3),
         normalize_model_id(DEEPSEEK_V3_2),
     }
 
@@ -331,6 +338,19 @@ def _project_messages(
 ) -> list[dict[str, Any]]:
     projected_messages: list[dict[str, Any]] = []
     is_r1 = _is_siliconflow_deepseek_r1(model)
+    is_deepseek_tool_model = _is_deepseek_tool_model(model)
+    # SiliconFlow DeepSeek (notably V3/V3.2) may reject OpenAI-style follow-up
+    # tool transcripts that include assistant.tool_calls + tool role messages with
+    # provider error `code=20015` (`"messages" in request are illegal.`).
+    #
+    # We keep first-round user/system messages in standard projection, but when
+    # a tool transcript is present we convert assistant/tool turns into the same
+    # replay-style shape used by R1. This preserves multi-round tool-loop ability
+    # while keeping provider-specific behavior isolated to this adapter.
+    #
+    # If SiliconFlow later accepts standard OpenAI transcripts consistently, this
+    # branch can be narrowed/removed with adapter regression updates.
+    has_tool_transcript = any(str(message.get("role") or "") == "tool" for message in messages)
     preserve_interleaved_reasoning = not is_r1
     for message in messages:
         normalized = dict(message)
@@ -338,6 +358,7 @@ def _project_messages(
         projected_messages.append(
             _project_r1_message(normalized, role)
             if is_r1
+            or (is_deepseek_tool_model and has_tool_transcript and role in {"assistant", "tool"})
             else _project_standard_message(
                 normalized,
                 role,

@@ -26,6 +26,7 @@ def test_build_tools_names() -> None:
         "houyi_grep",
         "houyi_shell_exec",
         "houyi_local_cli",
+        "houyi_local_cli_chain",
     ]
 
 
@@ -40,6 +41,9 @@ def test_build_tools_policies() -> None:
         ModelAutoInvoke.ALLOW_WITH_CONSENT
     )
     assert tools["houyi_local_cli"].invocation_policy.model_auto_invoke == ModelAutoInvoke.ALLOW
+    assert (
+        tools["houyi_local_cli_chain"].invocation_policy.model_auto_invoke == ModelAutoInvoke.ALLOW
+    )
 
 
 def test_register_tools() -> None:
@@ -47,7 +51,7 @@ def test_register_tools() -> None:
 
     registered = local_tools.register_builtin_local_tools(registry)
 
-    assert len(registered) == 7
+    assert len(registered) == 8
     assert all(registry.get(name) is not None for name in registered)
 
 
@@ -226,3 +230,299 @@ async def test_grep_requires_query(workspace_root: Path) -> None:
 
     assert result["success"] is False
     assert "query is required" in result["message"]
+
+
+@pytest.mark.asyncio
+async def test_chain_runs_pipe(workspace_root: Path) -> None:
+    skills_dir = workspace_root / "houyi" / "skills" / "web_search"
+    skills_dir.mkdir(parents=True)
+    (skills_dir / "SKILL.md").write_text("# Web Search\nweb search target\n", encoding="utf-8")
+
+    result = await local_tools._local_cli_chain_executor(
+        workflow=(
+            "find path=houyi/skills pattern=SKILL.md search_mode=exact "
+            "| read start_line=1 end_line=2"
+        )
+    )
+
+    assert result["success"] is True
+    steps = result["data"]["steps"]
+    assert len(steps) == 2
+    assert steps[0]["command"] == "find"
+    assert steps[1]["command"] == "read"
+    assert "Web Search" in steps[1]["result"]["data"]["content"]
+    assert result["data"]["mode"] == "plan"
+    assert result["data"]["workflow_id"] == "local_cli_chain"
+    assert result["data"]["continuation_token"] == "local_cli_chain:plan"
+    assert result["data"]["replan_required"] is False
+    assert result["data"]["repair_scope"] == "retry_failed_step_only"
+    assert result["data"]["reused_step_count"] == 2
+    assert len(result["data"]["frozen_success_steps"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_chain_runs_structured_steps(workspace_root: Path) -> None:
+    skills_dir = workspace_root / "houyi" / "skills" / "web_search"
+    skills_dir.mkdir(parents=True)
+    (skills_dir / "SKILL.md").write_text("# Web Search\nweb search target\n", encoding="utf-8")
+
+    result = await local_tools._local_cli_chain_executor(
+        steps=[
+            local_tools.LocalCliChainStepInput(
+                command="find",
+                path="houyi/skills",
+                pattern="SKILL.md",
+                search_mode="exact",
+            ),
+            local_tools.LocalCliChainStepInput(command="read", start_line=1, end_line=2),
+        ]
+    )
+
+    assert result["success"] is True
+    assert result["data"]["input_mode"] == "steps"
+    steps = result["data"]["steps"]
+    assert len(steps) == 2
+    assert steps[0]["command"] == "find"
+    assert steps[1]["command"] == "read"
+    assert "Web Search" in steps[1]["result"]["data"]["content"]
+
+
+@pytest.mark.asyncio
+async def test_chain_normalizes_structured_steps(workspace_root: Path) -> None:
+    skills_dir = workspace_root / "houyi" / "skills" / "web_search"
+    skills_dir.mkdir(parents=True)
+    (skills_dir / "SKILL.md").write_text("# Web Search\nweb search target\n", encoding="utf-8")
+
+    result = await local_tools._local_cli_chain_executor(
+        steps=[
+            {
+                "command": "find",
+                "path": "houyi/skills",
+                "pattern": "SKILL.md",
+                "search_mode": "exact",
+            },
+            {"command": "read", "start_line": 1, "end_line": 2},
+        ]
+    )
+
+    assert result["success"] is True
+    assert result["data"]["input_mode"] == "steps"
+    steps = result["data"]["steps"]
+    assert len(steps) == 2
+    assert steps[0]["command"] == "find"
+    assert steps[1]["command"] == "read"
+    assert "Web Search" in steps[1]["result"]["data"]["content"]
+
+
+@pytest.mark.asyncio
+async def test_chain_runs(workspace_root: Path) -> None:
+    skills_dir = workspace_root / "houyi" / "skills" / "web_search"
+    skills_dir.mkdir(parents=True)
+    (skills_dir / "SKILL.md").write_text("# Web Search\nweb search target\n", encoding="utf-8")
+
+    result = await local_tools._local_cli_chain_executor(
+        workflow=(
+            "find(path=houyi/skills, pattern=SKILL.md, search_mode=exact) "
+            "| read(start_line=1, end_line=2)"
+        )
+    )
+
+    assert result["success"] is True
+    steps = result["data"]["steps"]
+    assert len(steps) == 2
+    assert steps[0]["command"] == "find"
+    assert steps[1]["command"] == "read"
+    assert "Web Search" in steps[1]["result"]["data"]["content"]
+
+
+@pytest.mark.asyncio
+async def test_chain_runs_positional_path(workspace_root: Path) -> None:
+    skills_dir = workspace_root / "houyi" / "skills" / "web_search"
+    skills_dir.mkdir(parents=True)
+    (skills_dir / "SKILL.md").write_text("# Web Search\nweb search target\n", encoding="utf-8")
+
+    result = await local_tools._local_cli_chain_executor(
+        workflow="read houyi/skills/web_search/SKILL.md start_line=1 end_line=1"
+    )
+
+    assert result["success"] is True
+    steps = result["data"]["steps"]
+    assert len(steps) == 1
+    assert steps[0]["command"] == "read"
+    assert "Web Search" in steps[0]["result"]["data"]["content"]
+
+
+@pytest.mark.asyncio
+async def test_chain_runs_fallback(workspace_root: Path) -> None:
+    skills_dir = workspace_root / "houyi" / "skills" / "web_search"
+    skills_dir.mkdir(parents=True)
+    (skills_dir / "SKILL.md").write_text("# Web Search\nweb search target\n", encoding="utf-8")
+
+    result = await local_tools._local_cli_chain_executor(
+        workflow=(
+            "find path=houyi/skills pattern=missing.md search_mode=exact "
+            "|| find path=houyi/skills pattern=SKILL.md search_mode=exact"
+        )
+    )
+
+    assert result["success"] is True
+    steps = result["data"]["steps"]
+    assert len(steps) == 2
+    assert steps[0]["success"] is False
+    assert steps[1]["success"] is True
+    assert steps[1]["result"]["data"]["matches"]
+
+
+@pytest.mark.asyncio
+async def test_chain_rejects_ambiguous(workspace_root: Path) -> None:
+    web_search_dir = workspace_root / "houyi" / "skills" / "web_search"
+    web_search_dir.mkdir(parents=True)
+    (web_search_dir / "SKILL.md").write_text("# Web Search\nweb search target\n", encoding="utf-8")
+    local_search_dir = workspace_root / "houyi" / "skills" / "local_search"
+    local_search_dir.mkdir(parents=True)
+    (local_search_dir / "SKILL.md").write_text(
+        "# Local Search\nlocal search target\n", encoding="utf-8"
+    )
+
+    result = await local_tools._local_cli_chain_executor(
+        workflow=(
+            "find path=houyi/skills pattern=SKILL.md search_mode=exact "
+            "| read start_line=1 end_line=1"
+        )
+    )
+
+    assert result["success"] is False
+    steps = result["data"]["steps"]
+    assert len(steps) == 2
+    assert steps[0]["success"] is True
+    assert steps[1]["success"] is False
+    assert steps[1]["result"]["data"]["failure_kind"] == "projection_failed"
+    assert "unique path candidate" in steps[1]["result"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_chain_fallback(workspace_root: Path) -> None:
+    web_search_dir = workspace_root / "houyi" / "skills" / "web_search"
+    web_search_dir.mkdir(parents=True)
+    (web_search_dir / "SKILL.md").write_text("# Web Search\nweb search target\n", encoding="utf-8")
+    local_search_dir = workspace_root / "houyi" / "skills" / "local_search"
+    local_search_dir.mkdir(parents=True)
+    (local_search_dir / "SKILL.md").write_text(
+        "# Local Search\nlocal search target\n", encoding="utf-8"
+    )
+
+    result = await local_tools._local_cli_chain_executor(
+        workflow=(
+            "find path=houyi/skills pattern=SKILL.md search_mode=exact "
+            "| read start_line=1 end_line=1 "
+            "|| read path=houyi/skills/web_search/SKILL.md start_line=1 end_line=1"
+        )
+    )
+
+    assert result["success"] is True
+    steps = result["data"]["steps"]
+    assert len(steps) == 3
+    assert steps[1]["result"]["data"]["failure_kind"] == "projection_failed"
+    assert steps[2]["success"] is True
+    assert "Web Search" in steps[2]["result"]["data"]["content"]
+
+
+def test_chain_input_requires_continuation_for_continue_mode() -> None:
+    with pytest.raises(ValueError, match="continuation_token is required"):
+        local_tools.LocalCliChainInput(
+            mode="continue",
+            steps=[local_tools.LocalCliChainStepInput(command="read", path="a.txt")],
+            resume_from_step_index=0,
+        )
+
+
+def test_chain_input_requires_failed_step_and_action_for_repair_mode() -> None:
+    with pytest.raises(ValueError, match="failed_step_index is required"):
+        local_tools.LocalCliChainInput(
+            mode="repair",
+            continuation_token="wf:repair",
+            steps=[local_tools.LocalCliChainStepInput(command="read", path="a.txt")],
+            repair_action="replace_failed_step",
+        )
+
+    with pytest.raises(ValueError, match="repair_action is required"):
+        local_tools.LocalCliChainInput(
+            mode="repair",
+            continuation_token="wf:repair",
+            failed_step_index=0,
+            steps=[local_tools.LocalCliChainStepInput(command="read", path="a.txt")],
+        )
+
+
+@pytest.mark.asyncio
+async def test_chain_reports_structured_continue_metadata(workspace_root: Path) -> None:
+    target = workspace_root / "a.txt"
+    target.write_text("one\ntwo\n", encoding="utf-8")
+
+    result = await local_tools._local_cli_chain_executor(
+        mode="continue",
+        workflow_id="read_preview",
+        continuation_token="read_preview:plan",
+        resume_from_step_index=0,
+        steps=[
+            local_tools.LocalCliChainStepInput(
+                command="read", path="a.txt", start_line=1, end_line=1
+            )
+        ],
+    )
+
+    assert result["success"] is True
+    assert result["data"]["mode"] == "continue"
+    assert result["data"]["workflow_id"] == "read_preview"
+    assert result["data"]["continuation_token"] == "read_preview:plan"
+    assert result["data"]["resume_from_step_index"] == 0
+
+
+@pytest.mark.asyncio
+async def test_chain_reports_structured_repair_metadata(workspace_root: Path) -> None:
+    target = workspace_root / "a.txt"
+    target.write_text("one\ntwo\n", encoding="utf-8")
+
+    result = await local_tools._local_cli_chain_executor(
+        mode="repair",
+        workflow_id="read_preview",
+        continuation_token="read_preview:plan",
+        failed_step_index=0,
+        repair_action="replace_failed_step",
+        steps=[
+            local_tools.LocalCliChainStepInput(
+                command="read", path="a.txt", start_line=1, end_line=1
+            )
+        ],
+    )
+
+    assert result["success"] is True
+    assert result["data"]["mode"] == "repair"
+    assert result["data"]["workflow_id"] == "read_preview"
+    assert result["data"]["continuation_token"] == "read_preview:plan"
+    assert result["data"]["failed_step_index"] == 0
+    assert result["data"]["repair_action"] == "replace_failed_step"
+
+
+@pytest.mark.asyncio
+async def test_chain_rejects_badstep(workspace_root: Path) -> None:
+    _ = workspace_root
+
+    result = await local_tools._local_cli_chain_executor(workflow="write path=a.txt")
+
+    assert result["success"] is False
+    assert "unsupported chain command" in result["message"]
+    assert result["data"]["failure_kind"] == "unsupported_chain_command"
+    assert "read, list, find, or grep" in result["data"]["recovery_hint"]
+
+
+@pytest.mark.asyncio
+async def test_chain_rejects_invalid_argument(workspace_root: Path) -> None:
+    _ = workspace_root
+
+    result = await local_tools._local_cli_chain_executor(workflow="read path=a.txt extra")
+
+    assert result["success"] is False
+    assert "invalid chain argument" in result["message"]
+    assert result["data"]["failure_kind"] == "invalid_chain_argument"
+    assert "function-style steps" in result["data"]["recovery_hint"]

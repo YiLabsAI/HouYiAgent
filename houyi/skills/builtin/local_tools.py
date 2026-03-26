@@ -8,6 +8,7 @@ This module defines core local tools:
 - houyi_grep
 - houyi_shell_exec
 - houyi_local_cli
+- houyi_local_cli_chain
 """
 
 from __future__ import annotations
@@ -16,12 +17,14 @@ import asyncio
 import fnmatch
 import os
 import re
+import shlex
 from collections import deque
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from houyi.domain.skill.policy import (
     ExecPerm,
@@ -112,6 +115,646 @@ class LocalCliInput(BaseModel):
     max_depth: int = Field(default=16, ge=0, le=64)
     max_results: int = Field(default=DEFAULT_MAX_RESULTS, ge=1, le=1000)
     max_entries: int = Field(default=DEFAULT_MAX_RESULTS, ge=1, le=1000)
+
+
+class LocalCliChainInput(BaseModel):
+    mode: Literal["plan", "continue", "repair"] = Field(
+        default="plan",
+        description="Chain mode: initial plan, continue, or local repair.",
+    )
+    workflow_id: str | None = Field(
+        default=None,
+        min_length=1,
+        description="Optional workflow identifier.",
+    )
+    continuation_token: str | None = Field(
+        default=None,
+        min_length=1,
+        description="Opaque token from a previous chain run.",
+    )
+    resume_from_step_index: int | None = Field(
+        default=None,
+        ge=0,
+        description="Continue from this step index.",
+    )
+    failed_step_index: int | None = Field(
+        default=None,
+        ge=0,
+        description="Failed step index for repair.",
+    )
+    repair_action: (
+        Literal[
+            "replace_failed_step",
+            "append_fallback_after_failed_step",
+            "narrow_failed_step_arguments",
+        ]
+        | None
+    ) = Field(
+        default=None,
+        description="Repair action for the failed step.",
+    )
+    replan_reason: str | None = Field(
+        default=None,
+        min_length=1,
+        description="Reason for a full replan when repair is not enough.",
+    )
+    workflow: str | None = Field(
+        default=None,
+        min_length=1,
+        description=(
+            "Legacy chain workflow string for an already-decided multi-step local workflow. Prefer structured steps when the task clearly needs sequential actions, fallback, or repair. Example: find path=houyi/skills pattern=SKILL.md | read start_line=1 end_line=20"
+        ),
+    )
+    steps: list[LocalCliChainStepInput] | None = Field(
+        default=None,
+        min_length=1,
+        description=(
+            "Preferred structured chain steps for a known multi-step workflow. Use this after deciding the task needs staged read/list/find/grep actions, especially for fallback or repair, instead of treating an unclear request as generic file probing."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _validate_input_mode(self) -> LocalCliChainInput:
+        if not (self.workflow or self.steps):
+            raise ValueError("Provide workflow or steps")
+        if self.mode in {"continue", "repair"} and not self.continuation_token:
+            raise ValueError("continuation_token is required for continue or repair mode")
+        if self.mode == "continue" and self.resume_from_step_index is None:
+            raise ValueError("resume_from_step_index is required for continue mode")
+        if self.mode == "repair":
+            if self.failed_step_index is None:
+                raise ValueError("failed_step_index is required for repair mode")
+            if self.repair_action is None:
+                raise ValueError("repair_action is required for repair mode")
+        return self
+
+
+class LocalCliChainStepInput(BaseModel):
+    operator: Literal["&&", "||", "|", ";"] | None = Field(
+        default=None,
+        description="Operator applied before this step. Omit on the first step. If omitted on later steps, pipe semantics are used.",
+    )
+    command: Literal["read", "list", "find", "grep"] = Field(
+        description="Atomic local action for this step."
+    )
+    path: str | None = Field(
+        default=None,
+        description="Workspace-relative path. Omit to use the projected path from a previous step when available.",
+    )
+    pattern: str | None = Field(default=None, description="Pattern for find steps.")
+    query: str | None = Field(default=None, description="Search query for grep steps.")
+    start_line: int | None = Field(default=None, ge=1, description="Start line for read steps.")
+    end_line: int | None = Field(default=None, ge=1, description="End line for read steps.")
+    search_mode: Literal["glob", "contains", "exact"] | None = Field(
+        default=None,
+        description="Search mode for find steps.",
+    )
+    recursive: bool | None = Field(default=None, description="Recursive listing for list steps.")
+    iterative_subdirs: bool | None = Field(
+        default=None,
+        description="Whether find should iterate subdirectories breadth-first.",
+    )
+    case_sensitive: bool | None = Field(
+        default=None,
+        description="Case sensitivity for grep steps.",
+    )
+    max_depth: int | None = Field(default=None, ge=0, le=64, description="Maximum search depth.")
+    max_results: int | None = Field(
+        default=None,
+        ge=1,
+        le=1000,
+        description="Maximum matches returned by find or grep.",
+    )
+    max_entries: int | None = Field(
+        default=None,
+        ge=1,
+        le=1000,
+        description="Maximum entries returned by list.",
+    )
+
+    def to_chain_link(self, *, index: int) -> _ChainLink:
+        args = self.model_dump(exclude_none=True, exclude={"operator", "command"})
+        operator = None if index == 0 else (self.operator or "|")
+        return _ChainLink(
+            operator=operator,
+            step=_ChainStep(command=self.command, args=args),
+        )
+
+
+class LocalCliReadInput(BaseModel):
+    path: str = "."
+    start_line: int | None = Field(default=None, ge=1)
+    end_line: int | None = Field(default=None, ge=1)
+
+
+class LocalCliListInput(BaseModel):
+    path: str = "."
+    recursive: bool = False
+    max_entries: int = Field(default=DEFAULT_MAX_RESULTS, ge=1, le=1000)
+
+
+class LocalCliFindInput(BaseModel):
+    path: str = "."
+    pattern: str = "*"
+    search_mode: Literal["glob", "contains", "exact"] = "contains"
+    iterative_subdirs: bool = False
+    max_depth: int = Field(default=16, ge=0, le=64)
+    max_results: int = Field(default=DEFAULT_MAX_RESULTS, ge=1, le=1000)
+
+
+class LocalCliGrepInput(BaseModel):
+    path: str = "."
+    query: str
+    case_sensitive: bool = False
+    max_results: int = Field(default=DEFAULT_MAX_RESULTS, ge=1, le=1000)
+
+
+_LOCAL_CLI_PROJECTED_TOOL_NAMES = {
+    "read": "houyi_local_cli_read",
+    "list": "houyi_local_cli_list",
+    "find": "houyi_local_cli_find",
+    "grep": "houyi_local_cli_grep",
+}
+
+_LOCAL_CLI_PROJECTED_INPUT_MODELS: dict[str, type[BaseModel]] = {
+    "read": LocalCliReadInput,
+    "list": LocalCliListInput,
+    "find": LocalCliFindInput,
+    "grep": LocalCliGrepInput,
+}
+
+_LOCAL_CLI_PROJECTED_DESCRIPTIONS = {
+    "read": "Read local file content with optional line range through the unified local CLI backend. Use this when the atomic action is already clear, not for deciding a broader workflow or strategy.",
+    "list": "List local directory entries through the unified local CLI backend. Use this when the next atomic step is already clear, not as a substitute for workflow or skill selection.",
+    "find": "Find local files by pattern through the unified local CLI backend. Use this when file discovery is the clear next atomic action, not when the model still needs to decide a broader workflow.",
+    "grep": "Search local file contents by query through the unified local CLI backend. Use this when content search is the clear next atomic action, not for unresolved workflow-selection tasks.",
+}
+
+_LOCAL_CLI_CHAIN_OPERATORS = ("&&", "||", "|", ";")
+_LOCAL_CLI_ATOMIC_COMMANDS = {"read", "list", "find", "grep"}
+_LOCAL_CLI_CHAIN_POSITIONAL_ARG_KEYS = {
+    "read": ("path",),
+    "list": ("path",),
+    "find": ("path", "pattern"),
+    "grep": ("query",),
+}
+
+
+@dataclass(frozen=True)
+class _ChainStep:
+    command: Literal["read", "list", "find", "grep"]
+    args: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class _ChainLink:
+    operator: str | None
+    step: _ChainStep
+
+
+@dataclass(frozen=True)
+class _ProjectionContext:
+    values: dict[str, Any]
+    error: str | None = None
+
+
+def _coerce_chain_value(raw: str) -> Any:
+    lowered = raw.lower()
+    if lowered == "true":
+        return True
+    if lowered == "false":
+        return False
+    if re.fullmatch(r"-?\d+", raw):
+        with_value = int(raw)
+        return with_value
+    return raw
+
+
+def _flush_chain_buffer(tokens: list[str], buffer: list[str]) -> None:
+    text = "".join(buffer).strip()
+    if text:
+        tokens.append(text)
+    buffer.clear()
+
+
+def _match_chain_operator(workflow: str, index: int) -> tuple[str | None, int]:
+    two_chars = workflow[index : index + 2]
+    if two_chars in {"&&", "||"}:
+        return two_chars, 2
+    char = workflow[index]
+    if char in {"|", ";"}:
+        return char, 1
+    return None, 0
+
+
+def _tokenize_chain_workflow(workflow: str) -> list[str]:
+    tokens: list[str] = []
+    buffer: list[str] = []
+    quote_char: str | None = None
+    index = 0
+    while index < len(workflow):
+        char = workflow[index]
+        if quote_char is not None:
+            buffer.append(char)
+            if char == quote_char:
+                quote_char = None
+            index += 1
+            continue
+        if char in {"'", '"'}:
+            quote_char = char
+            buffer.append(char)
+            index += 1
+            continue
+        operator, width = _match_chain_operator(workflow, index)
+        if operator is not None:
+            _flush_chain_buffer(tokens, buffer)
+            tokens.append(operator)
+            index += width
+            continue
+        buffer.append(char)
+        index += 1
+    if quote_char is not None:
+        raise ValueError("workflow has an unterminated quoted value")
+    _flush_chain_buffer(tokens, buffer)
+    return tokens
+
+
+def _split_chain_step_tokens(step_text: str) -> list[str]:
+    stripped = step_text.strip()
+    function_match = re.fullmatch(r"([a-zA-Z_][a-zA-Z0-9_]*)\((.*)\)", stripped)
+    if function_match is None:
+        return shlex.split(step_text)
+    command, raw_args = function_match.groups()
+    lexer = shlex.shlex(raw_args, posix=True)
+    lexer.whitespace_split = True
+    lexer.whitespace += ","
+    lexer.commenters = ""
+    return [command, *list(lexer)]
+
+
+def _parse_chain_step(step_text: str) -> _ChainStep:
+    tokens = _split_chain_step_tokens(step_text)
+    if not tokens:
+        raise ValueError("workflow step is empty")
+    command = tokens[0]
+    if command not in _LOCAL_CLI_ATOMIC_COMMANDS:
+        raise ValueError(f"unsupported chain command: {command}")
+    args: dict[str, Any] = {}
+    positional_keys = _LOCAL_CLI_CHAIN_POSITIONAL_ARG_KEYS.get(command, ())
+    positional_index = 0
+    for token in tokens[1:]:
+        if "=" in token:
+            key, value = token.split("=", 1)
+            if not key:
+                raise ValueError(f"invalid chain argument: {token}")
+            args[key] = _coerce_chain_value(value)
+            continue
+        while positional_index < len(positional_keys) and positional_keys[positional_index] in args:
+            positional_index += 1
+        if positional_index >= len(positional_keys):
+            raise ValueError(f"invalid chain argument: {token}")
+        args[positional_keys[positional_index]] = _coerce_chain_value(token)
+        positional_index += 1
+    return _ChainStep(
+        command=cast(Literal["read", "list", "find", "grep"], command),
+        args=args,
+    )
+
+
+def _parse_chain_workflow(workflow: str) -> list[_ChainLink]:
+    tokens = _tokenize_chain_workflow(workflow)
+    if not tokens:
+        raise ValueError("workflow is empty")
+    links: list[_ChainLink] = []
+    pending_operator: str | None = None
+    expecting_step = True
+    for token in tokens:
+        if token in _LOCAL_CLI_CHAIN_OPERATORS:
+            if expecting_step:
+                raise ValueError(f"unexpected operator: {token}")
+            pending_operator = token
+            expecting_step = True
+            continue
+        if not expecting_step:
+            raise ValueError(f"missing operator before step: {token}")
+        links.append(_ChainLink(operator=pending_operator, step=_parse_chain_step(token)))
+        pending_operator = None
+        expecting_step = False
+    if expecting_step:
+        raise ValueError("workflow cannot end with an operator")
+    return links
+
+
+def _chain_links_from_structured_steps(steps: list[LocalCliChainStepInput]) -> list[_ChainLink]:
+    return [step.to_chain_link(index=index) for index, step in enumerate(steps)]
+
+
+def _normalize_structured_steps(
+    steps: Sequence[LocalCliChainStepInput | dict[str, Any]],
+) -> list[LocalCliChainStepInput]:
+    normalized_steps: list[LocalCliChainStepInput] = []
+    for step in steps:
+        if isinstance(step, LocalCliChainStepInput):
+            normalized_steps.append(step)
+            continue
+        normalized_steps.append(LocalCliChainStepInput.model_validate(step))
+    return normalized_steps
+
+
+def _collect_projection_candidate_paths(matches: Any) -> list[str]:
+    if not isinstance(matches, list):
+        return []
+    candidate_paths: list[str] = []
+    for item in matches:
+        if isinstance(item, str) and item and item not in candidate_paths:
+            candidate_paths.append(item)
+            continue
+        if not isinstance(item, dict):
+            continue
+        match_path = item.get("path")
+        if isinstance(match_path, str) and match_path and match_path not in candidate_paths:
+            candidate_paths.append(match_path)
+    return candidate_paths
+
+
+def _projection_context_from_candidates(
+    *, projection: dict[str, Any], candidate_paths: list[str]
+) -> _ProjectionContext:
+    if len(candidate_paths) == 1:
+        projection.setdefault("path", candidate_paths[0])
+        return _ProjectionContext(values=projection)
+    if len(candidate_paths) > 1:
+        return _ProjectionContext(
+            values=projection,
+            error=(
+                "projection requires a unique path candidate; add a narrower step or explicit path"
+            ),
+        )
+    return _ProjectionContext(values=projection)
+
+
+def _extract_projection(result: dict[str, Any]) -> _ProjectionContext:
+    data = result.get("data")
+    if not isinstance(data, dict):
+        return _ProjectionContext(values={})
+    projection: dict[str, Any] = {}
+    for key in ("path", "root_path"):
+        value = data.get(key)
+        if isinstance(value, str) and value:
+            projection[key] = value
+    candidate_paths = _collect_projection_candidate_paths(data.get("matches"))
+    return _projection_context_from_candidates(
+        projection=projection,
+        candidate_paths=candidate_paths,
+    )
+
+
+def _is_chain_success(result: dict[str, Any]) -> bool:
+    if result.get("success") is False:
+        return False
+    data = result.get("data")
+    if not isinstance(data, dict):
+        return True
+    matches = data.get("matches")
+    if isinstance(matches, list) and not matches:
+        return False
+    entries = data.get("entries")
+    if isinstance(entries, list) and not entries:
+        return False
+    content = data.get("content")
+    return not (isinstance(content, str) and not content and data.get("line_count") == 0)
+
+
+def _apply_projection(
+    command: str, args: dict[str, Any], projection: _ProjectionContext
+) -> dict[str, Any]:
+    merged = dict(args)
+    if projection.error and "path" not in merged and "root_path" not in merged:
+        raise ValueError(projection.error)
+    if command == "find" and "path" not in merged and "root_path" not in merged:
+        if isinstance(projection.values.get("path"), str):
+            merged["path"] = projection.values["path"]
+        elif isinstance(projection.values.get("root_path"), str):
+            merged["path"] = projection.values["root_path"]
+    if command in {"read", "list", "grep"} and "path" not in merged:
+        projected_path = projection.values.get("path") or projection.values.get("root_path")
+        if isinstance(projected_path, str):
+            merged["path"] = projected_path
+    return merged
+
+
+def _projection_failure_result(
+    *, step: _ChainStep, projection: _ProjectionContext, message: str
+) -> dict[str, Any]:
+    return ToolResponse(
+        success=False,
+        message=message,
+        data={
+            "failure_kind": "projection_failed",
+            "recovery_hint": "Retry only the failing step. Add an explicit path=... or insert a narrower find/grep step before piping, while keeping already successful earlier steps unchanged.",
+            "command": step.command,
+            "args": step.args,
+            "projection": dict(projection.values),
+        },
+    ).model_dump()
+
+
+def _chain_parse_failure_result(message: str) -> dict[str, Any]:
+    lowered = message.lower()
+    failure_kind = "invalid_chain_workflow"
+    recovery_hint = "Rewrite only the malformed step. Use read/list/find/grep steps joined by |, &&, ||, or ; with key=value arguments, or switch to structured steps when the workflow is already known."
+    if lowered.startswith("unsupported chain command:"):
+        failure_kind = "unsupported_chain_command"
+        recovery_hint = "Replace only the unsupported step with read, list, find, or grep. Example: find path=houyi/skills pattern=SKILL.md | read start_line=1 end_line=20"
+    elif lowered.startswith("invalid chain argument:"):
+        failure_kind = "invalid_chain_argument"
+        recovery_hint = "Correct only the failing step arguments. Use key=value arguments or function-style steps like read(path=..., start_line=1). A single positional value is only accepted for read/list as path, find as path then pattern, and grep as query. Prefer structured steps when the workflow is already decided."
+    return ToolResponse(
+        success=False,
+        message=message,
+        data={
+            "failure_kind": failure_kind,
+            "recovery_hint": recovery_hint,
+            "repair_scope": "retry_failed_step_only",
+            "accepted_commands": sorted(_LOCAL_CLI_ATOMIC_COMMANDS),
+        },
+    ).model_dump()
+
+
+def _chain_failure_summary(
+    *,
+    step_index: int,
+    step: _ChainStep,
+    result: dict[str, Any],
+) -> dict[str, Any]:
+    data = result.get("data")
+    failure_kind = "step_execution_failed"
+    recovery_hint = "Retry only the failing step with corrected arguments or a narrower input. Keep already successful earlier steps unchanged."
+    if isinstance(data, dict):
+        raw_failure_kind = data.get("failure_kind")
+        if isinstance(raw_failure_kind, str) and raw_failure_kind:
+            failure_kind = raw_failure_kind
+        raw_recovery_hint = data.get("recovery_hint")
+        if isinstance(raw_recovery_hint, str) and raw_recovery_hint:
+            recovery_hint = raw_recovery_hint
+    return {
+        "failure_kind": failure_kind,
+        "recovery_hint": recovery_hint,
+        "repair_scope": "retry_failed_step_only",
+        "failed_step_index": step_index,
+        "failed_command": step.command,
+        "failed_args": dict(step.args),
+    }
+
+
+async def _execute_chain_step(step: _ChainStep, projection: _ProjectionContext) -> dict[str, Any]:
+    try:
+        args = _apply_projection(step.command, step.args, projection)
+    except ValueError as exc:
+        return _projection_failure_result(step=step, projection=projection, message=str(exc))
+    if step.command == "read":
+        return await _local_cli_executor(
+            command="read",
+            path=str(args.get("path", ".")),
+            start_line=args.get("start_line"),
+            end_line=args.get("end_line"),
+        )
+    if step.command == "list":
+        return await _local_cli_executor(
+            command="list",
+            path=str(args.get("path", ".")),
+            recursive=bool(args.get("recursive", False)),
+            max_entries=int(args.get("max_entries", DEFAULT_MAX_RESULTS)),
+        )
+    if step.command == "find":
+        path = args.pop("root_path", args.get("path", "."))
+        search_mode = cast(
+            Literal["glob", "contains", "exact"],
+            str(args.get("search_mode", "contains")),
+        )
+        return await _local_cli_executor(
+            command="find",
+            path=str(path),
+            pattern=str(args.get("pattern") or "*"),
+            search_mode=search_mode,
+            iterative_subdirs=bool(args.get("iterative_subdirs", False)),
+            max_depth=int(args.get("max_depth", 16)),
+            max_results=int(args.get("max_results", DEFAULT_MAX_RESULTS)),
+        )
+    return await _local_cli_executor(
+        command="grep",
+        path=str(args.get("path", ".")),
+        query=str(args.get("query") or ""),
+        case_sensitive=bool(args.get("case_sensitive", False)),
+        max_results=int(args.get("max_results", DEFAULT_MAX_RESULTS)),
+    )
+
+
+async def _local_cli_chain_executor(
+    *,
+    mode: str = "plan",
+    workflow_id: str | None = None,
+    continuation_token: str | None = None,
+    resume_from_step_index: int | None = None,
+    failed_step_index: int | None = None,
+    repair_action: str | None = None,
+    replan_reason: str | None = None,
+    workflow: str | None = None,
+    steps: Sequence[LocalCliChainStepInput | dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    input_mode = "workflow"
+    try:
+        if steps:
+            links = _chain_links_from_structured_steps(_normalize_structured_steps(steps))
+            input_mode = "steps"
+        elif workflow:
+            links = _parse_chain_workflow(workflow)
+        else:
+            return _chain_parse_failure_result("Provide workflow or steps")
+    except ValueError as exc:
+        return _chain_parse_failure_result(str(exc))
+
+    normalized_mode = str(mode or "plan").strip().lower() or "plan"
+    input_workflow_id = str(workflow_id or "").strip()
+    active_workflow_id = input_workflow_id or "local_cli_chain"
+    active_continuation_token = (
+        str(continuation_token or "").strip() or f"{active_workflow_id}:{normalized_mode}"
+    )
+
+    executed_steps: list[dict[str, Any]] = []
+    projection = _ProjectionContext(values={})
+    last_result: dict[str, Any] | None = None
+    last_success = True
+    failure_summary: dict[str, Any] | None = None
+    frozen_success_steps: list[dict[str, Any]] = []
+    for index, link in enumerate(links):
+        operator = link.operator
+        if operator == "&&" and not last_success:
+            executed_steps.append(
+                {"operator": operator, "command": link.step.command, "skipped": True}
+            )
+            continue
+        if operator == "||" and last_success:
+            executed_steps.append(
+                {"operator": operator, "command": link.step.command, "skipped": True}
+            )
+            continue
+        result = await _execute_chain_step(link.step, projection)
+        last_result = result
+        last_success = _is_chain_success(result)
+        if last_success:
+            projection = _extract_projection(result)
+            failure_summary = None
+            frozen_success_steps.append(
+                {
+                    "step_index": index,
+                    "command": link.step.command,
+                    "args": dict(link.step.args),
+                }
+            )
+        else:
+            failure_summary = _chain_failure_summary(
+                step_index=index,
+                step=link.step,
+                result=result,
+            )
+        executed_steps.append(
+            {
+                "operator": operator,
+                "command": link.step.command,
+                "args": link.step.args,
+                "success": last_success,
+                "projection": dict(projection.values),
+                "projection_error": projection.error,
+                "result": result,
+            }
+        )
+    if last_result is None:
+        return ToolResponse(
+            success=False, message="workflow produced no executable steps"
+        ).model_dump()
+    return ToolResponse(
+        success=last_success,
+        data={
+            "mode": normalized_mode,
+            "workflow_id": active_workflow_id,
+            "continuation_token": active_continuation_token,
+            "resume_from_step_index": resume_from_step_index,
+            "failed_step_index": failed_step_index,
+            "repair_action": repair_action,
+            "replan_reason": replan_reason,
+            "workflow": workflow or "",
+            "input_mode": input_mode,
+            "steps": executed_steps,
+            "frozen_success_steps": frozen_success_steps,
+            "reused_step_count": len(frozen_success_steps),
+            "replan_required": False,
+            "repair_scope": "retry_failed_step_only",
+            "final": last_result,
+            **(failure_summary or {}),
+            "truncated": False,
+        },
+    ).model_dump()
 
 
 def _workspace_root() -> Path:
@@ -496,6 +1139,43 @@ async def _local_cli_executor(
     )
 
 
+def make_local_cli_projected_executor(
+    command: Literal["read", "list", "find", "grep"],
+) -> Any:
+    """Build a projected executor that binds one command onto the shared CLI backend."""
+
+    async def _executor(**kwargs: Any) -> dict[str, Any]:
+        return await _local_cli_executor(command=command, **kwargs)
+
+    return _executor
+
+
+def build_local_cli_projected_skills() -> list[SkillSpec]:
+    """Build command-aware Local CLI facades over the unified backend."""
+
+    projected_skills: list[SkillSpec] = []
+    for command in ("read", "list", "find", "grep"):
+        projected_skills.append(
+            SkillSpec(
+                name=_LOCAL_CLI_PROJECTED_TOOL_NAMES[command],
+                description=_LOCAL_CLI_PROJECTED_DESCRIPTIONS[command],
+                input_schema=_LOCAL_CLI_PROJECTED_INPUT_MODELS[command],
+                output_schema=ToolResponse,
+                executor=make_local_cli_projected_executor(command),
+                is_core=True,
+                invocation_policy=_policy_allow_filesystem_read(),
+                permissions=Permissions(filesystem=FilesystemPerm(read=True)),
+                metadata={
+                    "tags": ["cli", "projected", command, "workspace"],
+                    "local_cli_projected": True,
+                    "local_cli_command": command,
+                    "local_cli_backend": "houyi_local_cli",
+                },
+            )
+        )
+    return projected_skills
+
+
 def _policy_allow_filesystem_read() -> InvocationPolicy:
     return InvocationPolicy(
         model_auto_invoke=ModelAutoInvoke.ALLOW, side_effect=SideEffect.FILESYSTEM
@@ -588,6 +1268,19 @@ def build_builtin_local_tools() -> list[SkillSpec]:
             invocation_policy=_policy_allow_filesystem_read(),
             permissions=Permissions(filesystem=FilesystemPerm(read=True)),
             metadata={"tags": ["cli", "read", "list", "find", "grep", "workspace"]},
+        ),
+        SkillSpec(
+            name="houyi_local_cli_chain",
+            description="Run a controlled read-only local CLI workflow chain over read, list, find, and grep actions. Prefer this when the task clearly needs a staged local workflow, fallback, or repair path, rather than a single atomic action.",
+            input_schema=LocalCliChainInput,
+            output_schema=ToolResponse,
+            executor=_local_cli_chain_executor,
+            is_core=True,
+            invocation_policy=_policy_allow_filesystem_read(),
+            permissions=Permissions(filesystem=FilesystemPerm(read=True)),
+            metadata={
+                "tags": ["cli", "chain", "workflow", "read", "list", "find", "grep", "workspace"]
+            },
         ),
     ]
 

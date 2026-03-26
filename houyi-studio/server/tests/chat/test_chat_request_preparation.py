@@ -34,6 +34,7 @@ class TestChatRequestPreparation:
     async def test_prepare_builds_context(self):
         lock = _Lock()
         conversation = SimpleNamespace(
+            conversation_id="conv-1",
             model="conv-model",
             system_instructions="conv-sys",
             messages=[],
@@ -62,7 +63,12 @@ class TestChatRequestPreparation:
             default_system_instructions="default-sys",
             conversation_context=SimpleNamespace(
                 estimate_units=MagicMock(return_value=9),
-                apply_appended_messages=MagicMock(),
+            ),
+            context_state_updater=SimpleNamespace(
+                apply=MagicMock(
+                    return_value=SimpleNamespace(event_payload={"conversation_id": "conv-1"})
+                ),
+                request_cls=MagicMock(side_effect=lambda **kwargs: SimpleNamespace(**kwargs)),
             ),
             resolve_llm_kwargs=MagicMock(
                 return_value=({"temperature": 0.3}, {"input_budget": 321})
@@ -73,6 +79,10 @@ class TestChatRequestPreparation:
                     return_value=SimpleNamespace(
                         conversation_snapshot=compacted_snapshot,
                         compaction_event={"kind": "compacted"},
+                        context_state_event={
+                            "conversation_id": "conv-1",
+                            "source": "release_delta",
+                        },
                     )
                 )
             ),
@@ -85,6 +95,7 @@ class TestChatRequestPreparation:
             default_model=deps.default_model,
             default_system_instructions=deps.default_system_instructions,
             conversation_context=deps.conversation_context,
+            context_state_updater=deps.context_state_updater,
             resolve_llm_kwargs=deps.resolve_llm_kwargs,
             resolve_runtime_profile=deps.resolve_runtime_profile,
             context_compressor=deps.context_compressor,
@@ -100,14 +111,21 @@ class TestChatRequestPreparation:
         assert prepared.model == "req-model"
         assert prepared.llm_kwargs == {"temperature": 0.3}
         assert prepared.context_usage == {"used_tokens": 12}
+        assert prepared.context_state_event == {"conversation_id": "conv-1"}
         assert prepared.compaction_event == {"kind": "compacted"}
+        assert prepared.compaction_state_event == {
+            "conversation_id": "conv-1",
+            "source": "release_delta",
+        }
         assert conversation.messages[-1].role == MessageRole.USER
         assert conversation.messages[-1].metadata["usage"]["total_tokens"] == 9
-        deps.conversation_context.apply_appended_messages.assert_called_once_with(
-            conversation,
-            messages=[conversation.messages[-1]],
+        deps.context_state_updater.request_cls.assert_called_once_with(
+            mode="append",
+            reason="user_append",
             model="req-model",
+            messages=[conversation.messages[-1]],
         )
+        deps.context_state_updater.apply.assert_called_once()
         deps.build_context_messages.assert_called_once_with(
             conversation=compacted_snapshot,
             model="req-model",

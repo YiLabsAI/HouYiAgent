@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -25,7 +26,9 @@ from houyi.application.tool_calling.budget import (
     resolve_tool_loop_budget_chars,
 )
 from houyi.application.tool_calling.runner import ToolCallRunner
+from houyi.application.tool_calling.tool_bridge import ToolBridge
 from houyi.domain.skill.exceptions import SkillExecutionError
+from houyi.domain.skill.registry import SkillRegistry
 from houyi.domain.skill.spec import SkillSpec
 from houyi.infrastructure.config.env_config import (
     ENV_TOOLCALL_LOOP_MAX_MESSAGE_CHARS,
@@ -117,9 +120,35 @@ class _BudgetAdapter:
         self.model = model
 
 
+def _serialized_chars(value: Any) -> int:
+    return len(json.dumps(value, ensure_ascii=False, sort_keys=True))
+
+
 def _collect_trace_metrics(
     *, tool_trace: list[dict[str, Any]], tool_payloads: list[list[dict[str, Any]] | None]
-) -> dict[str, int]:
+) -> dict[str, float]:
+    schema_chars_total = sum(
+        _serialized_chars(payload) for payload in tool_payloads if isinstance(payload, list)
+    )
+    prompt_payload_chars_total = sum(
+        _serialized_chars(payload) for payload in tool_payloads if isinstance(payload, list)
+    )
+    completion_payload_chars_total = 0
+    tool_duration_values = [
+        float(entry.get("duration_ms") or 0.0)
+        for entry in tool_trace
+        if isinstance(entry.get("duration_ms"), (int, float))
+    ]
+    for payload in tool_payloads:
+        if not isinstance(payload, list):
+            continue
+        assistant_messages = [
+            message
+            for message in payload
+            if isinstance(message, dict) and message.get("role") == "assistant"
+        ]
+        if assistant_messages:
+            completion_payload_chars_total += _serialized_chars(assistant_messages[-1])
     return {
         "llm_round_count": len(tool_payloads),
         "tool_round_count": len(
@@ -136,15 +165,80 @@ def _collect_trace_metrics(
         "presented_content_chars_total": sum(
             int(entry.get("presented_content_chars") or 0) for entry in tool_trace
         ),
-        "schema_chars_total": sum(
-            len(json.dumps(payload, ensure_ascii=False, sort_keys=True))
-            for payload in tool_payloads
-            if isinstance(payload, list)
+        "schema_chars_total": schema_chars_total,
+        "prompt_payload_chars_total": prompt_payload_chars_total,
+        "completion_payload_chars_total": completion_payload_chars_total,
+        "prompt_token_proxy": prompt_payload_chars_total / 4.0,
+        "completion_token_proxy": completion_payload_chars_total / 4.0,
+        "total_token_proxy": (prompt_payload_chars_total + completion_payload_chars_total) / 4.0,
+        "tool_duration_ms_total": sum(tool_duration_values),
+        "tool_duration_ms_avg": (
+            sum(tool_duration_values) / len(tool_duration_values) if tool_duration_values else 0.0
         ),
     }
 
 
+def _projected_cli_bundle(schema_exposure: str) -> tuple[list[dict[str, Any]], list[SkillSpec]]:
+    registry = SkillRegistry()
+    for skill in local_tools.build_builtin_local_tools():
+        if skill.name == "houyi_local_cli":
+            registry.register(skill)
+            break
+    bridge = ToolBridge(registry)
+    skills = bridge.collect_skills(
+        skill_filter=["houyi_local_cli"],
+        schema_exposure=schema_exposure,
+    )
+    tools = bridge.collect_tool_schemas(
+        skill_filter=["houyi_local_cli"],
+        schema_exposure=schema_exposure,
+    )
+    return tools, skills
+
+
+def _bridge_skill_bundle(
+    *, skill_name: str, schema_exposure: str
+) -> tuple[list[dict[str, Any]], list[SkillSpec]]:
+    registry = SkillRegistry()
+    for skill in local_tools.build_builtin_local_tools():
+        if skill.name == skill_name:
+            registry.register(skill)
+            break
+    bridge = ToolBridge(registry)
+    skills = bridge.collect_skills(
+        skill_filter=[skill_name],
+        schema_exposure=schema_exposure,
+    )
+    tools = bridge.collect_tool_schemas(
+        skill_filter=[skill_name],
+        schema_exposure=schema_exposure,
+    )
+    return tools, skills
+
+
 class TestToolCallRunner:
+    async def _run_pipeline_lane(
+        self,
+        *,
+        runner: ToolCallRunner,
+        adapter: _FakeAdapter,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        skills: list[SkillSpec],
+    ) -> tuple[_FakeResponse, list[dict[str, Any]], dict[str, float]]:
+        started_at = time.perf_counter()
+        response, tool_trace = await runner.run(
+            adapter=adapter,
+            messages=messages,
+            tools=tools,
+            skills=skills,
+            executor=_DirectSkillExecutor(),
+            max_rounds=5,
+        )
+        metrics = _collect_trace_metrics(tool_trace=tool_trace, tool_payloads=adapter.tool_payloads)
+        metrics["wall_time_ms"] = (time.perf_counter() - started_at) * 1000.0
+        return response, tool_trace, metrics
+
     @pytest.mark.asyncio
     async def test_enforces_loop_budget(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv(ENV_TOOLCALL_LOOP_MAX_MESSAGE_CHARS, "200")
@@ -516,10 +610,10 @@ class TestToolCallRunner:
         assert len(adapter.chat_payloads) == 2
         second_round_payload = adapter.chat_payloads[-1]
         tool_message = next(msg for msg in second_round_payload if msg.get("role") == "tool")
-        assert len(tool_message["content"]) < 5000
+        assert len(str(tool_message["content"])) < 5000
         assert (
-            "[truncated" in tool_message["content"]
-            or '"_truncated": true' in tool_message["content"].lower()
+            "[truncated" in str(tool_message["content"])
+            or '"_truncated": true' in str(tool_message["content"]).lower()
         )
 
     @pytest.mark.asyncio
@@ -800,6 +894,8 @@ class TestToolCallRunner:
             skill_map["houyi_read_file"],
         ]
         local_cli_skill = skill_map["houyi_local_cli"]
+        projected_tools, projected_skills = _projected_cli_bundle("projected")
+        projected_min_tools, projected_min_skills = _projected_cli_bundle("projected_minimal")
 
         typed_adapter = _FakeAdapter(
             [
@@ -951,49 +1047,587 @@ class TestToolCallRunner:
                 _FakeResponse(content="done", tool_calls=[]),
             ]
         )
+        projected_adapter = _FakeAdapter(
+            [
+                _FakeResponse(
+                    content="",
+                    tool_calls=[
+                        {
+                            "id": "projected_list",
+                            "type": "function",
+                            "function": {
+                                "name": "houyi_local_cli_list",
+                                "arguments": json.dumps({"path": "houyi/skills"}),
+                            },
+                        }
+                    ],
+                ),
+                _FakeResponse(
+                    content="",
+                    tool_calls=[
+                        {
+                            "id": "projected_find",
+                            "type": "function",
+                            "function": {
+                                "name": "houyi_local_cli_find",
+                                "arguments": json.dumps(
+                                    {
+                                        "path": "houyi/skills",
+                                        "pattern": "SKILL.md",
+                                        "search_mode": "exact",
+                                    }
+                                ),
+                            },
+                        }
+                    ],
+                ),
+                _FakeResponse(
+                    content="",
+                    tool_calls=[
+                        {
+                            "id": "projected_grep",
+                            "type": "function",
+                            "function": {
+                                "name": "houyi_local_cli_grep",
+                                "arguments": json.dumps(
+                                    {"path": "houyi/skills", "query": "web search"}
+                                ),
+                            },
+                        }
+                    ],
+                ),
+                _FakeResponse(
+                    content="",
+                    tool_calls=[
+                        {
+                            "id": "projected_read",
+                            "type": "function",
+                            "function": {
+                                "name": "houyi_local_cli_read",
+                                "arguments": json.dumps(
+                                    {
+                                        "path": "houyi/skills/web_search/SKILL.md",
+                                        "start_line": 1,
+                                        "end_line": 20,
+                                    }
+                                ),
+                            },
+                        }
+                    ],
+                ),
+                _FakeResponse(content="done", tool_calls=[]),
+            ]
+        )
+        projected_min_adapter = _FakeAdapter(
+            [
+                _FakeResponse(
+                    content="",
+                    tool_calls=[
+                        {
+                            "id": "projected_min_list",
+                            "type": "function",
+                            "function": {
+                                "name": "houyi_local_cli_list",
+                                "arguments": json.dumps({"path": "houyi/skills"}),
+                            },
+                        }
+                    ],
+                ),
+                _FakeResponse(
+                    content="",
+                    tool_calls=[
+                        {
+                            "id": "projected_min_find",
+                            "type": "function",
+                            "function": {
+                                "name": "houyi_local_cli_find",
+                                "arguments": json.dumps(
+                                    {
+                                        "path": "houyi/skills",
+                                        "pattern": "SKILL.md",
+                                        "search_mode": "exact",
+                                    }
+                                ),
+                            },
+                        }
+                    ],
+                ),
+                _FakeResponse(
+                    content="",
+                    tool_calls=[
+                        {
+                            "id": "projected_min_grep",
+                            "type": "function",
+                            "function": {
+                                "name": "houyi_local_cli_grep",
+                                "arguments": json.dumps(
+                                    {"path": "houyi/skills", "query": "web search"}
+                                ),
+                            },
+                        }
+                    ],
+                ),
+                _FakeResponse(
+                    content="",
+                    tool_calls=[
+                        {
+                            "id": "projected_min_read",
+                            "type": "function",
+                            "function": {
+                                "name": "houyi_local_cli_read",
+                                "arguments": json.dumps(
+                                    {
+                                        "path": "houyi/skills/web_search/SKILL.md",
+                                        "start_line": 1,
+                                        "end_line": 20,
+                                    }
+                                ),
+                            },
+                        }
+                    ],
+                ),
+                _FakeResponse(content="done", tool_calls=[]),
+            ]
+        )
 
-        typed_response, typed_trace = await ToolCallRunner().run(
+        runner = ToolCallRunner()
+        typed_response, typed_trace, typed_metrics = await self._run_pipeline_lane(
+            runner=runner,
             adapter=typed_adapter,
             messages=[
                 {"role": "user", "content": "find the local web search skill and preview it"}
             ],
             tools=[skill.to_tool_schema() for skill in typed_skills],
             skills=typed_skills,
-            executor=_DirectSkillExecutor(),
-            max_rounds=5,
         )
-        local_cli_response, local_cli_trace = await ToolCallRunner().run(
+        local_cli_response, local_cli_trace, local_cli_metrics = await self._run_pipeline_lane(
+            runner=runner,
             adapter=local_cli_adapter,
             messages=[
                 {"role": "user", "content": "find the local web search skill and preview it"}
             ],
             tools=[local_cli_skill.to_tool_schema()],
             skills=[local_cli_skill],
-            executor=_DirectSkillExecutor(),
-            max_rounds=5,
         )
-
-        typed_metrics = _collect_trace_metrics(
-            tool_trace=typed_trace,
-            tool_payloads=typed_adapter.tool_payloads,
+        projected_response, projected_trace, projected_metrics = await self._run_pipeline_lane(
+            runner=runner,
+            adapter=projected_adapter,
+            messages=[
+                {"role": "user", "content": "find the local web search skill and preview it"}
+            ],
+            tools=projected_tools,
+            skills=projected_skills,
         )
-        local_cli_metrics = _collect_trace_metrics(
-            tool_trace=local_cli_trace,
-            tool_payloads=local_cli_adapter.tool_payloads,
+        (
+            projected_min_response,
+            projected_min_trace,
+            projected_min_metrics,
+        ) = await self._run_pipeline_lane(
+            runner=runner,
+            adapter=projected_min_adapter,
+            messages=[
+                {"role": "user", "content": "find the local web search skill and preview it"}
+            ],
+            tools=projected_min_tools,
+            skills=projected_min_skills,
         )
 
         assert typed_response.content == "done"
         assert local_cli_response.content == "done"
-        assert typed_metrics["llm_round_count"] == local_cli_metrics["llm_round_count"] == 5
-        assert typed_metrics["tool_round_count"] == local_cli_metrics["tool_round_count"] == 4
-        assert typed_metrics["tool_call_count"] == local_cli_metrics["tool_call_count"] == 4
+        assert projected_response.content == "done"
+        assert projected_min_response.content == "done"
+        assert typed_metrics["llm_round_count"] == 5
+        assert local_cli_metrics["llm_round_count"] == 5
+        assert projected_metrics["llm_round_count"] == 5
+        assert projected_min_metrics["llm_round_count"] == 5
+        assert typed_metrics["tool_round_count"] == 4
+        assert local_cli_metrics["tool_round_count"] == 4
+        assert projected_metrics["tool_round_count"] == 4
+        assert projected_min_metrics["tool_round_count"] == 4
+        assert typed_metrics["tool_call_count"] == 4
+        assert local_cli_metrics["tool_call_count"] == 4
+        assert projected_metrics["tool_call_count"] == 4
+        assert projected_min_metrics["tool_call_count"] == 4
         assert local_cli_metrics["schema_chars_total"] < typed_metrics["schema_chars_total"]
+        assert projected_metrics["schema_chars_total"] > local_cli_metrics["schema_chars_total"]
+        assert (
+            projected_min_metrics["schema_chars_total"] <= projected_metrics["schema_chars_total"]
+        )
+        assert projected_min_metrics["schema_chars_total"] < typed_metrics["schema_chars_total"]
         assert local_cli_metrics["presented_content_chars_total"] <= (
+            typed_metrics["presented_content_chars_total"] + 400
+        )
+        assert projected_metrics["presented_content_chars_total"] <= (
+            typed_metrics["presented_content_chars_total"] + 400
+        )
+        assert projected_min_metrics["presented_content_chars_total"] <= (
             typed_metrics["presented_content_chars_total"] + 400
         )
         assert local_cli_metrics["raw_payload_chars_total"] <= (
             typed_metrics["raw_payload_chars_total"] + 400
         )
+        assert projected_metrics["raw_payload_chars_total"] <= (
+            typed_metrics["raw_payload_chars_total"] + 400
+        )
+        assert projected_min_metrics["raw_payload_chars_total"] <= (
+            typed_metrics["raw_payload_chars_total"] + 400
+        )
+        assert local_cli_metrics["prompt_token_proxy"] < typed_metrics["prompt_token_proxy"]
+        assert projected_metrics["prompt_token_proxy"] > local_cli_metrics["prompt_token_proxy"]
+        assert (
+            projected_min_metrics["prompt_token_proxy"] <= projected_metrics["prompt_token_proxy"]
+        )
+        assert projected_min_metrics["prompt_token_proxy"] < typed_metrics["prompt_token_proxy"]
+        assert local_cli_metrics["completion_token_proxy"] <= (
+            typed_metrics["completion_token_proxy"] + 100
+        )
+        assert projected_metrics["completion_token_proxy"] <= (
+            typed_metrics["completion_token_proxy"] + 100
+        )
+        assert projected_min_metrics["completion_token_proxy"] <= (
+            typed_metrics["completion_token_proxy"] + 100
+        )
+        assert local_cli_metrics["total_token_proxy"] < typed_metrics["total_token_proxy"]
+        assert projected_min_metrics["total_token_proxy"] < typed_metrics["total_token_proxy"]
+        assert typed_metrics["tool_duration_ms_total"] > 0
+        assert local_cli_metrics["tool_duration_ms_total"] > 0
+        assert projected_metrics["tool_duration_ms_total"] > 0
+        assert projected_min_metrics["tool_duration_ms_total"] > 0
+        assert typed_metrics["tool_duration_ms_avg"] > 0
+        assert local_cli_metrics["tool_duration_ms_avg"] > 0
+        assert projected_metrics["tool_duration_ms_avg"] > 0
+        assert projected_min_metrics["tool_duration_ms_avg"] > 0
+        assert typed_metrics["wall_time_ms"] > 0
+        assert local_cli_metrics["wall_time_ms"] > 0
+        assert projected_metrics["wall_time_ms"] > 0
+        assert projected_min_metrics["wall_time_ms"] > 0
+
+    @pytest.mark.asyncio
+    async def test_chain_baseline(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("HOUYI_WORKSPACE_ROOT", str(tmp_path))
+
+        skills_dir = tmp_path / "houyi" / "skills" / "web_search"
+        skills_dir.mkdir(parents=True, exist_ok=True)
+        (skills_dir / "SKILL.md").write_text(
+            "# Web Search\nweb search local chain target\nline-3\n",
+            encoding="utf-8",
+        )
+
+        chain_skill = next(
+            skill
+            for skill in local_tools.build_builtin_local_tools()
+            if skill.name == "houyi_local_cli_chain"
+        )
+        adapter = _FakeAdapter(
+            [
+                _FakeResponse(
+                    content="",
+                    tool_calls=[
+                        {
+                            "id": "chain_flow",
+                            "type": "function",
+                            "function": {
+                                "name": "houyi_local_cli_chain",
+                                "arguments": json.dumps(
+                                    {
+                                        "workflow": (
+                                            "find path=houyi/skills pattern=SKILL.md search_mode=exact "
+                                            "| grep query='web search' | read start_line=1 end_line=2"
+                                        )
+                                    }
+                                ),
+                            },
+                        }
+                    ],
+                ),
+                _FakeResponse(content="done", tool_calls=[]),
+            ]
+        )
+
+        runner = ToolCallRunner()
+        response, tool_trace = await runner.run(
+            adapter=adapter,
+            messages=[
+                {"role": "user", "content": "find the local web search skill and preview it"}
+            ],
+            tools=[chain_skill.to_tool_schema()],
+            skills=[chain_skill],
+            executor=_DirectSkillExecutor(),
+            max_rounds=3,
+        )
+
+        assert response.content == "done"
+        assert len(tool_trace) == 1
+        raw = tool_trace[0]["result"]["raw"]
+        assert raw["success"] is True
+        assert len(raw["data"]["steps"]) == 3
+        assert raw["data"]["steps"][0]["command"] == "find"
+        assert raw["data"]["steps"][1]["command"] == "grep"
+        assert raw["data"]["steps"][2]["command"] == "read"
+        assert tool_trace[0]["tool_name"] == "houyi_local_cli_chain"
+
+    @pytest.mark.asyncio
+    async def test_chain_fallback(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("HOUYI_WORKSPACE_ROOT", str(tmp_path))
+
+        skills_dir = tmp_path / "houyi" / "skills" / "web_search"
+        skills_dir.mkdir(parents=True, exist_ok=True)
+        (skills_dir / "SKILL.md").write_text(
+            "# Web Search\nweb search local chain target\nline-3\n",
+            encoding="utf-8",
+        )
+
+        chain_skill = next(
+            skill
+            for skill in local_tools.build_builtin_local_tools()
+            if skill.name == "houyi_local_cli_chain"
+        )
+        adapter = _FakeAdapter(
+            [
+                _FakeResponse(
+                    content="",
+                    tool_calls=[
+                        {
+                            "id": "chain_fallback",
+                            "type": "function",
+                            "function": {
+                                "name": "houyi_local_cli_chain",
+                                "arguments": json.dumps(
+                                    {
+                                        "workflow": (
+                                            "find path=houyi/skills pattern=missing.md search_mode=exact "
+                                            "|| find path=houyi/skills pattern=SKILL.md search_mode=exact "
+                                            "| read start_line=1 end_line=1"
+                                        )
+                                    }
+                                ),
+                            },
+                        }
+                    ],
+                ),
+                _FakeResponse(content="done", tool_calls=[]),
+            ]
+        )
+
+        runner = ToolCallRunner()
+        response, tool_trace = await runner.run(
+            adapter=adapter,
+            messages=[{"role": "user", "content": "recover and preview the matching skill"}],
+            tools=[chain_skill.to_tool_schema()],
+            skills=[chain_skill],
+            executor=_DirectSkillExecutor(),
+            max_rounds=3,
+        )
+
+        assert response.content == "done"
+        raw = tool_trace[0]["result"]["raw"]
+        steps = raw["data"]["steps"]
+        assert steps[0]["success"] is False
+        assert steps[1]["success"] is True
+        assert steps[2]["success"] is True
+
+    @pytest.mark.asyncio
+    async def test_chain_comparative_workflow_surface(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("HOUYI_WORKSPACE_ROOT", str(tmp_path))
+
+        skills_dir = tmp_path / "houyi" / "skills" / "web_search"
+        skills_dir.mkdir(parents=True, exist_ok=True)
+        (skills_dir / "SKILL.md").write_text(
+            "# Web Search\nweb search local chain target\nline-3\n",
+            encoding="utf-8",
+        )
+
+        projected_tools, projected_skills = _projected_cli_bundle("projected")
+        chain_tools, chain_skills = _bridge_skill_bundle(
+            skill_name="houyi_local_cli_chain",
+            schema_exposure="full",
+        )
+        chain_min_tools, chain_min_skills = _bridge_skill_bundle(
+            skill_name="houyi_local_cli_chain",
+            schema_exposure="minimal",
+        )
+
+        projected_adapter = _FakeAdapter(
+            [
+                _FakeResponse(
+                    content="",
+                    tool_calls=[
+                        {
+                            "id": "projected_find",
+                            "type": "function",
+                            "function": {
+                                "name": "houyi_local_cli_find",
+                                "arguments": json.dumps(
+                                    {
+                                        "path": "houyi/skills",
+                                        "pattern": "SKILL.md",
+                                        "search_mode": "exact",
+                                    }
+                                ),
+                            },
+                        }
+                    ],
+                ),
+                _FakeResponse(
+                    content="",
+                    tool_calls=[
+                        {
+                            "id": "projected_grep",
+                            "type": "function",
+                            "function": {
+                                "name": "houyi_local_cli_grep",
+                                "arguments": json.dumps(
+                                    {
+                                        "path": "houyi/skills/web_search/SKILL.md",
+                                        "query": "web search",
+                                    }
+                                ),
+                            },
+                        }
+                    ],
+                ),
+                _FakeResponse(
+                    content="",
+                    tool_calls=[
+                        {
+                            "id": "projected_read",
+                            "type": "function",
+                            "function": {
+                                "name": "houyi_local_cli_read",
+                                "arguments": json.dumps(
+                                    {
+                                        "path": "houyi/skills/web_search/SKILL.md",
+                                        "start_line": 1,
+                                        "end_line": 2,
+                                    }
+                                ),
+                            },
+                        }
+                    ],
+                ),
+                _FakeResponse(content="done", tool_calls=[]),
+            ]
+        )
+        chain_adapter = _FakeAdapter(
+            [
+                _FakeResponse(
+                    content="",
+                    tool_calls=[
+                        {
+                            "id": "chain_workflow",
+                            "type": "function",
+                            "function": {
+                                "name": "houyi_local_cli_chain",
+                                "arguments": json.dumps(
+                                    {
+                                        "workflow": (
+                                            "find path=houyi/skills pattern=SKILL.md search_mode=exact "
+                                            "| grep query='web search' "
+                                            "| read start_line=1 end_line=2"
+                                        )
+                                    }
+                                ),
+                            },
+                        }
+                    ],
+                ),
+                _FakeResponse(content="done", tool_calls=[]),
+            ]
+        )
+        chain_min_adapter = _FakeAdapter(
+            [
+                _FakeResponse(
+                    content="",
+                    tool_calls=[
+                        {
+                            "id": "chain_min_workflow",
+                            "type": "function",
+                            "function": {
+                                "name": "houyi_local_cli_chain",
+                                "arguments": json.dumps(
+                                    {
+                                        "workflow": (
+                                            "find path=houyi/skills pattern=SKILL.md search_mode=exact "
+                                            "| grep query='web search' "
+                                            "| read start_line=1 end_line=2"
+                                        )
+                                    }
+                                ),
+                            },
+                        }
+                    ],
+                ),
+                _FakeResponse(content="done", tool_calls=[]),
+            ]
+        )
+
+        runner = ToolCallRunner()
+        projected_response, projected_trace, projected_metrics = await self._run_pipeline_lane(
+            runner=runner,
+            adapter=projected_adapter,
+            messages=[
+                {"role": "user", "content": "find the local web search skill and preview it"}
+            ],
+            tools=projected_tools,
+            skills=projected_skills,
+        )
+        chain_response, chain_trace, chain_metrics = await self._run_pipeline_lane(
+            runner=runner,
+            adapter=chain_adapter,
+            messages=[
+                {"role": "user", "content": "find the local web search skill and preview it"}
+            ],
+            tools=chain_tools,
+            skills=chain_skills,
+        )
+        chain_min_response, chain_min_trace, chain_min_metrics = await self._run_pipeline_lane(
+            runner=runner,
+            adapter=chain_min_adapter,
+            messages=[
+                {"role": "user", "content": "find the local web search skill and preview it"}
+            ],
+            tools=chain_min_tools,
+            skills=chain_min_skills,
+        )
+
+        assert projected_response.content == "done"
+        assert chain_response.content == "done"
+        assert chain_min_response.content == "done"
+        assert len(projected_trace) == 3
+        assert len(chain_trace) == 1
+        assert len(chain_min_trace) == 1
+        assert projected_metrics["tool_round_count"] == 3
+        assert chain_metrics["tool_round_count"] == 1
+        assert chain_min_metrics["tool_round_count"] == 1
+        assert projected_metrics["tool_call_count"] == 3
+        assert chain_metrics["tool_call_count"] == 1
+        assert chain_min_metrics["tool_call_count"] == 1
+        assert chain_metrics["llm_round_count"] < projected_metrics["llm_round_count"]
+        assert chain_min_metrics["llm_round_count"] < projected_metrics["llm_round_count"]
+        assert chain_metrics["schema_chars_total"] < projected_metrics["schema_chars_total"]
+        assert chain_min_metrics["schema_chars_total"] <= chain_metrics["schema_chars_total"]
+        assert chain_metrics["prompt_token_proxy"] < projected_metrics["prompt_token_proxy"]
+        assert chain_min_metrics["prompt_token_proxy"] <= chain_metrics["prompt_token_proxy"]
+        assert chain_metrics["wall_time_ms"] > 0
+        assert chain_min_metrics["wall_time_ms"] > 0
+        chain_raw = chain_trace[0]["result"]["raw"]
+        assert chain_raw["success"] is True
+        assert len(chain_raw["data"]["steps"]) == 3
+        assert chain_raw["data"]["steps"][0]["command"] == "find"
+        assert chain_raw["data"]["steps"][1]["command"] == "grep"
+        assert chain_raw["data"]["steps"][2]["command"] == "read"
 
 
 def test_prepare_drops_group() -> None:

@@ -71,6 +71,15 @@ describe('useChatStore', () => {
       top_p: null,
       stream: true,
       bookmarked: false,
+      conversation_context_state: {
+        conversation_id: 'conv-1',
+        used_units: 130000,
+        max_units: 272000,
+        state: 'elevated',
+        last_compacted_at: null,
+        last_compaction_delta: null,
+        updated_at: 1,
+      },
       metadata: {},
       created_at: 1,
       updated_at: 1,
@@ -914,6 +923,15 @@ describe('useChatStore', () => {
       top_p: null,
       stream: true,
       bookmarked: false,
+      conversation_context_state: {
+        conversation_id: 'conv-1',
+        used_units: 88200,
+        max_units: 272000,
+        state: 'healthy',
+        last_compacted_at: null,
+        last_compaction_delta: null,
+        updated_at: 3,
+      },
       metadata: {},
       created_at: 1,
       updated_at: 3,
@@ -926,6 +944,7 @@ describe('useChatStore', () => {
         return new Response(JSON.stringify({
           status: 'restored',
           backup_id: 'backup-undo-1',
+          conversation_context_state: restoredConversation.conversation_context_state,
           conversation: restoredConversation,
         }), {
           status: 200,
@@ -975,6 +994,212 @@ describe('useChatStore', () => {
     });
     expect(useChatStore.getState().restoreNotice?.message).toContain('Undo restore completed');
     expect(useChatStore.getState().scrollToMessageId).toBe('u-final');
+    expect(useChatStore.getState().activeConversation?.conversation_context_state).toEqual({
+      conversation_id: 'conv-1',
+      used_units: 88200,
+      max_units: 272000,
+      state: 'healthy',
+      last_compacted_at: null,
+      last_compaction_delta: null,
+      updated_at: 3,
+    });
+  });
+
+  it('applies authoritative context state returned by edit before reload completes', async () => {
+    const updatedConversation: Conversation = {
+      conversation_id: 'conv-1',
+      title: 'Chat',
+      status: 'active',
+      messages: [
+        {
+          message_id: 'u1',
+          role: 'user',
+          content: 'edited',
+          metadata: { edited: true },
+          created_at: 1,
+        },
+      ],
+      model: 'demo',
+      system_instructions: '',
+      temperature: null,
+      max_tokens: null,
+      top_p: null,
+      stream: true,
+      bookmarked: false,
+      conversation_context_state: {
+        conversation_id: 'conv-1',
+        used_units: 91234,
+        max_units: 272000,
+        state: 'healthy',
+        last_compacted_at: null,
+        last_compaction_delta: null,
+        updated_at: 5,
+      },
+      metadata: {},
+      created_at: 1,
+      updated_at: 5,
+      schema_version: 1,
+    };
+
+    global.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/api/chat/conversations/conv-1/messages/u1') && init?.method === 'PUT') {
+        return new Response(JSON.stringify({
+          conversation_id: 'conv-1',
+          conversation_context_state: updatedConversation.conversation_context_state,
+        }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      if (url.endsWith('/api/chat/conversations/conv-1/context-usage')) {
+        return new Response(JSON.stringify({ usage: null }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      if (url.endsWith('/api/chat/conversations/conv-1')) {
+        return new Response(JSON.stringify(updatedConversation), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    }) as typeof fetch;
+
+    useChatStore.setState((state) => ({
+      ...state,
+      activeConversationId: 'conv-1',
+      activeConversation: {
+        ...updatedConversation,
+        messages: [
+          {
+            message_id: 'u1',
+            role: 'user',
+            content: 'original',
+            metadata: {},
+            created_at: 1,
+          },
+        ],
+        conversation_context_state: null,
+      },
+    }));
+
+    await useChatStore.getState().editMessage('u1', 'edited');
+
+    expect(useChatStore.getState().activeConversation?.conversation_context_state).toEqual({
+      conversation_id: 'conv-1',
+      used_units: 91234,
+      max_units: 272000,
+      state: 'healthy',
+      last_compacted_at: null,
+      last_compaction_delta: null,
+      updated_at: 5,
+    });
+    expect(useChatStore.getState().activeConversation?.messages[0]?.content).toBe('edited');
+  });
+
+  it('applies authoritative context state returned by delete while keeping visible messages in sync', async () => {
+    const refreshedConversation: Conversation = {
+      conversation_id: 'conv-1',
+      title: 'Chat',
+      status: 'active',
+      messages: [
+        {
+          message_id: 'u1',
+          role: 'user',
+          content: 'keep',
+          metadata: {},
+          created_at: 1,
+        },
+      ],
+      model: 'demo',
+      system_instructions: '',
+      temperature: null,
+      max_tokens: null,
+      top_p: null,
+      stream: true,
+      bookmarked: false,
+      conversation_context_state: {
+        conversation_id: 'conv-1',
+        used_units: 60123,
+        max_units: 272000,
+        state: 'healthy',
+        last_compacted_at: null,
+        last_compaction_delta: null,
+        updated_at: 7,
+      },
+      metadata: {},
+      created_at: 1,
+      updated_at: 7,
+      schema_version: 1,
+    };
+
+    global.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/api/chat/conversations/conv-1/messages/a1') && init?.method === 'DELETE') {
+        return new Response(JSON.stringify({
+          conversation_id: 'conv-1',
+          conversation_context_state: refreshedConversation.conversation_context_state,
+        }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      if (url.endsWith('/api/chat/conversations/conv-1/context-usage')) {
+        return new Response(JSON.stringify({ usage: null }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      if (url.endsWith('/api/chat/conversations/conv-1')) {
+        return new Response(JSON.stringify(refreshedConversation), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      if (url.endsWith('/api/chat/conversations')) {
+        return new Response(JSON.stringify({ conversations: [] }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    }) as typeof fetch;
+
+    useChatStore.setState((state) => ({
+      ...state,
+      activeConversationId: 'conv-1',
+      activeConversation: {
+        ...refreshedConversation,
+        messages: [
+          ...refreshedConversation.messages,
+          {
+            message_id: 'a1',
+            role: 'assistant',
+            content: 'remove me',
+            metadata: {},
+            created_at: 2,
+          },
+        ],
+        conversation_context_state: null,
+      },
+    }));
+
+    await useChatStore.getState().deleteMessage('a1');
+
+    expect(useChatStore.getState().activeConversation?.conversation_context_state).toEqual({
+      conversation_id: 'conv-1',
+      used_units: 60123,
+      max_units: 272000,
+      state: 'healthy',
+      last_compacted_at: null,
+      last_compaction_delta: null,
+      updated_at: 7,
+    });
+    expect(useChatStore.getState().activeConversation?.messages).toEqual([
+      expect.objectContaining({ message_id: 'u1', content: 'keep' }),
+    ]);
   });
 
   it('hydrates conversation context state on load', async () => {
@@ -1171,6 +1396,22 @@ describe('useChatStore', () => {
         controller.enqueue(encoder.encode(
           'event: context.compacted\n'
           + `data: ${JSON.stringify({ message_id: 'assistant-1', compaction: compactionRecord })}\n\n`
+          + 'event: context.state.updated\n'
+          + `data: ${JSON.stringify({
+            message_id: 'assistant-1',
+            conversation_id: 'conv-1',
+            source: 'release_delta',
+            reason: 'compaction_commit',
+            conversation_context_state: {
+              conversation_id: 'conv-1',
+              used_units: 124156,
+              max_units: 272000,
+              state: 'compacted_recently',
+              last_compacted_at: 10,
+              last_compaction_delta: 1150,
+              updated_at: 10,
+            },
+          })}\n\n`
           + 'event: message.finish\n'
           + `data: ${JSON.stringify({
             message_id: 'assistant-1',
@@ -1243,10 +1484,14 @@ describe('useChatStore', () => {
         compaction_id: 'cmp-live-1',
         trigger: 'repo_intent_trim',
       });
-      expect(useChatStore.getState().activeConversation?.conversation_context_state).toMatchObject({
+      expect(useChatStore.getState().activeConversation?.conversation_context_state).toEqual({
+        conversation_id: 'conv-1',
+        used_units: 124156,
+        max_units: 272000,
         state: 'compacted_recently',
         last_compacted_at: 10,
         last_compaction_delta: 1150,
+        updated_at: 10,
       });
     });
   });
@@ -1594,6 +1839,23 @@ describe('useChatStore', () => {
     const stream = new ReadableStream({
       start(controller) {
         controller.enqueue(encoder.encode(
+          'event: context.state.updated\n'
+          + `data: ${JSON.stringify({
+            message_id: 'assistant-1',
+            conversation_id: 'conv-1',
+            source: 'rewrite_recompute',
+            reason: 'rewrite_messages',
+            conversation_context_state: {
+              conversation_id: 'conv-1',
+              used_units: 40200,
+              max_units: 272000,
+              state: 'healthy',
+              last_compacted_at: null,
+              last_compaction_delta: null,
+              updated_at: 2,
+            },
+          })}\n\n`
+          +
           'event: message.delta\n'
           + `data: ${JSON.stringify({ message_id: 'assistant-2', content: 'done' })}\n\n`
           + 'event: message.finish\n'
@@ -1641,6 +1903,15 @@ describe('useChatStore', () => {
       '/api/chat/conversations',
       expect.anything(),
     );
+    expect(useChatStore.getState().activeConversation?.conversation_context_state).toEqual({
+      conversation_id: 'conv-1',
+      used_units: 40200,
+      max_units: 272000,
+      state: 'healthy',
+      last_compacted_at: null,
+      last_compaction_delta: null,
+      updated_at: 2,
+    });
     expect(useChatStore.getState().activeConversation?.messages).toEqual([
       ...conversationPayload.messages,
       expect.objectContaining({

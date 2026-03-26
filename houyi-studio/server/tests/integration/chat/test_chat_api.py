@@ -634,6 +634,9 @@ class TestCompactConversation:
         restore_data = restore_resp.json()
         assert restore_data["status"] == "restored"
         assert restore_data["restored_compaction_id"] == "cmp_restore_1"
+        assert restore_data["conversation_context_state"]["conversation_id"] == conv_id
+        assert restore_data["context_state_event"]["conversation_id"] == conv_id
+        assert restore_data["context_state_event"]["reason"] == "restore_compaction"
         restore_point_backup_id = restore_data["restore_point_backup_id"]
         assert isinstance(restore_point_backup_id, str) and restore_point_backup_id
 
@@ -655,6 +658,9 @@ class TestCompactConversation:
         undo_data = undo_resp.json()
         assert undo_data["status"] == "restored"
         assert undo_data["backup_id"] == restore_point_backup_id
+        assert undo_data["conversation_context_state"]["conversation_id"] == conv_id
+        assert undo_data["context_state_event"]["conversation_id"] == conv_id
+        assert undo_data["context_state_event"]["reason"] == "restore_backup"
 
         undone_conv = store.get(conv_id)
         assert undone_conv is not None

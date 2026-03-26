@@ -37,11 +37,18 @@ class TestAssistantTurnPersistence:
         conversation = SimpleNamespace(messages=[], updated_at=0.0)
         json_store = SimpleNamespace(get=MagicMock(return_value=conversation), update=MagicMock())
         deps = SimpleNamespace(
-            conversation_context=SimpleNamespace(apply_appended_messages=MagicMock()),
+            context_state_updater=SimpleNamespace(
+                apply=MagicMock(
+                    return_value=SimpleNamespace(
+                        event_payload={"conversation_id": "conv-1", "source": "append_delta"}
+                    )
+                ),
+                request_cls=MagicMock(side_effect=lambda **kwargs: SimpleNamespace(**kwargs)),
+            ),
         )
         persistence = AssistantTurnPersistence(
             json_store=json_store,
-            conversation_context=deps.conversation_context,
+            context_state_updater=deps.context_state_updater,
         )
         assistant_msg = Message(role=MessageRole.ASSISTANT, content="")
         tool_msg = Message(role=MessageRole.TOOL, content="tool body", name="read_file")
@@ -63,7 +70,11 @@ class TestAssistantTurnPersistence:
             model="model-1",
         )
 
-        assert persisted is True
+        assert persisted.persisted is True
+        assert persisted.context_state_event == {
+            "conversation_id": "conv-1",
+            "source": "append_delta",
+        }
         assert assistant_msg.content == "hello"
         assert assistant_msg.reasoning_content == "think"
         assert assistant_msg.metadata["usage"] == {"total_tokens": 10}
@@ -72,11 +83,13 @@ class TestAssistantTurnPersistence:
         assert assistant_msg.metadata["trace_id"] == "trace-99"
         assert assistant_msg.metadata["post_stream_persist_ms"] >= 0
         assert conversation.messages == [tool_msg, assistant_msg]
-        deps.conversation_context.apply_appended_messages.assert_called_once_with(
-            conversation,
-            messages=[tool_msg, assistant_msg],
+        deps.context_state_updater.request_cls.assert_called_once_with(
+            mode="append",
+            reason="assistant_persist",
             model="model-1",
+            messages=[tool_msg, assistant_msg],
         )
+        deps.context_state_updater.apply.assert_called_once()
         assert chat_span.status == ("ok", None)
 
     @pytest.mark.asyncio
@@ -85,11 +98,16 @@ class TestAssistantTurnPersistence:
         conversation = SimpleNamespace(messages=[], updated_at=0.0)
         json_store = SimpleNamespace(get=MagicMock(return_value=conversation), update=MagicMock())
         deps = SimpleNamespace(
-            conversation_context=SimpleNamespace(apply_appended_messages=MagicMock()),
+            context_state_updater=SimpleNamespace(
+                apply=MagicMock(
+                    return_value=SimpleNamespace(event_payload={"conversation_id": "conv-1"})
+                ),
+                request_cls=MagicMock(side_effect=lambda **kwargs: SimpleNamespace(**kwargs)),
+            ),
         )
         persistence = AssistantTurnPersistence(
             json_store=json_store,
-            conversation_context=deps.conversation_context,
+            context_state_updater=deps.context_state_updater,
         )
         assistant_msg = Message(role=MessageRole.ASSISTANT, content="")
         chat_span = _Span(trace_id="trace-100")
@@ -110,17 +128,18 @@ class TestAssistantTurnPersistence:
             model="model-1",
         )
 
-        assert persisted is True
+        assert persisted.persisted is True
         assert assistant_msg.content == ""
         assert assistant_msg.reasoning_content == "think only"
         assert assistant_msg.metadata["usage"] == {"total_tokens": 8}
         assert assistant_msg.metadata["finish_reason"] == "stop"
         assert assistant_msg.metadata["final_stream_status"] == "reasoning_only"
         assert conversation.messages == [assistant_msg]
-        deps.conversation_context.apply_appended_messages.assert_called_once_with(
-            conversation,
-            messages=[assistant_msg],
+        deps.context_state_updater.request_cls.assert_called_once_with(
+            mode="append",
+            reason="assistant_persist",
             model="model-1",
+            messages=[assistant_msg],
         )
         assert chat_span.status == ("ok", None)
 
@@ -129,14 +148,14 @@ class TestAssistantTurnPersistence:
         lock = _Lock()
         deps = SimpleNamespace(
             json_store=SimpleNamespace(get=MagicMock(), update=MagicMock()),
-            conversation_context=SimpleNamespace(
-                estimate_units=MagicMock(),
-                apply_appended_messages=MagicMock(),
+            context_state_updater=SimpleNamespace(
+                apply=MagicMock(),
+                request_cls=MagicMock(),
             ),
         )
         persistence = AssistantTurnPersistence(
             json_store=deps.json_store,
-            conversation_context=deps.conversation_context,
+            context_state_updater=deps.context_state_updater,
         )
         chat_span = _Span()
 
@@ -156,6 +175,7 @@ class TestAssistantTurnPersistence:
             model="model-1",
         )
 
-        assert persisted is False
+        assert persisted.persisted is False
         assert chat_span.status == ("error", "LLM returned no content")
         deps.json_store.update.assert_not_called()
+        deps.context_state_updater.apply.assert_not_called()

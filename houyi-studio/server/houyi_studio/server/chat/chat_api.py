@@ -654,6 +654,21 @@ async def restore_compaction(conversation_id: str, compaction_id: str) -> dict[s
         "restored_compaction_id": compaction_id,
         "backup_id": backup_id,
         "restore_point_backup_id": restore_point["backup_id"],
+        "conversation_context_state": getattr(
+            refreshed,
+            "conversation_context_state",
+            None,
+        ),
+        "context_state_event": {
+            "conversation_id": refreshed.conversation_id,
+            "conversation_context_state": refreshed.conversation_context_state.model_dump(
+                mode="json"
+            )
+            if getattr(refreshed, "conversation_context_state", None) is not None
+            else None,
+            "source": "rewrite_response",
+            "reason": "restore_compaction",
+        },
         "conversation": refreshed.model_dump(mode="json"),
     }
 
@@ -697,6 +712,21 @@ async def restore_backup(conversation_id: str, backup_id: str) -> dict[str, Any]
     return {
         "status": "restored",
         "backup_id": backup_id,
+        "conversation_context_state": getattr(
+            refreshed,
+            "conversation_context_state",
+            None,
+        ),
+        "context_state_event": {
+            "conversation_id": refreshed.conversation_id,
+            "conversation_context_state": refreshed.conversation_context_state.model_dump(
+                mode="json"
+            )
+            if getattr(refreshed, "conversation_context_state", None) is not None
+            else None,
+            "source": "rewrite_response",
+            "reason": "restore_backup",
+        },
         "conversation": refreshed.model_dump(mode="json"),
     }
 
@@ -790,8 +820,19 @@ async def edit_message(
     """
     service = _get_service()
     try:
-        msg = await service.edit_message(conversation_id, message_id, req)
-        return msg.model_dump(mode="json")
+        result = await service.edit_message(conversation_id, message_id, req)
+        return {
+            "message": result.message.model_dump(mode="json")
+            if result.message is not None
+            else None,
+            "conversation_id": getattr(result.conversation, "conversation_id", conversation_id),
+            "conversation_context_state": getattr(
+                result.conversation,
+                "conversation_context_state",
+                None,
+            ),
+            "context_state_event": result.context_state_event,
+        }
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=_not_found_detail(str(e))) from e
     except ValueError as e:
@@ -878,12 +919,22 @@ async def update_pinned_context(
 async def delete_message(
     conversation_id: str,
     message_id: str,
-) -> dict[str, str]:
+) -> dict[str, Any]:
     """Delete a single message from a conversation."""
     service = _get_service()
     try:
-        await service.delete_message(conversation_id, message_id)
-        return {"status": "deleted", "message_id": message_id}
+        result = await service.delete_message(conversation_id, message_id)
+        return {
+            "status": "deleted",
+            "message_id": message_id,
+            "conversation_id": getattr(result.conversation, "conversation_id", conversation_id),
+            "conversation_context_state": getattr(
+                result.conversation,
+                "conversation_context_state",
+                None,
+            ),
+            "context_state_event": result.context_state_event,
+        }
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=_not_found_detail(str(e))) from e
     except ValueError as e:

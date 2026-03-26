@@ -269,19 +269,76 @@ class TestSiliconFlowAdapterHttpxPath:
             {"role": "system", "content": "sys"},
             {
                 "role": "assistant",
-                "reasoning_content": "hidden",
-                "tool_calls": [
-                    {
-                        "id": "call_1",
-                        "type": "function",
-                        "function": {
-                            "name": "houyi_find_files",
-                            "arguments": '{"pattern": "*.md"}',
-                        },
-                    }
-                ],
+                "content": 'Tool calls requested:\n1. houyi_find_files {"pattern": "*.md"}',
             },
-            {"role": "tool", "content": '{"matches": ["README.md"]}', "tool_call_id": "call_1"},
+            {
+                "role": "user",
+                "content": 'Tool result for houyi_find_files (call_1):\n{"matches": ["README.md"]}',
+            },
+        ]
+        assert prepared.extra_kwargs == {}
+        assert prepared.tool_choice is None
+
+    def test_prepare_v3_tool_turn(self):
+        adapter = SiliconFlowAdapter(
+            api_key="test-key",
+            base_url="https://example.invalid/v1",
+            default_model="deepseek-ai/DeepSeek-V3",
+        )
+        request = OpenAICompatRequest(
+            model="deepseek-ai/DeepSeek-V3",
+            messages=[
+                {"role": "system", "content": "sys"},
+                {"role": "user", "content": "find search skills"},
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {
+                                "name": "houyi_find_files",
+                                "arguments": {"pattern": "*search*"},
+                            },
+                        }
+                    ],
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_1",
+                    "name": "houyi_find_files",
+                    "content": {"matches": ["houyi/skills/web_search/SKILL.md"]},
+                },
+            ],
+            temperature=0.2,
+            tools=[
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "houyi_find_files",
+                        "description": "find files",
+                        "parameters": {"type": "object"},
+                    },
+                }
+            ],
+            extra_kwargs={"parallel_tool_calls": True},
+            tool_choice="required",
+        )
+
+        prepared = adapter._prepare_request_for_provider(request)
+
+        assert prepared.messages == [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "find search skills"},
+            {
+                "role": "assistant",
+                "content": 'Tool calls requested:\n1. houyi_find_files {"pattern": "*search*"}',
+            },
+            {
+                "role": "user",
+                "content": 'Tool result for houyi_find_files (call_1):\n{"matches": ["houyi/skills/web_search/SKILL.md"]}',
+            },
         ]
         assert prepared.extra_kwargs == {}
         assert prepared.tool_choice is None

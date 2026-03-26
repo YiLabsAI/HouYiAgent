@@ -24,6 +24,16 @@ class TestBuildToolTraceEvents:
         events = build_tool_trace_events(
             tool_trace=[
                 {
+                    "event": "agent.iteration",
+                    "round_index": 1,
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+                },
+                {
+                    "event": "agent.iteration",
+                    "round_index": 0,
+                    "usage": {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4},
+                },
+                {
                     "tool_call_id": "call-2",
                     "tool_name": "read_file",
                     "requested_tool_name": "houyi_read_file",
@@ -59,6 +69,16 @@ class TestBuildToolTraceEvents:
         ]
         assert payloads[0]["data"]["round_index"] == 0
         assert payloads[1]["data"]["round_index"] == 1
+        assert payloads[0]["data"]["usage"] == {
+            "prompt_tokens": 3,
+            "completion_tokens": 1,
+            "total_tokens": 4,
+        }
+        assert payloads[1]["data"]["usage"] == {
+            "prompt_tokens": 10,
+            "completion_tokens": 5,
+            "total_tokens": 15,
+        }
         assert payloads[2]["data"]["tool_call_id"] == "call-2"
         assert payloads[2]["data"]["requested_tool_name"] == "houyi_read_file"
         assert payloads[5]["data"]["result"] == {"matches": 3}
@@ -68,6 +88,11 @@ class TestBuildToolTraceEvents:
         events = build_tool_trace_events(
             tool_trace=[
                 {
+                    "event": "agent.iteration",
+                    "round_index": 0,
+                    "usage": {"total_tokens": 7},
+                },
+                {
                     "tool_call_id": "call-1",
                     "tool_name": "read_url",
                     "round_index": 0,
@@ -75,7 +100,7 @@ class TestBuildToolTraceEvents:
                     "duration_ms": 18,
                     "args": {"url": "https://example.com"},
                     "result": {"raw": {"error": "timeout"}},
-                }
+                },
             ],
             assistant_message_id="msg-1",
             trace_id="trace-1",
@@ -87,6 +112,7 @@ class TestBuildToolTraceEvents:
             "tool_call.start",
             "tool_call.error",
         ]
+        assert payloads[0]["data"]["usage"] == {"total_tokens": 7}
         assert payloads[2]["data"]["error"] == {"error": "timeout"}
 
 
