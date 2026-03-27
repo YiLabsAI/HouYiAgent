@@ -46,6 +46,24 @@ def test_build_tools_policies() -> None:
     )
 
 
+def test_build_tools_descriptions() -> None:
+    tools = {tool.name: tool for tool in local_tools.build_builtin_local_tools()}
+
+    assert "target path is already verified" in tools["houyi_read_file"].description
+    assert "narrow with find, list, or grep before read" in tools["houyi_read_file"].description
+    assert (
+        "path, skill location, or file choice is still unclear"
+        in tools["houyi_find_files"].description
+    )
+    assert "verify workspace structure or candidate folders" in tools["houyi_list_dir"].description
+    assert (
+        "narrow multiple candidates before choosing which file to read"
+        in tools["houyi_grep"].description
+    )
+    assert "prefer find, list, or grep before read" in tools["houyi_local_cli"].description
+    assert "keep narrowing when multiple candidates remain" in tools["houyi_local_cli"].description
+
+
 def test_register_tools() -> None:
     registry = SkillRegistry()
 
@@ -253,10 +271,10 @@ async def test_chain_runs_pipe(workspace_root: Path) -> None:
     assert "Web Search" in steps[1]["result"]["data"]["content"]
     assert result["data"]["mode"] == "plan"
     assert result["data"]["workflow_id"] == "local_cli_chain"
-    assert result["data"]["continuation_token"] == "local_cli_chain:plan"
+    assert result["data"]["continuation_token"].startswith("local_cli_chain:v1:")
     assert result["data"]["replan_required"] is False
     assert result["data"]["repair_scope"] == "retry_failed_step_only"
-    assert result["data"]["reused_step_count"] == 2
+    assert result["data"]["reused_step_count"] == 0
     assert len(result["data"]["frozen_success_steps"]) == 2
 
 
@@ -401,6 +419,35 @@ async def test_chain_rejects_ambiguous(workspace_root: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_chain_narrowing_ambiguous_find(workspace_root: Path) -> None:
+    web_search_dir = workspace_root / "houyi" / "skills" / "web_search"
+    web_search_dir.mkdir(parents=True)
+    (web_search_dir / "SKILL.md").write_text("# Web Search\nweb search target\n", encoding="utf-8")
+    local_search_dir = workspace_root / "houyi" / "skills" / "local_search"
+    local_search_dir.mkdir(parents=True)
+    (local_search_dir / "SKILL.md").write_text(
+        "# Local Search\nlocal search target\n", encoding="utf-8"
+    )
+
+    result = await local_tools._local_cli_chain_executor(
+        workflow=(
+            "find path=houyi/skills pattern=SKILL.md search_mode=exact "
+            "| grep query='web search target' "
+            "| read start_line=1 end_line=1"
+        )
+    )
+
+    assert result["success"] is True
+    steps = result["data"]["steps"]
+    assert len(steps) == 3
+    assert steps[0]["success"] is True
+    assert steps[1]["success"] is True
+    assert steps[2]["success"] is True
+    assert steps[1]["projection"]["path"].endswith("houyi/skills/web_search/SKILL.md")
+    assert "Web Search" in steps[2]["result"]["data"]["content"]
+
+
+@pytest.mark.asyncio
 async def test_chain_fallback(workspace_root: Path) -> None:
     web_search_dir = workspace_root / "houyi" / "skills" / "web_search"
     web_search_dir.mkdir(parents=True)
@@ -427,7 +474,44 @@ async def test_chain_fallback(workspace_root: Path) -> None:
     assert "Web Search" in steps[2]["result"]["data"]["content"]
 
 
-def test_chain_input_requires_continuation_for_continue_mode() -> None:
+@pytest.mark.asyncio
+async def test_chain_missing_read_hint(workspace_root: Path) -> None:
+    skills_dir = workspace_root / "houyi" / "skills" / "web_search"
+    skills_dir.mkdir(parents=True)
+    (skills_dir / "SKILL.md").write_text("# Web Search\nweb search target\n", encoding="utf-8")
+
+    result = await local_tools._local_cli_chain_executor(
+        steps=[
+            local_tools.LocalCliChainStepInput(
+                command="read",
+                path="houyi/skills/websearch/SKILL.md",
+                start_line=1,
+                end_line=1,
+            )
+        ]
+    )
+
+    assert result["success"] is False
+    assert result["data"]["failure_kind"] == "step_execution_failed"
+    assert "Do not guess another path directly" in result["data"]["recovery_hint"]
+    assert "Prefer the provided recovery_step_template" in result["data"]["recovery_hint"]
+    assert (
+        "Only add extra narrowing if that first find still returns multiple candidates"
+        in result["data"]["recovery_hint"]
+    )
+    template = result["data"]["recovery_step_template"]
+    assert template["reason"] == "read_file_not_found"
+    assert template["steps"][0]["command"] == "find"
+    assert template["steps"][0]["path"] == "houyi/skills"
+    assert template["steps"][0]["pattern"] == "SKILL.md"
+    assert template["steps"][0]["search_mode"] == "exact"
+    assert template["steps"][1]["command"] == "read"
+    assert template["steps"][1]["path_from_previous_find"] is True
+    assert template["steps"][1]["start_line"] == 1
+    assert template["steps"][1]["end_line"] == 1
+
+
+def test_chain_continue_needs_token() -> None:
     with pytest.raises(ValueError, match="continuation_token is required"):
         local_tools.LocalCliChainInput(
             mode="continue",
@@ -436,7 +520,7 @@ def test_chain_input_requires_continuation_for_continue_mode() -> None:
         )
 
 
-def test_chain_input_requires_failed_step_and_action_for_repair_mode() -> None:
+def test_chain_repair_needs_fields() -> None:
     with pytest.raises(ValueError, match="failed_step_index is required"):
         local_tools.LocalCliChainInput(
             mode="repair",
@@ -455,7 +539,7 @@ def test_chain_input_requires_failed_step_and_action_for_repair_mode() -> None:
 
 
 @pytest.mark.asyncio
-async def test_chain_reports_structured_continue_metadata(workspace_root: Path) -> None:
+async def test_chain_reports_metadata(workspace_root: Path) -> None:
     target = workspace_root / "a.txt"
     target.write_text("one\ntwo\n", encoding="utf-8")
 
@@ -474,12 +558,13 @@ async def test_chain_reports_structured_continue_metadata(workspace_root: Path) 
     assert result["success"] is True
     assert result["data"]["mode"] == "continue"
     assert result["data"]["workflow_id"] == "read_preview"
-    assert result["data"]["continuation_token"] == "read_preview:plan"
+    assert result["data"]["input_continuation_token"] == "read_preview:plan"
+    assert result["data"]["continuation_token"].startswith("local_cli_chain:v1:")
     assert result["data"]["resume_from_step_index"] == 0
 
 
 @pytest.mark.asyncio
-async def test_chain_reports_structured_repair_metadata(workspace_root: Path) -> None:
+async def test_chain_reports_repair_metadata(workspace_root: Path) -> None:
     target = workspace_root / "a.txt"
     target.write_text("one\ntwo\n", encoding="utf-8")
 
@@ -499,9 +584,112 @@ async def test_chain_reports_structured_repair_metadata(workspace_root: Path) ->
     assert result["success"] is True
     assert result["data"]["mode"] == "repair"
     assert result["data"]["workflow_id"] == "read_preview"
-    assert result["data"]["continuation_token"] == "read_preview:plan"
+    assert result["data"]["input_continuation_token"] == "read_preview:plan"
+    assert result["data"]["continuation_token"].startswith("local_cli_chain:v1:")
     assert result["data"]["failed_step_index"] == 0
     assert result["data"]["repair_action"] == "replace_failed_step"
+
+
+@pytest.mark.asyncio
+async def test_chain_continue_frozen_steps(workspace_root: Path) -> None:
+    target = workspace_root / "a.txt"
+    target.write_text("one\ntwo\nthree\n", encoding="utf-8")
+
+    planned = await local_tools._local_cli_chain_executor(
+        workflow_id="read_preview",
+        steps=[
+            local_tools.LocalCliChainStepInput(command="list", path="."),
+            local_tools.LocalCliChainStepInput(
+                command="read", path="a.txt", start_line=1, end_line=1
+            ),
+        ],
+    )
+
+    continued = await local_tools._local_cli_chain_executor(
+        mode="continue",
+        workflow_id="read_preview",
+        continuation_token=planned["data"]["continuation_token"],
+        resume_from_step_index=2,
+        steps=[
+            local_tools.LocalCliChainStepInput(
+                command="read", path="a.txt", start_line=2, end_line=2
+            )
+        ],
+    )
+
+    assert continued["success"] is True
+    assert continued["data"]["reused_step_count"] == 2
+    assert continued["data"]["steps"][0]["reused"] is True
+    assert continued["data"]["steps"][1]["reused"] is True
+    assert continued["data"]["steps"][2]["step_index"] == 2
+    assert continued["data"]["final"]["data"]["content"] == "two"
+
+
+@pytest.mark.asyncio
+async def test_chain_repair_rejects_step(workspace_root: Path) -> None:
+    target = workspace_root / "a.txt"
+    target.write_text("one\ntwo\n", encoding="utf-8")
+
+    planned = await local_tools._local_cli_chain_executor(
+        workflow_id="read_preview",
+        steps=[
+            local_tools.LocalCliChainStepInput(command="list", path="."),
+            local_tools.LocalCliChainStepInput(
+                command="read", path="a.txt", start_line=1, end_line=1
+            ),
+        ],
+    )
+
+    repaired = await local_tools._local_cli_chain_executor(
+        mode="repair",
+        workflow_id="read_preview",
+        continuation_token=planned["data"]["continuation_token"],
+        failed_step_index=1,
+        repair_action="replace_failed_step",
+        steps=[
+            local_tools.LocalCliChainStepInput(
+                command="read", path="a.txt", start_line=2, end_line=2
+            )
+        ],
+    )
+
+    assert repaired["success"] is False
+    assert repaired["data"]["failure_kind"] == "replan_required"
+    assert repaired["data"]["replan_required"] is True
+    assert repaired["data"]["repair_scope"] == "retry_failed_step_only"
+
+
+@pytest.mark.asyncio
+async def test_chain_continue_rejects(workspace_root: Path) -> None:
+    target = workspace_root / "a.txt"
+    target.write_text("one\ntwo\nthree\n", encoding="utf-8")
+
+    planned = await local_tools._local_cli_chain_executor(
+        workflow_id="read_preview",
+        steps=[
+            local_tools.LocalCliChainStepInput(command="list", path="."),
+            local_tools.LocalCliChainStepInput(
+                command="read", path="a.txt", start_line=1, end_line=1
+            ),
+        ],
+    )
+
+    continued = await local_tools._local_cli_chain_executor(
+        mode="continue",
+        workflow_id="read_preview",
+        continuation_token=planned["data"]["continuation_token"],
+        resume_from_step_index=1,
+        steps=[
+            local_tools.LocalCliChainStepInput(
+                command="read", path="a.txt", start_line=2, end_line=2
+            )
+        ],
+    )
+
+    assert continued["success"] is False
+    assert continued["data"]["failure_kind"] == "replan_required"
+    assert continued["data"]["replan_required"] is True
+    assert continued["data"]["repair_scope"] == "retry_failed_step_only"
 
 
 @pytest.mark.asyncio

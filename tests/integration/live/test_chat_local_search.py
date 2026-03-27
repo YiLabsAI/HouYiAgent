@@ -1242,7 +1242,7 @@ async def test_local_search_multi_model_matrix(
         }
 
 
-def test_recovery_efficiency_helpers_measure_post_failure_cost() -> None:
+def test_recovery_efficiency() -> None:
     run = _Run(
         completion_metadata={"usage": {"total_tokens": 60}},
         tool_start_events=[
@@ -1274,7 +1274,7 @@ def test_recovery_efficiency_helpers_measure_post_failure_cost() -> None:
 
 
 @pytest.mark.asyncio
-async def test_run_repeated_case_aggregates_recovery_efficiency_metrics(
+async def test_recovery_efficiency_metrics(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

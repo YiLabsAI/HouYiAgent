@@ -99,7 +99,7 @@ class TestSendMessageMainline:
         assert conv.messages[1].metadata["post_stream_persist_ms"] >= 0
         assert conv.messages[1].metadata["tokens_per_second"] > 0
 
-    def test_regenerate_emits_rewrite_context_state_before_new_deltas(self, app_and_client):
+    def test_regenerate_emits(self, app_and_client):
         _, client, store = app_and_client
         conv_id = create_conversation_id(client, title="Regenerate Rewrite Event")
 

@@ -369,7 +369,13 @@ _REPO_INTENT_REGEXES = (
     re.compile(r"https?://(?:www\.)?github\.com/[^\s]+", re.IGNORECASE),
     re.compile(r"\bgithub\.com/[^\s]+\b", re.IGNORECASE),
 )
-_REPO_TOOL_SKILLS = _CHAT_BUILTIN_TOOL_NAMES
+_REPO_TOOL_SKILLS = frozenset(
+    {
+        "houyi_list_dir",
+        "houyi_find_files",
+        "houyi_grep",
+    }
+)
 _WEB_TOOL_SKILLS = frozenset({_WEB_SEARCH_SKILL_NAME})
 
 

@@ -129,7 +129,7 @@ class TestRRFFusion:
 
 class TestIndexedModeSearch:
     @pytest.mark.asyncio
-    async def test_search_parallel_and_sequential_share_same_retrieval_surface(self) -> None:
+    async def test_same_retrieval_surface(self) -> None:
         from houyi.rag.indexed.mode import IndexedMode
 
         task_results = [
@@ -409,7 +409,7 @@ class TestParallelRetrievalConfig:
 class TestRetrievalExecutionRequestBuilder:
     """Tests for shared retrieval execution request construction."""
 
-    def test_request_uses_configured_strategies_and_timeout(self) -> None:
+    def test_uses_configured_strategies(self) -> None:
         """The shared execution request should mirror IndexedConfig retrieval settings."""
         from houyi.rag.indexed.mode import IndexedMode
 
@@ -430,7 +430,7 @@ class TestRetrievalExecutionRequestBuilder:
         assert request.timeout == 3.5
         assert request.result_factory is not None
 
-    def test_request_task_factory_respects_dispatch_context(self) -> None:
+    def test_respects_dispatch_context(self) -> None:
         """The shared execution request should keep dispatch wiring consistent across execution modes."""
         from houyi.rag.indexed.mode import IndexedMode
 
@@ -721,7 +721,7 @@ class TestConfidenceAdjustment:
             assert adjusted == 0.3
 
     @pytest.mark.asyncio
-    async def test_confidence_with_ambiguous_crag(self) -> None:
+    async def test_ambiguous_crag(self) -> None:
         """Test confidence is capped when CRAG reports ambiguous."""
         base_confidence = 0.9
         crag_quality = "ambiguous"
@@ -894,7 +894,7 @@ class TestIngestMethod:
                 assert "relations" in stats
 
     @pytest.mark.asyncio
-    async def test_ingest_with_graph_building(self) -> None:
+    async def test_graph_building(self) -> None:
         """Test ingest with graph building enabled."""
         from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -948,7 +948,7 @@ class TestIngestMethod:
                 mock_graph_store.add_relations.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_ingest_with_contextual_retrieval(self) -> None:
+    async def test_contextual_retrieval(self) -> None:
         """Test ingest with contextual retrieval enabled."""
         from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1003,7 +1003,7 @@ class TestIngestMethod:
                 mock_contextualizer.contextualize_chunks.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_ingest_with_llm_entity_extraction(self) -> None:
+    async def test_entity_extraction(self) -> None:
         """Test ingest using LLM for entity extraction."""
         from unittest.mock import AsyncMock, MagicMock, patch
 

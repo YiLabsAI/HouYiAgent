@@ -14,7 +14,9 @@ This module defines core local tools:
 from __future__ import annotations
 
 import asyncio
+import base64
 import fnmatch
+import json
 import os
 import re
 import shlex
@@ -162,14 +164,14 @@ class LocalCliChainInput(BaseModel):
         default=None,
         min_length=1,
         description=(
-            "Legacy chain workflow string for an already-decided multi-step local workflow. Prefer structured steps when the task clearly needs sequential actions, fallback, or repair. Example: find path=houyi/skills pattern=SKILL.md | read start_line=1 end_line=20"
+            "Legacy chain workflow string for an already-decided multi-step local workflow. Prefer structured steps for staged narrowing, fallback, or repair. For unclear workflow selection or unverified paths, narrow with find/list/grep before read. Example: find path=houyi/skills pattern=SKILL.md | grep query=web | read start_line=1 end_line=20"
         ),
     )
     steps: list[LocalCliChainStepInput] | None = Field(
         default=None,
         min_length=1,
         description=(
-            "Preferred structured chain steps for a known multi-step workflow. Use this after deciding the task needs staged read/list/find/grep actions, especially for fallback or repair, instead of treating an unclear request as generic file probing."
+            "Preferred structured chain steps for a known multi-step workflow. Use this after deciding staged find/list/grep/read actions, instead of generic file probing. If candidates or paths are uncertain, verify with find/list/grep before the first read."
         ),
     )
 
@@ -316,6 +318,278 @@ class _ChainLink:
 class _ProjectionContext:
     values: dict[str, Any]
     error: str | None = None
+
+
+@dataclass(frozen=True)
+class _ContinuationState:
+    workflow_id: str
+    mode: str
+    frozen_success_steps: list[dict[str, Any]]
+    projection: dict[str, Any]
+    projection_error: str | None = None
+    failed_step_index: int | None = None
+    repair_scope: str = "retry_failed_step_only"
+
+
+_CONTINUATION_TOKEN_PREFIX = "local_cli_chain:v1:"
+
+
+def _encode_continuation_state(state: _ContinuationState) -> str:
+    payload = {
+        "workflow_id": state.workflow_id,
+        "mode": state.mode,
+        "frozen_success_steps": state.frozen_success_steps,
+        "projection": state.projection,
+        "projection_error": state.projection_error,
+        "failed_step_index": state.failed_step_index,
+        "repair_scope": state.repair_scope,
+    }
+    encoded = base64.urlsafe_b64encode(
+        json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    ).decode("ascii")
+    return f"{_CONTINUATION_TOKEN_PREFIX}{encoded}"
+
+
+def _decode_continuation_state(token: str | None) -> _ContinuationState | None:
+    raw = str(token or "").strip()
+    if not raw.startswith(_CONTINUATION_TOKEN_PREFIX):
+        return None
+    encoded = raw[len(_CONTINUATION_TOKEN_PREFIX) :]
+    if not encoded:
+        return None
+    try:
+        payload = json.loads(base64.urlsafe_b64decode(encoded.encode("ascii")).decode("utf-8"))
+    except Exception:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    frozen_success_steps = payload.get("frozen_success_steps")
+    projection = payload.get("projection")
+    if not isinstance(frozen_success_steps, list) or not isinstance(projection, dict):
+        return None
+    return _ContinuationState(
+        workflow_id=str(payload.get("workflow_id") or "local_cli_chain"),
+        mode=str(payload.get("mode") or "plan"),
+        frozen_success_steps=[item for item in frozen_success_steps if isinstance(item, dict)],
+        projection=projection,
+        projection_error=(
+            str(payload.get("projection_error"))
+            if isinstance(payload.get("projection_error"), str)
+            else None
+        ),
+        failed_step_index=(
+            int(payload["failed_step_index"])
+            if isinstance(payload.get("failed_step_index"), int)
+            else None
+        ),
+        repair_scope=str(payload.get("repair_scope") or "retry_failed_step_only"),
+    )
+
+
+def _reused_step_entry(step: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "operator": step.get("operator"),
+        "command": step.get("command"),
+        "args": dict(step.get("args") or {}),
+        "success": True,
+        "reused": True,
+    }
+
+
+def _continuation_replan_result(
+    *,
+    workflow_id: str,
+    continuation_token: str,
+    message: str,
+    frozen_success_steps: list[dict[str, Any]],
+    failed_step_index: int | None,
+) -> dict[str, Any]:
+    return ToolResponse(
+        success=False,
+        message=message,
+        data={
+            "workflow_id": workflow_id,
+            "continuation_token": continuation_token,
+            "failure_kind": "replan_required",
+            "recovery_hint": "Do not rewrite already successful earlier steps. Continue from the failed step or explicitly declare replan_reason when a full replanning is necessary.",
+            "repair_scope": "retry_failed_step_only",
+            "replan_required": True,
+            "frozen_success_steps": frozen_success_steps,
+            "failed_step_index": failed_step_index,
+        },
+    ).model_dump()
+
+
+def _build_continuation_state(
+    *,
+    workflow_id: str,
+    mode: str,
+    projection: _ProjectionContext,
+    frozen_success_steps: list[dict[str, Any]],
+    failed_step_index: int | None,
+) -> _ContinuationState:
+    return _ContinuationState(
+        workflow_id=workflow_id,
+        mode=mode,
+        frozen_success_steps=frozen_success_steps,
+        projection=dict(projection.values),
+        projection_error=projection.error,
+        failed_step_index=failed_step_index,
+        repair_scope="retry_failed_step_only",
+    )
+
+
+def _prepare_chain_execution_context(
+    *,
+    normalized_mode: str,
+    input_workflow_id: str,
+    continuation_token: str,
+    resume_from_step_index: int | None,
+    failed_step_index: int | None,
+) -> tuple[
+    str,
+    list[dict[str, Any]],
+    _ProjectionContext,
+    dict[str, Any] | None,
+]:
+    active_workflow_id = input_workflow_id or "local_cli_chain"
+    decoded_state = _decode_continuation_state(continuation_token)
+    if decoded_state is not None and not input_workflow_id:
+        active_workflow_id = decoded_state.workflow_id
+
+    if normalized_mode == "continue" and decoded_state is not None:
+        prior_success_count = len(decoded_state.frozen_success_steps)
+        if resume_from_step_index is not None and resume_from_step_index < prior_success_count:
+            return (
+                active_workflow_id,
+                [],
+                _ProjectionContext(values={}),
+                _continuation_replan_result(
+                    workflow_id=active_workflow_id,
+                    continuation_token=continuation_token,
+                    message="continue mode cannot resume before frozen successful steps; explicit replan is required",
+                    frozen_success_steps=decoded_state.frozen_success_steps,
+                    failed_step_index=decoded_state.failed_step_index,
+                ),
+            )
+
+    if normalized_mode == "repair" and decoded_state is not None:
+        prior_success_count = len(decoded_state.frozen_success_steps)
+        if failed_step_index is not None and failed_step_index < prior_success_count:
+            return (
+                active_workflow_id,
+                [],
+                _ProjectionContext(values={}),
+                _continuation_replan_result(
+                    workflow_id=active_workflow_id,
+                    continuation_token=continuation_token,
+                    message="repair mode cannot modify frozen successful steps; explicit replan is required",
+                    frozen_success_steps=decoded_state.frozen_success_steps,
+                    failed_step_index=failed_step_index,
+                ),
+            )
+
+    reused_steps = (
+        list(decoded_state.frozen_success_steps)
+        if decoded_state is not None and normalized_mode in {"continue", "repair"}
+        else []
+    )
+    projection = (
+        _ProjectionContext(
+            values=dict(decoded_state.projection),
+            error=decoded_state.projection_error,
+        )
+        if decoded_state is not None and normalized_mode in {"continue", "repair"}
+        else _ProjectionContext(values={})
+    )
+    return active_workflow_id, reused_steps, projection, None
+
+
+async def _execute_chain_links(
+    *,
+    links: list[_ChainLink],
+    reused_steps: list[dict[str, Any]],
+    projection: _ProjectionContext,
+) -> tuple[
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    _ProjectionContext,
+    dict[str, Any] | None,
+    dict[str, Any] | None,
+    bool,
+]:
+    executed_steps: list[dict[str, Any]] = [_reused_step_entry(step) for step in reused_steps]
+    last_result: dict[str, Any] | None = None
+    last_success = True
+    failure_summary: dict[str, Any] | None = None
+    frozen_success_steps: list[dict[str, Any]] = list(reused_steps)
+    active_projection = projection
+
+    for link in links:
+        step_index = len(frozen_success_steps) if last_success else len(executed_steps)
+        operator = link.operator
+        if operator == "&&" and not last_success:
+            executed_steps.append(
+                {
+                    "operator": operator,
+                    "command": link.step.command,
+                    "skipped": True,
+                    "step_index": step_index,
+                }
+            )
+            continue
+        if operator == "||" and last_success:
+            executed_steps.append(
+                {
+                    "operator": operator,
+                    "command": link.step.command,
+                    "skipped": True,
+                    "step_index": step_index,
+                }
+            )
+            continue
+
+        result = await _execute_chain_step(link.step, active_projection)
+        last_result = result
+        last_success = _is_chain_success(result)
+        if last_success:
+            active_projection = _extract_projection(result)
+            failure_summary = None
+            frozen_success_steps.append(
+                {
+                    "step_index": step_index,
+                    "operator": operator,
+                    "command": link.step.command,
+                    "args": dict(link.step.args),
+                }
+            )
+        else:
+            failure_summary = _chain_failure_summary(
+                step_index=step_index,
+                step=link.step,
+                result=result,
+            )
+        executed_steps.append(
+            {
+                "step_index": step_index,
+                "operator": operator,
+                "command": link.step.command,
+                "args": link.step.args,
+                "success": last_success,
+                "projection": dict(active_projection.values),
+                "projection_error": active_projection.error,
+                "result": result,
+            }
+        )
+
+    return (
+        executed_steps,
+        frozen_success_steps,
+        active_projection,
+        last_result,
+        failure_summary,
+        last_success,
+    )
 
 
 def _coerce_chain_value(raw: str) -> Any:
@@ -529,7 +803,12 @@ def _apply_projection(
     command: str, args: dict[str, Any], projection: _ProjectionContext
 ) -> dict[str, Any]:
     merged = dict(args)
-    if projection.error and "path" not in merged and "root_path" not in merged:
+    if (
+        projection.error
+        and command == "read"
+        and "path" not in merged
+        and "root_path" not in merged
+    ):
         raise ValueError(projection.error)
     if command == "find" and "path" not in merged and "root_path" not in merged:
         if isinstance(projection.values.get("path"), str):
@@ -587,9 +866,48 @@ def _chain_failure_summary(
     step: _ChainStep,
     result: dict[str, Any],
 ) -> dict[str, Any]:
+    def _missing_read_recovery_template(failed_args: dict[str, Any]) -> dict[str, Any] | None:
+        raw_path = failed_args.get("path")
+        if not isinstance(raw_path, str) or not raw_path.strip():
+            return None
+        normalized_path = raw_path.strip().replace("\\", "/")
+        path_parts = [part for part in normalized_path.split("/") if part and part != "."]
+        if not path_parts:
+            return None
+        filename = path_parts[-1]
+        parent_parts = path_parts[:-1]
+        search_root_parts = parent_parts[:-1] if len(parent_parts) >= 2 else parent_parts
+        search_root = "/".join(search_root_parts) if search_root_parts else "."
+
+        read_step: dict[str, Any] = {
+            "command": "read",
+            "path_from_previous_find": True,
+        }
+        start_line = failed_args.get("start_line")
+        end_line = failed_args.get("end_line")
+        if isinstance(start_line, int) and start_line >= 1:
+            read_step["start_line"] = start_line
+        if isinstance(end_line, int) and end_line >= 1:
+            read_step["end_line"] = end_line
+
+        return {
+            "reason": "read_file_not_found",
+            "steps": [
+                {
+                    "command": "find",
+                    "path": search_root,
+                    "pattern": filename,
+                    "search_mode": "exact",
+                },
+                read_step,
+            ],
+        }
+
     data = result.get("data")
+    message = str(result.get("message") or "")
     failure_kind = "step_execution_failed"
     recovery_hint = "Retry only the failing step with corrected arguments or a narrower input. Keep already successful earlier steps unchanged."
+    recovery_template: dict[str, Any] | None = None
     if isinstance(data, dict):
         raw_failure_kind = data.get("failure_kind")
         if isinstance(raw_failure_kind, str) and raw_failure_kind:
@@ -597,9 +915,13 @@ def _chain_failure_summary(
         raw_recovery_hint = data.get("recovery_hint")
         if isinstance(raw_recovery_hint, str) and raw_recovery_hint:
             recovery_hint = raw_recovery_hint
+    if step.command == "read" and message.startswith("File not found:"):
+        recovery_hint = "Retry only the failing read step. Do not guess another path directly. Prefer the provided recovery_step_template as the default repair path: first run the suggested find step, then read from its exact match. Only add extra narrowing if that first find still returns multiple candidates. Keep already successful earlier steps unchanged."
+        recovery_template = _missing_read_recovery_template(step.args)
     return {
         "failure_kind": failure_kind,
         "recovery_hint": recovery_hint,
+        "recovery_step_template": recovery_template,
         "repair_scope": "retry_failed_step_only",
         "failed_step_index": step_index,
         "failed_command": step.command,
@@ -676,69 +998,54 @@ async def _local_cli_chain_executor(
 
     normalized_mode = str(mode or "plan").strip().lower() or "plan"
     input_workflow_id = str(workflow_id or "").strip()
-    active_workflow_id = input_workflow_id or "local_cli_chain"
-    active_continuation_token = (
-        str(continuation_token or "").strip() or f"{active_workflow_id}:{normalized_mode}"
+    incoming_continuation_token = str(continuation_token or "").strip()
+    (
+        active_workflow_id,
+        reused_steps,
+        projection,
+        early_result,
+    ) = _prepare_chain_execution_context(
+        normalized_mode=normalized_mode,
+        input_workflow_id=input_workflow_id,
+        continuation_token=incoming_continuation_token,
+        resume_from_step_index=resume_from_step_index,
+        failed_step_index=failed_step_index,
     )
+    if early_result is not None:
+        return early_result
 
-    executed_steps: list[dict[str, Any]] = []
-    projection = _ProjectionContext(values={})
-    last_result: dict[str, Any] | None = None
-    last_success = True
-    failure_summary: dict[str, Any] | None = None
-    frozen_success_steps: list[dict[str, Any]] = []
-    for index, link in enumerate(links):
-        operator = link.operator
-        if operator == "&&" and not last_success:
-            executed_steps.append(
-                {"operator": operator, "command": link.step.command, "skipped": True}
-            )
-            continue
-        if operator == "||" and last_success:
-            executed_steps.append(
-                {"operator": operator, "command": link.step.command, "skipped": True}
-            )
-            continue
-        result = await _execute_chain_step(link.step, projection)
-        last_result = result
-        last_success = _is_chain_success(result)
-        if last_success:
-            projection = _extract_projection(result)
-            failure_summary = None
-            frozen_success_steps.append(
-                {
-                    "step_index": index,
-                    "command": link.step.command,
-                    "args": dict(link.step.args),
-                }
-            )
-        else:
-            failure_summary = _chain_failure_summary(
-                step_index=index,
-                step=link.step,
-                result=result,
-            )
-        executed_steps.append(
-            {
-                "operator": operator,
-                "command": link.step.command,
-                "args": link.step.args,
-                "success": last_success,
-                "projection": dict(projection.values),
-                "projection_error": projection.error,
-                "result": result,
-            }
-        )
+    (
+        executed_steps,
+        frozen_success_steps,
+        projection,
+        last_result,
+        failure_summary,
+        last_success,
+    ) = await _execute_chain_links(
+        links=links,
+        reused_steps=reused_steps,
+        projection=projection,
+    )
     if last_result is None:
         return ToolResponse(
             success=False, message="workflow produced no executable steps"
         ).model_dump()
+
+    continuation_state = _build_continuation_state(
+        workflow_id=active_workflow_id,
+        mode=normalized_mode,
+        projection=projection,
+        frozen_success_steps=frozen_success_steps,
+        failed_step_index=(failure_summary or {}).get("failed_step_index"),
+    )
+    active_continuation_token = _encode_continuation_state(continuation_state)
     return ToolResponse(
         success=last_success,
         data={
             "mode": normalized_mode,
             "workflow_id": active_workflow_id,
             "continuation_token": active_continuation_token,
+            "input_continuation_token": incoming_continuation_token,
             "resume_from_step_index": resume_from_step_index,
             "failed_step_index": failed_step_index,
             "repair_action": repair_action,
@@ -747,7 +1054,7 @@ async def _local_cli_chain_executor(
             "input_mode": input_mode,
             "steps": executed_steps,
             "frozen_success_steps": frozen_success_steps,
-            "reused_step_count": len(frozen_success_steps),
+            "reused_step_count": len(reused_steps),
             "replan_required": False,
             "repair_scope": "retry_failed_step_only",
             "final": last_result,
@@ -1194,7 +1501,7 @@ def build_builtin_local_tools() -> list[SkillSpec]:
     return [
         SkillSpec(
             name="houyi_read_file",
-            description="Read local file content with optional line range.",
+            description="Read local file content with optional line range. Use this when the target path is already verified. If the path or file choice is still uncertain, narrow with find, list, or grep before read.",
             input_schema=ReadFileInput,
             output_schema=ToolResponse,
             executor=_read_file_executor,
@@ -1216,7 +1523,7 @@ def build_builtin_local_tools() -> list[SkillSpec]:
         ),
         SkillSpec(
             name="houyi_find_files",
-            description="Find files by glob pattern under a workspace directory.",
+            description="Find files by pattern under a workspace directory. Prefer this when the path, skill location, or file choice is still unclear before reading a file directly.",
             input_schema=FindFilesInput,
             output_schema=ToolResponse,
             executor=_find_files_executor,
@@ -1227,7 +1534,7 @@ def build_builtin_local_tools() -> list[SkillSpec]:
         ),
         SkillSpec(
             name="houyi_list_dir",
-            description="List directory entries under workspace.",
+            description="List directory entries under workspace. Use this to verify workspace structure or candidate folders before guessing a read path.",
             input_schema=ListDirInput,
             output_schema=ToolResponse,
             executor=_list_dir_executor,
@@ -1238,7 +1545,7 @@ def build_builtin_local_tools() -> list[SkillSpec]:
         ),
         SkillSpec(
             name="houyi_grep",
-            description="Search text patterns in files under workspace.",
+            description="Search text patterns in files under workspace. Prefer this to narrow multiple candidates before choosing which file to read.",
             input_schema=GrepInput,
             output_schema=ToolResponse,
             executor=_grep_executor,
@@ -1260,7 +1567,7 @@ def build_builtin_local_tools() -> list[SkillSpec]:
         ),
         SkillSpec(
             name="houyi_local_cli",
-            description="Run a read-only local CLI-style command for read, list, find, or grep workflows.",
+            description="Run a read-only local CLI-style command for read, list, find, or grep workflows. If the path or target file is unverified, prefer find, list, or grep before read, and keep narrowing when multiple candidates remain.",
             input_schema=LocalCliInput,
             output_schema=ToolResponse,
             executor=_local_cli_executor,
@@ -1271,7 +1578,7 @@ def build_builtin_local_tools() -> list[SkillSpec]:
         ),
         SkillSpec(
             name="houyi_local_cli_chain",
-            description="Run a controlled read-only local CLI workflow chain over read, list, find, and grep actions. Prefer this when the task clearly needs a staged local workflow, fallback, or repair path, rather than a single atomic action.",
+            description="Run a controlled read-only local CLI workflow chain over read, list, find, and grep actions. Prefer this for a staged local workflow, fallback, or repair. If a fallback path is unverified, do not begin with read; verify with find, list, or grep first.",
             input_schema=LocalCliChainInput,
             output_schema=ToolResponse,
             executor=_local_cli_chain_executor,

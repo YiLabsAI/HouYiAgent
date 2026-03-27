@@ -98,6 +98,7 @@ def _to_default_chain_schema(schema: dict[str, Any]) -> dict[str, Any]:
         "resume_from_step_index",
         "failed_step_index",
         "repair_action",
+        "replan_reason",
         "steps",
     ]
     cleaned["properties"] = {

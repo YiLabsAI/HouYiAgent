@@ -111,6 +111,41 @@ class ChatToolLoopPolicy:
             ]
             return ToolLoopGateDecision(filtered_skills, "enabled", "explicit_skill_request")
         if strategy == self._aggressive_strategy:
+            if self._looks_like_web_intent(user_content):
+                mixed_skills = [
+                    skill_name
+                    for skill_name in resolved_skills
+                    if skill_name in self._web_tool_skills or skill_name in self._repo_tool_skills
+                ]
+                if mixed_skills:
+                    return ToolLoopGateDecision(
+                        mixed_skills,
+                        "enabled",
+                        "strategy_aggressive_mixed_intent",
+                    )
+                web_skills = [
+                    skill_name
+                    for skill_name in resolved_skills
+                    if skill_name in self._web_tool_skills
+                ]
+                if web_skills:
+                    return ToolLoopGateDecision(
+                        web_skills,
+                        "enabled",
+                        "strategy_aggressive_web_intent",
+                    )
+            if self._looks_like_repo_intent(user_content):
+                repo_skills = [
+                    skill_name
+                    for skill_name in resolved_skills
+                    if skill_name in self._repo_tool_skills
+                ]
+                if repo_skills:
+                    return ToolLoopGateDecision(
+                        repo_skills,
+                        "enabled",
+                        "strategy_aggressive_repo_intent",
+                    )
             return ToolLoopGateDecision(
                 resolved_skills,
                 "enabled",

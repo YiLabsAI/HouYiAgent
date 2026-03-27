@@ -292,6 +292,7 @@ class TestToolBridgeCollection:
         assert len(schemas) == 1
         function_payload = schemas[0]["function"]
         assert "staged local workflow" in function_payload["description"]
+        assert "unverified" in function_payload["description"]
         parameters = function_payload["parameters"]
         properties = parameters["properties"]
         assert set(properties.keys()) == {
@@ -301,9 +302,13 @@ class TestToolBridgeCollection:
             "resume_from_step_index",
             "failed_step_index",
             "repair_action",
+            "replan_reason",
             "steps",
         }
         assert "Chain mode" in properties["mode"]["description"]
         assert "Opaque token" in properties["continuation_token"]["description"]
         assert "known multi-step workflow" in properties["steps"]["description"]
         assert "generic file probing" in properties["steps"]["description"]
+        assert (
+            "verify with find/list/grep before the first read" in properties["steps"]["description"]
+        )

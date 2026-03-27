@@ -391,6 +391,29 @@ class TestChatServiceToolLoopGating:
         assert decision.reason == "strategy_aggressive_default_on"
         assert decision.enabled_skills == ["houyi_grep", "houyi_read_file"]
 
+    def test_repo_intent_prefers_search(self):
+        service = ChatService(json_store=MagicMock())
+        decision = service._gate_tool_loop(
+            request=SendMessageRequest(
+                content="inspect the repository and find the relevant skill file",
+                tool_call_strategy="aggressive",
+            ),
+            resolved_skills=[
+                "houyi_find_files",
+                "houyi_grep",
+                "houyi_list_dir",
+                "houyi_read_file",
+            ],
+        )
+
+        assert decision.mode == "enabled"
+        assert decision.reason == "strategy_aggressive_mixed_intent"
+        assert decision.enabled_skills == [
+            "houyi_find_files",
+            "houyi_grep",
+            "houyi_list_dir",
+        ]
+
     def test_conservative_strategy(self):
         service = ChatService(json_store=MagicMock())
         decision = service._gate_tool_loop(
@@ -412,6 +435,26 @@ class TestChatServiceToolLoopGating:
         assert decision.mode == "enabled"
         assert decision.reason == "heuristic_mixed_intent"
         assert decision.enabled_skills == ["houyi_grep", "houyi_web_search"]
+
+    def test_repo_intent_filters(self):
+        service = ChatService(json_store=MagicMock())
+        decision = service._gate_tool_loop(
+            request=SendMessageRequest(content="find the relevant file in this repository"),
+            resolved_skills=[
+                "houyi_find_files",
+                "houyi_grep",
+                "houyi_list_dir",
+                "houyi_read_file",
+            ],
+        )
+
+        assert decision.mode == "enabled"
+        assert decision.reason == "heuristic_mixed_intent"
+        assert decision.enabled_skills == [
+            "houyi_find_files",
+            "houyi_grep",
+            "houyi_list_dir",
+        ]
 
     def test_repo_query_adds_search(self):
         service = ChatService(json_store=MagicMock())
