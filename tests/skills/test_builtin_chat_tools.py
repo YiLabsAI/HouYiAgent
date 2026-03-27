@@ -443,7 +443,8 @@ async def test_chain_narrowing_ambiguous_find(workspace_root: Path) -> None:
     assert steps[0]["success"] is True
     assert steps[1]["success"] is True
     assert steps[2]["success"] is True
-    assert steps[1]["projection"]["path"].endswith("houyi/skills/web_search/SKILL.md")
+    projected = steps[1]["projection"]["path"].replace("\\", "/")
+    assert projected.endswith("houyi/skills/web_search/SKILL.md")
     assert "Web Search" in steps[2]["result"]["data"]["content"]
 
 
