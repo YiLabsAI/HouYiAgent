@@ -468,6 +468,9 @@ class SQLiteMemoryBackend(MemoryBackend):
             self._connections.clear()
         self._local.conn = None
 
+    def __del__(self) -> None:
+        self.close()
+
     # ------------------------------------------------------------------
     # Row mapping
     # ------------------------------------------------------------------

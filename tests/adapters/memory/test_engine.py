@@ -20,27 +20,30 @@ from houyi.adapters.memory.types import (
 
 
 @pytest.fixture()
-def engine() -> MemoryEngine:
+def engine():
     """Engine with auto-approve and NoOp embeddings."""
     store = MemoryStore()
     emb = NoOpEmbeddingProvider(dim=32)
     policy = MemoryPolicy(auto_approve=True)
-    return MemoryEngine(store, embedding_provider=emb, policy=policy)
+    yield MemoryEngine(store, embedding_provider=emb, policy=policy)
+    store.close()
 
 
 @pytest.fixture()
-def engine_no_emb() -> MemoryEngine:
+def engine_no_emb():
     """Engine without embedding provider (lexical-only fallback)."""
     store = MemoryStore()
     policy = MemoryPolicy(auto_approve=True)
-    return MemoryEngine(store, policy=policy)
+    yield MemoryEngine(store, policy=policy)
+    store.close()
 
 
 @pytest.fixture()
-def engine_manual_approve() -> MemoryEngine:
+def engine_manual_approve():
     """Engine requiring manual approval (auto_approve=False)."""
     store = MemoryStore()
-    return MemoryEngine(store, policy=MemoryPolicy(auto_approve=False))
+    yield MemoryEngine(store, policy=MemoryPolicy(auto_approve=False))
+    store.close()
 
 
 class TestWritePipeline:

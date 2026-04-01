@@ -79,7 +79,7 @@ install-all:
 	@echo "✓ All dependencies installed (SDK + RAG + Studio + UI)"
 
 lock:
-	UV_INDEX_URL=https://pypi.org/simple UV_EXTRA_INDEX_URL='' uv lock --refresh
+	UV_NO_CONFIG=1 UV_INDEX_URL=https://pypi.org/simple uv lock --refresh
 
 lock-check:
 	@python3 -c "from pathlib import Path; import re, sys; registries=set(re.findall(r'registry = \"([^\"]+)\"', Path('uv.lock').read_text(encoding='utf-8'))); bad=sorted(r for r in registries if r != 'https://pypi.org/simple'); print('Unexpected lock registries: ' + ', '.join(bad)) if bad else print('uv.lock registry sources are pinned to official PyPI.'); sys.exit(1 if bad else 0)"

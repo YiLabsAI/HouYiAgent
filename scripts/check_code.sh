@@ -5,6 +5,13 @@
 
 set -euo pipefail
 
+# Prevent uv from rewriting uv.lock with local mirror URLs.
+# UV_NO_CONFIG ignores ~/.config/uv/uv.toml (may contain extra-index-url).
+# UV_FROZEN prevents lock file updates; lock changes go through `make lock`.
+export UV_NO_CONFIG=1
+export UV_INDEX_URL=https://pypi.org/simple
+export UV_FROZEN=1
+
 echo "🔍 Running code quality checks..."
 echo ""
 
@@ -43,7 +50,7 @@ ensure_deps() {
 
     if [ $need_sync -eq 1 ]; then
         echo -e "${YELLOW}  Installing missing dev dependencies...${NC}"
-        uv sync --extra dev --extra studio-server --extra rag-full --extra model-adapters --extra vertex-ai --extra websearch-ddg --extra websearch-tavily --extra websearch-readability --quiet
+        uv sync --frozen --extra dev --extra studio-server --extra rag-full --extra model-adapters --extra vertex-ai --extra websearch-ddg --extra websearch-tavily --extra websearch-readability --quiet
     fi
 
     if ! uv run python -c "import houyi_studio" 2>/dev/null; then

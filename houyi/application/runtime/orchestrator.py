@@ -115,7 +115,7 @@ class AgentOrchestrator:
         2. Sub-agents execute their assigned tasks in parallel.
         3. Main runner synthesises the sub-results into a final answer.
         """
-        start = time.monotonic()
+        start = time.perf_counter()
         orch_id = uuid.uuid4().hex[:10]
         await self._emit(AgentEventType.AGENT_STARTED, {"mode": "delegate", "task": task})
 
@@ -142,7 +142,7 @@ class AgentOrchestrator:
         synthesis_task = self._build_synthesis_prompt(task, agent_results)
         final = await main_runner.run(synthesis_task)
 
-        elapsed = (time.monotonic() - start) * 1000
+        elapsed = (time.perf_counter() - start) * 1000
         await self._emit(
             AgentEventType.AGENT_COMPLETED, {"mode": "delegate", "duration_ms": elapsed}
         )
@@ -171,7 +171,7 @@ class AgentOrchestrator:
           2. Agents produce findings that update shared state.
           3. Orchestrator checks convergence / budget.
         """
-        start = time.monotonic()
+        start = time.perf_counter()
         orch_id = uuid.uuid4().hex[:10]
         sid = state_id or f"state_{orch_id}"
         await self._emit(AgentEventType.AGENT_STARTED, {"mode": "autonomous", "task": task})
@@ -213,7 +213,7 @@ class AgentOrchestrator:
         for c in conflicts:
             c.resolution = await self.conflict_resolver.resolve(c)
 
-        elapsed = (time.monotonic() - start) * 1000
+        elapsed = (time.perf_counter() - start) * 1000
         await self._emit(
             AgentEventType.AGENT_COMPLETED, {"mode": "autonomous", "duration_ms": elapsed}
         )
@@ -237,7 +237,7 @@ class AgentOrchestrator:
         initial_context: dict[str, Any] | None = None,
     ) -> OrchestratorResult:
         """Execute stages sequentially, piping each output to the next."""
-        start = time.monotonic()
+        start = time.perf_counter()
         ctx = initial_context or {}
         results: list[SubAgentResult] = []
 
@@ -252,7 +252,7 @@ class AgentOrchestrator:
             if not r.success and self.error_policy.fallback_strategy == FallbackStrategy.ABORT:
                 break
 
-        elapsed = (time.monotonic() - start) * 1000
+        elapsed = (time.perf_counter() - start) * 1000
         return OrchestratorResult(
             success=all(r.success for r in results),
             output=results[-1].output if results else None,
@@ -268,7 +268,7 @@ class AgentOrchestrator:
         max_concurrent: int = 5,
     ) -> OrchestratorResult:
         """Execute agents concurrently and merge results."""
-        start = time.monotonic()
+        start = time.perf_counter()
         handles = await self.sub_agent_manager.spawn_parallel(
             [(cfg, t) for cfg, t in tasks],
             max_concurrent=max_concurrent,
@@ -278,7 +278,7 @@ class AgentOrchestrator:
 
         merged = self._merge_results(results, merge_strategy)
 
-        elapsed = (time.monotonic() - start) * 1000
+        elapsed = (time.perf_counter() - start) * 1000
         return OrchestratorResult(
             success=any(r.success for r in results),
             output=merged,

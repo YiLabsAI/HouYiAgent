@@ -103,7 +103,7 @@ rag-embedding = [
 ]
 
 rag-pdf = [
-    "pypdf>=6.7.4",
+    "pypdf>=6.9.2",
     "pdfplumber>=0.10.0",
 ]
 

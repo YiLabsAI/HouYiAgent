@@ -64,7 +64,7 @@ class AgentRunner:
 
     async def run(self, task: str, *, session_state: dict[str, Any] | None = None) -> AgentResult:
         """Execute the agent's tool-loop and return the final result."""
-        start = time.monotonic()
+        start = time.perf_counter()
         await self._emit(AgentEventType.AGENT_STARTED, {"task": task})
 
         turns = 0
@@ -82,7 +82,7 @@ class AgentRunner:
         else:
             await self._emit(AgentEventType.AGENT_COMPLETED, {"output": str(output)[:200]})
 
-        elapsed = (time.monotonic() - start) * 1000
+        elapsed = (time.perf_counter() - start) * 1000
         return AgentResult(
             agent_id=self.agent_id,
             task=task,

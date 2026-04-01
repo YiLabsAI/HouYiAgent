@@ -45,6 +45,42 @@ class CommunityDetectionResult:
         self.num_communities = len(self.communities)
 
 
+def _build_undirected(
+    adjacency: dict[str, list[tuple[str, float]]],
+) -> tuple[dict[str, set[str]], set[str]]:
+    """Convert directed adjacency list into undirected + collect all nodes."""
+    undirected: dict[str, set[str]] = {}
+    all_nodes: set[str] = set()
+    for src, neighbors in adjacency.items():
+        all_nodes.add(src)
+        undirected.setdefault(src, set())
+        for dst, _ in neighbors:
+            all_nodes.add(dst)
+            undirected[src].add(dst)
+            undirected.setdefault(dst, set()).add(src)
+    return undirected, all_nodes
+
+
+def _bfs_component(
+    start: str,
+    undirected: dict[str, set[str]],
+    visited: set[str],
+) -> list[str]:
+    """BFS from *start*, marking nodes in *visited*."""
+    component: list[str] = []
+    queue = [start]
+    while queue:
+        current = queue.pop(0)
+        if current in visited:
+            continue
+        visited.add(current)
+        component.append(current)
+        for neighbor in undirected.get(current, set()):
+            if neighbor not in visited:
+                queue.append(neighbor)
+    return component
+
+
 class CommunityDetector:
     """Community detection using Louvain algorithm.
 
@@ -160,30 +196,9 @@ class CommunityDetector:
         self,
         adjacency: dict[str, list[tuple[str, float]]],
     ) -> CommunityDetectionResult:
-        """Fallback: detect connected components as communities.
+        """Fallback: detect connected components as communities."""
+        undirected, all_nodes = _build_undirected(adjacency)
 
-        Args:
-            adjacency: Adjacency list
-
-        Returns:
-            CommunityDetectionResult
-        """
-        # Build undirected adjacency
-        undirected: dict[str, set[str]] = {}
-        all_nodes: set[str] = set()
-
-        for src, neighbors in adjacency.items():
-            all_nodes.add(src)
-            if src not in undirected:
-                undirected[src] = set()
-            for dst, _ in neighbors:
-                all_nodes.add(dst)
-                undirected[src].add(dst)
-                if dst not in undirected:
-                    undirected[dst] = set()
-                undirected[dst].add(src)
-
-        # Find connected components using BFS
         visited: set[str] = set()
         communities: list[Community] = []
         partition: dict[str, int] = {}
@@ -191,23 +206,7 @@ class CommunityDetector:
         for node in all_nodes:
             if node in visited:
                 continue
-
-            # BFS to find component
-            component: list[str] = []
-            queue = [node]
-
-            while queue:
-                current = queue.pop(0)
-                if current in visited:
-                    continue
-                visited.add(current)
-                component.append(current)
-
-                for neighbor in undirected.get(current, set()):
-                    if neighbor not in visited:
-                        queue.append(neighbor)
-
-            # Create community
+            component = _bfs_component(node, undirected, visited)
             comm_id = len(communities)
             communities.append(Community(id=comm_id, members=component))
             for member in component:
@@ -216,7 +215,7 @@ class CommunityDetector:
         return CommunityDetectionResult(
             communities=communities,
             partition=partition,
-            modularity=0.0,  # Not computed for fallback
+            modularity=0.0,
         )
 
     def get_community_subgraph(

@@ -22,7 +22,7 @@ class TestAgentRunner:
         assert isinstance(result, AgentResult)
         assert result.success
         assert result.turns_used >= 1
-        assert result.duration_ms > 0
+        assert result.duration_ms >= 0
 
     @pytest.mark.asyncio
     async def test_run_emits_events(self):

@@ -103,7 +103,7 @@ class TestDeduplicatorPerformance:
 
 class TestRetrieverPerformance:
     @pytest.fixture()
-    def large_store(self) -> MemoryStore:
+    def large_store(self):
         store = MemoryStore()
         emb = NoOpEmbeddingProvider(dim=32)
         import asyncio
@@ -122,7 +122,8 @@ class TestRetrieverPerformance:
         loop = asyncio.new_event_loop()
         loop.run_until_complete(_populate())
         loop.close()
-        return store
+        yield store
+        store.close()
 
     def test_p95_under_100ms(self, large_store: MemoryStore):
         emb = NoOpEmbeddingProvider(dim=32)
@@ -152,7 +153,8 @@ class TestFts5Performance:
                     memory_type=MemoryType.FACT,
                 )
             )
-        return backend
+        yield backend
+        backend.close()
 
     def test_fts5_p95_under_5ms(self, backend_1k):
         def run():
@@ -195,7 +197,8 @@ class TestEmbeddingSearchPerf:
         loop = asyncio.new_event_loop()
         loop.run_until_complete(_pop())
         loop.close()
-        return backend, emb
+        yield backend, emb
+        backend.close()
 
     def test_emb_search_p95_under_50ms(self, backend_emb_1k):
         backend, emb = backend_emb_1k

@@ -195,18 +195,27 @@ async def extract_memories(
 # Memory configuration
 # ---------------------------------------------------------------------------
 
-_memory_config: dict[str, Any] = {"enabled": True, "auto_extract": True}
+_DEFAULT_MEMORY_CONFIG: dict[str, Any] = {"enabled": True, "auto_extract": True}
+
+
+def _get_config(request: Request) -> dict[str, Any]:
+    cfg = getattr(request.app.state, "_memory_config", None)
+    if cfg is None:
+        cfg = dict(_DEFAULT_MEMORY_CONFIG)
+        request.app.state._memory_config = cfg
+    return cfg
 
 
 @router.get("/config")
-async def get_memory_config() -> dict[str, Any]:
-    return {"config": _memory_config}
+async def get_memory_config(request: Request) -> dict[str, Any]:
+    return {"config": _get_config(request)}
 
 
 @router.put("/config")
-async def update_memory_config(body: MemoryConfigUpdate) -> dict[str, Any]:
+async def update_memory_config(body: MemoryConfigUpdate, request: Request) -> dict[str, Any]:
+    cfg = _get_config(request)
     if body.enabled is not None:
-        _memory_config["enabled"] = body.enabled
+        cfg["enabled"] = body.enabled
     if body.auto_extract is not None:
-        _memory_config["auto_extract"] = body.auto_extract
-    return {"config": _memory_config}
+        cfg["auto_extract"] = body.auto_extract
+    return {"config": cfg}

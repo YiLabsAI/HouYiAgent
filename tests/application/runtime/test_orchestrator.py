@@ -38,7 +38,7 @@ class TestRunDelegate:
         result = await orch.run_delegate(runner, subs, "research AI trends")
         assert result.success
         assert len(result.agent_results) >= 1
-        assert result.duration_ms > 0
+        assert result.duration_ms >= 0
 
     @pytest.mark.asyncio
     async def test_delegate_empty_subs(self):

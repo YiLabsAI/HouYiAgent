@@ -24,12 +24,13 @@ from houyi.application.context.token_estimator import TokenEstimator
 
 
 @pytest.fixture()
-def engine() -> MemoryEngine:
+def engine():
     """Engine with auto-approve and NoOp embeddings."""
     store = MemoryStore()
     emb = NoOpEmbeddingProvider(dim=32)
     policy = MemoryPolicy(auto_approve=True)
-    return MemoryEngine(store, embedding_provider=emb, policy=policy)
+    yield MemoryEngine(store, embedding_provider=emb, policy=policy)
+    store.close()
 
 
 @pytest.fixture()

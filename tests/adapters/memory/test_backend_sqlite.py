@@ -19,14 +19,18 @@ from houyi.adapters.memory.types import (
 
 
 @pytest.fixture()
-def backend(tmp_path) -> SQLiteMemoryBackend:
-    return SQLiteMemoryBackend(db_path=tmp_path / "test.db")
+def backend(tmp_path):
+    b = SQLiteMemoryBackend(db_path=tmp_path / "test.db")
+    yield b
+    b.close()
 
 
 @pytest.fixture()
-def mem_backend(tmp_path) -> SQLiteMemoryBackend:
+def mem_backend(tmp_path):
     """In-memory backend for fast tests."""
-    return SQLiteMemoryBackend(db_path=":memory:")
+    b = SQLiteMemoryBackend(db_path=":memory:")
+    yield b
+    b.close()
 
 
 # ------------------------------------------------------------------

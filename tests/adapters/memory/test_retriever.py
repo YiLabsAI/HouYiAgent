@@ -23,12 +23,13 @@ from houyi.adapters.memory.types import (
 
 
 @pytest.fixture()
-def store() -> MemoryStore:
+def store():
     s = MemoryStore()
     s.put("python", "Python is great for ML", scope=MemoryScope.USER, memory_type=MemoryType.FACT)
     s.put("rust", "Rust is fast and safe", scope=MemoryScope.USER, memory_type=MemoryType.FACT)
     s.put("name", "User name: Alice", scope=MemoryScope.USER, memory_type=MemoryType.PROFILE)
-    return s
+    yield s
+    s.close()
 
 
 @pytest.fixture()

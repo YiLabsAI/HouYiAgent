@@ -48,6 +48,10 @@ class MemoryStore:
         """Access the underlying backend directly."""
         return self._backend
 
+    def close(self) -> None:
+        if hasattr(self._backend, "close"):
+            self._backend.close()
+
     # ------------------------------------------------------------------
     # CRUD
     # ------------------------------------------------------------------
