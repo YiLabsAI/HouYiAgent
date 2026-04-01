@@ -78,11 +78,12 @@ export const Header: React.FC<HeaderProps> = ({
           </button>
 
           <button
-            type="button"
-            disabled
-            className="px-4 py-1.5 rounded-md text-sm font-medium transition-all text-gray-500 cursor-not-allowed"
-            title="Agent (Coming soon): for now, use Chat + Workflow; multi-agent runtime will be available here later"
-            aria-label="Agent (Coming soon)"
+            onClick={() => onSetPrimaryMode('agent')}
+            className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${
+              primaryMode === 'agent'
+                ? 'bg-blue-600 text-white shadow-sm'
+                : 'text-gray-400 hover:text-gray-200'
+            }`}
           >
             <span className="flex items-center gap-2">
               <span>🤖</span>

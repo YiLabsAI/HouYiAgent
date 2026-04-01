@@ -794,6 +794,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
         scheduleConversationRefresh(streamConversationId, get, true);
       }
       void get().fetchConversations();
+
+      // Trigger background memory extraction from the last few messages
+      _triggerMemoryExtraction(get, activeConversationId);
     } catch (e: any) {
       if (e.name === 'AbortError') {
         // User-initiated abort — expected
@@ -1850,5 +1853,24 @@ function handleSSEEvent(
       }));
       break;
     }
+  }
+}
+
+/** Fire-and-forget memory extraction after a chat stream completes. */
+function _triggerMemoryExtraction(get: () => ChatState, conversationId: string): void {
+  try {
+    // Lazy dynamic import to avoid circular dependency
+    import('./useMemoryStore').then(({ useMemoryStore }) => {
+      const conv = get().activeConversation;
+      if (conv && conv.messages.length >= 2) {
+        const recentMsgs = conv.messages.slice(-6).map((m) => ({
+          role: m.role,
+          content: typeof m.content === 'string' ? m.content : '',
+        }));
+        void useMemoryStore.getState().extractFromChat(recentMsgs, conversationId);
+      }
+    }).catch(() => { /* non-critical */ });
+  } catch {
+    // non-critical
   }
 }

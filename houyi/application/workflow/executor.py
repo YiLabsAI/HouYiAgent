@@ -181,13 +181,14 @@ class LocalExecutor:
         Returns:
             Node execution result
         """
-        # Execute based on node type
         if node.node_type == NodeType.LLM:
             return await self._execute_llm_node(node, inputs)
         elif node.node_type == NodeType.TOOL:
             return await self._execute_tool_node(node, inputs)
         elif node.node_type == NodeType.VERIFY:
             return await self._execute_verify_node(node, inputs)
+        elif node.node_type == NodeType.AGENT:
+            return await self._execute_agent_node(node, inputs)
         else:
             raise ValueError(f"Unsupported node type: {node.node_type}")
 
@@ -275,6 +276,44 @@ class LocalExecutor:
 
         # Placeholder implementation
         return {"result": f"Result from {skill.name}"}
+
+    async def _execute_agent_node(self, node: IRNode, inputs: dict[str, Any]) -> dict[str, Any]:
+        """Execute AGENT node by spawning a sub-agent via SubAgentManager.
+
+        Requires ``agent_id`` on the node and an ``AgentRegistry`` available
+        via ``self.agent_registry``.  Falls back to a mock result when the
+        registry is not configured.
+        """
+        from houyi.application.runtime.sub_agent import SubAgentManager
+        from houyi.domain.agent.spec import AgentSpec
+
+        task_input = inputs.get("task", "")
+        agent_id = node.agent_id or node.metadata.get("agent_id", "")
+
+        registry = getattr(self, "agent_registry", None)
+        if registry is not None:
+            config = registry.get(agent_id)
+            if config and config.default_spec:
+                spec = config.default_spec
+            else:
+                spec = AgentSpec(role=agent_id or "sub_agent")
+        else:
+            spec = AgentSpec(role=agent_id or "sub_agent")
+
+        mgr = SubAgentManager()
+        handle = await mgr.spawn(spec, task_input)
+        result = await mgr.join(handle)
+
+        output: dict[str, Any] = {
+            "result": result.output,
+            "agent_id": result.agent_id,
+            "success": result.success,
+        }
+
+        if node.handoff_to:
+            output["handoff_to"] = node.handoff_to
+
+        return output
 
     def _extract_params_from_task(self, task: str, skill: SkillSpec) -> dict[str, Any]:
         """Extract skill parameters from task string.

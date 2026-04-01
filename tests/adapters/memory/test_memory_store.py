@@ -1,5 +1,3 @@
-"""Unit tests for houyi.adapters.memory.store.MemoryStore."""
-
 from __future__ import annotations
 
 import time
@@ -161,14 +159,13 @@ class TestMemoryStorePersistence:
         assert r2 is not None
         assert r2.content == "value2"
 
-    def test_delete_removes_file(self, tmp_path):
+    def test_delete_removes_record(self, tmp_path):
         store = MemoryStore(data_dir=tmp_path / "mem")
-        record = store.put("key1", "value1", scope=MemoryScope.SESSION)
-        file_path = tmp_path / "mem" / "session" / f"{record.record_id}.json"
-        assert file_path.exists()
+        store.put("key1", "value1", scope=MemoryScope.SESSION)
+        assert store.get("key1", scope=MemoryScope.SESSION) is not None
 
         store.delete("key1", scope=MemoryScope.SESSION)
-        assert not file_path.exists()
+        assert store.get("key1", scope=MemoryScope.SESSION) is None
 
     def test_expired_cleaned_on_load(self, tmp_path):
         store1 = MemoryStore(data_dir=tmp_path / "mem")

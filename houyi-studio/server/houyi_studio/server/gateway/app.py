@@ -50,7 +50,12 @@ from ..logging_config import (
     get_log_level,
     truncate_payload,
 )
+from ..memory.api import router as memory_router
+from ..memory.service import MemoryService
 from ..rag import get_knowledge_service, resolve_embedding_config
+from ..research.api import agents_router
+from ..research.api import router as research_router
+from ..research.service import ResearchService
 from ..skill.command_handler import SkillCommandHandler
 from ..skill.startup_hooks import register_console_skills
 from .command_dispatcher import CommandDispatcher
@@ -303,22 +308,86 @@ async def lifespan(app: FastAPI):
     get_execution_engine()
     register_console_skills()
 
-    # Initialize Chat subsystem
+    # Shared LLM adapter (used by Memory extraction + Research)
+    shared_llm_adapter = None
+    try:
+        from houyi.adapters.llm.factory import LLMAdapterFactory
+
+        shared_llm_adapter = LLMAdapterFactory.create()
+        logger.info("Shared LLM adapter initialized")
+    except Exception:
+        logger.warning("LLM adapter init failed — features degraded", exc_info=True)
+
+    # Initialize Memory subsystem first (shared by Chat and Research)
+    memory_store = None
+    memory_engine = None
+    memory_service = None
+    try:
+        from houyi.adapters.memory.engine import MemoryEngine
+        from houyi.adapters.memory.store import MemoryStore
+
+        memory_store = MemoryStore(
+            data_dir=Path(resolve_chat_data_dir(os.getenv(ENV_CHAT_DATA_DIR))).parent / "memory"
+        )
+        memory_engine = MemoryEngine(memory_store, llm_adapter=shared_llm_adapter)
+        memory_service = MemoryService(memory_engine)
+        app.state.memory_service = memory_service
+        app.include_router(memory_router)
+        logger.info(
+            "Memory subsystem initialized (LLM extraction: %s)",
+            "enabled" if shared_llm_adapter else "disabled",
+        )
+    except Exception:
+        logger.warning("Memory subsystem init failed — routes unavailable", exc_info=True)
+
+    # Initialize Chat subsystem (with optional memory injection)
     chat_data_dir = resolve_chat_data_dir(os.getenv(ENV_CHAT_DATA_DIR))
     settings_path = os.getenv(ENV_CHAT_SETTINGS_PATH, "data/settings.json")
     json_store = JsonStore(data_dir=chat_data_dir)
     settings_store = SettingsStore(settings_path=settings_path)
     chat_service = ChatService(
         json_store=json_store,
+        memory_store=memory_store,
         default_model=os.getenv(ENV_DEEPSEEK_MODEL, DEFAULT_MODEL),
         default_system_instructions=os.getenv(ENV_CHAT_SYSTEM_PROMPT, ""),
         settings_store=settings_store,
     )
+    app.state.chat_service = chat_service
+    app.state.memory_engine = memory_engine
     chat_router = register_chat_routes(chat_service, settings_store=settings_store)
     app.include_router(chat_router)
     logger.info(
-        "Chat subsystem initialized (data_dir=%s, settings=%s)", chat_data_dir, settings_path
+        "Chat subsystem initialized (data_dir=%s, settings=%s, memory=%s)",
+        chat_data_dir,
+        settings_path,
+        "enabled" if memory_store else "disabled",
     )
+
+    # Initialize Research subsystem
+    try:
+        from houyi.skills.web_search.providers import DuckDuckGoWebSearchProvider
+        from houyi.skills.web_search.service import WebSearchService
+
+        if shared_llm_adapter is None:
+            from houyi.adapters.llm.factory import LLMAdapterFactory
+
+            shared_llm_adapter = LLMAdapterFactory.create()
+
+        web_search = WebSearchService(provider=DuckDuckGoWebSearchProvider())
+        research_data_dir = Path(chat_data_dir).parent / "research"
+        research_service = ResearchService(
+            shared_llm_adapter,
+            web_search,
+            data_dir=research_data_dir,
+            memory_service=memory_service,
+        )
+        app.state.research_service = research_service
+        app.include_router(research_router)
+        app.include_router(agents_router)
+
+        logger.info("Research subsystem initialized")
+    except Exception:
+        logger.warning("Research subsystem init failed — routes unavailable", exc_info=True)
 
     logger.info("=" * 60)
     logger.info("HouYi Console Server Starting - %s", datetime.now())

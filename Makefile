@@ -3,6 +3,7 @@
 	test-sdk-unit test-server-unit test-unit \
 	test-sdk-integration test-server-integration test-integration \
 	test-sdk-integration-live test-sdk-integration-live-ddg test-sdk-integration-live-searxng test-sdk-integration-live-tavily test-sdk-integration-live-serper \
+	test-server-integration-live \
 	test-e2e test-e2e-smoke \
 	check check-unit check-integration check-e2e-smoke \
 	lint lint-fix lint-imports quick-check clean format typecheck
@@ -48,6 +49,7 @@ help:
 	@echo "  make test-sdk-integration-live-searxng Run the SearxNG live integration variant"
 	@echo "  make test-sdk-integration-live-tavily Run the Tavily live integration variant"
 	@echo "  make test-sdk-integration-live-serper Run the Serper live integration variant"
+	@echo "  make test-server-integration-live Run Studio server live integration tests"
 	@echo "  make test-e2e-smoke   Run Playwright smoke e2e tests"
 	@echo "  make test-e2e         Run full Playwright e2e tests"
 	@echo ""
@@ -185,6 +187,11 @@ test-sdk-integration-live-tavily:
 test-sdk-integration-live-serper:
 	@if [ -z "$$SERPER_API_KEY" ]; then echo 'SERPER_API_KEY is required'; exit 1; fi
 	HOUYI_RUN_LIVE_LLM_TOOL_SCENARIO_TESTS=1 SERPER_API_KEY="$$SERPER_API_KEY" uv run pytest tests/integration/live/ -k 'serper' -v
+
+# Studio server live tests (real LLM, explicitly executed)
+test-server-integration-live:
+	@uv run python -c "import houyi_studio" 2>/dev/null || (echo '📦 Installing studio server...' && uv pip install -e houyi-studio/server --quiet)
+	HOUYI_RUN_LIVE_LLM_TOOL_SCENARIO_TESTS=1 uv run pytest houyi-studio/server/tests/integration/live/ -v
 
 # E2E tests (requires backend running + Playwright browsers)
 test-e2e-smoke:

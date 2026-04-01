@@ -5,8 +5,26 @@ import importlib
 import re
 from urllib import request
 from urllib.error import URLError
+from urllib.parse import quote, urlparse, urlunparse
 
 from houyi.skills.web_search.errors import ContentFetchError, DependencyMissingError
+
+
+def _encode_url_for_http(url: str) -> str:
+    """Percent-encode non-ASCII characters in a URL for safe HTTP transmission."""
+    parsed = urlparse(url)
+    encoded_path = quote(parsed.path, safe="/:@!$&'()*+,;=-._~")
+    encoded_query = quote(parsed.query, safe="/:@!$&'()*+,;=-._~?=")
+    return urlunparse(
+        (
+            parsed.scheme,
+            parsed.netloc,
+            encoded_path,
+            parsed.params,
+            encoded_query,
+            parsed.fragment,
+        )
+    )
 
 
 class JinaContentFetcher:
@@ -20,7 +38,7 @@ class JinaContentFetcher:
                 return (url, "")
             if not re.match(r"^https?://", target):
                 target = f"https://{target}"
-            jina_url = f"{self._endpoint}{target}"
+            jina_url = _encode_url_for_http(f"{self._endpoint}{target}")
             try:
                 with request.urlopen(jina_url, timeout=30) as response:
                     payload = response.read().decode("utf-8", errors="ignore")
@@ -48,7 +66,8 @@ class ReadabilityContentFetcher:
 
         def _fetch_one(url: str) -> tuple[str, str]:
             try:
-                with request.urlopen(url, timeout=30) as response:
+                encoded_url = _encode_url_for_http(url)
+                with request.urlopen(encoded_url, timeout=30) as response:
                     html = response.read().decode("utf-8", errors="ignore")
             except (URLError, TimeoutError, OSError) as exc:
                 raise ContentFetchError(f"Readability fetch failed: {exc}") from exc

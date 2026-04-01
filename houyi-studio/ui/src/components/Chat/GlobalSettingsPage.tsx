@@ -8,7 +8,7 @@
  *
  */
 import React from 'react';
-import { Plus, Trash2, ChevronDown, ChevronRight, Wifi, WifiOff, RefreshCw, Eye, EyeOff, Check, X } from 'lucide-react';
+import { Plus, Trash2, ChevronDown, ChevronRight, Wifi, WifiOff, RefreshCw, Eye, EyeOff, Check, X, Brain } from 'lucide-react';
 import { CenterStage } from '@/components/CenterStage';
 import {
   PROVIDER_DISPLAY_NAMES,
@@ -70,6 +70,102 @@ interface GlobalSettingsPageProps {
 
 /** Strip HTML tags from error messages (frontend safety net). */
 const stripHtml = (s: string): string => s.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim().slice(0, 300);
+
+const MemorySettingsSection: React.FC = () => {
+  const [enabled, setEnabled] = React.useState(true);
+  const [autoExtract, setAutoExtract] = React.useState(true);
+  const [loaded, setLoaded] = React.useState(false);
+
+  React.useEffect(() => {
+    fetch('/api/memory/config')
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.config) {
+          setEnabled(data.config.enabled ?? true);
+          setAutoExtract(data.config.auto_extract ?? true);
+        }
+        setLoaded(true);
+      })
+      .catch(() => setLoaded(true));
+  }, []);
+
+  const update = (key: string, value: boolean) => {
+    const body: Record<string, boolean> = {};
+    if (key === 'enabled') { setEnabled(value); body.enabled = value; }
+    if (key === 'auto_extract') { setAutoExtract(value); body.auto_extract = value; }
+    fetch('/api/memory/config', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.config) {
+          import('@/stores/useMemoryStore').then(({ useMemoryStore }) => {
+            useMemoryStore.setState({ config: data.config });
+          });
+        }
+      })
+      .catch(() => {});
+  };
+
+  if (!loaded) return null;
+
+  return (
+    <section>
+      <h2 className="text-[13px] font-semibold text-gray-300 mb-3 flex items-center gap-1.5">
+        <Brain size={14} className="text-purple-400" />
+        Memory
+      </h2>
+      <div className="space-y-3">
+        <div className="flex items-center justify-between">
+          <div>
+            <label className="block text-[10px] text-gray-500">Memory System</label>
+            <span className="text-[10px] text-gray-600">
+              {enabled ? 'Extracts and recalls facts from conversations' : 'Disabled — no memory extraction or recall'}
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={() => update('enabled', !enabled)}
+            className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
+              enabled ? 'bg-purple-600' : 'bg-gray-600'
+            }`}
+          >
+            <span
+              className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
+                enabled ? 'translate-x-4' : 'translate-x-0.5'
+              }`}
+            />
+          </button>
+        </div>
+        {enabled && (
+          <div className="flex items-center justify-between">
+            <div>
+              <label className="block text-[10px] text-gray-500">Auto-extract</label>
+              <span className="text-[10px] text-gray-600">
+                Automatically extract preferences and facts after conversations
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => update('auto_extract', !autoExtract)}
+              className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
+                autoExtract ? 'bg-purple-600' : 'bg-gray-600'
+              }`}
+            >
+              <span
+                className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
+                  autoExtract ? 'translate-x-4' : 'translate-x-0.5'
+                }`}
+              />
+            </button>
+          </div>
+        )}
+      </div>
+    </section>
+  );
+};
 
 export const GlobalSettingsPage: React.FC<GlobalSettingsPageProps> = ({ isOpen, onClose }) => {
   const refreshDisplaySettings = useSettingsStore((s) => s.refreshSettings);
@@ -620,6 +716,9 @@ export const GlobalSettingsPage: React.FC<GlobalSettingsPageProps> = ({ isOpen, 
                 </div>
               </div>
             </section>
+
+            {/* Memory */}
+            <MemorySettingsSection />
 
             {/* Display */}
             <section>

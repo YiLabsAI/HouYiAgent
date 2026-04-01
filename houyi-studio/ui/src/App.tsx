@@ -6,6 +6,7 @@ import { RightSidebar } from './components/RightSidebar';
 import { BottomPanel } from './components/BottomPanel';
 import { DAGCanvas } from './components/DAGCanvas';
 import { ChatPage } from './components/Chat';
+import { AgentHub } from './components/Agent/AgentHub';
 import { ConversationSettingsDrawer } from './components/Chat/ConversationSettingsDrawer';
 import { GlobalSettingsPage } from './components/Chat/GlobalSettingsPage';
 import { SearchModal } from './components/Chat/SearchModal';
@@ -161,15 +162,28 @@ function App() {
     [leftCollapsed, sidebarTab, setSidebarTab],
   );
 
+  const prevSidebarStateRef = React.useRef<{ left: boolean; right: boolean } | null>(null);
+
   const handleSetPrimaryMode = React.useCallback(
     (mode: import('./stores/useConsoleStore').PrimaryMode) => {
+      const prevMode = useConsoleStore.getState().primaryMode;
       setPrimaryMode(mode);
-      // Close Run Settings panel when leaving Graph mode
+
       if (mode === 'chat') {
         setRunSettingsOpen(false);
       }
+
+      if (mode === 'agent' && prevMode !== 'agent') {
+        prevSidebarStateRef.current = { left: leftCollapsed, right: rightCollapsed };
+        setLeftCollapsed(true);
+        setRightCollapsed(true);
+      } else if (mode !== 'agent' && prevMode === 'agent' && prevSidebarStateRef.current) {
+        setLeftCollapsed(prevSidebarStateRef.current.left);
+        setRightCollapsed(prevSidebarStateRef.current.right);
+        prevSidebarStateRef.current = null;
+      }
     },
-    [setPrimaryMode, setRunSettingsOpen],
+    [setPrimaryMode, setRunSettingsOpen, leftCollapsed, rightCollapsed],
   );
 
   const handleToggleLeftCollapsed = () => {
@@ -313,19 +327,20 @@ function App() {
       />
 
       <div className="flex-1 flex overflow-hidden">
-        <ActivityBar
-          primaryMode={primaryMode}
-          sidebarTab={sidebarTab}
-          onSelectTab={handleSelectSidebarTab}
-          onOpenSettings={() => {
-            // Unified settings entry point: mode-aware
-            if (primaryMode === 'graph') {
-              setRunSettingsOpen(true);
-            } else {
-              setShowGlobalSettings(true);
-            }
-          }}
-        />
+        {primaryMode !== 'agent' && (
+          <ActivityBar
+            primaryMode={primaryMode}
+            sidebarTab={sidebarTab}
+            onSelectTab={handleSelectSidebarTab}
+            onOpenSettings={() => {
+              if (primaryMode === 'graph') {
+                setRunSettingsOpen(true);
+              } else {
+                setShowGlobalSettings(true);
+              }
+            }}
+          />
+        )}
 
         {!leftCollapsed && (
           <>
@@ -372,6 +387,9 @@ function App() {
           </div>
           <div className="flex-1 flex flex-col overflow-hidden" style={{ display: primaryMode === 'graph' ? 'flex' : 'none' }}>
             <DAGCanvas />
+          </div>
+          <div className="flex-1 flex flex-col overflow-hidden" style={{ display: primaryMode === 'agent' ? 'flex' : 'none' }}>
+            <AgentHub />
           </div>
 
           {showGraphBottomPanel && !bottomCollapsed && (
@@ -421,7 +439,7 @@ function App() {
             </div>
           </>
         )}
-        {rightCollapsed && (
+        {rightCollapsed && primaryMode !== 'agent' && (
           <RightSidebar
             isCollapsed={true}
             onToggleCollapse={() => setRightCollapsed(false)}

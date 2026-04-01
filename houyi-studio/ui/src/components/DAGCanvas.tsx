@@ -18,6 +18,7 @@ import { ToolNode } from './nodes/ToolNode';
 import { VerifyNode } from './nodes/VerifyNode';
 import { LogicNode } from './nodes/LogicNode';
 import { RouteNode } from './nodes/RouteNode';
+import { AgentNode } from './nodes/AgentNode';
 import { useConsoleStore } from '../stores/useConsoleStore';
 
 const nodeTypes: NodeTypes = {
@@ -26,6 +27,7 @@ const nodeTypes: NodeTypes = {
   verify: VerifyNode,
   logic: LogicNode,
   route: RouteNode,
+  agent: AgentNode,
 };
 
 export const DAGCanvas: React.FC = () => {

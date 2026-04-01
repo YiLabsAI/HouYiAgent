@@ -286,6 +286,7 @@ make test-sdk-integration-live-ddg # Run the DDG live integration variant
 make test-sdk-integration-live-searxng # Run the SearxNG live integration variant
 make test-sdk-integration-live-tavily # Run the Tavily live integration variant
 make test-sdk-integration-live-serper # Run the Serper live integration variant
+make test-server-integration-live # Run Studio server live integration tests
 make test-e2e-smoke   # Run Playwright smoke e2e tests
 make test-e2e         # Run full Playwright e2e tests
 make check-unit       # Static checks + all unit tests
@@ -483,6 +484,7 @@ ruff check houyi/ --fix
   - Live tests MUST be opt-in and MUST NOT execute only because credentials happen to exist in the shell.
   - The default live opt-in for the SDK live tool-call scenario is `HOUYI_RUN_LIVE_LLM_TOOL_SCENARIO_TESTS=1`.
   - Use `make test-sdk-integration-live` for the aggregate SDK live integration run.
+  - Use `make test-server-integration-live` for Studio server live integration tests (chat, memory).
   - Prefer provider-specific commands such as `make test-sdk-integration-live-ddg` and `make test-sdk-integration-live-serper` when validating a single provider.
 - **UI E2E policy**
   - `smoke/` is the fast browser gate and should cover only a minimal stable path.

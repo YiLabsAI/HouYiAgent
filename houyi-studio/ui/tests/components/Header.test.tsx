@@ -5,7 +5,7 @@
  *   - Mode indicator rendering (graph active, chat active)
  *   - Mode switch button callbacks
  *   - Conditional rendering of chat-specific and graph-specific toolbar items
- *   - Agent button disabled state
+ *   - Agent button clickable state
  */
 import { render, screen, fireEvent } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -75,15 +75,18 @@ describe('Header', () => {
     expect(graphBtn?.className).not.toContain('bg-blue-600');
   });
 
-  it('renders Agent button as disabled', () => {
+  it('renders Agent button as clickable', () => {
+    const setMode = vi.fn();
     render(
       <Header
         primaryMode="graph"
-        onSetPrimaryMode={vi.fn()}
+        onSetPrimaryMode={setMode}
       />,
     );
     const agentBtn = screen.getByText('Agent').closest('button');
-    expect(agentBtn).toBeDisabled();
+    expect(agentBtn).not.toBeDisabled();
+    fireEvent.click(agentBtn!);
+    expect(setMode).toHaveBeenCalledWith('agent');
   });
 
   // ---------------------------------------------------------------------------

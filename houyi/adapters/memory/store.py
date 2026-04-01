@@ -1,43 +1,56 @@
-"""Memory Store: simple KV storage for Phase 1.
+"""Memory Store: application-layer facade over MemoryBackend.
 
-Provides in-memory storage with optional JSON file persistence.
-Phase 1: Manual read/write, no automatic extraction or retrieval scoring.
-Phase 2: Will be extended with embedding-based retrieval and scoring.
-
+Manages expiry checks, context rendering, and backward-compatible API.
+Storage is delegated to the injected MemoryBackend (default: SQLite).
 """
 
 from __future__ import annotations
 
-import json
 import logging
 import time
 from pathlib import Path
 from typing import Any
 
-from houyi.adapters.memory.types import MemoryRecord, MemoryScope
+from houyi.adapters.memory.backends.base import MemoryBackend
+from houyi.adapters.memory.backends.sqlite import SQLiteMemoryBackend
+from houyi.adapters.memory.types import (
+    MemoryProvenance,
+    MemoryRecord,
+    MemoryScope,
+    MemoryType,
+)
 
 logger = logging.getLogger(__name__)
 
 
 class MemoryStore:
-    """Simple key-value memory store with optional file persistence.
+    """Application-layer facade over a pluggable MemoryBackend.
 
-    Thread-safety: Not thread-safe. For Phase 1 single-user scenarios only.
-    Phase 2 will add proper locking for concurrent access.
+    External API is identical to the previous JSON-based implementation —
+    all existing callers continue to work unchanged.
     """
 
-    def __init__(self, data_dir: str | Path | None = None):
-        """Initialize memory store.
+    def __init__(
+        self,
+        backend: MemoryBackend | None = None,
+        *,
+        data_dir: str | Path | None = None,
+    ):
+        if backend is not None:
+            self._backend = backend
+        elif data_dir is not None:
+            self._backend = SQLiteMemoryBackend(data_dir=data_dir)
+        else:
+            self._backend = SQLiteMemoryBackend(db_path=":memory:")
 
-        Args:
-            data_dir: Directory for JSON persistence. If None, memory is
-                      in-memory only (lost on restart).
-        """
-        self._records: dict[str, MemoryRecord] = {}
-        self._data_dir = Path(data_dir) if data_dir else None
-        if self._data_dir:
-            self._data_dir.mkdir(parents=True, exist_ok=True)
-            self._load_from_disk()
+    @property
+    def backend(self) -> MemoryBackend:
+        """Access the underlying backend directly."""
+        return self._backend
+
+    # ------------------------------------------------------------------
+    # CRUD
+    # ------------------------------------------------------------------
 
     def put(
         self,
@@ -46,187 +59,111 @@ class MemoryStore:
         scope: MemoryScope = MemoryScope.SESSION,
         metadata: dict[str, Any] | None = None,
         ttl: float | None = None,
+        *,
+        memory_type: MemoryType = MemoryType.FACT,
+        tags: list[str] | None = None,
+        confidence: float = 1.0,
+        decay: float = 1.0,
+        provenance: MemoryProvenance | None = None,
+        embedding: list[float] | None = None,
     ) -> MemoryRecord:
         """Store or update a memory record.
-
-        Args:
-            key: Unique key within scope.
-            content: Memory content text.
-            scope: Memory scope (session/user/workspace).
-            metadata: Optional metadata dict.
-            ttl: Time-to-live in seconds (None = no expiry).
 
         Returns:
             The created or updated MemoryRecord.
         """
-        store_key = f"{scope.value}:{key}"
+        existing = self._backend.get(key, scope)
         now = time.time()
 
-        if store_key in self._records:
-            record = self._records[store_key]
-            record.content = content
-            record.updated_at = now
+        if existing is not None:
+            existing.content = content
+            existing.updated_at = now
             if metadata:
-                record.metadata.update(metadata)
+                existing.metadata.update(metadata)
             if ttl is not None:
-                record.ttl = ttl
-        else:
-            record = MemoryRecord(
-                scope=scope,
-                key=key,
-                content=content,
-                metadata=metadata or {},
-                ttl=ttl,
-            )
-            self._records[store_key] = record
+                existing.ttl = ttl
+            existing.memory_type = memory_type
+            if tags is not None:
+                existing.tags = tags
+            existing.confidence = confidence
+            existing.decay = decay
+            if provenance is not None:
+                existing.provenance = provenance
+            if embedding is not None:
+                existing.embedding = embedding
+            self._backend.put(existing)
+            return existing
 
-        self._persist_record(record)
+        record = MemoryRecord(
+            scope=scope,
+            key=key,
+            content=content,
+            metadata=metadata or {},
+            ttl=ttl,
+            memory_type=memory_type,
+            tags=tags or [],
+            confidence=confidence,
+            decay=decay,
+            provenance=provenance,
+            embedding=embedding,
+        )
+        self._backend.put(record)
+        return record
+
+    def put_record(self, record: MemoryRecord) -> MemoryRecord:
+        """Store a pre-built MemoryRecord directly.
+
+        Useful for the write pipeline (extractor → classifier → store)
+        where a fully populated record is assembled before storage.
+        """
+        record.updated_at = time.time()
+        self._backend.put(record)
         return record
 
     def get(self, key: str, scope: MemoryScope = MemoryScope.SESSION) -> MemoryRecord | None:
         """Retrieve a memory record by key and scope.
 
-        Args:
-            key: Record key.
-            scope: Memory scope.
-
         Returns:
             MemoryRecord if found and not expired, else None.
         """
-        store_key = f"{scope.value}:{key}"
-        record = self._records.get(store_key)
-        if record is None:
-            return None
-        if record.is_expired:
-            self.delete(key, scope)
-            return None
-        return record
+        return self._backend.get(key, scope)
 
     def list_by_scope(self, scope: MemoryScope) -> list[MemoryRecord]:
-        """List all non-expired records in a scope.
+        """List all non-expired records in a scope, ordered by updated_at DESC."""
+        return self._backend.list_by_scope(scope)
 
-        Args:
-            scope: Memory scope to filter by.
+    def list_by_type(
+        self,
+        memory_type: MemoryType,
+        scope: MemoryScope | None = None,
+    ) -> list[MemoryRecord]:
+        """List non-expired records by memory type, optionally filtered by scope."""
+        return self._backend.list_by_type(memory_type, scope)
 
-        Returns:
-            List of MemoryRecords, ordered by updated_at descending.
-        """
-        records = []
-        expired_keys = []
-        for store_key, record in self._records.items():
-            if record.scope != scope:
-                continue
-            if record.is_expired:
-                expired_keys.append(store_key)
-                continue
-            records.append(record)
-
-        # Clean up expired
-        for k in expired_keys:
-            del self._records[k]
-
-        records.sort(key=lambda r: r.updated_at, reverse=True)
-        return records
+    def all_records(self, *, include_expired: bool = False) -> list[MemoryRecord]:
+        """Return all records across all scopes."""
+        return self._backend.all_records(include_expired=include_expired)
 
     def delete(self, key: str, scope: MemoryScope = MemoryScope.SESSION) -> bool:
-        """Delete a memory record.
-
-        Args:
-            key: Record key.
-            scope: Memory scope.
-
-        Returns:
-            True if record was found and deleted.
-        """
-        store_key = f"{scope.value}:{key}"
-        if store_key in self._records:
-            record = self._records.pop(store_key)
-            self._delete_from_disk(record)
-            return True
-        return False
+        """Delete a memory record. Returns True if found and deleted."""
+        return self._backend.delete(key, scope)
 
     def clear(self, scope: MemoryScope | None = None) -> int:
-        """Clear memory records.
+        """Clear records. If scope is None, clear all. Returns count deleted."""
+        return self._backend.clear(scope)
 
-        Args:
-            scope: If provided, only clear records in this scope.
-                   If None, clear all records.
-
-        Returns:
-            Number of records deleted.
-        """
-        if scope is None:
-            count = len(self._records)
-            self._records.clear()
-            if self._data_dir:
-                for f in self._data_dir.glob("*.json"):
-                    f.unlink(missing_ok=True)
-            return count
-
-        to_delete = [k for k, r in self._records.items() if r.scope == scope]
-        for k in to_delete:
-            record = self._records.pop(k)
-            self._delete_from_disk(record)
-        return len(to_delete)
+    # ------------------------------------------------------------------
+    # Context rendering
+    # ------------------------------------------------------------------
 
     def as_context_text(self, scope: MemoryScope = MemoryScope.SESSION) -> str:
-        """Render all records in a scope as context text for injection.
-
-        Args:
-            scope: Memory scope.
-
-        Returns:
-            Formatted text suitable for ContextPlanner memory injection.
-        """
+        """Render all records in a scope as context text for LLM injection."""
         records = self.list_by_scope(scope)
         if not records:
             return ""
-        lines = [f"- {r.key}: {r.content}" for r in records]
+        lines = []
+        for r in records:
+            tag_suffix = f" [{', '.join(r.tags)}]" if r.tags else ""
+            type_prefix = f"[{r.memory_type.value}] " if r.memory_type != MemoryType.FACT else ""
+            lines.append(f"- {type_prefix}{r.key}: {r.content}{tag_suffix}")
         return "\n".join(lines)
-
-    # --- Persistence helpers ---
-
-    def _persist_record(self, record: MemoryRecord) -> None:
-        """Write a single record to disk."""
-        if not self._data_dir:
-            return
-        scope_dir = self._data_dir / record.scope.value
-        scope_dir.mkdir(parents=True, exist_ok=True)
-        file_path = scope_dir / f"{record.record_id}.json"
-        try:
-            data = record.model_dump(mode="json")
-            tmp_path = file_path.with_suffix(".tmp")
-            tmp_path.write_text(json.dumps(data, ensure_ascii=False, indent=2))
-            tmp_path.rename(file_path)
-        except Exception as e:
-            logger.error("Failed to persist memory record %s: %s", record.record_id, e)
-
-    def _delete_from_disk(self, record: MemoryRecord) -> None:
-        """Delete a record file from disk."""
-        if not self._data_dir:
-            return
-        file_path = self._data_dir / record.scope.value / f"{record.record_id}.json"
-        file_path.unlink(missing_ok=True)
-
-    def _load_from_disk(self) -> None:
-        """Load all records from disk on startup."""
-        if not self._data_dir:
-            return
-        count = 0
-        for scope_dir in self._data_dir.iterdir():
-            if not scope_dir.is_dir():
-                continue
-            for file_path in scope_dir.glob("*.json"):
-                try:
-                    data = json.loads(file_path.read_text())
-                    record = MemoryRecord(**data)
-                    if record.is_expired:
-                        file_path.unlink(missing_ok=True)
-                        continue
-                    store_key = f"{record.scope.value}:{record.key}"
-                    self._records[store_key] = record
-                    count += 1
-                except Exception as e:
-                    logger.warning("Failed to load memory file %s: %s", file_path, e)
-        if count > 0:
-            logger.info("Loaded %d memory records from %s", count, self._data_dir)

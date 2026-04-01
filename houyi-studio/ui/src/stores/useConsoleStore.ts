@@ -62,7 +62,7 @@ interface RunSettings {
 }
 
 /** Editor Area mode — controlled by Title Bar (Header) */
-export type PrimaryMode = 'graph' | 'chat';
+export type PrimaryMode = 'graph' | 'chat' | 'agent';
 
 /** Primary Sidebar tab — constrained by primaryMode.
  *  graph → workflow | knowledge | skills

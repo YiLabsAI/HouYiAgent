@@ -9,8 +9,25 @@ from pydantic import BaseModel, Field
 from houyi.domain.skill.spec import SkillSpec
 
 
+class SubAgentConfig(BaseModel):
+    """Lightweight config for declaring a sub-agent within an orchestration."""
+
+    role: str = Field(..., description="Sub-agent role name")
+    skills: list[SkillSpec] = Field(default_factory=list)
+    system_prompt: str | None = None
+    max_turns: int = 20
+    tools: list[str] = Field(
+        default_factory=list, description="Tool names available to this sub-agent"
+    )
+
+
 class AgentSpec(BaseModel):
-    """Specification for an agent."""
+    """Specification for an agent.
+
+    Phase 2 fields (``sub_agents``, ``max_turns``, ``context_strategy``,
+    ``memory_config``) are backward-compatible—all default to ``None`` or
+    safe defaults so that existing callers are unaffected.
+    """
 
     role: str = Field(..., description="Agent role (e.g., 'Researcher', 'Analyst')")
     skills: list[SkillSpec] = Field(default_factory=list, description="Available skills")
@@ -22,6 +39,24 @@ class AgentSpec(BaseModel):
     verification_config: Any = Field(
         default=None,
         description="Agent-level verification configuration",
+    )
+
+    # --- Phase 2 fields (Sprint 2) ---
+    sub_agents: list[SubAgentConfig] = Field(
+        default_factory=list,
+        description="Declared sub-agents for orchestration",
+    )
+    max_turns: int = Field(
+        default=50,
+        description="Maximum tool-loop turns before forced stop",
+    )
+    context_strategy: dict[str, Any] | None = Field(
+        default=None,
+        description="Context truncation / compression strategy config",
+    )
+    memory_config: dict[str, Any] | None = Field(
+        default=None,
+        description="Memory engine configuration (scope, policy, etc.)",
     )
 
     def to_system_prompt(self) -> str:
@@ -58,4 +93,4 @@ class AgentSpec(BaseModel):
         return [skill.to_tool_schema() for skill in sorted_skills]
 
 
-__all__ = ["AgentSpec"]
+__all__ = ["AgentSpec", "SubAgentConfig"]

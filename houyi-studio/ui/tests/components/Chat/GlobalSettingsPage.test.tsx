@@ -10,9 +10,10 @@ vi.mock('@/hooks/useAvailableModels', () => ({
   invalidateModelCache: invalidateModelCacheMock,
 }));
 
-// Mock fetch
 const mockFetch = vi.fn();
-global.fetch = mockFetch;
+global.fetch = mockFetch as any;
+
+const memoryConfigResp = { ok: true, json: async () => ({ config: { enabled: true, auto_extract: true } }) };
 
 const defaultSettings = {
   version: 1,
@@ -41,12 +42,22 @@ const defaultSettings = {
   updated_at: 1000,
 };
 
+function routedFetch(overrides?: Record<string, any>) {
+  const settings = { ...defaultSettings, ...overrides };
+  return (url: string, opts?: any) => {
+    if (url === '/api/memory/config') return Promise.resolve(memoryConfigResp);
+    if (typeof url === 'string' && url.startsWith('/api/memory/')) return Promise.resolve(memoryConfigResp);
+    if (url === '/api/chat/settings')
+      return Promise.resolve({ ok: true, json: async () => settings });
+    return Promise.resolve({ ok: false, status: 404 });
+  };
+}
+
 describe('GlobalSettingsPage', () => {
   beforeEach(() => {
-    // resetAllMocks clears both call history AND the implementation queue
-    // (clearAllMocks only clears call history, leaving unconsumed mockResolvedValueOnce entries)
     vi.resetAllMocks();
-    global.fetch = mockFetch;
+    mockFetch.mockImplementation(routedFetch());
+    global.fetch = mockFetch as any;
     invalidateModelCacheMock.mockReset();
   });
 
@@ -56,11 +67,6 @@ describe('GlobalSettingsPage', () => {
   });
 
   it('renders title and loads settings on open', async () => {
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      json: async () => defaultSettings,
-    });
-
     render(<GlobalSettingsPage isOpen={true} onClose={vi.fn()} />);
     expect(screen.getByText('Global Settings')).toBeInTheDocument();
 
@@ -76,25 +82,14 @@ describe('GlobalSettingsPage', () => {
   });
 
   it('shows provider name after loading', async () => {
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      json: async () => defaultSettings,
-    });
-
     render(<GlobalSettingsPage isOpen={true} onClose={vi.fn()} />);
 
     await waitFor(() => {
-      // Provider name appears in the provider header row (may also appear in preset buttons)
       expect(screen.getAllByText('SiliconFlow').length).toBeGreaterThan(0);
     });
   });
 
   it('shows default model value', async () => {
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      json: async () => defaultSettings,
-    });
-
     render(<GlobalSettingsPage isOpen={true} onClose={vi.fn()} />);
 
     await waitFor(() => {
@@ -104,11 +99,6 @@ describe('GlobalSettingsPage', () => {
   });
 
   it('calls onClose when Cancel clicked', async () => {
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      json: async () => defaultSettings,
-    });
-
     const onClose = vi.fn();
     render(<GlobalSettingsPage isOpen={true} onClose={onClose} />);
 
@@ -121,18 +111,12 @@ describe('GlobalSettingsPage', () => {
   });
 
   it('calls PUT on Save', async () => {
-    mockFetch
-      .mockResolvedValueOnce({ ok: true, json: async () => defaultSettings })  // GET
-      .mockResolvedValueOnce({ ok: true, json: async () => defaultSettings }); // PUT
-
     render(<GlobalSettingsPage isOpen={true} onClose={vi.fn()} />);
 
-    // Wait for settings to load (model input appears)
     await waitFor(() => {
       expect(screen.getByPlaceholderText('deepseek-ai/DeepSeek-V3')).toBeInTheDocument();
     });
 
-    // Make the form dirty by changing the default model
     const modelInput = screen.getByPlaceholderText('deepseek-ai/DeepSeek-V3');
     fireEvent.change(modelInput, { target: { value: 'gpt-4' } });
 
@@ -150,7 +134,10 @@ describe('GlobalSettingsPage', () => {
   });
 
   it('shows error when fetch fails', async () => {
-    mockFetch.mockResolvedValueOnce({ ok: false, status: 500 });
+    mockFetch.mockImplementation((url: string) => {
+      if (url === '/api/memory/config') return Promise.resolve(memoryConfigResp);
+      return Promise.resolve({ ok: false, status: 500 });
+    });
 
     render(<GlobalSettingsPage isOpen={true} onClose={vi.fn()} />);
 
@@ -160,11 +147,6 @@ describe('GlobalSettingsPage', () => {
   });
 
   it('shows Add Provider button', async () => {
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      json: async () => defaultSettings,
-    });
-
     render(<GlobalSettingsPage isOpen={true} onClose={vi.fn()} />);
 
     await waitFor(() => {
@@ -173,11 +155,6 @@ describe('GlobalSettingsPage', () => {
   });
 
   it('shows display fields with correct values', async () => {
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      json: async () => defaultSettings,
-    });
-
     render(<GlobalSettingsPage isOpen={true} onClose={vi.fn()} />);
 
     await waitFor(() => {
@@ -189,11 +166,6 @@ describe('GlobalSettingsPage', () => {
   });
 
   it('shows max tokens explanation tooltip', async () => {
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      json: async () => defaultSettings,
-    });
-
     render(<GlobalSettingsPage isOpen={true} onClose={vi.fn()} />);
 
     await waitFor(() => {
@@ -205,5 +177,13 @@ describe('GlobalSettingsPage', () => {
     expect(screen.getByRole('tooltip')).toHaveTextContent(
       'Maximum response tokens to generate. Larger values allow longer answers, but leave less room for input context in each request. This does not change the model context window.',
     );
+  });
+
+  it('renders Memory section with toggles', async () => {
+    render(<GlobalSettingsPage isOpen={true} onClose={vi.fn()} />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Memory')).toBeInTheDocument();
+    });
   });
 });

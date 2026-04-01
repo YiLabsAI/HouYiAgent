@@ -1,0 +1,111 @@
+"""Shared fixtures for research engine tests."""
+
+from __future__ import annotations
+
+import json
+from collections.abc import AsyncIterator
+from typing import Any
+from unittest.mock import AsyncMock
+
+import pytest
+
+from houyi.adapters.llm.base import LLMAdapter, LLMResponse, StreamChunk
+from houyi.skills.web_search.service import WebSearchService
+from houyi.skills.web_search.types import WebSearchMetadata, WebSearchResponse, WebSearchResult
+
+
+class MockLLM(LLMAdapter):
+    """LLM adapter that returns pre-configured responses."""
+
+    def __init__(self, responses: list[str] | None = None) -> None:
+        self._responses = list(responses or [])
+        self._call_count = 0
+
+    async def chat(self, messages: list, **kwargs: Any) -> LLMResponse:
+        content = (
+            self._responses[self._call_count] if self._call_count < len(self._responses) else "{}"
+        )
+        self._call_count += 1
+        return LLMResponse(content=content, finish_reason="stop", model="mock")
+
+    async def stream_chat(self, messages: list, **kwargs: Any) -> AsyncIterator[StreamChunk]:
+        yield StreamChunk()
+
+
+def make_mock_web_search(results: list[WebSearchResult] | None = None) -> WebSearchService:
+    """Create a mock WebSearchService that returns pre-configured results."""
+    svc = AsyncMock(spec=WebSearchService)
+    svc.search = AsyncMock(
+        return_value=WebSearchResponse(
+            query="test",
+            provider="mock",
+            results=results
+            or [
+                WebSearchResult(
+                    title="Mock Result 1",
+                    url="https://example.com/1",
+                    snippet="snippet 1",
+                    content="Full content 1",
+                ),
+                WebSearchResult(
+                    title="Mock Result 2",
+                    url="https://example.com/2",
+                    snippet="snippet 2",
+                    content="Full content 2",
+                ),
+            ],
+            metadata=WebSearchMetadata(
+                cached=False, cache_hit=False, latency_ms=10, provider="mock"
+            ),
+        ),
+    )
+    return svc
+
+
+@pytest.fixture
+def mock_llm():
+    """Default mock LLM returning valid JSON for planner."""
+    plan_json = json.dumps(
+        {
+            "sub_questions": [
+                {
+                    "question": "What are current frameworks?",
+                    "priority": 5,
+                    "search_strategy": "web",
+                    "expected_sources": 5,
+                },
+                {
+                    "question": "How do they compare?",
+                    "priority": 4,
+                    "search_strategy": "web",
+                    "expected_sources": 5,
+                },
+                {
+                    "question": "Future trends?",
+                    "priority": 3,
+                    "search_strategy": "web",
+                    "expected_sources": 3,
+                },
+            ],
+            "outline": [
+                {
+                    "title": "Overview",
+                    "objective": "Landscape overview",
+                    "related_question_ids": [0],
+                },
+                {
+                    "title": "Comparison",
+                    "objective": "Feature comparison",
+                    "related_question_ids": [1],
+                },
+                {"title": "Outlook", "objective": "Future directions", "related_question_ids": [2]},
+            ],
+            "estimated_duration_min": 8,
+        }
+    )
+    return MockLLM(responses=[plan_json])
+
+
+@pytest.fixture
+def mock_web_search():
+    return make_mock_web_search()

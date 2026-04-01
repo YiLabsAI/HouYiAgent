@@ -19,6 +19,7 @@ class NodeType(str, Enum):
     VERIFY = "verify"  # Assertion verification node
     LOGIC = "logic"  # Logic control node
     ROUTE = "route"  # Routing decision node
+    AGENT = "agent"  # Sub-agent delegation node
 
 
 class IRNode(BaseModel):
@@ -47,6 +48,16 @@ class IRNode(BaseModel):
     metadata: dict[str, Any] = Field(
         default_factory=dict,
         description="Node-specific metadata",
+    )
+
+    # --- Phase 2 fields (Sprint 2: AGENT node support) ---
+    agent_id: str | None = Field(
+        default=None,
+        description="Agent type ID for AGENT nodes (resolved via AgentRegistry)",
+    )
+    handoff_to: str | None = Field(
+        default=None,
+        description="Target agent/node to hand off to after completion",
     )
 
     model_config = ConfigDict(arbitrary_types_allowed=True)

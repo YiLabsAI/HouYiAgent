@@ -1,0 +1,290 @@
+"""MemoryEngine unit tests.
+
+Covers the write pipeline (extract → classify → dedup → store),
+read pipeline (recall → score → explain), manual approval flow,
+and degradation scenarios (no embedding provider).
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from houyi.adapters.memory.embedding import NoOpEmbeddingProvider
+from houyi.adapters.memory.engine import MemoryEngine
+from houyi.adapters.memory.store import MemoryStore
+from houyi.adapters.memory.types import (
+    CandidateStatus,
+    MemoryPolicy,
+    MemoryType,
+)
+
+
+@pytest.fixture()
+def engine() -> MemoryEngine:
+    """Engine with auto-approve and NoOp embeddings."""
+    store = MemoryStore()
+    emb = NoOpEmbeddingProvider(dim=32)
+    policy = MemoryPolicy(auto_approve=True)
+    return MemoryEngine(store, embedding_provider=emb, policy=policy)
+
+
+@pytest.fixture()
+def engine_no_emb() -> MemoryEngine:
+    """Engine without embedding provider (lexical-only fallback)."""
+    store = MemoryStore()
+    policy = MemoryPolicy(auto_approve=True)
+    return MemoryEngine(store, policy=policy)
+
+
+@pytest.fixture()
+def engine_manual_approve() -> MemoryEngine:
+    """Engine requiring manual approval (auto_approve=False)."""
+    store = MemoryStore()
+    return MemoryEngine(store, policy=MemoryPolicy(auto_approve=False))
+
+
+class TestWritePipeline:
+    """Test extract → classify → dedup → store flow."""
+
+    async def test_explicit_memory_stored(self, engine: MemoryEngine):
+        messages = [
+            {"role": "user", "content": "Remember that the deadline is Friday."},
+        ]
+        candidates = await engine.process_messages(messages)
+        assert len(candidates) >= 1
+        approved = [c for c in candidates if c.status == CandidateStatus.APPROVED]
+        assert len(approved) >= 1
+        assert approved[0].memory_type == MemoryType.FACT
+
+    async def test_identity_extracted(self, engine: MemoryEngine):
+        messages = [
+            {"role": "user", "content": "My name is Alice and I work at ACME."},
+        ]
+        candidates = await engine.process_messages(messages)
+        profile_cands = [c for c in candidates if c.memory_type == MemoryType.PROFILE]
+        assert len(profile_cands) >= 1
+        assert "Alice" in profile_cands[0].content
+
+    async def test_preference_extracted(self, engine: MemoryEngine):
+        messages = [
+            {"role": "user", "content": "I prefer dark mode for all my editors."},
+        ]
+        candidates = await engine.process_messages(messages)
+        pref_cands = [c for c in candidates if c.memory_type == MemoryType.PREFERENCE]
+        assert len(pref_cands) >= 1
+
+    async def test_constraint_extracted(self, engine: MemoryEngine):
+        messages = [
+            {"role": "user", "content": "Don't use any Java examples."},
+        ]
+        candidates = await engine.process_messages(messages)
+        constraint_cands = [c for c in candidates if c.memory_type == MemoryType.CONSTRAINT]
+        assert len(constraint_cands) >= 1
+
+    async def test_assistant_messages_ignored(self, engine: MemoryEngine):
+        messages = [
+            {"role": "assistant", "content": "Remember that I am helpful."},
+        ]
+        candidates = await engine.process_messages(messages)
+        assert len(candidates) == 0
+
+    async def test_no_extraction_from_empty(self, engine: MemoryEngine):
+        candidates = await engine.process_messages([])
+        assert candidates == []
+
+    async def test_duplicate_merged(self, engine: MemoryEngine):
+        messages = [
+            {"role": "user", "content": "Remember that the server is on port 8080."},
+        ]
+        await engine.process_messages(messages)
+        candidates = await engine.process_messages(messages)
+        merged = [c for c in candidates if c.status == CandidateStatus.MERGED]
+        assert len(merged) >= 1
+
+
+class TestManualApproval:
+    """Test the manual approval flow."""
+
+    async def test_pending_not_stored(self, engine_manual_approve: MemoryEngine):
+        messages = [
+            {"role": "user", "content": "Remember that tests are important."},
+        ]
+        candidates = await engine_manual_approve.process_messages(messages)
+        assert all(
+            c.status in (CandidateStatus.PENDING, CandidateStatus.MERGED) for c in candidates
+        )
+        records = engine_manual_approve.store.all_records()
+        assert len(records) == 0
+
+    async def test_approve_stores_record(self, engine_manual_approve: MemoryEngine):
+        messages = [
+            {"role": "user", "content": "Remember that the API key is 12345."},
+        ]
+        candidates = await engine_manual_approve.process_messages(messages)
+        pending = [c for c in candidates if c.status == CandidateStatus.PENDING]
+        assert len(pending) >= 1
+
+        record = await engine_manual_approve.approve_candidate(pending[0])
+        assert record.content == pending[0].content
+        assert engine_manual_approve.store.get(record.key, record.scope) is not None
+
+
+class TestRecallPipeline:
+    """Test retrieval scoring and ranking."""
+
+    async def test_recall_returns_results(self, engine: MemoryEngine):
+        messages = [
+            {"role": "user", "content": "Remember that Python is great for ML."},
+        ]
+        await engine.process_messages(messages)
+        recalls = await engine.recall("What language for machine learning?")
+        assert len(recalls) >= 1
+        assert recalls[0].score > 0
+
+    async def test_recall_empty_store(self, engine: MemoryEngine):
+        recalls = await engine.recall("anything")
+        assert recalls == []
+
+    async def test_recall_context_text(self, engine: MemoryEngine):
+        messages = [
+            {"role": "user", "content": "Remember that the deploy target is k8s."},
+        ]
+        await engine.process_messages(messages)
+        recalls = await engine.recall("deployment")
+        text = engine.recall_as_context_text(recalls)
+        assert "deploy" in text.lower() or "k8s" in text.lower()
+
+    async def test_recall_respects_top_k(self, engine: MemoryEngine):
+        for i in range(10):
+            await engine.process_messages(
+                [
+                    {"role": "user", "content": f"Remember fact number {i}."},
+                ]
+            )
+        recalls = await engine.recall("facts", top_k=3)
+        assert len(recalls) <= 3
+
+
+class TestNoEmbeddingFallback:
+    """Engine works without embedding provider (lexical-only)."""
+
+    async def test_write_without_embedding(self, engine_no_emb: MemoryEngine):
+        messages = [
+            {"role": "user", "content": "Remember that Redis runs on port 6379."},
+        ]
+        candidates = await engine_no_emb.process_messages(messages)
+        assert len(candidates) >= 1
+        records = engine_no_emb.store.all_records()
+        assert len(records) >= 1
+        assert records[0].embedding is None
+
+    async def test_recall_without_embedding(self, engine_no_emb: MemoryEngine):
+        await engine_no_emb.process_messages(
+            [
+                {"role": "user", "content": "Remember that Redis runs on port 6379."},
+            ]
+        )
+        recalls = await engine_no_emb.recall("Redis port")
+        assert len(recalls) >= 1
+
+
+class TestBuildContext:
+    """Test build_context recall + formatting."""
+
+    async def test_returns_context(self, engine: MemoryEngine):
+        await engine.process_messages(
+            [{"role": "user", "content": "Remember that Python is great for ML."}]
+        )
+        ctx = await engine.build_context("Python machine learning")
+        assert ctx is not None
+        assert "python" in ctx.lower() or "ml" in ctx.lower()
+
+    async def test_returns_none_empty(self, engine: MemoryEngine):
+        ctx = await engine.build_context("anything")
+        assert ctx is None
+
+    async def test_respects_top_k(self, engine: MemoryEngine):
+        for i in range(5):
+            await engine.process_messages(
+                [{"role": "user", "content": f"Remember fact number {i}."}]
+            )
+        ctx = await engine.build_context("fact", top_k=2)
+        if ctx:
+            assert ctx.count("\n") <= 1
+
+
+class TestRecallContextText:
+    """Test recall_as_context_text formatting."""
+
+    async def test_format_includes_type(self, engine: MemoryEngine):
+        await engine.process_messages(
+            [{"role": "user", "content": "Remember that the API uses v2."}]
+        )
+        recalls = await engine.recall("API version")
+        text = engine.recall_as_context_text(recalls)
+        assert "score=" in text
+
+    async def test_empty_recalls(self, engine: MemoryEngine):
+        text = engine.recall_as_context_text([])
+        assert text == ""
+
+
+class TestEmbeddingCache:
+    """Test _cache_embedding writes to backend."""
+
+    async def test_embedding_cached(self, engine: MemoryEngine):
+        await engine.process_messages(
+            [{"role": "user", "content": "Remember that Redis port is 6379."}]
+        )
+        records = engine.store.all_records()
+        assert len(records) >= 1
+        record = records[0]
+        assert record.embedding is not None
+        backend = engine.store.backend
+        cached = backend.get_embedding(record.record_id, "NoOpEmbeddingProvider", "32")
+        assert cached is not None
+
+    async def test_no_cache_without_emb(self, engine_no_emb: MemoryEngine):
+        await engine_no_emb.process_messages(
+            [{"role": "user", "content": "Remember that port is 443."}]
+        )
+        records = engine_no_emb.store.all_records()
+        assert len(records) >= 1
+        assert records[0].embedding is None
+
+
+class TestDeriveKey:
+    """Test key derivation from candidate content."""
+
+    async def test_key_from_content(self, engine: MemoryEngine):
+        msgs = [{"role": "user", "content": "Remember that the sky is blue."}]
+        await engine.process_messages(msgs)
+        records = engine.store.all_records()
+        assert len(records) >= 1
+        assert records[0].key != ""
+        assert "_" in records[0].key or len(records[0].key) > 0
+
+
+class TestForgetting:
+    """Test forgetting maintenance."""
+
+    async def test_forgetting_evicts_stale(self, engine: MemoryEngine):
+        engine.store.put("old", "stale data", memory_type=MemoryType.FACT)
+        record = engine.store.get("old")
+        assert record is not None
+        record.decay = 0.05
+        record.updated_at = 1.0
+        engine.store.put_record(record)
+
+        evicted = await engine.run_forgetting()
+        assert evicted >= 1
+
+    async def test_forgetting_no_eviction(self, engine: MemoryEngine):
+        engine.store.put("fresh", "new data", memory_type=MemoryType.FACT)
+        evicted = await engine.run_forgetting()
+        assert evicted == 0
+        assert len(engine.store.all_records()) == 1
+
+    async def test_forgetting_empty_store(self, engine: MemoryEngine):
+        evicted = await engine.run_forgetting()
+        assert evicted == 0
