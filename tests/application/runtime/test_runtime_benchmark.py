@@ -6,9 +6,9 @@ import time
 
 import pytest
 
+from houyi.application.runtime.agent_team import AgentTeamManager
 from houyi.application.runtime.events import AgentEvent, AgentEventType, EventEmitter
 from houyi.application.runtime.runner import AgentRunner
-from houyi.application.runtime.sub_agent import SubAgentManager
 from houyi.domain.agent.spec import AgentSpec
 
 
@@ -40,8 +40,8 @@ class TestRuntimeBenchmarks:
 
     @pytest.mark.asyncio
     async def test_spawn_latency(self):
-        """SubAgentManager spawn p95 < 200ms."""
-        mgr = SubAgentManager()
+        """AgentTeamManager spawn p95 < 200ms."""
+        mgr = AgentTeamManager()
         latencies: list[float] = []
         handles = []
 
@@ -76,7 +76,7 @@ class TestRuntimeBenchmarks:
     @pytest.mark.asyncio
     async def test_five_agent_stability(self):
         """5 concurrent agents complete without error."""
-        mgr = SubAgentManager()
+        mgr = AgentTeamManager()
         agents = [(_spec(f"agent_{i}"), f"task {i}") for i in range(5)]
         handles = await mgr.spawn_parallel(agents)
         results = await mgr.join_all(handles)

@@ -1,6 +1,6 @@
 [project]
 name = "houyi-studio-server"
-version = "0.1.0"
+version = "0.3.0"
 description = "HouYi Studio server (FastAPI/WebSocket)"
 requires-python = ">=3.11"
 dependencies = [

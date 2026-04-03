@@ -1,4 +1,4 @@
-"""Runtime tools that SubAgents use during research execution.
+"""Runtime tools used during research execution.
 
 Each tool is a callable with a ``name`` attribute and an OpenAI-format
 ``schema`` dict.  ``AgentRunner`` picks these up automatically via

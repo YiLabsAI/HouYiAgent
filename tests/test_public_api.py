@@ -5,7 +5,7 @@ from houyi import Skill, SkillSpec, __version__, tool
 
 class TestHouyiPublicApi:
     def test_root_exports_version_and_skill_alias(self) -> None:
-        assert __version__ == "0.2.0"
+        assert __version__ == "0.3.0"
         assert Skill is SkillSpec
 
     def test_tool_decorator_empty_input_schema(self) -> None:

@@ -6,8 +6,19 @@ import { ReportViewer } from './ReportViewer';
 import { Search, Loader2 } from 'lucide-react';
 
 export const DeepResearchWorkspace: React.FC = () => {
-  const { phase, sessionId, plan, progress, report, error, loading, createSession, confirmAndExecute, cancelSession, reset } = useResearchStore();
+  const { phase, sessionId, plan, progress, report, error, loading, createSession, confirmAndExecute, cancelSession, reset, events } = useResearchStore();
   const [query, setQuery] = useState('');
+  const prevPhaseRef = React.useRef(phase);
+  const [justCompleted, setJustCompleted] = React.useState(false);
+
+  React.useEffect(() => {
+    if (prevPhaseRef.current === 'executing' && phase === 'report') {
+      setJustCompleted(true);
+    } else if (phase !== 'report') {
+      setJustCompleted(false);
+    }
+    prevPhaseRef.current = phase;
+  }, [phase]);
 
   React.useEffect(() => {
     if (sessionId) {
@@ -92,7 +103,8 @@ export const DeepResearchWorkspace: React.FC = () => {
         {phase === 'executing' && (
           <ProgressPanel
             progress={progress}
-            events={useResearchStore.getState().events}
+            events={events}
+            subQuestions={plan?.sub_questions}
             onCancel={cancelSession}
             error={error}
           />
@@ -100,7 +112,14 @@ export const DeepResearchWorkspace: React.FC = () => {
 
         {/* Phase: Report */}
         {phase === 'report' && report && (
-          <ReportViewer report={report} plan={plan} />
+          <ReportViewer
+            report={report}
+            plan={plan}
+            animate={justCompleted}
+            onRetry={() => {
+              if (plan) confirmAndExecute();
+            }}
+          />
         )}
       </div>
     </div>

@@ -32,6 +32,14 @@ from pydantic import BaseModel, Field
 DEFAULT_TEMPERATURE: float = 0.7
 """Default sampling temperature used across all LLM adapters."""
 
+DEFAULT_MAX_TOKENS: int = 4096
+"""Fallback max_tokens applied when callers pass ``None``.
+
+Prevents unbounded generation that can exceed provider read timeouts on
+slower models (e.g. Kimi K2.5 via SiliconFlow).  Callers may still pass
+an explicit value to override.
+"""
+
 
 @dataclass(slots=True)
 class StreamChunk:
@@ -310,13 +318,24 @@ class StreamResponse:
             self.model = getattr(adapter, "model", None)
 
     def to_response(self) -> LLMResponse:
-        """Convert accumulated stream data to an LLMResponse."""
+        """Convert accumulated stream data to an ``LLMResponse``.
+
+        When no explicit tool_calls deltas were received, falls back to
+        ``_parse_embedded_tool_calls`` to handle models (e.g. MiniMax,
+        DeepSeek) that embed tool invocations in reasoning/content text.
+        """
+        tool_calls = self.tool_calls
+        if not tool_calls:
+            tool_calls = _parse_embedded_tool_calls(
+                self.accumulated_reasoning or None,
+                self.accumulated_content or None,
+            )
         metadata: dict[str, Any] = {}
         if self.accumulated_reasoning:
             metadata["reasoning_content"] = self.accumulated_reasoning
         return LLMResponse(
             content=self.accumulated_content,
-            tool_calls=self.tool_calls,
+            tool_calls=tool_calls,
             finish_reason=self.finish_reason or "stop",
             usage=self.usage,
             model=self.model or "unknown",
@@ -330,14 +349,15 @@ class LLMAdapter(ABC):
     Adapters provide a unified interface for different LLM providers.
 
     Subclasses MUST implement:
-    - ``chat()``        — non-streaming, returns ``LLMResponse``
-    - ``stream_chat()`` — streaming, yields ``StreamChunk`` objects
 
-    The optional ``stream_completion()`` convenience method wraps a prompt
-    as a user message and delegates to ``stream_chat()``.
+    - ``stream_chat()`` — the core streaming primitive (provider-specific).
+
+    ``chat()`` has a concrete default that consumes ``stream_chat()`` and
+    accumulates the result into an ``LLMResponse``.  Subclasses MAY override
+    ``chat()`` when the provider offers a more efficient native non-streaming
+    API, but this is optional.
     """
 
-    @abstractmethod
     async def chat(
         self,
         messages: list[LLMMessage | dict],
@@ -346,7 +366,18 @@ class LLMAdapter(ABC):
         max_tokens: int | None = None,
         **kwargs: Any,
     ) -> LLMResponse:
-        """Non-streaming chat completion with optional tool calling.
+        """Chat completion — returns a complete ``LLMResponse``.
+
+        The default implementation streams via ``stream_chat()`` and
+        accumulates the result using ``StreamResponse``, which handles
+        content, reasoning, tool_calls deltas, and usage metadata.
+
+        This keeps the HTTP connection alive token-by-token, avoiding
+        read-timeouts on slow models — the recommended default per
+        OpenAI best practices.
+
+        Subclasses MAY override with a native non-streaming call when
+        the provider SDK handles timeouts and retries well on its own.
 
         Args:
             messages: Conversation messages (LLMMessage or plain dicts).
@@ -358,7 +389,19 @@ class LLMAdapter(ABC):
         Returns:
             Complete LLM response.
         """
-        ...
+        stream = StreamResponse(
+            self.stream_chat(
+                messages=messages,
+                tools=tools,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                **kwargs,
+            )
+        )
+        async for _chunk in stream:
+            pass
+        stream.finalize(self)
+        return stream.to_response()
 
     @abstractmethod
     async def stream_chat(
@@ -369,7 +412,10 @@ class LLMAdapter(ABC):
         max_tokens: int | None = None,
         **kwargs: Any,
     ) -> AsyncIterator[StreamChunk]:
-        """Streaming chat completion.
+        """Streaming chat completion — the core abstract primitive.
+
+        Each provider has a fundamentally different streaming API, so this
+        method cannot be shared and MUST be implemented by every adapter.
 
         Args:
             messages: Conversation messages (LLMMessage or plain dicts).
@@ -399,8 +445,6 @@ class LLMAdapter(ABC):
 
         Convenience wrapper: builds a ``[{role: user, content: prompt}]``
         message list and delegates to ``stream_chat()``.
-
-        Yields ``StreamChunk`` objects for consistency with ``stream_chat()``.
 
         Args:
             prompt: Input prompt text.

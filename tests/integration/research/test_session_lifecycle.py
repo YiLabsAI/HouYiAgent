@@ -97,22 +97,62 @@ _RACE_JSON = json.dumps(
 )
 _FACT_JSON = json.dumps({"citation_accuracy": 92.0, "effective_citations": 8})
 
+_QUERY_GEN = json.dumps(["AI agent framework 2026", "compare agent tools"])
+_SUFFICIENCY = json.dumps({"sufficient": True, "rationale": "Enough"})
+_CLARIFICATION_PASS = json.dumps(
+    {
+        "needs_clarification": False,
+        "confidence": 0.9,
+        "issues": [],
+        "suggested_questions": [],
+        "refined_query": None,
+    }
+)
+_INTERMEDIATE_JSON = json.dumps(
+    {
+        "analysis": "Analysis of findings.",
+        "key_findings": ["Finding 1"],
+        "confidence": 0.8,
+        "gaps": [],
+    }
+)
+_VALIDATION_JSON = json.dumps(
+    {
+        "quality_score": 80,
+        "has_citations": True,
+        "is_relevant": True,
+        "is_substantive": True,
+        "needs_rewrite": False,
+        "issues": [],
+    }
+)
+
 
 def _build_responses() -> list[str]:
-    """LLM response sequence for a 3-question session.
+    """LLM response sequence for a 3-question standard-depth session.
 
-    plan → searcher*3 → section*3 → summary → RACE → FACT.
-    Each sub-question is handled by a SubAgent returning JSON sources.
+    Standard depth: clarification → plan → 3×(query_gen+sufficiency)
+    → 3×intermediate → 3×section → summary → 3×validation → RACE → FACT.
     """
     return [
+        _CLARIFICATION_PASS,
         _PLAN_JSON,
-        _SEARCHER_RESPONSE,
-        _SEARCHER_RESPONSE,
-        _SEARCHER_RESPONSE,
+        _QUERY_GEN,
+        _SUFFICIENCY,
+        _QUERY_GEN,
+        _SUFFICIENCY,
+        _QUERY_GEN,
+        _SUFFICIENCY,
+        _INTERMEDIATE_JSON,
+        _INTERMEDIATE_JSON,
+        _INTERMEDIATE_JSON,
         _SECTION_JSON,
         _SECTION_JSON,
         _SECTION_JSON,
         "Summary of the research findings on AI agent frameworks.",
+        _VALIDATION_JSON,
+        _VALIDATION_JSON,
+        _VALIDATION_JSON,
         _RACE_JSON,
         _FACT_JSON,
     ]
@@ -123,13 +163,16 @@ class _MockLLM(LLMAdapter):
         self._responses = responses
         self._idx = 0
 
-    async def chat(self, messages: list, **kwargs: Any) -> LLMResponse:
+    def _next_content(self) -> str:
         content = self._responses[self._idx] if self._idx < len(self._responses) else "{}"
         self._idx += 1
-        return LLMResponse(content=content, finish_reason="stop", model="mock")
+        return content
+
+    async def chat(self, messages: list, **kwargs: Any) -> LLMResponse:
+        return LLMResponse(content=self._next_content(), finish_reason="stop", model="mock")
 
     async def stream_chat(self, messages: list, **kwargs: Any) -> AsyncIterator[StreamChunk]:
-        yield StreamChunk()
+        yield StreamChunk(content_delta=self._next_content())
 
 
 def _mock_web_search() -> WebSearchService:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from houyi.application.runtime.context_strategy import ContextStrategy
+from houyi.application.context.context_strategy import ContextStrategy
 from houyi.application.runtime.events import AgentEvent, AgentEventType, EventEmitter
 from houyi.application.runtime.runner import AgentResult, AgentRunner
 from houyi.domain.agent.spec import AgentSpec

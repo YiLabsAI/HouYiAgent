@@ -102,16 +102,19 @@ class OpenAICompatAdapterBase(LLMAdapter):
         enable_streaming: bool,
         kwargs: dict[str, Any],
     ) -> OpenAICompatRequest:
+        from houyi.adapters.llm.base import DEFAULT_MAX_TOKENS
+
         model = kwargs.pop("model", None) or self._get_default_model()
         normalized_messages = self._normalize_messages(messages)
         if getattr(self, "strict_message_string_contract", False):
             normalized_messages = self._sanitize_request_messages(normalized_messages)
+        effective_max_tokens = max_tokens if max_tokens is not None else DEFAULT_MAX_TOKENS
         return OpenAICompatRequest.create(
             model=model,
             messages=normalized_messages,
             temperature=temperature,
             tools=tools,
-            max_tokens=max_tokens,
+            max_tokens=effective_max_tokens,
             enable_streaming=enable_streaming,
             extra_kwargs=kwargs,
         )
@@ -701,24 +704,6 @@ class OpenAICompatAdapterBase(LLMAdapter):
         payload = self._normalize_httpx_payload(self._encode_stream_request_for_httpx(request))
         async for chunk in self._execute_stream_request_httpx(payload):
             yield chunk
-
-    async def chat(
-        self,
-        messages: list[LLMMessage | dict],
-        tools: list[dict] | None = None,
-        temperature: float = DEFAULT_TEMPERATURE,
-        max_tokens: int | None = None,
-        **kwargs: Any,
-    ) -> LLMResponse:
-        request = self._build_request(
-            messages=messages,
-            tools=tools,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            enable_streaming=False,
-            kwargs=dict(kwargs),
-        )
-        return await self._chat(request)
 
     async def stream_chat(
         self,

@@ -119,3 +119,71 @@ class TestBoundaryAndInteraction:
         report = await gen.generate(plan, _sources())
         assert len(report.sections) == len(plan.outline)
         assert report.metadata.section_count == len(plan.outline)
+
+
+class TestIntermediateContext:
+    async def test_section_with_intermediate_context(self):
+        from houyi.application.research.intermediate import IntermediateReport
+
+        llm = MockLLM(responses=[_SECTION_JSON, _SECTION_JSON, "Summary."])
+        gen = ReportGenerator(llm)
+        plan = _plan_with_outline()
+        plan.outline[0].related_question_ids = ["q1"]
+        plan.outline[1].related_question_ids = ["q2"]
+
+        intermediates = [
+            IntermediateReport(
+                question_id="q1",
+                question="What are current frameworks?",
+                analysis="Detailed analysis of frameworks [ref_001].",
+                key_findings=["Finding A"],
+                confidence=0.85,
+            ),
+            IntermediateReport(
+                question_id="q2",
+                question="How do they compare?",
+                analysis="Comparison analysis reveals [ref_001].",
+                key_findings=["Finding B"],
+                confidence=0.75,
+            ),
+        ]
+
+        report = await gen.generate(plan, _sources(), intermediate_reports=intermediates)
+        assert len(report.sections) == 2
+        assert report.summary == "Summary."
+
+    async def test_intermediate_context_builds_analysis(self):
+        from houyi.application.research.intermediate import IntermediateReport
+        from houyi.application.research.report import _intermediate_context
+
+        ir = IntermediateReport(
+            question_id="q1",
+            question="Test question?",
+            analysis="Deep analysis text with citations.",
+            confidence=0.9,
+        )
+        result = _intermediate_context(["q1"], {"q1": ir})
+        assert "Test question?" in result
+        assert "Deep analysis text" in result
+        assert "90%" in result
+
+
+class TestParseSectionEdgeCases:
+    async def test_strips_code_fence(self):
+        from houyi.application.research.report import _parse_section
+
+        fenced = "```json\n" + _SECTION_JSON + "\n```"
+        section = _parse_section("Test Section", fenced)
+        assert section.content != ""
+        assert len(section.citations) == 1
+        assert section.citations[0].reference_id == "ref_001"
+
+
+class TestStripLeadingHeadingEdgeCases:
+    async def test_blank_lines_before_heading(self):
+        from houyi.application.research.report import _strip_leading_heading
+
+        content = "\n\n## Overview\nContent here."
+        result = _strip_leading_heading("Overview", content)
+        assert "Content here." in result
+        assert "## Overview" not in result

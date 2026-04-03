@@ -125,6 +125,24 @@ describe('useResearchStore', () => {
   });
 
   describe('openSession', () => {
+    /** Phase 3.5 fix: openSession must fully reset stale state before fetching */
+    it('resets plan/report/phase before loading new session', async () => {
+      mockFetch([
+        { status: 201, body: { session_id: 's-old', plan: { query: 'old', sub_questions: [], outline: [], version: 1, status: 'draft' }, status: 'planning' } },
+        { status: 200, body: { session_id: 's-new', status: 'completed', plan: { query: 'new', sub_questions: [], outline: [], version: 2, status: 'completed' }, progress: { total_steps: 5, completed_steps: 5, current_step: 'done', elapsed_seconds: 10, sub_question_progress: {} } } },
+        { status: 200, body: { report: { title: 'New Report', sections: [], references: [], quality_score: null } } },
+      ]);
+      const { useResearchStore } = await loadStoreFresh();
+      await useResearchStore.getState().createSession('old');
+      expect(useResearchStore.getState().plan?.query).toBe('old');
+
+      await useResearchStore.getState().openSession('s-new');
+      const s = useResearchStore.getState();
+      expect(s.sessionId).toBe('s-new');
+      expect(s.plan?.query).toBe('new');
+      expect(s.events).toEqual([]);
+    });
+
     it('loads existing completed session', async () => {
       mockFetch([
         { status: 200, body: { session_id: 's2', status: 'completed', plan: { query: 'old', sub_questions: [], outline: [], version: 3, status: 'completed' }, progress: { total_steps: 5, completed_steps: 5, current_step: 'done', elapsed_seconds: 30, sub_question_progress: {} } } },

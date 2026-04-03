@@ -19,7 +19,7 @@ class NodeType(str, Enum):
     VERIFY = "verify"  # Assertion verification node
     LOGIC = "logic"  # Logic control node
     ROUTE = "route"  # Routing decision node
-    AGENT = "agent"  # Sub-agent delegation node
+    AGENT = "agent"  # Agent delegation node
 
 
 class IRNode(BaseModel):

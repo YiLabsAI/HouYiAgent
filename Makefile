@@ -200,6 +200,19 @@ test-e2e-smoke:
 test-e2e:
 	@cd houyi-studio/ui && pnpm install --frozen-lockfile && pnpm test:e2e
 
+# Benchmark (DeepResearch-Bench)
+benchmark:
+	$(UV_RUN) python scripts/run_benchmark.py --queries benchmark/data/query.jsonl --output benchmark/output/houyi.jsonl --depth deep --concurrency 3
+
+benchmark-smoke:
+	$(UV_RUN) python scripts/run_benchmark.py --queries benchmark/data/query.jsonl --output benchmark/output/houyi-smoke.jsonl --depth standard --limit 5 --concurrency 2
+
+benchmark-delegate:
+	$(UV_RUN) python scripts/run_benchmark.py --queries benchmark/data/query.jsonl --output benchmark/output/houyi-delegate.jsonl --depth deep --mode delegate --concurrency 3
+
+benchmark-autonomous:
+	$(UV_RUN) python scripts/run_benchmark.py --queries benchmark/data/query.jsonl --output benchmark/output/houyi-autonomous.jsonl --depth deep --mode autonomous --concurrency 3
+
 # Cleanup
 clean:
 	find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true

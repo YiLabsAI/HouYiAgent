@@ -120,6 +120,7 @@ class QualityEvaluator:
         resp = await self._llm.chat(
             messages=[{"role": "user", "content": prompt}],
             temperature=0.1,
+            max_tokens=1000,
             **self._llm_kwargs,
         )
         return _parse_race(resp.content)
@@ -140,6 +141,7 @@ class QualityEvaluator:
         resp = await self._llm.chat(
             messages=[{"role": "user", "content": prompt}],
             temperature=0.1,
+            max_tokens=1000,
             **self._llm_kwargs,
         )
         return _parse_fact(resp.content)

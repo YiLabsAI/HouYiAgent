@@ -27,7 +27,8 @@ from houyi.application.research.types import (
 logger = logging.getLogger(__name__)
 
 _PLAN_SYSTEM_PROMPT = """\
-You are a research planner. Given a user query, generate a structured research plan.
+You are an expert research planner specializing in PhD-level, multi-dimensional \
+research decomposition. Given a user query, generate a structured research plan.
 
 Output STRICT JSON with:
 {
@@ -51,12 +52,23 @@ Output STRICT JSON with:
 }
 
 Rules:
-- Generate 3-5 sub-questions covering key dimensions (keep focused, avoid redundancy).
-- Assign DISTINCT priorities: each question gets a unique value 1-5 (5=highest).
-  If there are fewer than 5 questions, spread across the 1-5 range.
-- Dependencies: if question B needs results from question A, set depends_on=[A's index].
-- Outline sections map to sub-questions via related_question_ids (0-indexed).
+- Decompose the query into sub-questions that are MECE (mutually exclusive, \
+collectively exhaustive). Generate NO MORE than the max specified in the user message. Cover distinct analytical dimensions: background/context, \
+mechanisms/methodology, empirical evidence, comparative analysis, limitations/debate, \
+and future directions — as applicable to the query.
+- Each sub-question should be SPECIFIC and SEARCHABLE (not vague). Bad: "What are \
+the implications?" Good: "What empirical studies have measured the economic impact \
+of X on Y in the period 2020-2025?"
+- Assign DISTINCT priorities: each question gets a unique value 1-5 (5=highest). \
+Foundational/definitional questions get higher priority.
+- Dependencies: if question B requires information from question A to formulate \
+effective searches, set depends_on=[A's 0-based index]. Use dependencies to model \
+logical prerequisite relationships.
+- Outline sections should form a coherent narrative arc. Map each section to its \
+contributing sub-questions via related_question_ids (0-indexed).
 - Default search_strategy is "web" unless context suggests otherwise.
+- Set expected_sources realistically: 3-5 for focused factual queries, 5-10 for \
+broad analytical questions.
 - estimated_duration_min: rough estimate based on depth and question count.
 """
 
@@ -71,7 +83,7 @@ Incorporate known facts to avoid redundant research.
 class ResearchPlanner:
     """Generates research plans by decomposing queries via LLM.
 
-    Uses direct ``LLMAdapter.chat()`` calls (no tool-loop).
+    Uses ``LLMAdapter.chat()`` calls (streaming by default, no tool-loop).
     """
 
     def __init__(self, llm_adapter: LLMAdapter, **llm_kwargs: Any) -> None:
@@ -99,19 +111,22 @@ class ResearchPlanner:
         if memory_context:
             system += _PLAN_WITH_MEMORY_ADDENDUM.format(memory_text=memory_context)
 
+        max_qs = {"quick": 3, "standard": 5, "deep": 8}.get(settings.depth, 5)
         user_msg = (
             f"Research query: {query}\n"
             f"Depth: {settings.depth.value}\n"
-            f"Max sub-questions: 8\n"
+            f"Max sub-questions: {max_qs}\n"
             f"Respond ONLY with the JSON object."
         )
 
+        plan_max_tokens = {"quick": 1500, "standard": 2000, "deep": 3000}.get(settings.depth, 2000)
         resp = await self._llm.chat(
             messages=[
                 {"role": "system", "content": system},
                 {"role": "user", "content": user_msg},
             ],
             temperature=0.3,
+            max_tokens=plan_max_tokens,
             **self._llm_kwargs,
         )
 

@@ -16,6 +16,7 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 from houyi.adapters.llm.base import LLMAdapter
+from houyi.application.research.intermediate import IntermediateReport
 from houyi.application.research.types import (
     AggregatedSources,
     Citation,
@@ -32,7 +33,7 @@ from houyi.application.research.types import (
 logger = logging.getLogger(__name__)
 
 _SECTION_PROMPT = """\
-You are writing a section of a research report.
+You are writing a section of an academic-grade research report.
 
 Report title context: {query}
 Section: {title}
@@ -42,11 +43,17 @@ Available sources (reference_id | title | snippet):
 
 Write the section in Markdown. Rules:
 - Do NOT include a heading for this section (the heading is added externally).
-- For every factual claim, insert an inline citation as [ref_id].
-- Use multiple citations when appropriate.
+- CITATION DISCIPLINE: Every factual claim, statistic, date, or attribution MUST \
+have an inline citation as [ref_id]. A paragraph without citations is unacceptable. \
+Use multiple citations when claims are supported by multiple sources.
+- Only cite sources from the provided list. Do NOT fabricate reference IDs.
+- ANALYSIS DEPTH: Go beyond summarizing — synthesize across sources, identify \
+patterns, note contradictions, and provide analytical commentary.
+- STRUCTURE: Use sub-headings (###), bullet points, or numbered lists to organize \
+complex information. Include comparison tables when relevant.
 - Write in the SAME language as the report title / query above. \
 If the query is in Chinese, write in Chinese. If English, write in English.
-- Use clear, professional prose.
+- Use clear, professional, scholarly prose. Aim for 400-800 words per section.
 
 Respond ONLY with JSON:
 {{
@@ -84,23 +91,34 @@ class ReportGenerator:
         plan: ResearchPlan,
         sources: AggregatedSources,
         style: ReportStyle = ReportStyle.DETAILED,
+        intermediate_reports: list[IntermediateReport] | None = None,
     ) -> ResearchReport:
         """Generate a complete report (non-streaming).
 
         Iterates over plan outline sections, calling the LLM once per section
-        to produce content with inline citations.
+        to produce content with inline citations.  When *intermediate_reports*
+        are provided (standard/deep depth), the pre-analysed findings are
+        injected as additional context to improve citation fidelity and reduce
+        hallucinations.
         """
+        ir_by_qid: dict[str, IntermediateReport] = {}
+        if intermediate_reports:
+            for ir in intermediate_reports:
+                ir_by_qid[ir.question_id] = ir
+
         start = time.monotonic()
         report_id = f"rpt_{uuid.uuid4().hex[:8]}"
         sections: list[ReportSection] = []
 
         for outline_sec in plan.outline:
             relevant = _relevant_sources(outline_sec.related_question_ids, sources)
+            ir_context = _intermediate_context(outline_sec.related_question_ids, ir_by_qid)
             section = await self._generate_section(
                 plan.query,
                 outline_sec.title,
                 outline_sec.objective,
                 relevant,
+                intermediate_context=ir_context,
             )
             sections.append(section)
 
@@ -178,6 +196,7 @@ class ReportGenerator:
         title: str,
         objective: str,
         sources: list[SourceReference],
+        intermediate_context: str = "",
     ) -> ReportSection:
         sources_text = "\n".join(
             f"  {s.reference_id} | {s.title} | {s.snippet[:200]}" for s in sources[:20]
@@ -188,9 +207,15 @@ class ReportGenerator:
             objective=objective,
             sources_text=sources_text or "(no sources)",
         )
+        if intermediate_context:
+            prompt += (
+                "\n\nPre-analysed findings from research agents "
+                "(use to improve accuracy and citation fidelity):\n" + intermediate_context
+            )
         resp = await self._llm.chat(
             messages=[{"role": "user", "content": prompt}],
             temperature=0.3,
+            max_tokens=3000,
             **self._llm_kwargs,
         )
         return _parse_section(title, resp.content)
@@ -205,6 +230,7 @@ class ReportGenerator:
         resp = await self._llm.chat(
             messages=[{"role": "user", "content": prompt}],
             temperature=0.3,
+            max_tokens=1000,
             **self._llm_kwargs,
         )
         return resp.content.strip()
@@ -213,6 +239,23 @@ class ReportGenerator:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _intermediate_context(
+    question_ids: list[str],
+    ir_by_qid: dict[str, IntermediateReport],
+) -> str:
+    """Build a text block from intermediate reports for the given questions."""
+    parts: list[str] = []
+    for qid in question_ids:
+        ir = ir_by_qid.get(qid)
+        if ir and ir.analysis:
+            parts.append(
+                f"[Sub-question: {ir.question}]\n"
+                f"Confidence: {ir.confidence:.0%}\n"
+                f"{ir.analysis[:800]}"
+            )
+    return "\n\n---\n\n".join(parts)
 
 
 def _relevant_sources(

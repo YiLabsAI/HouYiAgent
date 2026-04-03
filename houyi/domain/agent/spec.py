@@ -9,22 +9,36 @@ from pydantic import BaseModel, Field
 from houyi.domain.skill.spec import SkillSpec
 
 
-class SubAgentConfig(BaseModel):
-    """Lightweight config for declaring a sub-agent within an orchestration."""
+class AgentTeamConfig(BaseModel):
+    """Lightweight config for declaring an agent within a team orchestration.
 
-    role: str = Field(..., description="Sub-agent role name")
+    Used by both DELEGATE (supervisor-worker) and AUTONOMOUS (peer)
+    topologies.
+    """
+
+    role: str = Field(..., description="Agent role name within the team")
     skills: list[SkillSpec] = Field(default_factory=list)
     system_prompt: str | None = None
     max_turns: int = 20
-    tools: list[str] = Field(
-        default_factory=list, description="Tool names available to this sub-agent"
+    tools: list[str] = Field(default_factory=list, description="Tool names available to this agent")
+    model: str | None = Field(
+        default=None,
+        description="Override LLM model for this agent (None = inherit from parent)",
+    )
+    memory_scope: str = Field(
+        default="isolated",
+        description="Memory scope: 'isolated' (default) or 'shared'",
+    )
+    spawn_depth_limit: int = Field(
+        default=1,
+        description="Max nesting depth for recursive agent spawning (0 = leaf)",
     )
 
 
 class AgentSpec(BaseModel):
     """Specification for an agent.
 
-    Phase 2 fields (``sub_agents``, ``max_turns``, ``context_strategy``,
+    Phase 2 fields (``team_agents``, ``max_turns``, ``context_strategy``,
     ``memory_config``) are backward-compatible—all default to ``None`` or
     safe defaults so that existing callers are unaffected.
     """
@@ -42,9 +56,9 @@ class AgentSpec(BaseModel):
     )
 
     # --- Phase 2 fields (Sprint 2) ---
-    sub_agents: list[SubAgentConfig] = Field(
+    team_agents: list[AgentTeamConfig] = Field(
         default_factory=list,
-        description="Declared sub-agents for orchestration",
+        description="Declared team agents for orchestration (DELEGATE / AUTONOMOUS)",
     )
     max_turns: int = Field(
         default=50,
@@ -93,4 +107,4 @@ class AgentSpec(BaseModel):
         return [skill.to_tool_schema() for skill in sorted_skills]
 
 
-__all__ = ["AgentSpec", "SubAgentConfig"]
+__all__ = ["AgentSpec", "AgentTeamConfig"]

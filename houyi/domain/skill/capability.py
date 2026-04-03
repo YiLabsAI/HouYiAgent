@@ -101,7 +101,7 @@ class HostCapabilities:
     max_tool_timeout_ms: int = 300000
     max_concurrent_tools: int = 10
     host_name: str = "houyi"
-    host_version: str = "0.1.0"
+    host_version: str = "0.3.0"
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -138,7 +138,7 @@ class HostCapabilities:
             max_tool_timeout_ms=data.get("maxToolTimeoutMs", 300000),
             max_concurrent_tools=data.get("maxConcurrentTools", 10),
             host_name=data.get("hostName", "houyi"),
-            host_version=data.get("hostVersion", "0.1.0"),
+            host_version=data.get("hostVersion", "0.3.0"),
         )
 
 
@@ -302,5 +302,5 @@ DEFAULT_HOUYI_CAPABILITIES = HostCapabilities(
     ],
     evaluation_support=True,
     host_name="houyi",
-    host_version="0.1.0",
+    host_version="0.3.0",
 )

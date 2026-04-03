@@ -38,8 +38,15 @@ describe('Composer', () => {
       },
     };
     mockUseChatStore.mockReset();
-    mockUseChatStore.mockImplementation((selector?: (store: { contextUsage: MockContextUsage }) => unknown) => {
-      const store = { contextUsage: null };
+    const composerUi: Record<string, Record<string, unknown>> = {};
+    mockUseChatStore.mockImplementation((selector?: (store: Record<string, unknown>) => unknown) => {
+      const store: Record<string, unknown> = {
+        contextUsage: null,
+        composerUiByConversation: composerUi,
+        setComposerUiState: (convId: string, patch: Record<string, unknown>) => {
+          composerUi[convId] = { ...(composerUi[convId] ?? {}), ...patch };
+        },
+      };
       return selector ? selector(store) : store;
     });
     mockUseConsoleStore.mockReset();
@@ -134,41 +141,53 @@ describe('Composer', () => {
   });
 
   it('toggles thinking mode on click', () => {
-    render(<Composer onSend={onSend} onStop={onStop} isStreaming={false} />);
+    const { rerender } = render(
+      <Composer conversationId="conv-1" onSend={onSend} onStop={onStop} isStreaming={false} />,
+    );
 
     const btn = screen.getByTitle('Thinking mode OFF');
     fireEvent.click(btn);
+    rerender(<Composer conversationId="conv-1" onSend={onSend} onStop={onStop} isStreaming={false} />);
     expect(screen.getByTitle('Thinking mode ON')).toBeInTheDocument();
 
     fireEvent.click(screen.getByTitle('Thinking mode ON'));
+    rerender(<Composer conversationId="conv-1" onSend={onSend} onStop={onStop} isStreaming={false} />);
     expect(screen.getByTitle('Thinking mode OFF')).toBeInTheDocument();
   });
 
   it('toggles web search on click', () => {
-    render(<Composer onSend={onSend} onStop={onStop} isStreaming={false} />);
+    const { rerender } = render(
+      <Composer conversationId="conv-1" onSend={onSend} onStop={onStop} isStreaming={false} />,
+    );
 
-    const btn = screen.getByTitle('Web search OFF');
-    fireEvent.click(btn);
+    fireEvent.click(screen.getByTitle('Web search OFF'));
+    rerender(<Composer conversationId="conv-1" onSend={onSend} onStop={onStop} isStreaming={false} />);
     expect(screen.getByTitle('Web search ON')).toBeInTheDocument();
   });
 
   it('toggles deep research on click', () => {
-    render(<Composer onSend={onSend} onStop={onStop} isStreaming={false} />);
+    const { rerender } = render(
+      <Composer conversationId="conv-1" onSend={onSend} onStop={onStop} isStreaming={false} />,
+    );
 
     const btn = screen.getByTestId('deep-research-toggle');
     expect(btn).toHaveAttribute('title', expect.stringContaining('OFF'));
     fireEvent.click(btn);
-    expect(btn).toHaveAttribute('title', expect.stringContaining('ON'));
-    fireEvent.click(btn);
-    expect(btn).toHaveAttribute('title', expect.stringContaining('OFF'));
+    rerender(<Composer conversationId="conv-1" onSend={onSend} onStop={onStop} isStreaming={false} />);
+    expect(screen.getByTestId('deep-research-toggle')).toHaveAttribute('title', expect.stringContaining('ON'));
+    fireEvent.click(screen.getByTestId('deep-research-toggle'));
+    rerender(<Composer conversationId="conv-1" onSend={onSend} onStop={onStop} isStreaming={false} />);
+    expect(screen.getByTestId('deep-research-toggle')).toHaveAttribute('title', expect.stringContaining('OFF'));
   });
 
   it('passes enableReasoning in onSend options when toggled on', () => {
-    render(<Composer onSend={onSend} onStop={onStop} isStreaming={false} />);
+    const { rerender } = render(
+      <Composer conversationId="conv-1" onSend={onSend} onStop={onStop} isStreaming={false} />,
+    );
     const textarea = screen.getByPlaceholderText(/Type a message/);
 
-    // Toggle thinking mode ON
     fireEvent.click(screen.getByTitle('Thinking mode OFF'));
+    rerender(<Composer conversationId="conv-1" onSend={onSend} onStop={onStop} isStreaming={false} />);
 
     fireEvent.change(textarea, { target: { value: 'test' } });
     fireEvent.keyDown(textarea, { key: 'Enter', shiftKey: false });
@@ -179,10 +198,13 @@ describe('Composer', () => {
   });
 
   it('passes maxTokens in onSend options when advanced max tokens is set', () => {
-    render(<Composer onSend={onSend} onStop={onStop} isStreaming={false} />);
+    const { rerender } = render(
+      <Composer conversationId="conv-1" onSend={onSend} onStop={onStop} isStreaming={false} />,
+    );
     const textarea = screen.getByPlaceholderText(/Type a message/);
 
     fireEvent.click(screen.getByTestId('composer-advanced-toggle'));
+    rerender(<Composer conversationId="conv-1" onSend={onSend} onStop={onStop} isStreaming={false} />);
     const maxTokensInput = screen.getByPlaceholderText('(default)');
     fireEvent.change(maxTokensInput, { target: { value: '32' } });
 

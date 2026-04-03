@@ -36,6 +36,13 @@ def _stub_startup_dependencies(app_module, monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(app_module, "ChatService", lambda **kwargs: object())
     monkeypatch.setattr(app_module, "register_chat_routes", lambda *args, **kwargs: APIRouter())
 
+    # Prevent the lifespan's Research subsystem init from polluting the
+    # module-level _research_service_ref global (side effect not reverted
+    # by monkeypatch, leaks into subsequent tests).
+    from houyi.skills.builtin import deep_research as _dr_mod
+
+    monkeypatch.setattr(_dr_mod, "_research_service_ref", None)
+
     monkeypatch.setenv(ENV_CHAT_DATA_DIR, str(tmp_path / "chat-data"))
     monkeypatch.setenv(ENV_CHAT_SETTINGS_PATH, str(tmp_path / "settings.json"))
     return captured

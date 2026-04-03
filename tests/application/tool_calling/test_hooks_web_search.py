@@ -4,6 +4,7 @@ from unittest.mock import patch
 
 import pytest
 
+from houyi.application.tool_calling.tool_hooks import web_search as _ws_hook_mod
 from houyi.application.tool_calling.tool_hooks.web_search import (
     WebSearchCachePolicyHook,
     WebSearchProviderHook,
@@ -53,7 +54,8 @@ class TestToolCallWebSearchHooks:
     @pytest.mark.asyncio
     async def test_provider_logs_normalization(self) -> None:
         hook = WebSearchProviderHook(provider="serper")
-        with patch("houyi.application.tool_calling.tool_hooks.web_search.logger.info") as mock_info:
+        with patch.object(_ws_hook_mod, "logger") as mock_logger:
+            mock_info = mock_logger.info
             result = await hook.before_tool_call(
                 {
                     "tool_name": "web_search",

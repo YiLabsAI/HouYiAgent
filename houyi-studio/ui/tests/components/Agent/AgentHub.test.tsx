@@ -130,13 +130,37 @@ describe('AgentHub', () => {
     expect(screen.getByTestId('memory-inbox')).toBeInTheDocument();
   });
 
-  it('back button returns to hub', async () => {
+  it('back button returns to hub and resets store', async () => {
     render(<AgentHub />);
     fireEvent.click(await screen.findByRole('button', { name: /Deep Research/i }));
     expect(screen.getByTestId('deep-research-workspace')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /Agent Hub/i }));
     expect(screen.queryByTestId('deep-research-workspace')).not.toBeInTheDocument();
     expect(screen.getByText('Choose an agent to start a new session')).toBeInTheDocument();
+    expect(mockStore.reset).toHaveBeenCalled();
+    expect(mockStore.disconnectSSE).toHaveBeenCalled();
+  });
+
+  it('opening a session resets store before loading', async () => {
+    mockStore.sessions = [
+      { session_id: 'sess-nav', query: 'nav test', status: 'completed', created_at: '2026-01-01' },
+    ];
+    render(<AgentHub />);
+    await flushHubEffects();
+    fireEvent.click(screen.getByText('nav test'));
+    expect(mockStore.reset).toHaveBeenCalled();
+    expect(mockStore.openSession).toHaveBeenCalledWith('sess-nav');
+  });
+
+  it('popstate event syncs view from hash', async () => {
+    render(<AgentHub />);
+    await flushHubEffects();
+    window.location.hash = '#/research';
+    window.dispatchEvent(new PopStateEvent('popstate'));
+    // Should switch to deep_research view
+    await waitFor(() => {
+      expect(screen.getByTestId('deep-research-workspace')).toBeInTheDocument();
+    });
   });
 
   it('pagination shows when > 10 sessions', async () => {

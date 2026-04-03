@@ -1,7 +1,7 @@
 """Runtime agent canonical module.
 
 ``Agent`` is the **user-facing entry point** for all HouYi agent execution —
-single-agent tool loops, sub-agent delegation, and autonomous collaboration.
+tool loops, team delegation, and autonomous collaboration.
 """
 
 from __future__ import annotations
@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any
 
 from houyi.application.runtime.events import EventEmitter
 from houyi.application.workflow.orchestration.state import SessionState
-from houyi.domain.agent import AgentSpec, SubAgentConfig
+from houyi.domain.agent import AgentSpec, AgentTeamConfig
 from houyi.domain.skill.spec import SkillSpec
 
 if TYPE_CHECKING:
@@ -23,9 +23,9 @@ class Agent:
     Wraps ``AgentSpec`` with execution capabilities.  Supports three
     execution paths, selected automatically by ``run()`` / ``arun()``:
 
-    1. **Tool-loop** — agent has ``tools`` (no sub_agents): iterative
-       LLM → tool-call → result loop via ``AgentRunner``.
-    2. **Orchestrated** — agent has ``sub_agents`` or ``mode`` is set:
+    1. **Tool-loop** — agent has ``tools`` (no team_agents): iterative
+       LLM -> tool-call -> result loop via ``AgentRunner``.
+    2. **Orchestrated** — agent has ``team_agents`` or ``mode`` is set:
        ``AgentOrchestrator`` handles delegate / autonomous collaboration.
     3. **DAG** — fallback graph-based execution via planner + executor.
 
@@ -35,15 +35,20 @@ class Agent:
         agent = Agent(role="Searcher", llm=llm, tools=[web_search_tool])
         result = await agent.arun("Find AI papers")
 
-        # Delegate orchestration (supervisor + sub-agents)
+        # Delegate orchestration (supervisor + team agents)
         supervisor = Agent(
             role="Supervisor", llm=llm,
-            sub_agents=[SubAgentConfig(role="Worker", ...)],
+            team_agents=[AgentTeamConfig(role="Worker", ...)],
             mode="delegate",
             tools=[web_search_tool],
         )
         result = await supervisor.arun("Research topic")
     """
+
+    spec: AgentSpec
+    mode: str | None
+    _llm_adapter: Any
+    _tools: list[Any]
 
     def __init__(
         self,
@@ -54,18 +59,33 @@ class Agent:
         system_prompt: str | None = None,
         observability: dict | None = None,
         *,
-        sub_agents: list[SubAgentConfig] | None = None,
+        team_agents: list[AgentTeamConfig | Agent] | None = None,
         max_turns: int = 50,
         mode: str | None = None,
         tools: list[Any] | None = None,
         event_emitter: EventEmitter | None = None,
     ):
+        configs: list[AgentTeamConfig] = []
+        self._team_instances: dict[str, Agent] = {}
+        for ta in team_agents or []:
+            if isinstance(ta, Agent):
+                cfg = AgentTeamConfig(
+                    role=ta.spec.role,
+                    skills=ta.spec.skills,
+                    system_prompt=ta.spec.system_prompt,
+                    max_turns=ta.spec.max_turns,
+                )
+                configs.append(cfg)
+                self._team_instances[ta.spec.role] = ta
+            else:
+                configs.append(ta)
+
         self.spec = AgentSpec(
             role=role,
             skills=skills or [],
             system_prompt=system_prompt,
             policies={"llm": llm, "memory": memory},
-            sub_agents=sub_agents or [],
+            team_agents=configs,
             max_turns=max_turns,
         )
 
@@ -113,7 +133,7 @@ class Agent:
         else:
             description = input
 
-        if self.spec.sub_agents or self.mode in ("delegate", "autonomous"):
+        if self.spec.team_agents or self.mode in ("delegate", "autonomous"):
             return self._run_orchestrated(description)
 
         if self._tools:
@@ -134,7 +154,7 @@ class Agent:
 
         description = input.description if isinstance(input, Task) else input
 
-        if self.spec.sub_agents or self.mode in ("delegate", "autonomous"):
+        if self.spec.team_agents or self.mode in ("delegate", "autonomous"):
             return await self._arun_orchestrated(description)
 
         if self._tools or self._llm_adapter is not None:
@@ -184,9 +204,9 @@ class Agent:
 
     async def _arun_orchestrated(self, task: str) -> Any:
         """Orchestrated execution: delegate or autonomous via AgentOrchestrator."""
+        from houyi.application.runtime.agent_team import AgentTeamManager
         from houyi.application.runtime.orchestrator import AgentOrchestrator
         from houyi.application.runtime.runner import AgentRunner
-        from houyi.application.runtime.sub_agent import SubAgentManager
 
         runner = AgentRunner(
             self.spec,
@@ -195,7 +215,7 @@ class Agent:
             max_turns=self.spec.max_turns,
             event_emitter=self._event_emitter,
         )
-        mgr = SubAgentManager(
+        mgr = AgentTeamManager(
             llm_adapter=self._llm_adapter,
             event_emitter=self._event_emitter,
         )
@@ -205,12 +225,18 @@ class Agent:
             default_tools=self._tools,
         )
 
-        sub_agents_map = {cfg.role: cfg for cfg in self.spec.sub_agents}
+        agents_or_configs: list[AgentTeamConfig | Agent] = []
+        for cfg in self.spec.team_agents:
+            instance = self._team_instances.get(cfg.role)
+            agents_or_configs.append(instance if instance else cfg)
 
         if self.mode == "autonomous":
-            result = await orch.run_autonomous(self.spec.sub_agents, task)
+            result = await orch.run_autonomous(agents_or_configs, task)
         else:
-            result = await orch.run_delegate(runner, sub_agents_map, task)
+            agents_map: dict[str, AgentTeamConfig | Agent] = {
+                (a.spec.role if isinstance(a, Agent) else a.role): a for a in agents_or_configs
+            }
+            result = await orch.run_delegate(runner, agents_map, task)
         return result.output
 
     async def _arun_tool_loop(self, task: str) -> Any:

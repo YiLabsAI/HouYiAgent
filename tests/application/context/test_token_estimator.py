@@ -53,8 +53,8 @@ class TestTokenEstimatorInit:
         assert est.context_window == 128_000
 
     def test_kimi_canonical_model(self):
-        assert normalize_model_id("moonshotai/Kimi-K2.5") == "moonshotai/Kimi-K2.5"
-        assert resolve_model_context_window("moonshotai/Kimi-K2.5") == 131_072
+        assert normalize_model_id("Pro/moonshotai/Kimi-K2.5") == "Pro/moonshotai/Kimi-K2.5"
+        assert resolve_model_context_window("Pro/moonshotai/Kimi-K2.5") == 131_072
 
 
 class TestTokenEstimatorCounting:

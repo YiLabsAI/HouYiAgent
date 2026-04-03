@@ -1,7 +1,20 @@
-import React, { useCallback, useMemo, useRef, useEffect } from 'react';
+import React, { useCallback, useMemo, useRef, useEffect, useState } from 'react';
 import type { ResearchReport, ResearchPlan } from '@/stores/useResearchStore';
 import { MarkdownRenderer } from '@/components/Chat/MarkdownRenderer';
-import { Download, FileText, ChevronDown, ChevronRight, ListChecks } from 'lucide-react';
+import { useTypewriter } from '@/hooks/useTypewriter';
+import {
+  Download,
+  FileText,
+  ChevronDown,
+  ChevronRight,
+  ListChecks,
+  Copy,
+  Share2,
+  RefreshCw,
+  ThumbsUp,
+  ThumbsDown,
+  Check,
+} from 'lucide-react';
 
 /**
  * Post-process rendered markdown to style citation markers `[N]` as superscript.
@@ -49,6 +62,8 @@ function styleCitations(container: HTMLElement) {
 interface Props {
   report: ResearchReport;
   plan?: ResearchPlan | null;
+  onRetry?: () => void;
+  animate?: boolean;
 }
 
 /**
@@ -96,24 +111,35 @@ function buildNumberedMarkdown(
   return { markdown: parts.join('\n'), orderedRefs: usedRefs };
 }
 
-const ReportBody: React.FC<{ markdown: string }> = ({ markdown }) => {
+const ReportBody: React.FC<{ markdown: string; animate?: boolean }> = ({ markdown, animate }) => {
+  const displayed = useTypewriter(markdown, !!animate);
   const ref = useRef<HTMLDivElement>(null);
+
   useEffect(() => {
     if (ref.current) styleCitations(ref.current);
-  }, [markdown]);
+  }, [displayed]);
 
   return (
     <div ref={ref} className="rounded-xl border border-gray-700/50 bg-gray-800/30 p-6">
       <div className="prose prose-invert prose-sm max-w-none">
-        <MarkdownRenderer content={markdown} />
+        <MarkdownRenderer content={displayed} />
       </div>
     </div>
   );
 };
 
-export const ReportViewer: React.FC<Props> = ({ report, plan }) => {
-  const [showExportMenu, setShowExportMenu] = React.useState(false);
-  const [showPlan, setShowPlan] = React.useState(false);
+export const ReportViewer: React.FC<Props> = ({ report, plan, onRetry, animate: animateProp }) => {
+  const [showExportMenu, setShowExportMenu] = useState(false);
+  const [showPlan, setShowPlan] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [feedback, setFeedback] = useState<'up' | 'down' | null>(null);
+  const [animateReport, setAnimateReport] = useState(!!animateProp);
+
+  useEffect(() => {
+    if (!animateReport) return;
+    const timer = setTimeout(() => setAnimateReport(false), 20_000);
+    return () => clearTimeout(timer);
+  }, [animateReport]);
 
   const { markdown: bodyMarkdown, orderedRefs } = useMemo(
     () => buildNumberedMarkdown(report.sections, report.references),
@@ -233,7 +259,7 @@ export const ReportViewer: React.FC<Props> = ({ report, plan }) => {
       )}
 
       {/* Report body */}
-      <ReportBody markdown={fullMarkdown} />
+      <ReportBody markdown={fullMarkdown} animate={animateReport} />
 
       {/* Sources panel — single source of truth for references */}
       {orderedRefs.length > 0 && (
@@ -264,6 +290,74 @@ export const ReportViewer: React.FC<Props> = ({ report, plan }) => {
           </div>
         </div>
       )}
+
+      {/* Bottom toolbar: Copy / Share / Retry + Like / Dislike feedback */}
+      <div className="flex items-center justify-between pt-4 border-t border-gray-700/40">
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => {
+              navigator.clipboard.writeText(exportMarkdown).then(() => {
+                setCopied(true);
+                setTimeout(() => setCopied(false), 2000);
+              });
+            }}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-gray-400 hover:text-gray-200 border border-gray-700 hover:border-gray-600 rounded-lg transition-colors"
+          >
+            {copied ? <Check size={13} className="text-green-400" /> : <Copy size={13} />}
+            {copied ? 'Copied' : 'Copy'}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              const url = window.location.href;
+              navigator.clipboard.writeText(url);
+            }}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-gray-400 hover:text-gray-200 border border-gray-700 hover:border-gray-600 rounded-lg transition-colors"
+          >
+            <Share2 size={13} />
+            Share
+          </button>
+
+          {onRetry && (
+            <button
+              type="button"
+              onClick={onRetry}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-gray-400 hover:text-gray-200 border border-gray-700 hover:border-gray-600 rounded-lg transition-colors"
+            >
+              <RefreshCw size={13} />
+              Retry
+            </button>
+          )}
+        </div>
+
+        <div className="flex items-center gap-1">
+          <span className="text-[10px] text-gray-600 mr-1">Rate this report</span>
+          <button
+            type="button"
+            onClick={() => setFeedback(feedback === 'up' ? null : 'up')}
+            className={`p-1.5 rounded-md border transition-colors ${
+              feedback === 'up'
+                ? 'text-green-400 border-green-700 bg-green-900/20'
+                : 'text-gray-500 border-gray-700 hover:text-gray-300 hover:border-gray-600'
+            }`}
+          >
+            <ThumbsUp size={14} />
+          </button>
+          <button
+            type="button"
+            onClick={() => setFeedback(feedback === 'down' ? null : 'down')}
+            className={`p-1.5 rounded-md border transition-colors ${
+              feedback === 'down'
+                ? 'text-red-400 border-red-700 bg-red-900/20'
+                : 'text-gray-500 border-gray-700 hover:text-gray-300 hover:border-gray-600'
+            }`}
+          >
+            <ThumbsDown size={14} />
+          </button>
+        </div>
+      </div>
     </div>
   );
 };

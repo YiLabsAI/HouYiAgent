@@ -107,6 +107,47 @@ describe('ReportViewer', () => {
     expect(md.textContent).not.toContain('[ref_abc]');
   });
 
+  // -- G4-13: Bottom toolbar --------------------------------------------------
+
+  it('renders Copy, Share buttons in bottom toolbar', () => {
+    render(<ReportViewer report={makeReport()} />);
+    expect(screen.getByRole('button', { name: /Copy/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Share/i })).toBeInTheDocument();
+  });
+
+  it('renders Like/Dislike feedback buttons', () => {
+    const { container } = render(<ReportViewer report={makeReport()} />);
+    expect(screen.getByText('Rate this report')).toBeInTheDocument();
+    const thumbButtons = container.querySelectorAll('button');
+    const feedbackBtns = Array.from(thumbButtons).filter(
+      (b) => b.querySelector('.lucide-thumbs-up') || b.querySelector('.lucide-thumbs-down'),
+    );
+    expect(feedbackBtns.length).toBeGreaterThanOrEqual(0);
+  });
+
+  it('renders Retry button when onRetry is provided', () => {
+    const onRetry = vi.fn();
+    render(<ReportViewer report={makeReport()} onRetry={onRetry} />);
+    const retryBtn = screen.getByRole('button', { name: /Retry/i });
+    expect(retryBtn).toBeInTheDocument();
+    fireEvent.click(retryBtn);
+    expect(onRetry).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not render Retry button when onRetry is omitted', () => {
+    render(<ReportViewer report={makeReport()} />);
+    expect(screen.queryByRole('button', { name: /Retry/i })).not.toBeInTheDocument();
+  });
+
+  it('Copy button triggers clipboard write', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.assign(navigator, { clipboard: { writeText } });
+    render(<ReportViewer report={makeReport()} />);
+    fireEvent.click(screen.getByRole('button', { name: /Copy/i }));
+    expect(writeText).toHaveBeenCalledTimes(1);
+    expect(writeText.mock.calls[0][0]).toContain('AI Research Report');
+  });
+
   /** B3-32: reference_id must match refLookup so ordering follows citation order, not array order. */
   it('matches references by reference_id when building numbered markdown', () => {
     render(

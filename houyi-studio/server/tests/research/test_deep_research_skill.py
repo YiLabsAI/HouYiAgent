@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from unittest.mock import patch
+
+from houyi.skills.builtin import deep_research as _dr_mod
 from houyi.skills.builtin.deep_research import (
     DeepResearchInput,
     DeepResearchOutput,
@@ -32,12 +35,14 @@ class TestSkillSpec:
 class TestSkillExecution:
     async def test_executor_returns_dict(self):
         skill = build_deep_research_skill()
-        result = await skill.executor(query="AI frameworks", depth="standard")
+        with patch.object(_dr_mod, "_research_service_ref", None):
+            result = await skill.executor(query="AI frameworks", depth="standard")
         assert isinstance(result, dict)
         assert "session_id" in result
         assert "summary" in result
 
     async def test_executor_placeholder(self):
         skill = build_deep_research_skill()
-        result = await skill.executor(query="test")
+        with patch.object(_dr_mod, "_research_service_ref", None):
+            result = await skill.executor(query="test")
         assert "ResearchService" in result["summary"]

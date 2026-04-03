@@ -98,3 +98,6 @@ knowledge/
 .claude/
 .openclaw/
 
+# Benchmark outputs (keep query.jsonl, ignore generated results)
+benchmark/output/
+

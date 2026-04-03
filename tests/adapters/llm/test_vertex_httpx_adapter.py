@@ -8,8 +8,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from houyi.adapters.llm import vertex_httpx_adapter as _vertex_mod
 from houyi.adapters.llm.vertex_httpx_adapter import VertexAIAdapter
 from houyi.infrastructure.config.env_config import EnvConfig
+from houyi.infrastructure.net import proxy as _proxy_mod
 
 
 @pytest.fixture(autouse=True)
@@ -335,7 +337,7 @@ class TestVertexAIAdapterRetry:
 
             with (
                 patch("httpx.AsyncClient", return_value=MockHttpxClient()),
-                patch("houyi.adapters.llm.vertex_httpx_adapter.asyncio.sleep", new=AsyncMock()),
+                patch.object(_vertex_mod.asyncio, "sleep", new=AsyncMock()),
             ):
                 chunks = []
                 async for chunk in adapter.stream_chat(
@@ -478,7 +480,7 @@ class TestVertexAIAdapterRetry:
 
             with (
                 patch("httpx.AsyncClient", return_value=MockHttpxClient()),
-                patch("houyi.adapters.llm.vertex_httpx_adapter.asyncio.sleep", new=AsyncMock()),
+                patch.object(_vertex_mod.asyncio, "sleep", new=AsyncMock()),
                 pytest.raises(Exception, match="500"),
             ):
                 async for _chunk in adapter.stream_chat(
@@ -878,6 +880,7 @@ class TestVertexAIAdapterHelpers:
 
     @pytest.mark.asyncio
     async def test_chat_auth_error(self, tmp_path):
+        """Auth failure flows through streaming path and surfaces as content text."""
         sa_path, _ = _make_sa_file(tmp_path)
         with patch.dict(
             os.environ,
@@ -891,9 +894,7 @@ class TestVertexAIAdapterHelpers:
         with patch.object(adapter, "_get_access_token", AsyncMock(return_value=None)):
             result = await adapter.chat([{"role": "user", "content": "hi"}])
 
-        assert result.finish_reason == "error"
-        assert result.metadata == {"error": "Failed to authenticate with Vertex AI"}
-        assert result.content == ""
+        assert "[Error: Failed to authenticate with Vertex AI]" in (result.content or "")
 
     @pytest.mark.asyncio
     async def test_stream_auth_error(self, tmp_path):
@@ -973,8 +974,8 @@ class TestVertexAIAdapterJwtAndToken:
             patch.object(adapter, "_sign_jwt_with_openssl", return_value="fake-jwt"),
             patch("httpx.AsyncClient", return_value=mock_httpx_client),
             patch("httpx.TransportError", ConnectBoom),
-            patch("houyi.adapters.llm.vertex_httpx_adapter.asyncio.sleep", new=AsyncMock()),
-            patch("houyi.infrastructure.net.proxy.detect_proxy", return_value=None),
+            patch.object(_vertex_mod.asyncio, "sleep", new=AsyncMock()),
+            patch.object(_proxy_mod, "detect_proxy", return_value=None),
         ):
             token = await adapter._get_access_token()
 
@@ -1003,7 +1004,7 @@ class TestVertexAIAdapterJwtAndToken:
         with (
             patch.object(adapter, "_sign_jwt_with_openssl", return_value="fake-jwt"),
             patch("httpx.AsyncClient", return_value=mock_httpx_client),
-            patch("houyi.infrastructure.net.proxy.detect_proxy", return_value=None),
+            patch.object(_proxy_mod, "detect_proxy", return_value=None),
         ):
             token = await adapter._get_access_token()
 
@@ -1016,24 +1017,39 @@ class TestVertexAIAdapterChat:
     @pytest.mark.asyncio
     async def test_chat_updates_usage(self, tmp_path):
         sa_path, _ = _make_sa_file(tmp_path)
-        captured = {}
+        captured: dict = {}
 
-        mock_resp = MagicMock(status_code=200)
-        mock_resp.json.return_value = {
-            "model": "google/gemini-2.5-pro",
-            "choices": [{"message": {"content": "ok", "tool_calls": []}, "finish_reason": "stop"}],
-            "usage": {"prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7},
-        }
-
-        mock_httpx_client = AsyncMock()
-        mock_httpx_client.post = AsyncMock(
-            side_effect=lambda url, headers=None, json=None: captured.update(
-                {"url": url, "headers": headers, "json": json}
-            )
-            or mock_resp
+        sse_body = (
+            'data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}],'
+            '"usage":{"prompt_tokens":5,"completion_tokens":2,"total_tokens":7}}\n'
+            "data: [DONE]\n"
         )
-        mock_httpx_client.__aenter__ = AsyncMock(return_value=mock_httpx_client)
-        mock_httpx_client.__aexit__ = AsyncMock(return_value=False)
+
+        class MockStreamResp:
+            status_code = 200
+
+            def raise_for_status(self):
+                return None
+
+            async def aiter_lines(self):
+                for line in sse_body.strip().splitlines():
+                    yield line
+
+        class MockHttpxClient:
+            async def aclose(self):
+                pass
+
+            def stream(self, method, url, json=None, headers=None):
+                captured.update({"url": url, "headers": headers, "json": json})
+
+                class _Ctx:
+                    async def __aenter__(inner_self):
+                        return MockStreamResp()
+
+                    async def __aexit__(inner_self, *args):
+                        return False
+
+                return _Ctx()
 
         with patch.dict(
             os.environ,
@@ -1043,8 +1059,8 @@ class TestVertexAIAdapterChat:
 
         with (
             patch.object(adapter, "_get_access_token", AsyncMock(return_value="token-1")),
-            patch("httpx.AsyncClient", return_value=mock_httpx_client),
-            patch("houyi.infrastructure.net.proxy.detect_proxy", return_value=None),
+            patch("httpx.AsyncClient", return_value=MockHttpxClient()),
+            patch.object(_proxy_mod, "detect_proxy", return_value=None),
         ):
             result = await adapter.chat(
                 [{"role": "user", "content": "hi"}],
@@ -1065,26 +1081,42 @@ class TestVertexAIAdapterChat:
         class ConnectBoom(Exception):
             pass
 
-        mock_resp = MagicMock(status_code=200)
-        mock_resp.json.return_value = {
-            "model": "google/gemini-2.5-pro",
-            "choices": [{"message": {"content": "ok", "tool_calls": []}, "finish_reason": "stop"}],
-            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
-        }
+        sse_body = (
+            'data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}],'
+            '"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}\n'
+            "data: [DONE]\n"
+        )
 
         attempts = 0
 
-        async def _post(url, headers=None, json=None):
-            nonlocal attempts
-            attempts += 1
-            if attempts == 1:
-                raise ConnectBoom("connect fail")
-            return mock_resp
+        class MockStreamResp:
+            status_code = 200
 
-        mock_httpx_client = AsyncMock()
-        mock_httpx_client.post = AsyncMock(side_effect=_post)
-        mock_httpx_client.__aenter__ = AsyncMock(return_value=mock_httpx_client)
-        mock_httpx_client.__aexit__ = AsyncMock(return_value=False)
+            def raise_for_status(self):
+                return None
+
+            async def aiter_lines(self):
+                for line in sse_body.strip().splitlines():
+                    yield line
+
+        class MockHttpxClient:
+            async def aclose(self):
+                pass
+
+            def stream(self, method, url, json=None, headers=None):
+                nonlocal attempts
+                attempts += 1
+
+                class _Ctx:
+                    async def __aenter__(inner_self):
+                        if attempts == 1:
+                            raise ConnectBoom("connect fail")
+                        return MockStreamResp()
+
+                    async def __aexit__(inner_self, *args):
+                        return False
+
+                return _Ctx()
 
         with patch.dict(
             os.environ,
@@ -1094,10 +1126,10 @@ class TestVertexAIAdapterChat:
 
         with (
             patch.object(adapter, "_get_access_token", AsyncMock(return_value="token-1")),
-            patch("httpx.AsyncClient", return_value=mock_httpx_client),
+            patch("httpx.AsyncClient", return_value=MockHttpxClient()),
             patch("httpx.TransportError", ConnectBoom),
-            patch("houyi.adapters.llm.vertex_httpx_adapter.asyncio.sleep", new=AsyncMock()),
-            patch("houyi.infrastructure.net.proxy.detect_proxy", return_value=None),
+            patch.object(_vertex_mod.asyncio, "sleep", new=AsyncMock()),
+            patch.object(_proxy_mod, "detect_proxy", return_value=None),
         ):
             result = await adapter.chat([{"role": "user", "content": "hi"}])
 

@@ -69,8 +69,8 @@ class ConflictRecord(BaseModel):
     resolution: ConflictResolution | None = None
 
 
-class SubAgentResult(BaseModel):
-    """Lightweight wrapper for a sub-agent's output used in conflict detection."""
+class AgentTaskResult(BaseModel):
+    """Lightweight result wrapper for conflict detection and error policy."""
 
     agent_id: str = ""
     task: str = ""
@@ -90,7 +90,7 @@ class ConflictResolver:
       (placeholder; requires an LLM adapter in Phase 2).
     """
 
-    async def detect(self, results: list[SubAgentResult]) -> list[ConflictRecord]:
+    async def detect(self, results: list[AgentTaskResult]) -> list[ConflictRecord]:
         """Compare pairwise results and return detected conflicts."""
         conflicts: list[ConflictRecord] = []
         for i, a in enumerate(results):

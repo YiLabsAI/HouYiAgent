@@ -385,6 +385,10 @@ async def lifespan(app: FastAPI):
         app.include_router(research_router)
         app.include_router(agents_router)
 
+        from houyi.skills.builtin.deep_research import set_research_service
+
+        set_research_service(research_service)
+
         logger.info("Research subsystem initialized")
     except Exception:
         logger.warning("Research subsystem init failed — routes unavailable", exc_info=True)

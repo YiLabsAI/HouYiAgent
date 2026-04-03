@@ -10,7 +10,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from houyi.application.runtime.context_strategy import ContextStrategy
+from houyi.application.context.context_strategy import ContextStrategy
 from houyi.application.runtime.events import AgentEvent, AgentEventType, EventEmitter
 from houyi.domain.agent.spec import AgentSpec
 
@@ -41,7 +41,7 @@ class AgentRunner:
     * Support both blocking (``run``) and streaming (``run_stream``) APIs.
 
     The runner is intentionally decoupled from multi-agent orchestration;
-    ``SubAgentManager`` and ``AgentOrchestrator`` compose runners.
+    ``AgentTeamManager`` and ``AgentOrchestrator`` compose runners.
     """
 
     def __init__(

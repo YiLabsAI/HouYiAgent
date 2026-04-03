@@ -31,6 +31,8 @@ from houyi.skills.web_search.types import (
     WebSearchResult,
 )
 
+_QUICK = ResearchSettings(depth="quick")
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -65,9 +67,12 @@ _RACE = json.dumps(
 )
 _FACT = json.dumps({"citation_accuracy": 90.0, "effective_citations": 5})
 
+_QUERY_GEN = json.dumps(["test search query", "alternate query"])
+_SUFFICIENCY = json.dumps({"sufficient": True, "rationale": "Enough"})
+
 
 def _all_responses() -> list[str]:
-    return [_PLAN_JSON, _SEARCHER_RESPONSE, _SECTION, "Summary.", _RACE, _FACT]
+    return [_PLAN_JSON, _QUERY_GEN, _SUFFICIENCY, _SECTION, "Summary.", _RACE, _FACT]
 
 
 class _MockLLM(LLMAdapter):
@@ -107,19 +112,19 @@ def _mock_ws() -> WebSearchService:
 class TestCreateSession:
     async def test_creates_plan(self, tmp_path):
         svc = ResearchService(_MockLLM(), _mock_ws(), data_dir=tmp_path)
-        session, plan = await svc.create_session("AI frameworks")
+        session, plan = await svc.create_session("AI frameworks", settings=_QUICK)
         assert plan is not None
         assert session.status == ResearchStatus.PLAN_READY
 
     async def test_idempotency_key(self, tmp_path):
         svc = ResearchService(_MockLLM([_PLAN_JSON, _PLAN_JSON]), _mock_ws(), data_dir=tmp_path)
-        s1, _ = await svc.create_session("Q1", idempotency_key="key1")
-        s2, _ = await svc.create_session("Q2", idempotency_key="key1")
+        s1, _ = await svc.create_session("Q1", idempotency_key="key1", settings=_QUICK)
+        s2, _ = await svc.create_session("Q2", idempotency_key="key1", settings=_QUICK)
         assert s1.session_id == s2.session_id
 
     async def test_create_empty_settings(self, tmp_path):
         svc = ResearchService(_MockLLM(), _mock_ws(), data_dir=tmp_path)
-        session, plan = await svc.create_session("test", settings=ResearchSettings())
+        session, plan = await svc.create_session("test", settings=_QUICK)
         assert session.status == ResearchStatus.PLAN_READY
         assert plan is not None
 
@@ -127,14 +132,14 @@ class TestCreateSession:
 class TestEditPlan:
     async def test_edit_bumps_version(self, tmp_path):
         svc = ResearchService(_MockLLM(), _mock_ws(), data_dir=tmp_path)
-        session, plan = await svc.create_session("test")
+        session, plan = await svc.create_session("test", settings=_QUICK)
         edit = PlanEdit(op=PlanEditOperation.ADD, target_question="Extra?")
         updated = await svc.edit_plan(session.session_id, [edit])
         assert updated.version == 2
 
     async def test_version_conflict(self, tmp_path):
         svc = ResearchService(_MockLLM(), _mock_ws(), data_dir=tmp_path)
-        session, _ = await svc.create_session("test")
+        session, _ = await svc.create_session("test", settings=_QUICK)
         with pytest.raises(VersionConflictError):
             await svc.edit_plan(session.session_id, [], client_plan_version=99)
 
@@ -149,7 +154,7 @@ class TestNotFound:
 class TestListSessions:
     async def test_list_after_create(self, tmp_path):
         svc = ResearchService(_MockLLM(), _mock_ws(), data_dir=tmp_path)
-        await svc.create_session("test")
+        await svc.create_session("test", settings=_QUICK)
         items = svc.list_sessions()
         assert len(items) == 1
         assert items[0]["query"] == "test"
@@ -158,7 +163,7 @@ class TestListSessions:
 class TestCancelSession:
     async def test_cancel(self, tmp_path):
         svc = ResearchService(_MockLLM(), _mock_ws(), data_dir=tmp_path)
-        session, _ = await svc.create_session("test")
+        session, _ = await svc.create_session("test", settings=_QUICK)
         await svc.cancel_session(session.session_id, "user cancelled")
         assert session.status == ResearchStatus.CANCELLED
 
@@ -166,7 +171,7 @@ class TestCancelSession:
 class TestDeleteSession:
     async def test_delete_cancelled(self, tmp_path):
         svc = ResearchService(_MockLLM(), _mock_ws(), data_dir=tmp_path)
-        session, _ = await svc.create_session("test")
+        session, _ = await svc.create_session("test", settings=_QUICK)
         await svc.cancel_session(session.session_id)
         await svc.delete_session(session.session_id)
         assert svc.get_session(session.session_id) is None
@@ -174,7 +179,7 @@ class TestDeleteSession:
     async def test_delete_plan_ready(self, tmp_path):
         """Non-executing sessions (e.g. plan_ready) can be deleted."""
         svc = ResearchService(_MockLLM(), _mock_ws(), data_dir=tmp_path)
-        session, _ = await svc.create_session("test")
+        session, _ = await svc.create_session("test", settings=_QUICK)
         assert session.status == ResearchStatus.PLAN_READY
         await svc.delete_session(session.session_id)
         assert svc.get_session(session.session_id) is None
@@ -182,7 +187,7 @@ class TestDeleteSession:
     async def test_delete_executing_blocked(self, tmp_path):
         """Executing sessions cannot be deleted."""
         svc = ResearchService(_MockLLM(), _mock_ws(), data_dir=tmp_path)
-        session, _ = await svc.create_session("test")
+        session, _ = await svc.create_session("test", settings=_QUICK)
         session._status = ResearchStatus.EXECUTING
         with pytest.raises(SessionNotTerminalError):
             await svc.delete_session(session.session_id)
@@ -191,7 +196,7 @@ class TestDeleteSession:
 class TestExecuteLifecycle:
     async def test_full_execute_lifecycle(self, tmp_path):
         svc = ResearchService(_MockLLM(_all_responses()), _mock_ws(), data_dir=tmp_path)
-        session, _ = await svc.create_session("AI frameworks")
+        session, _ = await svc.create_session("AI frameworks", settings=_QUICK)
         await svc.confirm_and_execute(session.session_id)
         assert session.status == ResearchStatus.COMPLETED
 
@@ -204,14 +209,14 @@ class TestExecuteLifecycle:
 class TestGetters:
     async def test_progress_after_create(self, tmp_path):
         svc = ResearchService(_MockLLM(), _mock_ws(), data_dir=tmp_path)
-        session, _ = await svc.create_session("test")
+        session, _ = await svc.create_session("test", settings=_QUICK)
         progress = svc.get_progress(session.session_id)
         assert progress.status == ResearchStatus.PLAN_READY
         assert progress.total_steps == 1
 
     async def test_emitter_after_create(self, tmp_path):
         svc = ResearchService(_MockLLM(), _mock_ws(), data_dir=tmp_path)
-        session, _ = await svc.create_session("test")
+        session, _ = await svc.create_session("test", settings=_QUICK)
         emitter = svc.get_emitter(session.session_id)
         assert emitter is not None
 
@@ -223,7 +228,7 @@ class TestGetters:
 class TestPersistence:
     async def test_json_written(self, tmp_path):
         svc = ResearchService(_MockLLM(), _mock_ws(), data_dir=tmp_path)
-        session, _ = await svc.create_session("test")
+        session, _ = await svc.create_session("test", settings=_QUICK)
         path = tmp_path / f"{session.session_id}.json"
         assert path.exists()
         data = json.loads(path.read_text())
@@ -232,7 +237,7 @@ class TestPersistence:
     async def test_sessions_loaded_on_startup(self, tmp_path):
         """Sessions persisted as JSON are hydrated when a new service starts."""
         svc1 = ResearchService(_MockLLM(), _mock_ws(), data_dir=tmp_path)
-        session, _ = await svc1.create_session("persisted query")
+        session, _ = await svc1.create_session("persisted query", settings=_QUICK)
         sid = session.session_id
 
         svc2 = ResearchService(_MockLLM(), _mock_ws(), data_dir=tmp_path)
@@ -242,7 +247,7 @@ class TestPersistence:
     async def test_archived_session_shows_plan(self, tmp_path):
         """Archived session preserves the plan for display."""
         svc1 = ResearchService(_MockLLM(), _mock_ws(), data_dir=tmp_path)
-        session, plan = await svc1.create_session("test plan")
+        session, plan = await svc1.create_session("test plan", settings=_QUICK)
         sid = session.session_id
 
         svc2 = ResearchService(_MockLLM(), _mock_ws(), data_dir=tmp_path)
@@ -254,7 +259,7 @@ class TestPersistence:
     async def test_archived_session_preserves_error(self, tmp_path):
         """If a session had an error, it's visible after reload."""
         svc1 = ResearchService(_MockLLM(), _mock_ws(), data_dir=tmp_path)
-        session, _ = await svc1.create_session("will fail")
+        session, _ = await svc1.create_session("will fail", settings=_QUICK)
         session._error = "Research timed out after 420s"
         session._status = ResearchStatus.FAILED
         svc1._persist_session(session)
@@ -268,7 +273,7 @@ class TestPersistence:
     async def test_delete_archived_session(self, tmp_path):
         """Archived (terminal) sessions can be deleted."""
         svc1 = ResearchService(_MockLLM(), _mock_ws(), data_dir=tmp_path)
-        session, _ = await svc1.create_session("to delete")
+        session, _ = await svc1.create_session("to delete", settings=_QUICK)
         await svc1.cancel_session(session.session_id)
         sid = session.session_id
 
@@ -285,7 +290,7 @@ class TestConcurrencyLimit:
 
     async def test_running_count_increments(self, tmp_path):
         svc = ResearchService(_MockLLM(), _mock_ws(), data_dir=tmp_path)
-        session, _ = await svc.create_session("running test")
+        session, _ = await svc.create_session("running test", settings=_QUICK)
         assert svc.running_session_count() == 0
         session._status = ResearchStatus.EXECUTING
         assert svc.running_session_count() == 1
@@ -320,7 +325,7 @@ class TestMemoryIntegration:
             data_dir=tmp_path,
             memory_service=mem_svc,
         )
-        session, _ = await svc.create_session("AI research")
+        session, _ = await svc.create_session("AI research", settings=_QUICK)
         await svc.confirm_and_execute(session.session_id)
         assert session.status == ResearchStatus.COMPLETED
         candidates = mem_svc.list_candidates()
@@ -334,7 +339,7 @@ class TestMemoryIntegration:
             data_dir=tmp_path,
             memory_service=None,
         )
-        session, _ = await svc.create_session("AI research")
+        session, _ = await svc.create_session("AI research", settings=_QUICK)
         await svc.confirm_and_execute(session.session_id)
         assert session.status == ResearchStatus.COMPLETED
 
@@ -351,7 +356,7 @@ class TestMemoryIntegration:
             data_dir=tmp_path,
             memory_service=broken_svc,
         )
-        session, _ = await svc.create_session("test")
+        session, _ = await svc.create_session("test", settings=_QUICK)
         await svc.confirm_and_execute(session.session_id)
         assert session.status == ResearchStatus.COMPLETED
 
@@ -359,7 +364,7 @@ class TestMemoryIntegration:
 class TestRehydrate:
     async def test_rehydrate_resets_plan_to_draft(self, tmp_path):
         svc1 = ResearchService(_MockLLM(), _mock_ws(), data_dir=tmp_path)
-        session, _ = await svc1.create_session("rehydrate me")
+        session, _ = await svc1.create_session("rehydrate me", settings=_QUICK)
         sid = session.session_id
         await svc1.cancel_session(sid, "user cancelled")
 

@@ -1,3 +1,6 @@
+/**
+ * Tests for ProgressPanel — progress bar, ThinkingTrajectory integration, cancel.
+ */
 import { render, screen, fireEvent } from '@testing-library/react';
 import { describe, it, expect, vi } from 'vitest';
 import { ProgressPanel } from '@/components/Agent/DeepResearch/ProgressPanel';
@@ -52,21 +55,37 @@ describe('ProgressPanel', () => {
     expect(screen.getByText('45s elapsed')).toBeInTheDocument();
   });
 
-  it('renders events in activity log', () => {
+  it('renders ThinkingTrajectory with events', () => {
     const events: SSEEvent[] = [
-      { event_id: 'e1', event_type: 'research.step_started', sequence: 1, payload: { step: 'Q1' } },
-      { event_id: 'e2', event_type: 'research.step_started', sequence: 2, payload: { step: 'Q2' } },
-      { event_id: 'e3', event_type: 'research.step_started', sequence: 3, payload: { step: 'Q3' } },
+      { event_id: 'e1', event_type: 'research.step_started', sequence: 1, payload: { step_id: 'sq1', step: 'Q1' } },
+      { event_id: 'e2', event_type: 'research.source_found', sequence: 2, payload: { question_id: 'sq1', title: 'Source A' } },
     ];
     render(<ProgressPanel progress={baseProgress()} events={events} onCancel={vi.fn()} />);
-    expect(screen.getByText('Researching: Q1')).toBeInTheDocument();
-    expect(screen.getByText('Researching: Q2')).toBeInTheDocument();
-    expect(screen.getByText('Researching: Q3')).toBeInTheDocument();
+    expect(screen.getByText('Q1')).toBeInTheDocument();
+    expect(screen.getByText('Thinking Trajectory')).toBeInTheDocument();
   });
 
-  it('shows empty state', () => {
+  it('passes subQuestions to ThinkingTrajectory', () => {
+    const events: SSEEvent[] = [
+      { event_id: 'e1', event_type: 'research.step_started', sequence: 1, payload: { step_id: 'sq1', step: 'short' } },
+    ];
+    const subQuestions = [{
+      question_id: 'sq1',
+      question: 'Full question text here',
+      priority: 5,
+      search_strategy: 'web',
+      expected_sources: 5,
+      depends_on: [],
+    }];
+    render(
+      <ProgressPanel progress={baseProgress()} events={events} subQuestions={subQuestions} onCancel={vi.fn()} />,
+    );
+    expect(screen.getByText('Full question text here')).toBeInTheDocument();
+  });
+
+  it('shows empty state via ThinkingTrajectory', () => {
     render(<ProgressPanel progress={baseProgress()} events={[]} onCancel={vi.fn()} />);
-    expect(screen.getByText('Waiting for events...')).toBeInTheDocument();
+    expect(screen.getByText('Waiting for research events...')).toBeInTheDocument();
   });
 
   it('cancel button calls callback', () => {
@@ -76,44 +95,11 @@ describe('ProgressPanel', () => {
     expect(onCancel).toHaveBeenCalledTimes(1);
   });
 
-  it('limits display to 20 events', () => {
-    const events: SSEEvent[] = Array.from({ length: 25 }, (_, i) => ({
-      event_id: `id-${i + 1}`,
-      event_type: 'research.step_started',
-      sequence: i + 1,
-      payload: { step: `S${i + 1}` },
-    }));
-    render(<ProgressPanel progress={baseProgress()} events={events} onCancel={vi.fn()} />);
-    const seqLabels = screen.getAllByText(/#\d+/);
-    expect(seqLabels).toHaveLength(20);
-    expect(screen.queryByText('#1')).not.toBeInTheDocument();
-    expect(screen.getByText('#25')).toBeInTheDocument();
-  });
-
-  it('event labels for different types', () => {
-    const events: SSEEvent[] = [
-      {
-        event_id: 'a',
-        event_type: 'research.step_completed',
-        sequence: 1,
-        payload: { step: 'S1' },
-      },
-      {
-        event_id: 'b',
-        event_type: 'research.source_found',
-        sequence: 2,
-        payload: { title: 'My Source', url: 'https://example.com' },
-      },
-      {
-        event_id: 'c',
-        event_type: 'research.quality_evaluated',
-        sequence: 3,
-        payload: {},
-      },
-    ];
-    render(<ProgressPanel progress={baseProgress()} events={events} onCancel={vi.fn()} />);
-    expect(screen.getByText('Completed: S1')).toBeInTheDocument();
-    expect(screen.getByText('Found: My Source')).toBeInTheDocument();
-    expect(screen.getByText('Quality evaluation complete')).toBeInTheDocument();
+  it('hides cancel when terminated (error)', () => {
+    render(
+      <ProgressPanel progress={baseProgress()} events={[]} onCancel={vi.fn()} error="Something failed" />,
+    );
+    expect(screen.queryByRole('button', { name: /Cancel Research/i })).not.toBeInTheDocument();
+    expect(screen.getByText('Stopped')).toBeInTheDocument();
   });
 });

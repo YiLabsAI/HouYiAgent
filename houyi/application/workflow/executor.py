@@ -278,13 +278,13 @@ class LocalExecutor:
         return {"result": f"Result from {skill.name}"}
 
     async def _execute_agent_node(self, node: IRNode, inputs: dict[str, Any]) -> dict[str, Any]:
-        """Execute AGENT node by spawning a sub-agent via SubAgentManager.
+        """Execute AGENT node by spawning a team agent via AgentTeamManager.
 
         Requires ``agent_id`` on the node and an ``AgentRegistry`` available
         via ``self.agent_registry``.  Falls back to a mock result when the
         registry is not configured.
         """
-        from houyi.application.runtime.sub_agent import SubAgentManager
+        from houyi.application.runtime.agent_team import AgentTeamManager
         from houyi.domain.agent.spec import AgentSpec
 
         task_input = inputs.get("task", "")
@@ -296,11 +296,11 @@ class LocalExecutor:
             if config and config.default_spec:
                 spec = config.default_spec
             else:
-                spec = AgentSpec(role=agent_id or "sub_agent")
+                spec = AgentSpec(role=agent_id or "agent")
         else:
-            spec = AgentSpec(role=agent_id or "sub_agent")
+            spec = AgentSpec(role=agent_id or "agent")
 
-        mgr = SubAgentManager()
+        mgr = AgentTeamManager()
         handle = await mgr.spawn(spec, task_input)
         result = await mgr.join(handle)
 

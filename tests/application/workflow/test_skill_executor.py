@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from pydantic import BaseModel, ValidationError
 
+from houyi.application.workflow import skill_executor as _executor_mod
 from houyi.application.workflow.skill_executor import SkillExecutionError, SkillExecutor
 from houyi.domain.skill.spec import SkillSpec
 from houyi.infrastructure.config.env_config import ENV_SHELL_CURL_TIMEOUT
@@ -377,7 +378,7 @@ class TestSkillExecutor:
 
         executor = SkillExecutor(max_retries=3)
 
-        with patch("houyi.application.workflow.skill_executor.asyncio.sleep", new=AsyncMock()):
+        with patch.object(_executor_mod.asyncio, "sleep", new=AsyncMock()):
             result = await executor.execute(skill, {"fail_count": 2})
         assert result["attempts"] == 3
 
@@ -405,7 +406,7 @@ class TestSkillExecutor:
         executor = SkillExecutor(max_retries=2)
 
         with (
-            patch("houyi.application.workflow.skill_executor.asyncio.sleep", new=AsyncMock()),
+            patch.object(_executor_mod.asyncio, "sleep", new=AsyncMock()),
             pytest.raises(SkillExecutionError),
         ):
             await executor.execute(skill, {"value": 1})
@@ -479,7 +480,7 @@ class TestSkillExecutorRetrySpans:
         executor._on_retry_span = collected_spans.append  # type: ignore[attr-defined]
 
         try:
-            with patch("houyi.application.workflow.skill_executor.asyncio.sleep", new=AsyncMock()):
+            with patch.object(_executor_mod.asyncio, "sleep", new=AsyncMock()):
                 result = await executor.execute(skill, {"fail_count": 2})
         finally:
             TraceContext.pop(token)
@@ -559,7 +560,7 @@ class TestSkillExecutorRetrySpans:
         executor = SkillExecutor(max_retries=3)
         executor._on_retry_span = collected.append  # type: ignore[attr-defined]
 
-        with patch("houyi.application.workflow.skill_executor.asyncio.sleep", new=AsyncMock()):
+        with patch.object(_executor_mod.asyncio, "sleep", new=AsyncMock()):
             result = await executor.execute(skill, {"fail_count": 1})
         assert result["attempts"] == 2
         # No trace context → no retry spans created

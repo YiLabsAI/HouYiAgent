@@ -78,12 +78,16 @@ async def create_session(
     request: Request,
 ) -> dict[str, Any]:
     svc: ResearchService = request.app.state.research_service
-    session, plan = await svc.create_session(
-        query=body.query,
-        settings=body.settings,
-        idempotency_key=body.idempotency_key,
-        memory_context=body.memory_context,
-    )
+    try:
+        session, plan = await svc.create_session(
+            query=body.query,
+            settings=body.settings,
+            idempotency_key=body.idempotency_key,
+            memory_context=body.memory_context,
+        )
+    except Exception as exc:
+        logger.error("create_session failed: %s", exc, exc_info=True)
+        raise HTTPException(502, detail=f"LLM/planning error: {exc}") from exc
     return {
         "session_id": session.session_id,
         "plan": plan.model_dump(),
@@ -108,13 +112,17 @@ async def get_session(session_id: str, request: Request) -> dict[str, Any]:
     session = svc.get_session(session_id)
     if not session:
         raise HTTPException(404, detail="session_not_found")
-    return {
-        "session_id": session.session_id,
-        "status": session.status.value,
-        "plan": session.plan.model_dump() if session.plan else None,
-        "progress": session.progress.model_dump(),
-        "error": getattr(session, "_error", None) or getattr(session, "error", None),
-    }
+    try:
+        return {
+            "session_id": session.session_id,
+            "status": session.status.value,
+            "plan": session.plan.model_dump() if session.plan else None,
+            "progress": session.progress.model_dump(),
+            "error": getattr(session, "_error", None) or getattr(session, "error", None),
+        }
+    except Exception as exc:
+        logger.error("get_session serialization failed: %s", exc, exc_info=True)
+        raise HTTPException(500, detail=f"session data error: {exc}") from exc
 
 
 @router.put("/sessions/{session_id}/plan")

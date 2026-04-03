@@ -1,7 +1,7 @@
 [project]
 name = "houyi"
-version = "0.1.1"
-description = "Next-generation lightweight multi-agent framework with industry-leading capabilities"
+version = "0.3.0"
+description = "Lightweight, extensible, production-grade multi-agent framework with SOTA built-in agents"
 authors = [
     {name = "HouYi Team"}
 ]
@@ -229,7 +229,7 @@ warn_return_any = true
 module = [
     "houyi.verification.*",
     "houyi.rag.*",
-    "houyi.evaluation.*",
+    "houyi.arena.*",
 ]
 ignore_errors = true
 

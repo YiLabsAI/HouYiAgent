@@ -633,20 +633,28 @@ class SiliconFlowAdapter(OpenAICompatAdapterBase):
         logger.debug("Thinking enabled with thinking_budget=%d", request.thinking_budget)
         return {"thinking_budget": request.thinking_budget}
 
+    _CLIENT_CONNECT_TIMEOUT = 10.0
+    _CLIENT_READ_TIMEOUT = 240.0
+    _CLIENT_MAX_RETRIES = 1
+
     def _new_client(self) -> Any:
         import httpx
         from openai import AsyncOpenAI
 
         http_client = httpx.AsyncClient(
             proxy=self._get_httpx_proxy(),
-            timeout=httpx.Timeout(120.0, connect=10.0, read=120.0),
+            timeout=httpx.Timeout(
+                self._CLIENT_READ_TIMEOUT,
+                connect=self._CLIENT_CONNECT_TIMEOUT,
+                read=self._CLIENT_READ_TIMEOUT,
+            ),
             trust_env=False,
         )
         return AsyncOpenAI(
             api_key=self.api_key,
             base_url=self.base_url,
-            timeout=120.0,
-            max_retries=2,
+            timeout=self._CLIENT_READ_TIMEOUT,
+            max_retries=self._CLIENT_MAX_RETRIES,
             http_client=http_client,
         )
 
@@ -681,35 +689,6 @@ class SiliconFlowAdapter(OpenAICompatAdapterBase):
                     exc_info=True,
                 )
             raise
-
-    async def chat(
-        self,
-        messages: list[LLMMessage | dict],
-        tools: list[dict] | None = None,
-        temperature: float = DEFAULT_TEMPERATURE,
-        max_tokens: int | None = None,
-        **kwargs: Any,
-    ) -> LLMResponse:
-        """Non-streaming chat completion with tool calling support."""
-        request = self._build_request(
-            messages=messages,
-            tools=tools,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            enable_streaming=False,
-            kwargs=dict(kwargs),
-        )
-
-        if not self.api_key:
-            return LLMResponse(
-                content="Mock response (no API key)",
-                tool_calls=[],
-                finish_reason="stop",
-                usage={},
-                model=request.model,
-            )
-
-        return await super()._chat(request)
 
     def _get_httpx_proxy(self) -> str | None:
         if not _is_proxy_enabled():

@@ -42,8 +42,8 @@ GEMINI_3_PRO_PREVIEW = "gemini-3-pro-preview"
 GEMINI_3_FLASH_PREVIEW = "gemini-3-flash-preview"
 GEMINI_31_PRO_PREVIEW = "gemini-3.1-pro-preview"
 
-# Moonshot
-KIMI_K2_5 = "moonshotai/Kimi-K2.5"
+# Moonshot (Pro/ prefix required on SiliconFlow for private-tier access)
+KIMI_K2_5 = "Pro/moonshotai/Kimi-K2.5"
 
 # MiniMax
 MINIMAX_M25 = "MiniMax-M2.5"
@@ -89,7 +89,7 @@ PROVIDER_DISPLAY_NAMES: dict[str, str] = {
 # ---------------------------------------------------------------------------
 # Default model used across the SDK when no model is specified
 # ---------------------------------------------------------------------------
-DEFAULT_MODEL: str = DEEPSEEK_V3
+DEFAULT_MODEL: str = KIMI_K2_5
 
 # ---------------------------------------------------------------------------
 # Context window sizes (max input tokens).

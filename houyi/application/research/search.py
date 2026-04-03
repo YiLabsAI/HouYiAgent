@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from houyi.adapters.llm.base import LLMAdapter
@@ -27,28 +28,49 @@ from houyi.skills.web_search.types import WebSearchResult
 
 logger = logging.getLogger(__name__)
 
+SearchEventCallback = Callable[[str, dict[str, Any]], Awaitable[None]]
+
 _QUERY_GEN_PROMPT = """\
-You are a research assistant. Generate 2-3 distinct web search queries to \
-investigate the following sub-question. Consider the prior findings and \
-excluded URLs.
+You are an expert research assistant generating web search queries for \
+an academic-grade research task.
 
 Sub-question: {question}
 User's overall query: {user_query}
 Prior findings: {prior}
 Round: {round} of max {max_rounds}
 
+Generate 2-3 DISTINCT search queries. Strategy:
+- Round 1: Start with precise, specific queries using domain terminology, \
+author names, paper titles, or technical terms when applicable.
+- Later rounds: DIVERSIFY — rephrase, use synonyms, try alternative \
+angles, or broaden/narrow scope based on what prior rounds found.
+- Include at least one query with temporal qualifiers (e.g., "2024", \
+"recent", "latest") when the topic benefits from recency.
+- For non-English topics, generate queries in BOTH the original language \
+and English to maximize source coverage.
+- Avoid vague or overly broad queries. Each query should target a specific \
+aspect of the sub-question.
+
 Respond ONLY with a JSON array of query strings, e.g. ["query 1", "query 2"].
 """
 
 _SUFFICIENCY_PROMPT = """\
-You are evaluating search results for a research sub-question.
+You are a research quality assessor evaluating whether collected sources \
+are sufficient for an academic-grade analysis.
 
 Sub-question: {question}
 Sources found so far: {source_count}
 Latest results summary: {summary}
 
-Is the information collected SUFFICIENT to comprehensively answer this \
-sub-question? Consider breadth, depth, and source diversity.
+Evaluate sufficiency on three criteria:
+1. **Breadth**: Do sources cover multiple perspectives or data points?
+2. **Depth**: Are there authoritative or primary sources (not just summaries)?
+3. **Diversity**: Are sources from different authors/publishers/years?
+
+Mark sufficient=true when at least 2 of 3 criteria are met, OR when \
+{source_count} >= 6 (diminishing returns beyond this point). Balance \
+thoroughness against efficiency — if sources already cover the core \
+aspects of the question, stop searching.
 
 Respond ONLY with JSON: {{"sufficient": true/false, "rationale": "..."}}
 """
@@ -67,12 +89,14 @@ class SearchCoordinator:
         web_search: WebSearchService,
         max_search_rounds: int = 10,
         max_results_per_round: int = 8,
+        on_event: SearchEventCallback | None = None,
         **llm_kwargs: Any,
     ) -> None:
         self._llm = llm_adapter
         self._web_search = web_search
         self._max_rounds = max_search_rounds
         self._max_per_round = max_results_per_round
+        self._on_event = on_event
         self._llm_kwargs = llm_kwargs
 
     async def search(
@@ -98,6 +122,15 @@ class SearchCoordinator:
                 round_idx,
             )
 
+            await self._notify(
+                "search.queries_generated",
+                {
+                    "question_id": sub_question.question_id,
+                    "round": round_idx + 1,
+                    "queries": queries,
+                },
+            )
+
             hits: list[SearchHit] = []
             for query in queries:
                 try:
@@ -113,6 +146,16 @@ class SearchCoordinator:
                             hits.append(hit)
                             src = _to_source_ref(hit)
                             all_sources[src.reference_id] = src
+                            await self._notify(
+                                "search.source_discovered",
+                                {
+                                    "question_id": sub_question.question_id,
+                                    "title": hit.title,
+                                    "url": hit.url,
+                                    "snippet": (hit.snippet or "")[:200],
+                                    "query": query,
+                                },
+                            )
                 except Exception:
                     logger.warning("Search query failed: %s", query, exc_info=True)
 
@@ -151,6 +194,13 @@ class SearchCoordinator:
             exhausted=len(rounds) >= self._max_rounds and not rounds[-1].sufficient,
         )
 
+    async def _notify(self, event_type: str, data: dict[str, Any]) -> None:
+        if self._on_event:
+            try:
+                await self._on_event(event_type, data)
+            except Exception:
+                logger.debug("Search event callback failed for %s", event_type, exc_info=True)
+
     # ------------------------------------------------------------------
     # LLM helpers
     # ------------------------------------------------------------------
@@ -172,6 +222,7 @@ class SearchCoordinator:
         resp = await self._llm.chat(
             messages=[{"role": "user", "content": prompt}],
             temperature=0.4,
+            max_tokens=512,
             **self._llm_kwargs,
         )
         return _parse_query_list(resp.content)
@@ -190,6 +241,7 @@ class SearchCoordinator:
         resp = await self._llm.chat(
             messages=[{"role": "user", "content": prompt}],
             temperature=0.1,
+            max_tokens=256,
             **self._llm_kwargs,
         )
         return _parse_sufficiency(resp.content)
@@ -248,3 +300,96 @@ def _parse_sufficiency(content: str) -> tuple[bool, str]:
         return bool(data.get("sufficient", False)), str(data.get("rationale", ""))
     except json.JSONDecodeError:
         return False, "Failed to parse sufficiency evaluation"
+
+
+_STOP_WORDS = frozenset(
+    [
+        "a",
+        "an",
+        "the",
+        "and",
+        "or",
+        "but",
+        "for",
+        "nor",
+        "so",
+        "yet",
+        "at",
+        "by",
+        "in",
+        "of",
+        "on",
+        "to",
+        "up",
+        "is",
+        "it",
+        "are",
+        "was",
+        "were",
+        "be",
+        "been",
+        "am",
+        "do",
+        "does",
+        "did",
+        "has",
+        "have",
+        "had",
+        "will",
+        "shall",
+        "can",
+        "could",
+        "may",
+        "might",
+        "would",
+        "should",
+        "what",
+        "which",
+        "who",
+        "whom",
+        "whose",
+        "where",
+        "when",
+        "how",
+        "that",
+        "this",
+        "these",
+        "those",
+        "with",
+        "from",
+        "into",
+        "about",
+    ]
+)
+
+
+def _extract_keywords(text: str) -> set[str]:
+    """Extract meaningful keywords from text, filtering stop words."""
+    if not text:
+        return set()
+    words = [w.strip(".,!?;:\"'()[]{}") for w in text.lower().split()]
+    return {w for w in words if len(w) > 2 and w not in _STOP_WORDS}
+
+
+def _filter_relevant(
+    sources: list[SourceReference],
+    question: str,
+    user_query: str,
+    min_overlap: int = 1,
+) -> list[SourceReference]:
+    """Keep sources whose title/snippet share keywords with the query."""
+    if not sources:
+        return []
+    keywords = _extract_keywords(question) | _extract_keywords(user_query)
+    if not keywords:
+        return sources
+    kept = []
+    for src in sources:
+        text = f"{src.title} {src.snippet}".lower()
+        if not text.strip():
+            kept.append(src)
+            continue
+        overlap = sum(1 for kw in keywords if kw in text)
+        if overlap >= min_overlap:
+            kept.append(src)
+    return kept if kept else sources

@@ -184,40 +184,84 @@ adjust these env vars:
 - `HOUYI_TOOLCALL_LOOP_MAX_MESSAGE_CHARS`
 - `HOUYI_TOOLCALL_LOOP_MAX_TOTAL_CHARS`
 
+### 6. Sub-Agent Delegation (Supervisor Pattern)
+
+Coordinate sub-agents through a supervisor that decomposes tasks and merges results:
+
+```python
+from houyi import Agent
+from houyi.domain.agent import AgentTeamConfig
+
+supervisor = Agent(
+    role="Research Supervisor",
+    llm=OpenAIAdapter(model="gpt-4o-mini"),
+    tools=[web_search_tool],
+    sub_agents=[
+        AgentTeamConfig(role="Searcher", skills=["web_search"]),
+        AgentTeamConfig(role="Analyst", skills=["code_execute"]),
+    ],
+    mode="delegate",
+)
+
+result = await supervisor.arun("Deep research on AI agent architectures")
+```
+
+The supervisor LLM autonomously decides how to decompose the task, dispatches sub-questions to the appropriate sub-agents, and merges their results.
+
+### 7. Memory — Persistent Context Across Sessions
+
+```python
+from houyi.adapters.memory.engine import MemoryEngine
+from houyi.adapters.memory.store import MemoryStore
+
+store = MemoryStore(data_dir="./memory_data")
+engine = MemoryEngine(store)
+
+await engine.add("User prefers Python over JavaScript", tags=["preference"])
+memories = await engine.recall("What language does the user prefer?", top_k=5)
+context = await engine.build_context("programming question", max_tokens=500)
+```
+
 ## Core Concepts
 
 ### Agent
 
-An agent is a runtime instance with execution capabilities:
+The `Agent` class is the universal entry point with three execution paths:
 
-- **Role**: Defines the agent's purpose
-- **Skills**: Functions the agent can execute
-- **LLM**: Optional language model integration
-- **Observability**: Built-in tracing (enabled by default)
+- **Tool-loop** — agent has tools, no sub_agents: iterative LLM → tool-call → result loop
+- **Orchestrated** — agent has `sub_agents` or `mode` set: `AgentOrchestrator` handles delegate / autonomous collaboration
+- **DAG** — fallback graph-based execution via planner + executor
 
 ### Skill
 
 A skill is a function wrapped with Pydantic validation:
 
 - Use `@tool` decorator for automatic schema inference
-- Input/output validation
-- Type safety with Pydantic
+- Input/output validation and type safety
 
-### Task
+### AgentTeamConfig
 
-A task represents work to be done:
+Declarative sub-agent definition for supervisor patterns:
 
-- **Description**: What needs to be done
-- **Agent**: Which agent should do it
-- **Context**: Dependencies on other tasks (for DAG execution)
+- **role**: Sub-agent's specialization
+- **skills**: Capabilities the sub-agent can use
+- Supervisor LLM autonomously decides dispatch and merge
 
-### Team
+### Team & Task
 
-A team coordinates multiple agents:
+Multi-agent DAG orchestration:
 
 - **DAG Execution**: Parallel execution with dependency management
 - **Context Passing**: Share results between tasks
 - **Cycle Detection**: Prevents circular dependencies
+
+### Memory
+
+Persistent, queryable context store:
+
+- **SQLite + FTS5**: Full-text search with embedding-based hybrid retrieval
+- **LLM-powered extraction**: Automatic memory extraction from conversations
+- **Emphasis-aware recall**: Prioritizes memories the user has emphasized
 
 ## Next Steps
 

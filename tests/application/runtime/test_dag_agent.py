@@ -1,4 +1,4 @@
-"""Tests for AGENT node execution in DAG and Agent sub_agents API."""
+"""Tests for AGENT node execution in DAG and Agent team_agents API."""
 
 from __future__ import annotations
 
@@ -78,25 +78,25 @@ class TestAgentNodeExecution:
         assert result.success
 
 
-class TestAgentSubAgentsAPI:
-    def test_agent_with_sub_agents(self):
+class TestAgentTeamAgentsAPI:
+    def test_team_agents(self):
         from houyi.application.runtime.agent import Agent
-        from houyi.domain.agent.spec import SubAgentConfig
+        from houyi.domain.agent.spec import AgentTeamConfig
 
         agent = Agent(
             role="orchestrator",
-            sub_agents=[
-                SubAgentConfig(role="researcher"),
-                SubAgentConfig(role="writer"),
+            team_agents=[
+                AgentTeamConfig(role="researcher"),
+                AgentTeamConfig(role="writer"),
             ],
             mode="delegate",
         )
-        assert len(agent.spec.sub_agents) == 2
+        assert len(agent.spec.team_agents) == 2
         assert agent.mode == "delegate"
 
-    def test_agent_no_sub_agents_compat(self):
+    def test_no_team_agents_compat(self):
         from houyi.application.runtime.agent import Agent
 
         agent = Agent(role="simple")
-        assert agent.spec.sub_agents == []
+        assert agent.spec.team_agents == []
         assert agent.mode is None

@@ -11,6 +11,7 @@ from houyi.infrastructure.config.env_config import (
     ENV_GOOGLE_API_KEY,
     ENV_GOOGLE_CLOUD_PROJECT,
 )
+from houyi.rag.indexed.embedding import gemini as _gemini_mod
 
 
 class TestGeminiEmbedderConfig:
@@ -59,7 +60,7 @@ class TestGeminiEmbedderAuth:
         with patch.dict(os.environ, {ENV_GOOGLE_API_KEY: "test-api-key"}):
             mock_genai = MagicMock()
             with patch.dict("sys.modules", {"google": MagicMock(), "google.genai": mock_genai}):
-                with patch("houyi.rag.indexed.embedding.gemini.GeminiEmbedder._ensure_client"):
+                with patch.object(_gemini_mod.GeminiEmbedder, "_ensure_client"):
                     embedder._ensure_client()
 
     def test_error_message_mentions_both_auth_methods(self):
@@ -177,7 +178,7 @@ class TestGeminiEmbedderAuth:
         embedder._client = MagicMock()
 
         texts = ["text1", "text2", "text3", "text4"]
-        with patch("houyi.rag.indexed.embedding.gemini.asyncio.sleep", new=AsyncMock()):
+        with patch.object(_gemini_mod.asyncio, "sleep", new=AsyncMock()):
             result = await embedder.embed_batch(texts)
 
         assert len(result) == 4

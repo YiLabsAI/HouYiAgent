@@ -9,6 +9,7 @@ from __future__ import annotations
 import time
 import uuid
 from enum import Enum
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -18,8 +19,16 @@ from pydantic import BaseModel, Field
 
 
 class OrchestrationMode(str, Enum):
-    """Multi-agent orchestration strategy for a research session."""
+    """Multi-agent orchestration strategy for a research session.
 
+    DIRECT     — SearchCoordinator (direct LLM + WebSearch, no Agent SDK).
+    DELEGATE   — AgentTeamManager spawns one agent per sub-question, joins
+                 sequentially (supervisor pattern).
+    AUTONOMOUS — AgentTeamManager spawns all agents concurrently, joins all
+                 (peer collaboration pattern).
+    """
+
+    DIRECT = "direct"
     DELEGATE = "delegate"
     AUTONOMOUS = "autonomous"
 
@@ -111,17 +120,24 @@ class OutlineSection(BaseModel):
     required_depth: str = "standard"
 
 
+_DEPTH_SEARCH_ROUNDS: dict[str, int] = {"quick": 2, "standard": 3, "deep": 5}
+
+
 class ResearchSettings(BaseModel):
     """User-configurable settings for a research session."""
 
     depth: ResearchDepth = ResearchDepth.STANDARD
-    orchestration_mode: OrchestrationMode = OrchestrationMode.DELEGATE
+    orchestration_mode: OrchestrationMode = OrchestrationMode.DIRECT
     max_agents: int = 5
     model_profile: str = "auto"
     report_formats: list[ExportFormat] = Field(
         default_factory=lambda: [ExportFormat.MARKDOWN],
     )
-    max_search_rounds: int = 5
+    max_search_rounds: int = 0
+
+    def model_post_init(self, __context: Any) -> None:
+        if self.max_search_rounds == 0:
+            self.max_search_rounds = _DEPTH_SEARCH_ROUNDS.get(self.depth, 3)
 
 
 class PlanEdit(BaseModel):

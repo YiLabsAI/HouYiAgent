@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from houyi.application.runtime.agent_team import AgentTeamManager
 from houyi.application.runtime.error_policy import ErrorPolicy, FallbackStrategy
 from houyi.application.runtime.events import EventEmitter
 from houyi.application.runtime.orchestrator import (
@@ -12,20 +13,19 @@ from houyi.application.runtime.orchestrator import (
     OrchestratorStage,
 )
 from houyi.application.runtime.runner import AgentRunner
-from houyi.application.runtime.sub_agent import SubAgentManager
-from houyi.domain.agent.spec import AgentSpec, SubAgentConfig
+from houyi.domain.agent.spec import AgentSpec, AgentTeamConfig
 
 
 def _spec(role: str = "test") -> AgentSpec:
     return AgentSpec(role=role)
 
 
-def _cfg(role: str = "sub") -> SubAgentConfig:
-    return SubAgentConfig(role=role, max_turns=3)
+def _cfg(role: str = "sub") -> AgentTeamConfig:
+    return AgentTeamConfig(role=role, max_turns=3)
 
 
 def _orch(**kwargs) -> AgentOrchestrator:
-    mgr = SubAgentManager()
+    mgr = AgentTeamManager()
     return AgentOrchestrator(mgr, **kwargs)
 
 
@@ -44,7 +44,7 @@ class TestRunDelegate:
     async def test_delegate_empty_subs(self):
         orch = _orch()
         runner = AgentRunner(_spec("main"), max_turns=2)
-        result = await orch.run_delegate(runner, {}, "no sub-agents")
+        result = await orch.run_delegate(runner, {}, "no team agents")
         assert result.success
 
 

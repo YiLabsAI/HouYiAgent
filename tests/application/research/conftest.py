@@ -21,15 +21,18 @@ class MockLLM(LLMAdapter):
         self._responses = list(responses or [])
         self._call_count = 0
 
-    async def chat(self, messages: list, **kwargs: Any) -> LLMResponse:
+    def _next_content(self) -> str:
         content = (
             self._responses[self._call_count] if self._call_count < len(self._responses) else "{}"
         )
         self._call_count += 1
-        return LLMResponse(content=content, finish_reason="stop", model="mock")
+        return content
+
+    async def chat(self, messages: list, **kwargs: Any) -> LLMResponse:
+        return LLMResponse(content=self._next_content(), finish_reason="stop", model="mock")
 
     async def stream_chat(self, messages: list, **kwargs: Any) -> AsyncIterator[StreamChunk]:
-        yield StreamChunk()
+        yield StreamChunk(content_delta=self._next_content())
 
 
 def make_mock_web_search(results: list[WebSearchResult] | None = None) -> WebSearchService:

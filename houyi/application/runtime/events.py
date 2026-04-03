@@ -27,8 +27,8 @@ class AgentEventType(str, Enum):
     TOOL_STARTED = "tool.started"
     TOOL_COMPLETED = "tool.completed"
     TOOL_FAILED = "tool.failed"
-    SUB_AGENT_SPAWNED = "sub_agent.spawned"
-    SUB_AGENT_COMPLETED = "sub_agent.completed"
+    TEAM_AGENT_SPAWNED = "team_agent.spawned"
+    TEAM_AGENT_COMPLETED = "team_agent.completed"
     PROGRESS = "progress"
 
 

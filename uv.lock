@@ -952,7 +952,7 @@ sdist = { url = "https://files.pythonhosted.org/packages/cf/7a/1a9b1405f2eb59515
 
 [[package]]
 name = "houyi"
-version = "0.1.1"
+version = "0.3.0"
 source = { editable = "." }
 dependencies = [
     { name = "pydantic" },

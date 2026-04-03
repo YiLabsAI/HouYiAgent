@@ -252,6 +252,13 @@ function App() {
     console.log('[App] Session ID:', sid);
     const { connect: c } = useConsoleStore.getState();
     c(sid);
+
+    // Auto-switch to agent mode if the URL hash points to a research/memory route
+    const hash = window.location.hash.replace(/^#/, '');
+    if (hash.startsWith('/research') || hash.startsWith('/memory')) {
+      handleSetPrimaryMode('agent');
+    }
+
     // Delay disconnect to survive React StrictMode's mount→unmount→remount cycle.
     // If the component re-mounts within 100ms (StrictMode), the disconnect is cancelled.
     return () => {

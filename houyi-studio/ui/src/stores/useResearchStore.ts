@@ -353,7 +353,19 @@ export const useResearchStore = create<ResearchState>((set, get) => ({
   },
 
   openSession: async (sessionId: string) => {
-    set({ loading: true, error: null, sessionId, events: [], lastEventId: null, lastSequence: 0 });
+    get().disconnectSSE();
+    set({
+      loading: true,
+      error: null,
+      sessionId,
+      events: [],
+      lastEventId: null,
+      lastSequence: 0,
+      plan: null,
+      report: null,
+      progress: null,
+      phase: 'input',
+    });
     try {
       const data = await researchFetch<{
         session_id: string;

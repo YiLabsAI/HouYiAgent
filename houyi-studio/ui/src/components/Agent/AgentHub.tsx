@@ -6,7 +6,7 @@
  * navigation to the Deep Research workspace and Memory Inbox.
  */
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { AgentCard } from './AgentCard';
 import { DeepResearchWorkspace } from './DeepResearch/Workspace';
 import { MemoryInbox } from '../Memory/MemoryInbox';
@@ -17,8 +17,10 @@ type AgentView = 'hub' | 'deep_research' | 'memory_inbox';
 
 const PAGE_SIZE = 10;
 
-function setHash(path: string) {
-  window.history.replaceState(null, '', path ? `#${path}` : window.location.pathname);
+function pushHash(path: string) {
+  const target = path ? `#${path}` : window.location.pathname;
+  if (window.location.hash === (path ? `#${path}` : '')) return;
+  window.history.pushState(null, '', target);
 }
 
 function parseHash(): { view: AgentView; sessionId?: string } {
@@ -68,6 +70,21 @@ export const AgentHub: React.FC = () => {
   const { sessions, fetchSessions, openSession, deleteSession, reset } = useResearchStore();
   const initializedRef = React.useRef(false);
 
+  // Sync view state from hash (used on mount and on popstate)
+  const syncFromHash = useCallback(async () => {
+    const parsed = parseHash();
+    if (parsed.view === 'deep_research' && parsed.sessionId) {
+      await openSession(parsed.sessionId);
+      setView('deep_research');
+    } else {
+      if (parsed.view === 'hub') {
+        useResearchStore.getState().disconnectSSE();
+        reset();
+      }
+      setView(parsed.view);
+    }
+  }, [openSession, reset]);
+
   useEffect(() => {
     fetch('/api/agents/types')
       .then((r) => r.json())
@@ -77,14 +94,18 @@ export const AgentHub: React.FC = () => {
 
     if (!initializedRef.current) {
       initializedRef.current = true;
-      const parsed = parseHash();
-      if (parsed.view === 'deep_research' && parsed.sessionId) {
-        openSession(parsed.sessionId).then(() => setView('deep_research'));
-      } else if (parsed.view !== 'hub') {
-        setView(parsed.view);
-      }
+      syncFromHash();
     }
-  }, [fetchSessions, openSession]);
+  }, [fetchSessions, syncFromHash]);
+
+  // Listen for browser back/forward to update view
+  useEffect(() => {
+    const onPopState = () => {
+      syncFromHash();
+    };
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, [syncFromHash]);
 
   // Auto-refresh session list while any session is still executing
   useEffect(() => {
@@ -98,13 +119,13 @@ export const AgentHub: React.FC = () => {
   const navigate = (v: AgentView, sessionId?: string) => {
     setView(v);
     if (v === 'deep_research' && sessionId) {
-      setHash(`/research/${sessionId}`);
+      pushHash(`/research/${sessionId}`);
     } else if (v === 'deep_research') {
-      setHash('/research');
+      pushHash('/research');
     } else if (v === 'memory_inbox') {
-      setHash('/memory');
+      pushHash('/memory');
     } else {
-      setHash('');
+      pushHash('');
     }
   };
 
@@ -116,8 +137,16 @@ export const AgentHub: React.FC = () => {
   };
 
   const handleOpenSession = async (sessionId: string) => {
+    reset();
     await openSession(sessionId);
     navigate('deep_research', sessionId);
+  };
+
+  const handleBackToHub = () => {
+    useResearchStore.getState().disconnectSSE();
+    reset();
+    fetchSessions();
+    navigate('hub');
   };
 
   if (view === 'deep_research') {
@@ -126,7 +155,7 @@ export const AgentHub: React.FC = () => {
         <div className="flex items-center gap-3 px-4 py-2 border-b border-gray-800">
           <button
             type="button"
-            onClick={() => { useResearchStore.getState().disconnectSSE(); fetchSessions(); navigate('hub'); }}
+            onClick={handleBackToHub}
             className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-300 transition-colors"
           >
             <ArrowLeft size={14} /> Agent Hub

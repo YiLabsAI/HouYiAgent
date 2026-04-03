@@ -1,14 +1,20 @@
 """Runtime application facade: Agent, Task, Team infrastructure."""
 
+from houyi.application.context.context_strategy import ContextStrategy
 from houyi.application.runtime.agent import Agent
-from houyi.application.runtime.context_strategy import ContextStrategy
+from houyi.application.runtime.agent_team import (
+    AgentTeamManager,
+    TeamAgentHandle,
+    TeamAgentResult,
+    TeamAgentStatus,
+)
 from houyi.application.runtime.error_policy import (
+    AgentTaskResult,
     ConflictRecord,
     ConflictResolution,
     ConflictResolver,
     ErrorPolicy,
     FallbackStrategy,
-    SubAgentResult,
 )
 from houyi.application.runtime.events import AgentEvent, AgentEventType, EventEmitter
 from houyi.application.runtime.message_bus import AgentMessage, AgentMessageBus, AgentMessageType
@@ -26,7 +32,6 @@ from houyi.application.runtime.shared_state import (
     SharedStateBackend,
     StateChange,
 )
-from houyi.application.runtime.sub_agent import SubAgentHandle, SubAgentManager, SubAgentStatus
 from houyi.application.runtime.task import Task
 from houyi.application.runtime.team import Team
 
@@ -41,6 +46,8 @@ __all__ = [
     "AgentRegistry",
     "AgentResult",
     "AgentRunner",
+    "AgentTaskResult",
+    "AgentTeamManager",
     "AgentTypeConfig",
     "ConflictRecord",
     "ConflictResolution",
@@ -56,10 +63,9 @@ __all__ = [
     "OrchestratorState",
     "SharedStateBackend",
     "StateChange",
-    "SubAgentHandle",
-    "SubAgentManager",
-    "SubAgentResult",
-    "SubAgentStatus",
     "Task",
     "Team",
+    "TeamAgentHandle",
+    "TeamAgentResult",
+    "TeamAgentStatus",
 ]

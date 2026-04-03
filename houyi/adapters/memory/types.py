@@ -52,7 +52,7 @@ class RecallMatchMethod(str, Enum):
 
 
 class MemoryLifecyclePolicy(str, Enum):
-    """Sub-Agent memory lifecycle on termination."""
+    """Agent memory lifecycle on termination."""
 
     PROMOTE_ON_COMPLETE = "promote"
     DISCARD_ON_FAILURE = "discard"

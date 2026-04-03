@@ -351,6 +351,8 @@ class VertexAIAdapter(OpenAICompatAdapterBase):
         normalized_messages: list[dict[str, Any]],
         temperature: float,
         max_tokens: int | None,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: str | None = None,
         extra_kwargs: dict[str, Any],
     ) -> dict[str, Any]:
         body: dict[str, Any] = {
@@ -363,6 +365,10 @@ class VertexAIAdapter(OpenAICompatAdapterBase):
         clamped_max_tokens = cls._clamp_max_tokens(max_tokens)
         if clamped_max_tokens is not None:
             body["max_tokens"] = clamped_max_tokens
+        if tools:
+            body["tools"] = tools
+        if tool_choice is not None:
+            body["tool_choice"] = tool_choice
         if "top_p" in extra_kwargs and extra_kwargs["top_p"] is not None:
             body["top_p"] = extra_kwargs["top_p"]
         if "stop" in extra_kwargs and extra_kwargs["stop"] is not None:
@@ -531,6 +537,8 @@ class VertexAIAdapter(OpenAICompatAdapterBase):
             normalized_messages=request.messages,
             temperature=request.temperature,
             max_tokens=request.max_tokens,
+            tools=request.tools,
+            tool_choice=request.tool_choice,
             extra_kwargs={
                 **dict(request.extra_kwargs),
                 "top_p": request.top_p,
@@ -573,8 +581,12 @@ class VertexAIAdapter(OpenAICompatAdapterBase):
         self._request_access_token = access_token
         return await http_client.post(url, json=payload, headers=self._get_httpx_headers())
 
+    @property
+    def _is_mock_mode(self) -> bool:
+        return not self.project_id or not self._sa
+
     async def _chat_request_httpx(self, request: Any) -> LLMResponse:
-        if not self.project_id or not self._sa:
+        if self._is_mock_mode:
             return LLMResponse(
                 content="Mock response (no project ID or service account)",
                 tool_calls=[],
@@ -755,7 +767,7 @@ class VertexAIAdapter(OpenAICompatAdapterBase):
         self,
         request: Any,
     ) -> AsyncIterator[StreamChunk]:
-        if not self.project_id or not self._sa:
+        if self._is_mock_mode:
             logger.info("Using mock streaming (no project ID or service account)")
             words = f"Mock response from {request.model}: ...".split()
             for word in words:

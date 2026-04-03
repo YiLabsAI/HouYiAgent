@@ -20,7 +20,34 @@ class _FakeChatCompletions:
 
     async def create(self, **kwargs):
         self.calls.append(kwargs)
+        if kwargs.get("stream") and not hasattr(self._response, "__aiter__"):
+            return self._to_stream(self._response)
         return self._response
+
+    @staticmethod
+    def _to_stream(response: object) -> _FakeStream:
+        """Auto-convert a non-streaming response to a _FakeStream."""
+        choices = getattr(response, "choices", [])
+        usage = getattr(response, "usage", None)
+        chunks: list[object] = []
+        for choice in choices:
+            msg = getattr(choice, "message", None)
+            content = getattr(msg, "content", None) if msg else None
+            reasoning = getattr(msg, "reasoning_content", None) if msg else None
+            finish_reason = getattr(choice, "finish_reason", None)
+            chunks.append(
+                _FakeStreamingChunk(
+                    [
+                        _FakeStreamingChoice(
+                            content=content,
+                            reasoning_content=reasoning,
+                            finish_reason=finish_reason,
+                        )
+                    ],
+                    usage=usage,
+                )
+            )
+        return _FakeStream(chunks or [_FakeStreamingChunk([])])
 
 
 class _FakeStream:
@@ -901,32 +928,39 @@ async def test_chat_httpx(monkeypatch) -> None:
 
     captured: dict[str, object] = {}
 
-    class _HttpxResponse:
+    sse_lines = [
+        'data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}],'
+        '"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}',
+        "data: [DONE]",
+    ]
+
+    class _HttpxStreamResponse:
+        status_code = 200
+
         def raise_for_status(self) -> None:
             return None
 
-        @staticmethod
-        def json():
-            return {
-                "model": "test-model",
-                "choices": [
-                    {"message": {"content": "ok", "tool_calls": []}, "finish_reason": "stop"}
-                ],
-                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
-            }
+        async def aiter_lines(self):
+            for line in sse_lines:
+                yield line
 
     class _HttpxClient:
-        async def __aenter__(self):
-            return self
+        async def aclose(self):
+            pass
 
-        async def __aexit__(self, *args):
-            return False
-
-        async def post(self, url, json=None, headers=None):
+        def stream(self, method, url, json=None, headers=None):
             captured["url"] = url
             captured["json"] = json
             captured["headers"] = headers
-            return _HttpxResponse()
+
+            class _Ctx:
+                async def __aenter__(inner_self):
+                    return _HttpxStreamResponse()
+
+                async def __aexit__(inner_self, *args):
+                    return False
+
+            return _Ctx()
 
     monkeypatch.setattr("httpx.AsyncClient", lambda *args, **kwargs: _HttpxClient())
 
@@ -939,7 +973,7 @@ async def test_chat_httpx(monkeypatch) -> None:
 
     assert result.content == "ok"
     assert captured["url"] == "https://example.test/chat/completions"
-    assert captured["json"]["stream"] is False
+    assert captured["json"]["stream"] is True
     assert captured["json"]["max_tokens"] == 10
 
 
