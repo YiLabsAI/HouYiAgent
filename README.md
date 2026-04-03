@@ -1,7 +1,7 @@
 <div align="center">
   <img src=".github/images/logo-text.svg" alt="HouYi Logo" width="400">
 
-  <h3>Lightweight · Extensible · Production-grade · Context-Engineered Multi-Agent Framework</h3>
+  <h3>Lightweight · Extensible · Production-Grade · Context-Engineered Multi-Agent Framework</h3>
   <p><em>with neuro-symbolic verification</em></p>
 
   <p>
@@ -229,7 +229,7 @@ HouYi ships with production-ready agent applications built on top of the SDK:
 | **Chatbox** | Multi-turn conversational AI with streaming, tool calling, memory integration, and full context engineering pipeline |
 | **Memory Inbox** | LLM-powered memory extraction from conversations with human-in-the-loop review/approve/reject workflow |
 
-These are not demos — they are production applications that exercise every layer of the SDK. Study their source as reference implementations for building your own agents.
+Each is a production-grade application that exercises every layer of the SDK. Study their source as reference implementations for building your own agents.
 
 ## 📚 Documentation
 
