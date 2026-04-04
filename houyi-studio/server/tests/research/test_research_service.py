@@ -23,6 +23,8 @@ from houyi.application.research.types import (
     PlanStatus,
     ResearchSettings,
     ResearchStatus,
+    SearchResult,
+    SourceReference,
 )
 from houyi.skills.web_search.service import WebSearchService
 from houyi.skills.web_search.types import (
@@ -331,7 +333,7 @@ class TestMemoryIntegration:
         candidates = mem_svc.list_candidates()
         assert len(candidates) > 0
 
-    async def test_no_push_without_memory_svc(self, tmp_path):
+    async def test_without_memory_svc(self, tmp_path):
         """Without memory_service, execution still succeeds."""
         svc = ResearchService(
             _MockLLM(_all_responses()),
@@ -343,7 +345,7 @@ class TestMemoryIntegration:
         await svc.confirm_and_execute(session.session_id)
         assert session.status == ResearchStatus.COMPLETED
 
-    async def test_memory_extraction_failure_nonfatal(self, tmp_path):
+    async def test_memory_extraction_failure(self, tmp_path):
         """Memory extraction failure does not crash execution."""
         from unittest.mock import MagicMock
 
@@ -376,3 +378,25 @@ class TestRehydrate:
         live = svc2._require_live_session(sid)
         assert live.plan is not None
         assert live.plan.status == PlanStatus.DRAFT
+
+    async def test_restores_search_results(self, tmp_path):
+        """Rehydrated session must carry search_results so retry checkpoint works."""
+        svc1 = ResearchService(_MockLLM(), _mock_ws(), data_dir=tmp_path)
+        session, _ = await svc1.create_session("checkpoint test", settings=_QUICK)
+        sid = session.session_id
+
+        sr = SearchResult(
+            question_id="sq_test1",
+            rounds=[],
+            sources=[SourceReference(url="https://example.com", title="T", snippet="s")],
+            summary="done",
+            coverage_score=0.9,
+        )
+        session._search_results.append(sr)
+        svc1._persist_session(session)
+
+        svc2 = ResearchService(_MockLLM(), _mock_ws(), data_dir=tmp_path)
+        live = svc2._require_live_session(sid)
+        assert len(live._search_results) == 1
+        assert live._search_results[0].question_id == "sq_test1"
+        assert live._search_results[0].summary == "done"

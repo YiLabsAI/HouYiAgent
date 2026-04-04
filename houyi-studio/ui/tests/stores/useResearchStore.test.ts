@@ -67,6 +67,32 @@ describe('useResearchStore', () => {
       expect(useResearchStore.getState().error).toBeTruthy();
       expect(useResearchStore.getState().phase).toBe('input');
     });
+
+    it('includes settings in POST body when provided', async () => {
+      const fetchMock = vi.fn(async () => ({
+        ok: true,
+        status: 201,
+        statusText: 'Created',
+        json: async () => ({
+          session_id: 's-depth',
+          plan: { query: 'test', sub_questions: [], outline: [], version: 1, status: 'draft' },
+          status: 'planning',
+        }),
+        text: async () => '',
+        headers: new Headers(),
+        body: null,
+      })) as unknown as typeof fetch;
+      globalThis.fetch = fetchMock;
+      const { useResearchStore } = await loadStoreFresh();
+      await useResearchStore.getState().createSession('topic', { depth: 'deep' });
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/research/sessions',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({ query: 'topic', settings: { depth: 'deep' } }),
+        }),
+      );
+    });
   });
 
   describe('editPlan', () => {

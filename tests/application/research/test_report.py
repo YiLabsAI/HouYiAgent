@@ -168,6 +168,27 @@ class TestIntermediateContext:
         assert "90%" in result
 
 
+class TestParallelGeneration:
+    async def test_sections_generated_concurrently(self):
+        """Verify all outline sections are produced by the parallelized generate()."""
+        plan = ResearchPlan(
+            query="AI",
+            outline=[
+                OutlineSection(title=f"Section {i}", objective=f"obj {i}", related_question_ids=[])
+                for i in range(5)
+            ],
+        )
+        # 5 sections + 1 summary = 6 LLM calls
+        llm = MockLLM(responses=[_SECTION_JSON] * 5 + ["Summary."])
+        gen = ReportGenerator(llm)
+        report = await gen.generate(plan, _sources())
+        assert len(report.sections) == 5
+        assert report.summary == "Summary."
+        titles = [s.title for s in report.sections]
+        for i in range(5):
+            assert f"Section {i}" in titles
+
+
 class TestParseSectionEdgeCases:
     async def test_strips_code_fence(self):
         from houyi.application.research.report import _parse_section
@@ -177,6 +198,23 @@ class TestParseSectionEdgeCases:
         assert section.content != ""
         assert len(section.citations) == 1
         assert section.citations[0].reference_id == "ref_001"
+
+    async def test_extracts_json_from_prefix_text(self):
+        """LLM sometimes prepends prose before the JSON object."""
+        from houyi.application.research.report import _parse_section
+
+        raw = 'Here is the section:\n' + _SECTION_JSON
+        section = _parse_section("Test Section", raw)
+        assert "AI frameworks" in section.content
+        assert len(section.citations) == 1
+
+    async def test_raw_json_not_shown_as_content(self):
+        """Ensure {\"content\":...} is parsed, not displayed as-is."""
+        from houyi.application.research.report import _parse_section
+
+        section = _parse_section("Title", _SECTION_JSON)
+        assert not section.content.startswith("{")
+        assert '"content"' not in section.content
 
 
 class TestStripLeadingHeadingEdgeCases:

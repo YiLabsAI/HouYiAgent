@@ -21,6 +21,36 @@ from .conftest import MockLLM, make_mock_web_search
 
 _QUICK = ResearchSettings(depth="quick")
 
+
+def test_report_budget_by_depth():
+    llm = MockLLM()
+    ws = make_mock_web_search()
+    sq = ResearchSession(llm_adapter=llm, web_search=ws, settings=ResearchSettings(depth="quick"))
+    st = ResearchSession(llm_adapter=llm, web_search=ws, settings=ResearchSettings(depth="standard"))
+    dp = ResearchSession(llm_adapter=llm, web_search=ws, settings=ResearchSettings(depth="deep"))
+    assert sq._report_budget_seconds() == 600
+    assert st._report_budget_seconds() == 1200
+    assert dp._report_budget_seconds() == 1500
+
+
+def test_timeout_full_checkpoint():
+    """During a full checkpoint, the timeout equals the report budget, with no false search time"""
+    from houyi.application.research.types import ResearchPlan, SubQuestion
+
+    llm = MockLLM()
+    ws = make_mock_web_search()
+    session = ResearchSession(llm_adapter=llm, web_search=ws, settings=ResearchSettings(depth="standard"))
+    session._plan = ResearchPlan(
+        query="q",
+        sub_questions=[
+            SubQuestion(question_id="a", question="a?"),
+            SubQuestion(question_id="b", question="b?"),
+            SubQuestion(question_id="c", question="c?"),
+        ],
+    )
+    session._retry_checkpoint = {"a": object(), "b": object(), "c": object()}  # type: ignore[assignment]
+    assert session._session_timeout() == session._report_budget_seconds()
+
 _PLAN_JSON = json.dumps(
     {
         "sub_questions": [
@@ -343,6 +373,96 @@ class TestExecute:
         session._plan.status = PlanStatus.COMPLETED
         with pytest.raises(RuntimeError, match="cannot be executed"):
             await session.execute()
+
+    async def test_retry_clears_stale_results(self):
+        """Retrying execute() must clear previous search_results to avoid duplication (200% bug)."""
+        from houyi.application.research.types import SearchResult, SourceReference
+
+        llm = MockLLM(responses=[_PLAN_JSON])
+        ws = make_mock_web_search()
+        session = ResearchSession(llm_adapter=llm, web_search=ws, settings=_QUICK)
+        await session.start("test")
+        await session.confirm_plan()
+
+        stale = SearchResult(
+            question_id="stale_q",
+            rounds=[],
+            sources=[SourceReference(url="https://stale.example.com", title="Stale", snippet="s")],
+            summary="leftover from previous run",
+            coverage_score=0.5,
+        )
+        session._search_results.extend([stale, stale, stale])
+        assert len(session._search_results) == 3
+
+        session._plan.status = PlanStatus.CONFIRMED
+
+        async def _noop():
+            pass
+
+        session._execute_inner = _noop  # type: ignore[assignment]
+
+        await session.execute()
+        assert len(session._search_results) == 0
+        assert session._error is None
+
+    async def test_retry_reuses_checkpoint(self):
+        """On retry, completed sub-questions (with sources) are reused, not re-searched."""
+        from houyi.application.research.types import SearchResult, SourceReference
+
+        responses = _standard_session_responses()
+        llm = MockLLM(responses=responses)
+        ws = make_mock_web_search()
+        session = ResearchSession(llm_adapter=llm, web_search=ws, settings=_STANDARD)
+        plan = await session.start("test")
+        await session.confirm_plan()
+        sqs = plan.sub_questions
+        assert len(sqs) >= 2
+
+        completed_result = SearchResult(
+            question_id=sqs[0].question_id,
+            rounds=[],
+            sources=[SourceReference(url="https://example.com", title="Done", snippet="ok")],
+            summary="Previously completed",
+            coverage_score=0.9,
+        )
+        session._search_results.append(completed_result)
+
+        session._plan.status = PlanStatus.CONFIRMED
+        await session.execute()
+
+        matched = [sr for sr in session._search_results if sr.question_id == sqs[0].question_id]
+        assert len(matched) == 1
+        assert matched[0].summary == "Previously completed"
+
+    async def test_emits_elapsed_seconds(self):
+        """Step events must carry elapsed_seconds for the frontend progress panel."""
+        llm = MockLLM(responses=[_PLAN_JSON])
+        ws = make_mock_web_search()
+        session = ResearchSession(llm_adapter=llm, web_search=ws, settings=_QUICK)
+        await session.start("test")
+        await session.confirm_plan()
+
+        captured: list[dict] = []
+        orig_emit = session._emit
+
+        async def _capture(event_type: str, **kwargs):
+            if event_type in ("research.step_started", "research.step_completed"):
+                captured.append({"type": event_type, **kwargs})
+            await orig_emit(event_type, **kwargs)
+
+        session._emit = _capture  # type: ignore[assignment]
+        session._session_timeout = lambda: 120  # type: ignore[assignment]
+
+        try:
+            await session.execute()
+        except Exception:
+            pass
+
+        step_events = [e for e in captured if "elapsed_seconds" in e]
+        assert len(step_events) > 0, "Step events must include elapsed_seconds"
+        for e in step_events:
+            assert isinstance(e["elapsed_seconds"], float)
+            assert e["elapsed_seconds"] >= 0
 
 
 class TestCancel:
@@ -763,26 +883,9 @@ class TestStandardDepthPaths:
         for ir in session._intermediate_reports:
             assert ir.confidence > 0
 
-    async def test_conflict_detection_and_resolution(self):
+    async def test_conflict_detection_skipped_for_standard(self):
+        """Conflict detection only runs for 'deep' depth to avoid O(n²) LLM overhead."""
         from unittest.mock import AsyncMock, patch
-
-        from houyi.application.runtime.conflict import (
-            ConflictRecord,
-            ConflictResolution,
-        )
-
-        fake_conflict = ConflictRecord(
-            agent_a_id="q1",
-            agent_b_id="q2",
-            output_a="Python dominates ML",
-            output_b="R is the standard for statistics",
-        )
-        fake_resolution = ConflictResolution(
-            method="source_voting",
-            chosen_output="Python dominates ML",
-            confidence=0.8,
-            rationale="More sources support Python",
-        )
 
         responses = _standard_session_responses()
         llm = MockLLM(responses=responses)
@@ -791,17 +894,43 @@ class TestStandardDepthPaths:
         await session.start("AI frameworks")
         await session.confirm_plan()
 
-        with (
-            patch.object(
-                session._report_pipeline._conflict_resolver,
-                "detect",
-                new=AsyncMock(return_value=[fake_conflict]),
-            ),
-            patch.object(
-                session._report_pipeline._conflict_resolver,
-                "resolve",
-                new=AsyncMock(return_value=fake_resolution),
-            ),
+        detect_mock = AsyncMock(return_value=[])
+        with patch.object(
+            session._report_pipeline._conflict_resolver,
+            "detect",
+            new=detect_mock,
+        ):
+            await session.execute()
+
+        assert session.status == ResearchStatus.COMPLETED
+        assert len(session._conflicts) == 0
+        detect_mock.assert_not_called()
+
+    async def test_conflict_detection_runs_for_deep(self):
+        """Conflict detection runs for 'deep' mode using fast source voting."""
+        from unittest.mock import AsyncMock, patch
+
+        from houyi.application.runtime.conflict import ConflictRecord
+
+        fake_conflict = ConflictRecord(
+            agent_a_id="q1",
+            agent_b_id="q2",
+            output_a="Python dominates ML",
+            output_b="R is the standard for statistics",
+        )
+
+        _DEEP = ResearchSettings(depth="deep")
+        responses = _standard_session_responses()
+        llm = MockLLM(responses=responses)
+        ws = make_mock_web_search()
+        session = ResearchSession(llm_adapter=llm, web_search=ws, settings=_DEEP)
+        await session.start("AI frameworks")
+        await session.confirm_plan()
+
+        with patch.object(
+            session._report_pipeline._conflict_resolver,
+            "detect",
+            new=AsyncMock(return_value=[fake_conflict]),
         ):
             await session.execute()
 

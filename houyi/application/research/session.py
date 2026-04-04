@@ -264,6 +264,7 @@ class ResearchSession:
         self._error: str | None = None
         self._event_seq = 0
         self._cancelled = False
+        self._execution_phase: str = "init"
 
     # ------------------------------------------------------------------
     # Phase 1: Planning
@@ -323,33 +324,52 @@ class ResearchSession:
     # Phase 2: Execution
     # ------------------------------------------------------------------
 
-    _PER_QUESTION_BUDGET_SECONDS = 180
-    _REPORT_BUDGET_SECONDS = 180
+    _PER_QUESTION_BUDGET_SECONDS = 120
+    # Report pipeline (conflicts + sections + validation + repair + quality) can exceed 10+ LLM
+    # calls × 30–120s each on standard/deep; budget must not assume "search is the long pole".
+    _REPORT_BUDGET_BY_DEPTH: dict[str, int] = {"quick": 600, "standard": 1200, "deep": 1500}
+
+    def _report_budget_seconds(self) -> int:
+        """Wall-clock budget for search → intermediates → report pipeline (depth-aware)."""
+        d = self._settings.depth
+        key = d.value if hasattr(d, "value") else str(d)
+        return self._REPORT_BUDGET_BY_DEPTH.get(key, 1200)
 
     def _session_timeout(self) -> float:
         """Dynamic timeout: budget per question + report generation.
 
-        Budget varies by orchestration mode:
-        - DIRECT: n × 180s (serial SearchCoordinator).
-        - DELEGATE: ceil(n / max_agents) × 300s (parallel isolated SC).
-        - AUTONOMOUS: ceil(n / max_agents) × 300s + 60s (parallel + SharedState).
-        All modes add 180s for report generation + quality evaluation.
+        On retry, checkpointed (already-completed) questions are excluded
+        from the budget — only remaining questions count.
+
+        When **all** sub-questions are checkpointed, remaining search work is 0 — do not use
+        ``max(1, …)`` to inject a fake per-question slot; that mis-accounts wall time vs the
+        report pipeline (the long pole when search is skipped).
+
+        Budget varies by orchestration mode (report budget from ``_report_budget_seconds()``):
+        - DIRECT: remaining × 120s + report budget.
+        - DELEGATE / AUTONOMOUS: batch×300s + report budget (+ extras); no batches when remaining=0.
         """
-        n = len(self._plan.sub_questions) if self._plan else 3
+        report_budget = float(self._report_budget_seconds())
+        total = len(self._plan.sub_questions) if self._plan else 3
+        checkpoint = getattr(self, "_retry_checkpoint", {})
+        remaining = max(0, total - len(checkpoint))
         mode = self._settings.orchestration_mode
+        extra = 60 if mode == OrchestrationMode.AUTONOMOUS else 0
         if mode in (OrchestrationMode.DELEGATE, OrchestrationMode.AUTONOMOUS):
-            batches = max(1, -(-n // self._settings.max_agents))
-            extra = 60 if mode == OrchestrationMode.AUTONOMOUS else 0
-            return batches * self._AGENT_TIMEOUT_SECONDS + self._REPORT_BUDGET_SECONDS + extra
-        return n * self._PER_QUESTION_BUDGET_SECONDS + self._REPORT_BUDGET_SECONDS
+            if remaining == 0:
+                return report_budget + extra
+            batches = max(1, -(-remaining // self._settings.max_agents))
+            return batches * self._AGENT_TIMEOUT_SECONDS + report_budget + extra
+        if remaining == 0:
+            return report_budget
+        return remaining * self._PER_QUESTION_BUDGET_SECONDS + report_budget
 
     async def execute(self) -> None:
         """Execute the research plan: search all sub-questions and generate report.
 
-        Timeout varies by mode (5 sub-questions, max_agents=5):
-        - DIRECT:     5×180+180 = 1080s  (serial SearchCoordinator)
-        - DELEGATE:   ceil(5/5)×300+180 = 480s  (parallel isolated SC)
-        - AUTONOMOUS: ceil(5/5)×300+240 = 540s  (parallel + SharedState)
+        Timeout varies by mode and depth (report budget: quick 600s / standard 1200s / deep 1500s):
+        - DIRECT: remaining×120s + report budget (remaining = sub-questions not in checkpoint).
+        - DELEGATE/AUTONOMOUS: batch×300 + report budget + extras; all-checkpoint → report budget only.
         Each individual SearchCoordinator also has a 300s hard cap.
         """
         if not self._plan:
@@ -359,6 +379,31 @@ class ResearchSession:
 
         self._plan.status = PlanStatus.EXECUTING
         self._status = ResearchStatus.EXECUTING
+        self._intermediate_reuse_by_qid = {ir.question_id: ir for ir in self._intermediate_reports}
+        self._retry_checkpoint: dict[str, SearchResult] = {
+            sr.question_id: sr for sr in self._search_results if sr.sources
+        }
+        total_sq = len(self._plan.sub_questions)
+        if (
+            self._settings.depth in ("standard", "deep")
+            and total_sq
+            and len(self._retry_checkpoint) == total_sq
+            and not self._intermediate_reuse_by_qid
+        ):
+            logger.info(
+                "research.intermediate_reuse: full search checkpoint but no prior intermediates "
+                "— will generate %d intermediate reports (LLM); persist after last run enables reuse",
+                total_sq,
+            )
+        self._search_results.clear()
+        self._intermediate_reports.clear()
+        self._conflicts.clear()
+        self._aggregated = None
+        self._report = None
+        self._quality = None
+        self._error = None
+        self._started_at = time.time()
+        self._execution_phase = "search"
         session_timeout = self._session_timeout()
 
         try:
@@ -367,6 +412,15 @@ class ResearchSession:
                 timeout=session_timeout,
             )
         except TimeoutError:
+            d = self._settings.depth
+            depth_s = d.value if hasattr(d, "value") else str(d)
+            logger.warning(
+                "research.session_timeout session_id=%s depth=%s phase=%s budget_s=%.0f",
+                self.session_id,
+                depth_s,
+                self._execution_phase,
+                session_timeout,
+            )
             self._error = f"Research timed out after {session_timeout:.0f}s"
             self._plan.status = PlanStatus.FAILED
             self._status = ResearchStatus.FAILED
@@ -383,12 +437,66 @@ class ResearchSession:
             await self._emit("research.failed", error=self._error)
             raise
 
+    async def _emit_report_generation_end(self, *, error: str | None = None) -> None:
+        """Pair with ``research.step_started`` for the report phase (UI spinner / SSE)."""
+        total = len(self._plan.sub_questions) if self._plan else 0
+        await self._emit(
+            "research.step_completed",
+            step_id="report_generation",
+            step="Generating report...",
+            total_steps=total,
+            completed_steps=total,
+            elapsed_seconds=round(time.time() - self._started_at, 2),
+            failed=bool(error),
+            error=error or "",
+        )
+
+    async def _emit_restored_search_events(self, question_id: str, result: SearchResult) -> None:
+        """Re-emit search_queries + source_found so UI shows sources after checkpoint retry."""
+        for rnd in result.rounds:
+            if rnd.queries:
+                await self._emit(
+                    "research.search_queries",
+                    question_id=question_id,
+                    round=rnd.round_index + 1,
+                    queries=rnd.queries,
+                )
+        for src in result.sources[:12]:
+            await self._emit(
+                "research.source_found",
+                question_id=question_id,
+                title=src.title or "",
+                url=src.url or "",
+                snippet=(src.snippet or "")[:500],
+                query="",
+            )
+
     async def _execute_inner(self) -> None:
         """Core execution: search → report → quality evaluation."""
+        self._execution_phase = "search"
         await self._run_search()
         self._check_cancelled()
         self._status = ResearchStatus.GENERATING_REPORT
-        await self._run_report()
+        total = len(self._plan.sub_questions) if self._plan else 0
+        await self._emit(
+            "research.step_started",
+            step_id="report_generation",
+            step="Generating report...",
+            total_steps=total,
+            completed_steps=total,
+            elapsed_seconds=round(time.time() - self._started_at, 2),
+        )
+        self._execution_phase = "report"
+        try:
+            await self._run_report()
+        except asyncio.CancelledError:
+            await self._emit_report_generation_end(error="cancelled")
+            raise
+        except Exception as exc:
+            await self._emit_report_generation_end(error=str(exc))
+            raise
+        await self._emit_report_generation_end()
+        self._execution_phase = "done"
         if self._plan:
             self._plan.status = PlanStatus.COMPLETED
         self._status = ResearchStatus.COMPLETED
@@ -506,6 +614,7 @@ class ResearchSession:
         dependencies are searched first, with priority as tiebreaker.
         """
         assert self._plan is not None
+        t_search = time.perf_counter()
         questions = _topo_sort_questions(self._plan.sub_questions)
         mode = self._settings.orchestration_mode
 
@@ -519,11 +628,25 @@ class ResearchSession:
         self._aggregated = await self._aggregator.aggregate(self._search_results)
 
         if self._settings.depth in ("standard", "deep"):
+            reuse = getattr(self, "_intermediate_reuse_by_qid", None) or {}
+            ck = frozenset(getattr(self, "_retry_checkpoint", {}).keys())
             self._intermediate_reports = await self._report_pipeline.generate_intermediates(
                 self._search_results,
                 questions,
                 self._plan.query,
+                reuse_by_question_id=reuse,
+                checkpoint_question_ids=ck,
             )
+
+        d = self._settings.depth
+        depth_s = d.value if hasattr(d, "value") else str(d)
+        logger.info(
+            "research.phase.search_done session_id=%s depth=%s elapsed_s=%.2f sub_questions=%d",
+            self.session_id,
+            depth_s,
+            time.perf_counter() - t_search,
+            len(self._plan.sub_questions),
+        )
 
     # ── DIRECT mode ────────────────────────────────────────────
 
@@ -531,14 +654,41 @@ class ResearchSession:
         """DIRECT: serial SearchCoordinator with shared context."""
         assert self._plan is not None
         total = len(questions)
+        checkpoint = getattr(self, "_retry_checkpoint", {})
         for sq in questions:
             self._check_cancelled()
+            cached = checkpoint.get(sq.question_id)
+            if cached:
+                self._search_results.append(cached)
+                logger.info("Retry: reusing checkpoint for %s", sq.question_id)
+                await self._emit(
+                    "research.step_started",
+                    step_id=sq.question_id,
+                    step=sq.question[:60],
+                    total_steps=total,
+                    completed_steps=len(self._search_results) - 1,
+                    elapsed_seconds=round(time.time() - self._started_at, 2),
+                    reused=True,
+                )
+                await self._emit_restored_search_events(sq.question_id, cached)
+                await self._emit(
+                    "research.step_completed",
+                    step_id=sq.question_id,
+                    step=sq.question[:60],
+                    total_steps=total,
+                    completed_steps=len(self._search_results),
+                    sources=len(cached.sources),
+                    elapsed_seconds=round(time.time() - self._started_at, 2),
+                    reused=True,
+                )
+                continue
             await self._emit(
                 "research.step_started",
                 step_id=sq.question_id,
                 step=sq.question[:60],
                 total_steps=total,
                 completed_steps=len(self._search_results),
+                elapsed_seconds=round(time.time() - self._started_at, 2),
             )
             result = await self._search_question(sq)
             self._search_results.append(result)
@@ -549,6 +699,7 @@ class ResearchSession:
                 total_steps=total,
                 completed_steps=len(self._search_results),
                 sources=len(result.sources),
+                elapsed_seconds=round(time.time() - self._started_at, 2),
             )
 
     # ── DELEGATE mode ──────────────────────────────────────────
@@ -562,14 +713,42 @@ class ResearchSession:
         """
         assert self._plan is not None
         total = len(questions)
+        checkpoint = getattr(self, "_retry_checkpoint", {})
+        pending = [sq for sq in questions if sq.question_id not in checkpoint]
 
-        for sq in questions:
+        for sq in pending:
             await self._emit(
                 "research.agent_spawned",
                 agent_id=f"{self.session_id}_{sq.question_id}",
                 agent_name=sq.question[:60],
                 task=sq.question,
             )
+
+        for sq in questions:
+            cached = checkpoint.get(sq.question_id)
+            if cached:
+                self._search_results.append(cached)
+                logger.info("Retry: reusing checkpoint for %s", sq.question_id)
+                await self._emit(
+                    "research.step_started",
+                    step_id=sq.question_id,
+                    step=sq.question[:60],
+                    total_steps=total,
+                    completed_steps=len(self._search_results) - 1,
+                    elapsed_seconds=round(time.time() - self._started_at, 2),
+                    reused=True,
+                )
+                await self._emit_restored_search_events(sq.question_id, cached)
+                await self._emit(
+                    "research.step_completed",
+                    step_id=sq.question_id,
+                    step=sq.question[:60],
+                    total_steps=total,
+                    completed_steps=len(self._search_results),
+                    sources=len(cached.sources),
+                    elapsed_seconds=round(time.time() - self._started_at, 2),
+                    reused=True,
+                )
 
         sem = asyncio.Semaphore(self._settings.max_agents)
 
@@ -582,6 +761,7 @@ class ResearchSession:
                     step=sq.question[:60],
                     total_steps=total,
                     completed_steps=len(self._search_results),
+                    elapsed_seconds=round(time.time() - self._started_at, 2),
                 )
                 result = await self._search_question_isolated(sq)
                 await self._emit(
@@ -590,15 +770,16 @@ class ResearchSession:
                     step=sq.question[:60],
                     total_steps=total,
                     sources=len(result.sources),
+                    elapsed_seconds=round(time.time() - self._started_at, 2),
                 )
                 return result
 
         results = await asyncio.gather(
-            *[_run_one(sq) for sq in questions],
+            *[_run_one(sq) for sq in pending],
             return_exceptions=True,
         )
 
-        for sq, r in zip(questions, results, strict=True):
+        for sq, r in zip(pending, results, strict=True):
             if isinstance(r, BaseException):
                 logger.warning("DELEGATE search failed for %s: %s", sq.question_id, r)
                 r = SearchResult(
@@ -623,14 +804,48 @@ class ResearchSession:
         total = len(questions)
         state_id = f"research_{self.session_id}"
         shared = self._shared_state
+        checkpoint = getattr(self, "_retry_checkpoint", {})
+        pending = [sq for sq in questions if sq.question_id not in checkpoint]
 
-        for sq in questions:
+        for sq in pending:
             await self._emit(
                 "research.agent_spawned",
                 agent_id=f"{self.session_id}_{sq.question_id}",
                 agent_name=sq.question[:60],
                 task=sq.question,
             )
+
+        for sq in questions:
+            cached = checkpoint.get(sq.question_id)
+            if cached:
+                self._search_results.append(cached)
+                logger.info("Retry: reusing checkpoint for %s", sq.question_id)
+                await self._emit(
+                    "research.step_started",
+                    step_id=sq.question_id,
+                    step=sq.question[:60],
+                    total_steps=total,
+                    completed_steps=len(self._search_results) - 1,
+                    elapsed_seconds=round(time.time() - self._started_at, 2),
+                    reused=True,
+                )
+                await self._emit_restored_search_events(sq.question_id, cached)
+                await self._emit(
+                    "research.step_completed",
+                    step_id=sq.question_id,
+                    step=sq.question[:60],
+                    total_steps=total,
+                    completed_steps=len(self._search_results),
+                    sources=len(cached.sources),
+                    elapsed_seconds=round(time.time() - self._started_at, 2),
+                    reused=True,
+                )
+                for src in cached.sources:
+                    if src.snippet:
+                        await shared.write(
+                            state_id,
+                            {"findings": [{"question_id": sq.question_id, "snippet": src.snippet}]},
+                        )
 
         sem = asyncio.Semaphore(self._settings.max_agents)
 
@@ -643,6 +858,7 @@ class ResearchSession:
                     step=sq.question[:60],
                     total_steps=total,
                     completed_steps=len(self._search_results),
+                    elapsed_seconds=round(time.time() - self._started_at, 2),
                 )
                 state = await shared.read(state_id)
                 peer_findings = [
@@ -670,15 +886,16 @@ class ResearchSession:
                     step=sq.question[:60],
                     total_steps=total,
                     sources=len(result.sources),
+                    elapsed_seconds=round(time.time() - self._started_at, 2),
                 )
                 return result
 
         results = await asyncio.gather(
-            *[_run_one(sq) for sq in questions],
+            *[_run_one(sq) for sq in pending],
             return_exceptions=True,
         )
 
-        for sq, r in zip(questions, results, strict=True):
+        for sq, r in zip(pending, results, strict=True):
             if isinstance(r, BaseException):
                 logger.warning("AUTONOMOUS search failed for %s: %s", sq.question_id, r)
                 r = SearchResult(

@@ -162,3 +162,19 @@ class TestHeadRequest:
         assert result.reachable is True
         assert result.status_code == 200
         assert calls == ["HEAD", "GET"]
+
+
+class TestLocalUrlFilter:
+    async def test_localhost_marked_unreachable(self):
+        v = URLValidator()
+        report = await v.validate(["http://localhost:3000/page", "http://127.0.0.1/foo"])
+        assert report.total == 2
+        assert report.unreachable == 2
+        for r in report.results:
+            assert r.reachable is False
+            assert r.error == "local_or_invalid_scheme"
+
+    async def test_file_scheme_rejected(self):
+        v = URLValidator()
+        report = await v.validate(["file:///etc/passwd"])
+        assert report.unreachable == 1

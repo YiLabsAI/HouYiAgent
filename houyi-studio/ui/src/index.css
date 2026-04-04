@@ -22,15 +22,14 @@
 
 body {
   margin: 0;
-  display: flex;
-  place-items: center;
   min-width: 320px;
-  min-height: 100vh;
+  overflow: hidden;
 }
 
 #root {
   width: 100%;
   height: 100vh;
+  overflow: hidden;
 }
 
 .react-flow__attribution {
@@ -197,3 +196,12 @@ body {
   overflow-y: hidden;
   padding: 2px 0;
 }
+
+/* Report body: compact typography for research reports */
+.report-body h1 { font-size: 0.875rem !important; /* 14px — text-sm */ }
+.report-body h2 { font-size: 0.8125rem !important; /* 13px */ }
+.report-body h3 { font-size: 0.75rem !important; /* 12px — text-xs */ }
+.report-body p,
+.report-body li { font-size: inherit; /* 12px from parent text-xs */ }
+.report-body ul,
+.report-body ol { font-size: inherit; }

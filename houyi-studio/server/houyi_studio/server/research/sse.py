@@ -102,6 +102,10 @@ async def research_sse_stream(
                 if replaying:
                     env.replayed = True
                     yield env.to_sse()
+        elif not last_event_id and buffer:
+            for env in buffer:
+                env.replayed = True
+                yield env.to_sse()
 
         yield f": connected session={session_id}\n\n"
 
@@ -137,7 +141,8 @@ async def research_sse_stream(
                 sequence=sequence,
                 payload=payload,
             )
-            buffer.append(envelope)
+            if event_buffer is None:
+                buffer.append(envelope)
             yield envelope.to_sse()
 
             if research_event in ("research.completed", "research.failed", "research.cancelled"):

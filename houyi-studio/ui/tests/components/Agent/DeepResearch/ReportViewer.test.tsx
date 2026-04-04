@@ -37,6 +37,13 @@ describe('ReportViewer', () => {
     expect(screen.getByText('Research Report')).toBeInTheDocument();
   });
 
+  it('report body uses compact text-xs and report-body class', () => {
+    const { container } = render(<ReportViewer report={makeReport()} />);
+    const reportBody = container.querySelector('.report-body');
+    expect(reportBody).toBeTruthy();
+    expect(reportBody?.classList.contains('text-xs')).toBe(true);
+  });
+
   it('renders quality scores', () => {
     render(<ReportViewer report={makeReport()} />);
     expect(screen.getByText('8.5')).toBeInTheDocument();
@@ -193,5 +200,110 @@ describe('ReportViewer', () => {
     const alphaRow = alpha?.closest('a');
     expect(within(betaRow as HTMLElement).getByText('[1]', { exact: false })).toBeInTheDocument();
     expect(within(alphaRow as HTMLElement).getByText('[2]', { exact: false })).toBeInTheDocument();
+  });
+
+  it('sanitizes well-formed JSON section content', () => {
+    const jsonContent = JSON.stringify({
+      content: 'Actual report content about AI.',
+      citations: [{ reference_id: 'ref_x', text_span: 'AI' }],
+    });
+    render(
+      <ReportViewer
+        report={makeReport({
+          sections: [{ title: 'Section', content: jsonContent, citations: [] }],
+          references: [],
+        })}
+      />,
+    );
+    const md = screen.getByTestId('md-renderer');
+    expect(md.textContent).toContain('Actual report content about AI.');
+    expect(md.textContent).not.toContain('"content"');
+    expect(md.textContent).not.toContain('"citations"');
+  });
+
+  it('sanitizes JSON with literal newlines in content value', () => {
+    const broken = '{ "content": "Line 1\\nLine 2\\n\\n### Heading\\n\\nMore text.", "citations": [] }';
+    render(
+      <ReportViewer
+        report={makeReport({
+          sections: [{ title: 'S', content: broken, citations: [] }],
+          references: [],
+        })}
+      />,
+    );
+    const md = screen.getByTestId('md-renderer');
+    expect(md.textContent).toContain('Line 1');
+    expect(md.textContent).toContain('More text.');
+    expect(md.textContent).not.toContain('"content"');
+  });
+
+  it('sanitizes structurally-formatted JSON with actual newlines', () => {
+    const multiline = '{\n  "content": "Report body here.",\n  "citations": []\n}';
+    render(
+      <ReportViewer
+        report={makeReport({
+          sections: [{ title: 'S', content: multiline, citations: [] }],
+          references: [],
+        })}
+      />,
+    );
+    const md = screen.getByTestId('md-renderer');
+    expect(md.textContent).toContain('Report body here.');
+    expect(md.textContent).not.toContain('"content"');
+  });
+
+  it('sanitizes code-fenced JSON section content', () => {
+    const jsonBody = JSON.stringify({ content: 'Fenced content here.', citations: [] });
+    const fenced = '```json\n' + jsonBody + '\n```';
+    render(
+      <ReportViewer
+        report={makeReport({
+          sections: [{ title: 'S', content: fenced, citations: [] }],
+          references: [],
+        })}
+      />,
+    );
+    const md = screen.getByTestId('md-renderer');
+    expect(md.textContent).toContain('Fenced content here.');
+    expect(md.textContent).not.toContain('"content"');
+  });
+
+  it('merges prose with trailing fenced JSON body', () => {
+    const trailing = 'Normal analysis text.\n\n```json\n{"content": "Body from JSON.", "citations": []}\n```';
+    render(
+      <ReportViewer
+        report={makeReport({
+          sections: [{ title: 'S', content: trailing, citations: [] }],
+          references: [],
+        })}
+      />,
+    );
+    const md = screen.getByTestId('md-renderer');
+    expect(md.textContent).toContain('Normal analysis text.');
+    expect(md.textContent).toContain('Body from JSON.');
+    expect(md.textContent).not.toContain('"content"');
+  });
+
+  it('filters out localhost and bare-id references', () => {
+    render(
+      <ReportViewer
+        report={makeReport({
+          sections: [
+            {
+              title: 'Intro',
+              content: 'Good [ref_ok] and bad [ref_local].',
+              citations: [],
+            },
+          ],
+          references: [
+            { reference_id: 'ref_ok', url: 'https://example.com', title: 'Good', snippet: '', reliability: 0.8 },
+            { reference_id: 'ref_local', url: 'http://localhost:3000/page', title: 'Local', snippet: '', reliability: 0.1 },
+          ],
+        })}
+      />,
+    );
+    const links = screen.getAllByRole('link');
+    expect(links.some((el) => el.getAttribute('href') === 'https://example.com')).toBe(true);
+    expect(links.some((el) => el.getAttribute('href')?.includes('localhost'))).toBe(false);
   });
 });

@@ -86,12 +86,21 @@ export interface SSEEvent {
 // Store
 // ---------------------------------------------------------------------------
 
+export interface SearchResultData {
+  question_id: string;
+  sources: SourceReference[];
+  summary: string;
+  coverage_score: number;
+  error?: string | null;
+}
+
 interface ResearchState {
   phase: ResearchPhase;
   sessionId: string | null;
   plan: ResearchPlan | null;
   progress: ResearchProgress | null;
   report: ResearchReport | null;
+  searchResults: SearchResultData[] | null;
   sessions: SessionSummary[];
   events: SSEEvent[];
   error: string | null;
@@ -134,6 +143,7 @@ const initialState = {
   plan: null as ResearchPlan | null,
   progress: null as ResearchProgress | null,
   report: null as ResearchReport | null,
+  searchResults: null as SearchResultData[] | null,
   sessions: [] as SessionSummary[],
   events: [] as SSEEvent[],
   error: null as string | null,
@@ -363,6 +373,7 @@ export const useResearchStore = create<ResearchState>((set, get) => ({
       lastSequence: 0,
       plan: null,
       report: null,
+      searchResults: null,
       progress: null,
       phase: 'input',
     });
@@ -373,6 +384,7 @@ export const useResearchStore = create<ResearchState>((set, get) => ({
         plan: ResearchPlan | null;
         progress: ResearchProgress;
         error?: string | null;
+        search_results?: SearchResultData[] | null;
       }>(`/sessions/${sessionId}`);
 
       const statusPhaseMap: Record<string, ResearchPhase> = {
@@ -386,11 +398,17 @@ export const useResearchStore = create<ResearchState>((set, get) => ({
         failed: 'planning',
         cancelled: 'planning',
       };
-      const phase = statusPhaseMap[data.status] || 'input';
+      let phase = statusPhaseMap[data.status] || 'input';
+
+      const hasPartialResults = data.status === 'failed' && data.search_results && data.search_results.length > 0;
+      if (hasPartialResults) {
+        phase = 'report';
+      }
 
       set({
         plan: data.plan,
         progress: data.progress,
+        searchResults: data.search_results || null,
         phase,
         loading: false,
         error: data.error || null,

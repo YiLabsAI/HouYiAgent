@@ -14,7 +14,10 @@ import time
 from pathlib import Path
 from typing import Any
 
+from houyi_studio.server.research.sse import ResearchSSEEnvelope
+
 from houyi.adapters.llm.base import LLMAdapter
+from houyi.application.research.intermediate import IntermediateReport
 from houyi.application.research.session import ResearchSession
 from houyi.application.research.types import (
     PlanEdit,
@@ -24,6 +27,7 @@ from houyi.application.research.types import (
     ResearchReport,
     ResearchSettings,
     ResearchStatus,
+    SearchResult,
 )
 from houyi.application.runtime.events import EventEmitter
 from houyi.skills.web_search.service import WebSearchService
@@ -45,6 +49,8 @@ class _ArchivedSession:
         self._progress_data: dict[str, Any] = data.get("progress", {})
         self._error: str | None = data.get("error")
         self._report_data: dict[str, Any] | None = data.get("report")
+        self._search_results_data: list[dict[str, Any]] = data.get("search_results", [])
+        self._intermediate_reports_data: list[dict[str, Any]] = data.get("intermediate_reports", [])
         self.created_at: str = data.get("created_at", "")
         self.updated_at: float = data.get("updated_at", 0)
 
@@ -79,6 +85,14 @@ class _ArchivedSession:
     def report_data(self) -> dict[str, Any] | None:
         return self._report_data
 
+    @property
+    def search_results_data(self) -> list[dict[str, Any]]:
+        return self._search_results_data
+
+    @property
+    def intermediate_reports_data(self) -> list[dict[str, Any]]:
+        return self._intermediate_reports_data
+
 
 class ResearchService:
     """Server-side service managing research sessions.
@@ -103,8 +117,30 @@ class ResearchService:
         self._sessions: dict[str, ResearchSession | _ArchivedSession] = {}
         self._idempotency: dict[str, str] = {}
         self._emitters: dict[str, EventEmitter] = {}
+        self._event_buffers: dict[str, list] = {}
         self._memory_service = memory_service
         self._load_persisted_sessions()
+
+    def _attach_buffer_listener(self, session_id: str, emitter: EventEmitter) -> None:
+        """Attach an always-on listener that buffers events for late SSE subscribers."""
+        buf = self._event_buffers.setdefault(session_id, [])
+        seq_counter = {"n": 0}
+
+        async def _buffer_handler(event: Any) -> None:
+            research_event = event.data.get("research_event", "unknown")
+            seq_counter["n"] += 1
+            payload = {
+                k: v for k, v in event.data.items() if k not in ("research_event", "sequence")
+            }
+            env = ResearchSSEEnvelope(
+                event_type=research_event,
+                session_id=session_id,
+                sequence=seq_counter["n"],
+                payload=payload,
+            )
+            buf.append(env)
+
+        emitter.on_any(_buffer_handler)
 
     def running_session_count(self) -> int:
         """Count currently executing sessions."""
@@ -139,6 +175,7 @@ class ResearchService:
         plan = await session.start(query)
         self._sessions[session.session_id] = session
         self._emitters[session.session_id] = emitter
+        self._attach_buffer_listener(session.session_id, emitter)
         if idempotency_key:
             self._idempotency[idempotency_key] = session.session_id
 
@@ -150,6 +187,9 @@ class ResearchService:
 
     def get_emitter(self, session_id: str) -> EventEmitter | None:
         return self._emitters.get(session_id)
+
+    def get_event_buffer(self, session_id: str) -> list:
+        return self._event_buffers.setdefault(session_id, [])
 
     async def edit_plan(
         self,
@@ -187,8 +227,10 @@ class ResearchService:
         if session.status == ResearchStatus.EXECUTING:
             return
         await session.confirm_plan()
-        await session.execute()
-        self._persist_session(session)
+        try:
+            await session.execute()
+        finally:
+            self._persist_session(session)
         await self._extract_and_push_memories(session)
 
     async def _extract_and_push_memories(self, session: ResearchSession) -> None:
@@ -280,7 +322,11 @@ class ResearchService:
         return session
 
     def _rehydrate(self, archived: _ArchivedSession) -> ResearchSession:
-        """Convert an archived session back into a live ResearchSession."""
+        """Convert an archived session back into a live ResearchSession.
+
+        Restores plan and search_results so that retry can checkpoint
+        already-completed sub-questions and skip re-searching them.
+        """
         emitter = EventEmitter()
         session = ResearchSession(
             session_id=archived.session_id,
@@ -295,8 +341,44 @@ class ResearchService:
             session._status = ResearchStatus.PLAN_READY
         session.created_at = archived.created_at or session.created_at
 
+        for i, sr_data in enumerate(archived.search_results_data):
+            try:
+                session._search_results.append(SearchResult.model_validate(sr_data))
+            except Exception:
+                logger.warning(
+                    "Failed to restore search result [%d] for session %s",
+                    i,
+                    archived.session_id,
+                    exc_info=True,
+                )
+        if session._search_results:
+            logger.info(
+                "Restored %d search results for session %s",
+                len(session._search_results),
+                archived.session_id,
+            )
+
+        for i, ir_data in enumerate(archived.intermediate_reports_data):
+            try:
+                session._intermediate_reports.append(IntermediateReport.model_validate(ir_data))
+            except Exception:
+                logger.warning(
+                    "Failed to restore intermediate report [%d] for session %s",
+                    i,
+                    archived.session_id,
+                    exc_info=True,
+                )
+        if session._intermediate_reports:
+            logger.info(
+                "Restored %d intermediate reports for session %s",
+                len(session._intermediate_reports),
+                archived.session_id,
+            )
+
         self._sessions[archived.session_id] = session
         self._emitters[archived.session_id] = emitter
+        self._event_buffers.pop(archived.session_id, None)
+        self._attach_buffer_listener(archived.session_id, emitter)
         logger.info("Rehydrated archived session %s into live session", archived.session_id)
         return session
 
@@ -308,6 +390,14 @@ class ResearchService:
         if hasattr(session, "_report") and session._report is not None:
             with contextlib.suppress(Exception):
                 report_data = session._report.model_dump()
+        search_results_data: list[dict] = []
+        if hasattr(session, "_search_results"):
+            with contextlib.suppress(Exception):
+                search_results_data = [sr.model_dump() for sr in session._search_results]
+        intermediate_data: list[dict] = []
+        if hasattr(session, "_intermediate_reports"):
+            with contextlib.suppress(Exception):
+                intermediate_data = [ir.model_dump() for ir in session._intermediate_reports]
         data = {
             "session_id": session.session_id,
             "status": session.status.value,
@@ -315,6 +405,8 @@ class ResearchService:
             "progress": session.progress.model_dump(),
             "error": error,
             "report": report_data,
+            "search_results": search_results_data,
+            "intermediate_reports": intermediate_data,
             "created_at": getattr(session, "created_at", ""),
             "updated_at": time.time(),
         }

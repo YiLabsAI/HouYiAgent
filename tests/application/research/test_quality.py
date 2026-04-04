@@ -114,3 +114,50 @@ class TestBoundaryAndInteraction:
         ev = QualityEvaluator(llm)
         await ev.evaluate_race(_report())
         assert llm._call_count == 1
+
+
+class TestGracefulDegradation:
+    """Quality evaluation must not crash the pipeline on LLM errors."""
+
+    async def test_race_error_returns_zero(self):
+        llm = _FailingLLM()
+        ev = QualityEvaluator(llm)
+        score = await ev.evaluate(_report(), _sources())
+        assert score.race.overall == 0.0
+        assert score.fact.citation_accuracy == 0.0
+        assert score.overall == 0.0
+
+    async def test_race_ok_fact_error(self):
+        llm = _OnceFailLLM(fail_on=1, responses=[_RACE_JSON])
+        ev = QualityEvaluator(llm)
+        score = await ev.evaluate(_report(), _sources())
+        assert score.race.overall > 0
+        assert score.fact.citation_accuracy == 0.0
+
+    async def test_fact_ok_race_error(self):
+        # Call 0 (RACE) fails and consumes a counter slot; FACT at index 1
+        llm = _OnceFailLLM(fail_on=0, responses=["", _FACT_JSON])
+        ev = QualityEvaluator(llm)
+        score = await ev.evaluate(_report(), _sources())
+        assert score.race.overall == 0.0
+        assert score.fact.citation_accuracy == 95.0
+
+
+class _FailingLLM(MockLLM):
+    async def chat(self, messages, **kwargs):
+        raise RuntimeError("billing error")
+
+
+class _OnceFailLLM(MockLLM):
+    """Fails on the Nth call (0-indexed), succeeds otherwise."""
+
+    def __init__(self, fail_on: int, responses: list[str] | None = None):
+        super().__init__(responses)
+        self._fail_on = fail_on
+
+    async def chat(self, messages, **kwargs):
+        idx = self._call_count
+        if idx == self._fail_on:
+            self._call_count += 1
+            raise RuntimeError("billing error")
+        return await super().chat(messages, **kwargs)

@@ -53,13 +53,21 @@ class URLValidator:
         self._timeout = timeout
         self._semaphore = asyncio.Semaphore(max_concurrent)
 
+    _LOCAL_PATTERNS = ("localhost", "127.0.0.1", "0.0.0.0", "file://", "file:///")
+
     async def validate(self, urls: list[str]) -> URLValidationReport:
         """Validate all URLs concurrently and return an aggregated report."""
         if not urls:
             return URLValidationReport()
 
         unique = list(dict.fromkeys(urls))
-        tasks = [self._check_url(url) for url in unique]
+        tasks = []
+        for url in unique:
+            low = url.lower()
+            if any(p in low for p in self._LOCAL_PATTERNS) or not low.startswith(("http://", "https://")):
+                tasks.append(self._bogus(url))
+            else:
+                tasks.append(self._check_url(url))
         results = await asyncio.gather(*tasks)
 
         reachable = sum(1 for r in results if r.reachable)
@@ -71,6 +79,10 @@ class URLValidator:
             error_rate=round((total - reachable) / max(total, 1), 3),
             results=list(results),
         )
+
+    @staticmethod
+    async def _bogus(url: str) -> URLValidationResult:
+        return URLValidationResult(url=url, reachable=False, error="local_or_invalid_scheme")
 
     async def _check_url(self, url: str) -> URLValidationResult:
         """Check a single URL via HTTP HEAD, falling back to GET."""

@@ -70,6 +70,106 @@ interface Props {
  * Map raw `[ref_xxx]` citation tokens to sequential superscript `<sup>[1]</sup>`
  * and build a reference ordering that matches the numbering.
  */
+function isUsableRef(ref: ResearchReport['references'][0]): boolean {
+  if (!ref.url) return false;
+  const u = ref.url.toLowerCase();
+  if (u.includes('localhost') || u.includes('127.0.0.1') || u.startsWith('file:')) return false;
+  if (!u.startsWith('http://') && !u.startsWith('https://')) return false;
+  return true;
+}
+
+/**
+ * Scan a JSON string value starting right after the opening `"`.
+ * Returns the raw characters up to the matching (unescaped) closing `"`,
+ * then un-escapes standard JSON sequences.
+ */
+function scanJsonStringValue(text: string, start: number): string | null {
+  let esc = false;
+  for (let i = start; i < text.length; i++) {
+    if (esc) { esc = false; continue; }
+    if (text[i] === '\\') { esc = true; continue; }
+    if (text[i] === '"') {
+      return text.slice(start, i)
+        .replace(/\\n/g, '\n')
+        .replace(/\\r/g, '\r')
+        .replace(/\\t/g, '\t')
+        .replace(/\\"/g, '"')
+        .replace(/\\\\/g, '\\');
+    }
+  }
+  return null;
+}
+
+/**
+ * Try to extract a `"content"` field from a JSON-like string.
+ * Handles: well-formed JSON, JSON with literal newlines inside string values,
+ * and structurally-formatted JSON that breaks JSON.parse.
+ */
+function extractContentField(text: string): string | null {
+  try {
+    const data = JSON.parse(text);
+    if (data && typeof data.content === 'string') return data.content;
+  } catch { /* continue */ }
+
+  const m = text.match(/"content"\s*:\s*"/);
+  if (!m || m.index === undefined) return null;
+  return scanJsonStringValue(text, m.index + m[0].length);
+}
+
+/**
+ * Extract the actual content if the section body is (or ends with) a raw JSON
+ * object with a "content" key. Covers three LLM failure modes:
+ *  1. Entire content is `{"content":"…","citations":[…]}`
+ *  2. Entire content is wrapped in a code fence: ````json\n{…}\n````
+ *  3. Normal markdown followed by a trailing JSON code fence or raw JSON block
+ */
+function sanitizeSectionContent(raw: string): string {
+  if (!raw.includes('"content"')) return raw;
+  const trimmed = raw.trim();
+
+  let text = trimmed;
+  if (text.startsWith('```')) {
+    const firstNl = text.indexOf('\n');
+    const lastFence = text.lastIndexOf('```');
+    if (firstNl !== -1 && lastFence > firstNl) {
+      text = text.slice(firstNl + 1, lastFence).trim();
+    }
+  }
+
+  if (text.startsWith('{')) {
+    const result = extractContentField(text);
+    if (result !== null) return result;
+  }
+
+  const fenceRe = /\n```(?:json)?\s*\n(\s*\{[\s\S]*?"content"\s*:[\s\S]*)\n\s*```\s*$/;
+  const fenceMatch = trimmed.match(fenceRe);
+  if (fenceMatch) {
+    const before = trimmed.slice(0, fenceMatch.index!).trim();
+    const inner = fenceMatch[1].trim();
+    const extracted = extractContentField(inner);
+    if (extracted !== null) {
+      return before ? `${before}\n\n${extracted}` : extracted;
+    }
+  }
+
+  // Prose then raw JSON on following lines (no fence) — common LLM failure mode.
+  const proseJsonSplit = /\n\s*\{\s*"content"\s*:/;
+  const splitIdx = trimmed.search(proseJsonSplit);
+  if (splitIdx >= 0) {
+    const before = trimmed.slice(0, splitIdx).trim();
+    const braceStart = trimmed.indexOf('{', splitIdx);
+    if (braceStart !== -1) {
+      const jsonPart = trimmed.slice(braceStart);
+      const extracted = extractContentField(jsonPart);
+      if (extracted !== null) {
+        return before ? `${before}\n\n${extracted}` : extracted;
+      }
+    }
+  }
+
+  return raw;
+}
+
 function buildNumberedMarkdown(
   sections: ResearchReport['sections'],
   references: ResearchReport['references'],
@@ -82,12 +182,13 @@ function buildNumberedMarkdown(
     if (ref.reference_id) refLookup.set(ref.reference_id, ref);
   }
 
-  const assignIndex = (refId: string): number => {
+  const assignIndex = (refId: string): number | null => {
     const existing = refIdToIndex.get(refId);
     if (existing !== undefined) return existing;
+    const ref = refLookup.get(refId);
+    if (ref && !isUsableRef(ref)) return null;
     const idx = ordered.length + 1;
     refIdToIndex.set(refId, idx);
-    const ref = refLookup.get(refId);
     ordered.push(ref ?? { url: '', title: refId, snippet: '', reliability: 0 });
     return idx;
   };
@@ -95,18 +196,18 @@ function buildNumberedMarkdown(
   const replaceCitations = (text: string): string => {
     return text.replace(/\[ref_([a-zA-Z0-9]+)\]/g, (_match, id) => {
       const num = assignIndex(`ref_${id}`);
-      return `[${num}]`;
+      return num !== null ? `[${num}]` : '';
     });
   };
 
   const parts: string[] = [];
   for (const section of sections) {
     parts.push(`## ${section.title}\n`);
-    parts.push(replaceCitations(section.content));
+    parts.push(replaceCitations(sanitizeSectionContent(section.content)));
     parts.push('');
   }
 
-  const usedRefs = ordered.length > 0 ? ordered : references;
+  const usedRefs = ordered.length > 0 ? ordered.filter(isUsableRef) : references.filter(isUsableRef);
 
   return { markdown: parts.join('\n'), orderedRefs: usedRefs };
 }
@@ -120,10 +221,8 @@ const ReportBody: React.FC<{ markdown: string; animate?: boolean }> = ({ markdow
   }, [displayed]);
 
   return (
-    <div ref={ref} className="rounded-xl border border-gray-700/50 bg-gray-800/30 p-6">
-      <div className="prose prose-invert prose-sm max-w-none">
-        <MarkdownRenderer content={displayed} />
-      </div>
+    <div ref={ref} className="report-body rounded-xl border border-gray-700/50 bg-gray-800/50 p-6 text-xs text-gray-300 leading-relaxed">
+      <MarkdownRenderer content={displayed} />
     </div>
   );
 };

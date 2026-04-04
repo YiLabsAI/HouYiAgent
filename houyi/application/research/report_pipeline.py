@@ -7,7 +7,9 @@ and the returned ``ReportPipelineResult``.
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -74,6 +76,36 @@ class ReportPipeline:
         self._emit = emit
 
     # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    async def _generate_pending_intermediates(
+        self,
+        pending: list[tuple[SearchResult, str]],
+        plan_query: str,
+        one_fn: Any,
+    ) -> dict[str, IntermediateReport]:
+        """Run parallel intermediate generation with serial fallback."""
+        if not pending:
+            return {}
+        try:
+            results = await asyncio.gather(*[one_fn(sr, qt) for sr, qt in pending])
+            return {sr.question_id: ir for (sr, _), ir in zip(pending, results, strict=True)}
+        except Exception:
+            logger.warning(
+                "Parallel intermediate generation failed, falling back to serial", exc_info=True
+            )
+        gen_by_qid: dict[str, IntermediateReport] = {}
+        for sr, qt in pending:
+            try:
+                gen_by_qid[sr.question_id] = await self._intermediate_gen.generate(
+                    sr, qt, plan_query
+                )
+            except Exception:
+                logger.warning("Intermediate report failed for %s", sr.question_id, exc_info=True)
+        return gen_by_qid
+
+    # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
@@ -82,28 +114,73 @@ class ReportPipeline:
         search_results: list[SearchResult],
         questions: list[Any],
         plan_query: str,
+        *,
+        reuse_by_question_id: dict[str, IntermediateReport] | None = None,
+        checkpoint_question_ids: frozenset[str] | None = None,
     ) -> list[IntermediateReport]:
-        """Generate intermediate reports for each sub-question's results."""
+        """Generate intermediate reports per sub-question (parallel, with reuse on retry).
+
+        When ``reuse_by_question_id`` and ``checkpoint_question_ids`` are set,
+        sub-questions whose search was **skipped** via checkpoint reuse the
+        prior intermediate report — avoids N redundant LLM calls on report-timeout
+        retries (root cause of multi-minute report phases).
+        """
         qid_to_text = {sq.question_id: sq.question for sq in questions}
-        reports: list[IntermediateReport] = []
+        reuse = reuse_by_question_id or {}
+        ck = checkpoint_question_ids or frozenset()
+        t0 = time.perf_counter()
+        reused_count = 0
+
+        pending: list[tuple[SearchResult, str]] = []
         for sr in search_results:
             q_text = qid_to_text.get(sr.question_id, "")
-            try:
-                ir = await self._intermediate_gen.generate(sr, q_text, plan_query)
-                reports.append(ir)
+            if sr.question_id in ck and sr.question_id in reuse:
+                reused_count += 1
+                continue
+            pending.append((sr, q_text))
+
+        sem = asyncio.Semaphore(4)
+
+        async def _one(sr: SearchResult, q_text: str) -> IntermediateReport:
+            async with sem:
+                return await self._intermediate_gen.generate(sr, q_text, plan_query)
+
+        gen_by_qid = await self._generate_pending_intermediates(pending, plan_query, _one)
+
+        out: list[IntermediateReport] = []
+        for sr in search_results:
+            if sr.question_id in ck and sr.question_id in reuse:
+                ir = reuse[sr.question_id]
+                out.append(ir)
                 await self._emit(
                     "research.intermediate_report",
                     question_id=sr.question_id,
                     confidence=ir.confidence,
                     key_findings=ir.key_findings[:3],
+                    reused_from_checkpoint=True,
                 )
-            except Exception:
-                logger.warning(
-                    "Intermediate report failed for %s",
-                    sr.question_id,
-                    exc_info=True,
-                )
-        return reports
+                continue
+            generated = gen_by_qid.get(sr.question_id)
+            if generated is None:
+                continue
+            ir = generated
+            out.append(ir)
+            await self._emit(
+                "research.intermediate_report",
+                question_id=sr.question_id,
+                confidence=ir.confidence,
+                key_findings=ir.key_findings[:3],
+            )
+
+        elapsed = time.perf_counter() - t0
+        logger.info(
+            "research.intermediate_reports phase=done elapsed_s=%.2f reused=%d generated=%d pending_llm=%d",
+            elapsed,
+            reused_count,
+            len(gen_by_qid),
+            len(pending),
+        )
+        return out
 
     async def run(
         self,
@@ -114,51 +191,103 @@ class ReportPipeline:
         settings: ResearchSettings,
     ) -> ReportPipelineResult:
         """Execute the full report pipeline and return results."""
-        conflicts = await self._detect_conflicts(search_results)
-
-        report = await self._reporter.generate(
-            plan,
-            aggregated,
-            intermediate_reports=intermediate_reports or None,
+        depth_val = (
+            settings.depth.value if hasattr(settings.depth, "value") else str(settings.depth)
         )
-        for section in report.sections:
-            await self._emit(
-                "research.report_section",
-                chunk={
-                    "section_id": section.section_id,
-                    "title": section.title,
-                    "citations": len(section.citations),
-                },
+        timings: dict[str, float] = {}
+        t_run0 = time.perf_counter()
+
+        try:
+            await self._emit("research.pipeline_phase", phase="conflict_detection")
+            t = time.perf_counter()
+            conflicts = await self._detect_conflicts(search_results, settings)
+            timings["conflicts_ms"] = (time.perf_counter() - t) * 1000.0
+
+            await self._emit("research.pipeline_phase", phase="report_generation")
+            t = time.perf_counter()
+            report = await self._reporter.generate(
+                plan,
+                aggregated,
+                intermediate_reports=intermediate_reports or None,
             )
-
-        await self._validate_urls(aggregated, report)
-
-        validation: ValidationReport | None = None
-        if settings.depth in ("standard", "deep"):
-            validation = await self._validator.validate(report, plan.query)
-            if validation.sections_needing_rewrite > 0:
+            timings["report_generate_ms"] = (time.perf_counter() - t) * 1000.0
+            for section in report.sections:
                 await self._emit(
-                    "research.validation_issues",
-                    sections_flagged=validation.sections_needing_rewrite,
-                    overall_score=validation.overall_score,
-                )
-                await self._repair_weak_sections(
-                    validation,
-                    report,
-                    plan,
-                    aggregated,
+                    "research.report_section",
+                    chunk={
+                        "section_id": section.section_id,
+                        "title": section.title,
+                        "citations": len(section.citations),
+                    },
                 )
 
-        quality = await self._evaluator.evaluate(report, aggregated)
-        if quality:
-            report.metadata.quality_overall = quality.overall
+            await self._emit("research.pipeline_phase", phase="url_validation")
+            t = time.perf_counter()
+            await self._validate_urls(aggregated, report)
+            timings["url_validate_ms"] = (time.perf_counter() - t) * 1000.0
 
-        return ReportPipelineResult(
-            report=report,
-            quality=quality,
-            validation=validation,
-            conflicts=conflicts,
-        )
+            validation: ValidationReport | None = None
+            if settings.depth in ("standard", "deep"):
+                try:
+                    await self._emit("research.pipeline_phase", phase="validation")
+                    t = time.perf_counter()
+                    validation = await self._validator.validate(report, plan.query)
+                    timings["validation_ms"] = (time.perf_counter() - t) * 1000.0
+                    if validation.sections_needing_rewrite > 0:
+                        await self._emit(
+                            "research.validation_issues",
+                            sections_flagged=validation.sections_needing_rewrite,
+                            overall_score=validation.overall_score,
+                        )
+                        t = time.perf_counter()
+                        await self._repair_weak_sections(
+                            validation,
+                            report,
+                            plan,
+                            aggregated,
+                        )
+                        timings["repair_ms"] = (time.perf_counter() - t) * 1000.0
+                except Exception:
+                    logger.warning(
+                        "Validation/repair stage failed — skipping (report still usable)",
+                        exc_info=True,
+                    )
+
+            quality = None
+            try:
+                await self._emit("research.pipeline_phase", phase="quality_evaluation")
+                t = time.perf_counter()
+                quality = await self._evaluator.evaluate(report, aggregated)
+                timings["quality_ms"] = (time.perf_counter() - t) * 1000.0
+            except Exception:
+                logger.warning(
+                    "Quality evaluation failed — skipping (report still usable)",
+                    exc_info=True,
+                )
+            if quality:
+                report.metadata.quality_overall = quality.overall
+
+            timings["total_ms"] = (time.perf_counter() - t_run0) * 1000.0
+            logger.info(
+                "research.report_pipeline phase=done depth=%s timings_ms=%s",
+                depth_val,
+                {k: round(v, 1) for k, v in timings.items()},
+            )
+            return ReportPipelineResult(
+                report=report,
+                quality=quality,
+                validation=validation,
+                conflicts=conflicts,
+            )
+        except Exception:
+            timings["partial_total_ms"] = (time.perf_counter() - t_run0) * 1000.0
+            logger.warning(
+                "research.report_pipeline phase=failed depth=%s partial_timings_ms=%s",
+                depth_val,
+                {k: round(v, 1) for k, v in timings.items()},
+                exc_info=True,
+            )
+            raise
 
     # ------------------------------------------------------------------
     # Internal steps
@@ -167,8 +296,16 @@ class ReportPipeline:
     async def _detect_conflicts(
         self,
         search_results: list[SearchResult],
+        settings: ResearchSettings,
     ) -> list[ConflictRecord]:
-        if len(search_results) < 2:
+        """Detect contradictions between sub-question answers.
+
+        Only runs for ``deep`` mode since sub-questions intentionally cover
+        different aspects — pairwise comparison is only warranted when
+        thoroughness justifies the cost.  Resolution always uses fast
+        source-voting (no LLM call) to avoid the O(n²) latency explosion.
+        """
+        if settings.depth != "deep" or len(search_results) < 2:
             return []
         agent_results = [
             AgentTaskResult(
@@ -183,7 +320,7 @@ class ReportPipeline:
         try:
             detected = await self._conflict_resolver.detect(agent_results)
             for conflict in detected:
-                resolution = await self._conflict_resolver.resolve(conflict)
+                resolution = self._conflict_resolver._resolve_via_voting(conflict)
                 conflict.resolution = resolution
                 await self._emit(
                     "research.conflict_detected",

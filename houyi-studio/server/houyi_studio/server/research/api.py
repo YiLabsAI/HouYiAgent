@@ -113,12 +113,23 @@ async def get_session(session_id: str, request: Request) -> dict[str, Any]:
     if not session:
         raise HTTPException(404, detail="session_not_found")
     try:
+        from .service import _ArchivedSession
+
+        search_results = None
+        if isinstance(session, _ArchivedSession):
+            sr_data = session.search_results_data
+            if sr_data:
+                search_results = sr_data
+        elif hasattr(session, "_search_results") and session._search_results:
+            search_results = [sr.model_dump() for sr in session._search_results]
+
         return {
             "session_id": session.session_id,
             "status": session.status.value,
             "plan": session.plan.model_dump() if session.plan else None,
             "progress": session.progress.model_dump(),
             "error": getattr(session, "_error", None) or getattr(session, "error", None),
+            "search_results": search_results,
         }
     except Exception as exc:
         logger.error("get_session serialization failed: %s", exc, exc_info=True)
@@ -242,8 +253,14 @@ async def session_events(
     emitter = svc.get_emitter(session_id)
     if not emitter:
         raise HTTPException(404, detail="session_not_found")
+    event_buffer = svc.get_event_buffer(session_id)
     return StreamingResponse(
-        research_sse_stream(emitter, session_id, last_event_id=last_event_id),
+        research_sse_stream(
+            emitter,
+            session_id,
+            last_event_id=last_event_id,
+            event_buffer=event_buffer,
+        ),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

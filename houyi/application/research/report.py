@@ -7,6 +7,7 @@ streaming (``AsyncIterator[ReportChunk]``) output.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -20,6 +21,7 @@ from houyi.application.research.intermediate import IntermediateReport
 from houyi.application.research.types import (
     AggregatedSources,
     Citation,
+    OutlineSection,
     ReportChunk,
     ReportChunkType,
     ReportMetadata,
@@ -108,19 +110,22 @@ class ReportGenerator:
 
         start = time.monotonic()
         report_id = f"rpt_{uuid.uuid4().hex[:8]}"
-        sections: list[ReportSection] = []
 
-        for outline_sec in plan.outline:
-            relevant = _relevant_sources(outline_sec.related_question_ids, sources)
-            ir_context = _intermediate_context(outline_sec.related_question_ids, ir_by_qid)
-            section = await self._generate_section(
-                plan.query,
-                outline_sec.title,
-                outline_sec.objective,
-                relevant,
-                intermediate_context=ir_context,
-            )
-            sections.append(section)
+        sem = asyncio.Semaphore(4)
+
+        async def _gen(outline_sec: OutlineSection) -> ReportSection:
+            async with sem:
+                relevant = _relevant_sources(outline_sec.related_question_ids, sources)
+                ir_context = _intermediate_context(outline_sec.related_question_ids, ir_by_qid)
+                return await self._generate_section(
+                    plan.query,
+                    outline_sec.title,
+                    outline_sec.objective,
+                    relevant,
+                    intermediate_context=ir_context,
+                )
+
+        sections = list(await asyncio.gather(*[_gen(o) for o in plan.outline]))
 
         summary = await self._generate_summary(plan.query, sections)
         duration = time.monotonic() - start
@@ -279,8 +284,8 @@ def _parse_section(title: str, content: str) -> ReportSection:
         last_fence = text.rfind("```")
         text = text[first_nl + 1 : last_fence].strip()
 
-    try:
-        data = json.loads(text)
+    data = _try_parse_json(text)
+    if data and "content" in data:
         citations = [
             Citation(
                 reference_id=c.get("reference_id", ""),
@@ -289,14 +294,31 @@ def _parse_section(title: str, content: str) -> ReportSection:
             )
             for c in data.get("citations", [])
         ]
-        body = _strip_leading_heading(title, data.get("content", ""))
-        return ReportSection(
-            title=title,
-            content=body,
-            citations=citations,
-        )
-    except json.JSONDecodeError:
-        return ReportSection(title=title, content=_strip_leading_heading(title, text))
+        body = _strip_leading_heading(title, data["content"])
+        return ReportSection(title=title, content=body, citations=citations)
+    return ReportSection(title=title, content=_strip_leading_heading(title, text))
+
+
+def _try_parse_json(text: str) -> dict | None:
+    """Best-effort JSON extraction: try full text, then brace-delimited substring."""
+    try:
+        data = json.loads(text)
+        if isinstance(data, dict):
+            return data
+    except (json.JSONDecodeError, ValueError):
+        pass
+
+    first = text.find("{")
+    last = text.rfind("}")
+    if first != -1 and last > first:
+        try:
+            data = json.loads(text[first : last + 1])
+            if isinstance(data, dict):
+                return data
+        except (json.JSONDecodeError, ValueError):
+            pass
+
+    return None
 
 
 def _strip_leading_heading(title: str, content: str) -> str:

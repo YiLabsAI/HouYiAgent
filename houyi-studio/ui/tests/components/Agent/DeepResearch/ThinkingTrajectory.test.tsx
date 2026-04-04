@@ -51,7 +51,7 @@ describe('ThinkingTrajectory', () => {
     expect(screen.queryByText('short')).not.toBeInTheDocument();
   });
 
-  it('displays source count badge per group', () => {
+  it('displays source count badge with label per group', () => {
     const events: SSEEvent[] = [
       evt('e1', 'research.step_started', 1, { step_id: 'sq_1', step: 'Q1' }),
       evt('e2', 'research.source_found', 2, { question_id: 'sq_1', title: 'S1', url: 'https://1.com' }),
@@ -59,7 +59,7 @@ describe('ThinkingTrajectory', () => {
       evt('e4', 'research.source_found', 4, { question_id: 'sq_1', title: 'S3', url: 'https://3.com' }),
     ];
     render(<ThinkingTrajectory events={events} />);
-    expect(screen.getByText('3')).toBeInTheDocument();
+    expect(screen.getByText('3 sources')).toBeInTheDocument();
   });
 
   it('expands group on click to show source details', () => {
@@ -114,5 +114,62 @@ describe('ThinkingTrajectory', () => {
     const { container } = render(<ThinkingTrajectory events={events} />);
     const checkIcon = container.querySelector('.text-green-400');
     expect(checkIcon).toBeTruthy();
+  });
+
+  it('shows red icon (not spinner) for failed pipeline event', () => {
+    const events: SSEEvent[] = [
+      evt('e1', 'research.failed', 1, { error: 'Research timed out after 900s' }),
+    ];
+    const { container } = render(<ThinkingTrajectory events={events} />);
+    expect(screen.getByText('Research timed out after 900s')).toBeInTheDocument();
+    const redIcons = container.querySelectorAll('.text-red-400');
+    expect(redIcons.length).toBeGreaterThan(0);
+    const spinners = container.querySelectorAll('.animate-spin');
+    expect(spinners.length).toBe(0);
+  });
+
+  it('does not show confusing sequence numbers in pipeline events', () => {
+    const events: SSEEvent[] = [
+      evt('e1', 'research.intermediate_report', 200, { question_id: 'sq_1' }),
+    ];
+    render(<ThinkingTrajectory events={events} />);
+    expect(screen.getByText('Intermediate report: sq_1')).toBeInTheDocument();
+    expect(screen.queryByText('#200')).not.toBeInTheDocument();
+  });
+
+  it('treats report_generation step events as pipeline, not question group', () => {
+    const events: SSEEvent[] = [
+      evt('e1', 'research.step_started', 1, { step_id: 'sq_1', step: 'Q1' }),
+      evt('e2', 'research.step_completed', 2, { step_id: 'sq_1', step: 'Q1' }),
+      evt('e3', 'research.step_started', 3, { step_id: 'report_generation', step: 'Generating report...' }),
+    ];
+    render(<ThinkingTrajectory events={events} />);
+    expect(screen.getByText('Q1')).toBeInTheDocument();
+    // "Generating report..." should NOT appear as a question group card
+    const allButtons = screen.getAllByRole('button');
+    const labels = allButtons.map((b) => b.textContent);
+    expect(labels.some((l) => l?.includes('Generating report'))).toBe(false);
+  });
+
+  it('forces searching questions to completed once report phase starts', () => {
+    const events: SSEEvent[] = [
+      evt('e1', 'research.step_started', 1, { step_id: 'sq_1', step: 'Q1' }),
+      // step_completed missing — would stay "searching" without the fix
+      evt('e2', 'research.intermediate_report', 2, { question_id: 'sq_1' }),
+    ];
+    const { container } = render(<ThinkingTrajectory events={events} />);
+    // Should show green completed icon, not spinner
+    const greenIcons = container.querySelectorAll('.text-green-400');
+    expect(greenIcons.length).toBeGreaterThan(0);
+    const questionSpinners = container.querySelectorAll('button .animate-spin');
+    expect(questionSpinners.length).toBe(0);
+  });
+
+  it('shows pipeline phase label for research.pipeline_phase events', () => {
+    const events: SSEEvent[] = [
+      evt('e1', 'research.pipeline_phase', 1, { phase: 'report_generation' }),
+    ];
+    render(<ThinkingTrajectory events={events} />);
+    expect(screen.getByText('Writing report sections...')).toBeInTheDocument();
   });
 });

@@ -30,7 +30,7 @@ describe('ProgressPanel', () => {
       />,
     );
     expect(screen.getByText('30%')).toBeInTheDocument();
-    expect(screen.getByText('3 / 10 search steps')).toBeInTheDocument();
+    expect(screen.getByText('3 / 10 sub-questions searched')).toBeInTheDocument();
   });
 
   it('shows current step name', () => {
@@ -44,15 +44,19 @@ describe('ProgressPanel', () => {
     expect(screen.getByText('Searching...')).toBeInTheDocument();
   });
 
-  it('shows elapsed time', () => {
-    render(
+  it('shows elapsed time via client-side timer when events exist', () => {
+    const events: SSEEvent[] = [
+      { event_id: 'e1', event_type: 'research.step_started', sequence: 1, payload: { step_id: 'sq1' } },
+    ];
+    const { container } = render(
       <ProgressPanel
-        progress={baseProgress({ elapsed_seconds: 45 })}
-        events={[]}
+        progress={baseProgress()}
+        events={events}
         onCancel={vi.fn()}
       />,
     );
-    expect(screen.getByText('45s elapsed')).toBeInTheDocument();
+    const elapsedSpan = container.querySelector('.text-gray-600 span:last-child');
+    expect(elapsedSpan?.textContent).toMatch(/\d+s elapsed/);
   });
 
   it('renders ThinkingTrajectory with events', () => {
@@ -101,5 +105,46 @@ describe('ProgressPanel', () => {
     );
     expect(screen.queryByRole('button', { name: /Cancel Research/i })).not.toBeInTheDocument();
     expect(screen.getByText('Stopped')).toBeInTheDocument();
+  });
+
+  it('caps percentage at 100% even when completed exceeds total', () => {
+    render(
+      <ProgressPanel
+        progress={baseProgress({ total_steps: 5, completed_steps: 10 })}
+        events={[]}
+        onCancel={vi.fn()}
+        error="Research timed out"
+      />,
+    );
+    expect(screen.getByText('100%')).toBeInTheDocument();
+    expect(screen.getByText('5 / 5 sub-questions searched')).toBeInTheDocument();
+  });
+
+  it('hides progress spinner when terminated', () => {
+    const events: SSEEvent[] = [
+      { event_id: 'e1', event_type: 'research.step_completed', sequence: 1, payload: { step_id: 'sq1' } },
+    ];
+    const { container } = render(
+      <ProgressPanel progress={baseProgress()} events={events} onCancel={vi.fn()} error="Timed out" />,
+    );
+    const progressBar = container.querySelector('.space-y-2');
+    const spinners = progressBar?.querySelectorAll('.animate-spin') ?? [];
+    expect(spinners.length).toBe(0);
+  });
+
+  it('shows pipeline phase label instead of generic Writing report when allSearchDone', () => {
+    const events: SSEEvent[] = [
+      { event_id: 'e1', event_type: 'research.pipeline_phase', sequence: 1, payload: { phase: 'validation' } },
+    ];
+    render(
+      <ProgressPanel
+        progress={baseProgress({ total_steps: 5, completed_steps: 5 })}
+        events={events}
+        onCancel={vi.fn()}
+      />,
+    );
+    const matches = screen.getAllByText('Validating sections...');
+    expect(matches.length).toBeGreaterThanOrEqual(1);
+    expect(screen.queryByText('Writing report...')).not.toBeInTheDocument();
   });
 });

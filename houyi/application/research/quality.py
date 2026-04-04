@@ -91,15 +91,46 @@ class QualityEvaluator:
         sources: AggregatedSources,
         reference_answer: str | None = None,
     ) -> QualityScore:
-        """Run both RACE and FACT evaluations and combine scores."""
-        race = await self.evaluate_race(report, reference_answer)
-        fact = await self.evaluate_fact(report, sources)
+        """Run both RACE and FACT evaluations and combine scores.
+
+        Both evaluations are best-effort: if the LLM is unavailable (e.g.
+        billing / rate-limit), the stage returns a zero-score placeholder
+        instead of crashing the entire pipeline.
+        """
+        import asyncio
+
+        race, fact = await asyncio.gather(
+            self._safe_race(report, reference_answer),
+            self._safe_fact(report, sources),
+        )
         overall = race.overall * 0.6 + (fact.citation_accuracy * 0.4)
         return QualityScore(
             race=race,
             fact=fact,
             overall=round(overall, 2),
         )
+
+    async def _safe_race(
+        self,
+        report: ResearchReport,
+        reference_answer: str | None,
+    ) -> RACEScore:
+        try:
+            return await self.evaluate_race(report, reference_answer)
+        except Exception:
+            logger.warning("RACE evaluation failed — returning zero-score placeholder", exc_info=True)
+            return RACEScore()
+
+    async def _safe_fact(
+        self,
+        report: ResearchReport,
+        sources: AggregatedSources,
+    ) -> FACTScore:
+        try:
+            return await self.evaluate_fact(report, sources)
+        except Exception:
+            logger.warning("FACT evaluation failed — returning zero-score placeholder", exc_info=True)
+            return FACTScore()
 
     async def evaluate_race(
         self,

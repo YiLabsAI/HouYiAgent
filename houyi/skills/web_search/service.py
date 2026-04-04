@@ -264,7 +264,7 @@ class WebSearchService:
     @staticmethod
     def _resolve_cache_ttl() -> int:
         ttl_raw = (os.getenv(ENV_WEB_SEARCH_CACHE_TTL) or "").strip()
-        return int(ttl_raw) if ttl_raw else 300
+        return int(ttl_raw) if ttl_raw else 3600
 
     @classmethod
     def _resolve_cache(cls, ttl: int) -> LRUCache | None:
@@ -819,5 +819,11 @@ class WebSearchService:
         if use_cache and self.cache is not None and execution_result.provider_results:
             ttl = self.cache_ttl if self.cache_ttl is not None else self.cache.default_ttl
             self.cache.put(cache_key, response, ttl=ttl)
+            logger.info(
+                "web_search CACHE PUT: cache_key=%s ttl=%ds entries=%d",
+                cache_key,
+                ttl,
+                self.cache.stats.total_size,
+            )
 
         return response

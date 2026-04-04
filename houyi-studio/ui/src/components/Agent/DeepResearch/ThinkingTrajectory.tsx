@@ -43,13 +43,14 @@ interface QuestionGroup {
 function groupByQuestion(
   events: SSEEvent[],
   subQuestions?: SubQuestion[],
-): { questionGroups: QuestionGroup[]; pipelineEvents: SSEEvent[] } {
+): { questionGroups: QuestionGroup[]; pipelineEvents: SSEEvent[]; pipelinePhase: string | null } {
   const sqMap = new Map(
     (subQuestions || []).map((sq) => [sq.question_id, sq.question]),
   );
 
   const groups = new Map<string, QuestionGroup>();
   const pipeline: SSEEvent[] = [];
+  let pipelinePhase: string | null = null;
 
   for (const evt of events) {
     const qid =
@@ -57,13 +58,21 @@ function groupByQuestion(
       (evt.payload.step_id as string) ||
       '';
 
+    // Pipeline step events (report_generation) are not sub-question searches
+    const isPipelineStep = qid === 'report_generation';
+
     const isQuestionEvent =
       qid &&
+      !isPipelineStep &&
       (evt.event_type.startsWith('research.step_') ||
         evt.event_type === 'research.source_found' ||
         evt.event_type === 'research.search_queries' ||
         evt.event_type === 'research.agent_spawned' ||
         evt.event_type === 'research.agent_completed');
+
+    if (evt.event_type === 'research.pipeline_phase') {
+      pipelinePhase = (evt.payload.phase as string) || null;
+    }
 
     if (isQuestionEvent) {
       if (!groups.has(qid)) {
@@ -80,7 +89,9 @@ function groupByQuestion(
       g.events.push(evt);
 
       if (evt.event_type === 'research.step_started') g.status = 'searching';
-      if (evt.event_type === 'research.step_completed') g.status = 'completed';
+      if (evt.event_type === 'research.step_completed') {
+        g.status = (evt.payload.failed as boolean) ? 'failed' : 'completed';
+      }
       if (evt.event_type === 'research.source_found') {
         g.sources.push({
           title: (evt.payload.title as string) || '',
@@ -102,12 +113,32 @@ function groupByQuestion(
         g.status = 'failed';
     } else {
       pipeline.push(evt);
+      if (evt.event_type === 'research.failed') {
+        for (const g of groups.values()) {
+          if (g.status === 'searching') g.status = 'failed';
+        }
+      }
+    }
+  }
+
+  // Once report phase has started, all search questions must be done
+  const reportPhaseStarted = pipeline.some(
+    (e) =>
+      e.event_type === 'research.intermediate_report' ||
+      e.event_type === 'research.report_section' ||
+      e.event_type === 'research.completed' ||
+      e.event_type === 'research.pipeline_phase',
+  );
+  if (reportPhaseStarted) {
+    for (const g of groups.values()) {
+      if (g.status === 'searching') g.status = 'completed';
     }
   }
 
   return {
     questionGroups: Array.from(groups.values()),
     pipelineEvents: pipeline,
+    pipelinePhase,
   };
 }
 
@@ -125,16 +156,31 @@ const statusIcon = (status: QuestionGroup['status']) => {
 };
 
 const pipelineIcon = (type: string) => {
+  if (type.includes('plan_confirmed')) return <CheckCircle2 size={12} className="text-green-400" />;
   if (type.includes('intermediate')) return <FileText size={12} className="text-blue-400" />;
   if (type.includes('conflict')) return <AlertCircle size={12} className="text-amber-400" />;
+  if (type.includes('pipeline_phase')) return <Loader2 size={12} className="text-purple-400 animate-spin" />;
   if (type.includes('validation')) return <ShieldCheck size={12} className="text-green-400" />;
   if (type.includes('quality')) return <Sparkles size={12} className="text-purple-400" />;
-  if (type.includes('report')) return <FileText size={12} className="text-purple-400" />;
+  if (type.includes('report_section')) return <FileText size={12} className="text-purple-400" />;
   if (type.includes('completed')) return <CheckCircle2 size={12} className="text-green-400" />;
+  if (type.includes('failed') || type.includes('cancelled')) return <AlertCircle size={12} className="text-red-400" />;
   return <Loader2 size={12} className="text-gray-400 animate-spin" />;
 };
 
+const PIPELINE_PHASE_LABELS: Record<string, string> = {
+  conflict_detection: 'Detecting conflicts...',
+  report_generation: 'Writing report sections...',
+  url_validation: 'Validating URLs...',
+  validation: 'Validating sections...',
+  quality_evaluation: 'Evaluating quality...',
+};
+
 const pipelineLabel = (evt: SSEEvent): string => {
+  if (evt.event_type === 'research.pipeline_phase') {
+    const phase = (evt.payload.phase as string) || '';
+    return PIPELINE_PHASE_LABELS[phase] || phase;
+  }
   if (evt.event_type === 'research.intermediate_report')
     return `Intermediate report: ${(evt.payload.question_id as string) || ''}`;
   if (evt.event_type === 'research.conflict_detected')
@@ -145,6 +191,7 @@ const pipelineLabel = (evt: SSEEvent): string => {
   if (evt.event_type === 'research.report_section')
     return `Writing: ${((evt.payload.chunk as Record<string, unknown>)?.title as string) || 'section'}`;
   if (evt.event_type === 'research.completed') return 'Research completed';
+  if (evt.event_type === 'research.failed') return (evt.payload.error as string) || 'Research failed';
   if (evt.event_type === 'research.query_refined')
     return `Query refined: ${(evt.payload.refined as string) || ''}`;
   if (evt.event_type === 'memory.candidate_extracted')
@@ -167,8 +214,8 @@ const QuestionGroupItem: React.FC<{ group: QuestionGroup }> = ({ group }) => {
         <span className="text-xs text-gray-300 flex-1 truncate">{group.label}</span>
         {sourceCount > 0 && (
           <span className="flex items-center gap-1 text-[10px] text-gray-500 bg-gray-800/60 px-1.5 py-0.5 rounded">
-            <SearchIcon size={10} />
-            {sourceCount}
+            <Globe size={10} />
+            {sourceCount} sources
           </span>
         )}
         {group.status === 'searching' && sourceCount === 0 && (
@@ -290,20 +337,40 @@ export const ThinkingTrajectory: React.FC<Props> = ({ events, subQuestions }) =>
         )}
 
         {/* Pipeline events (intermediate reports, conflicts, validation, etc.) */}
-        {pipelineEvents.length > 0 && (
-          <div className="space-y-1 pt-1 border-t border-gray-700/30">
-            <span className="text-[10px] text-gray-600 uppercase tracking-wider">
-              Pipeline
-            </span>
-            {pipelineEvents.map((evt) => (
-              <div key={evt.event_id} className="flex items-start gap-2 text-xs">
-                <div className="pt-0.5 shrink-0">{pipelineIcon(evt.event_type)}</div>
-                <span className="text-gray-400">{pipelineLabel(evt)}</span>
-                <span className="text-gray-700 ml-auto shrink-0">#{evt.sequence}</span>
-              </div>
-            ))}
-          </div>
-        )}
+        {pipelineEvents.length > 0 && (() => {
+          const visible = pipelineEvents.filter(
+            (e) =>
+              !(e.event_type.startsWith('research.step_') &&
+                (e.payload.step_id as string) === 'report_generation'),
+          );
+          const lastPhaseSeq = Math.max(
+            0,
+            ...visible
+              .filter((e) => e.event_type === 'research.pipeline_phase')
+              .map((e) => e.sequence),
+          );
+          return visible.length > 0 ? (
+            <div className="space-y-1 pt-1 border-t border-gray-700/30">
+              <span className="text-[10px] text-gray-600 uppercase tracking-wider">
+                Pipeline
+              </span>
+              {visible.map((evt) => {
+                const isPastPhase =
+                  evt.event_type === 'research.pipeline_phase' &&
+                  evt.sequence < lastPhaseSeq;
+                const icon = isPastPhase
+                  ? <CheckCircle2 size={12} className="text-green-400" />
+                  : pipelineIcon(evt.event_type);
+                return (
+                  <div key={evt.event_id} className="flex items-start gap-2 text-xs">
+                    <div className="pt-0.5 shrink-0">{icon}</div>
+                    <span className="text-gray-400">{pipelineLabel(evt)}</span>
+                  </div>
+                );
+              })}
+            </div>
+          ) : null;
+        })()}
       </div>
     </div>
   );

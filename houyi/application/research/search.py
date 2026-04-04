@@ -221,7 +221,7 @@ class SearchCoordinator:
         )
         resp = await self._llm.chat(
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.4,
+            temperature=0.0,
             max_tokens=512,
             **self._llm_kwargs,
         )

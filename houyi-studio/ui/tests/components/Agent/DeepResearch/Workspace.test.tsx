@@ -99,7 +99,7 @@ describe('DeepResearchWorkspace', () => {
       target: { value: '  my topic  ' },
     });
     fireEvent.click(screen.getByRole('button', { name: /Start Research/i }));
-    expect(mockStore.createSession).toHaveBeenCalledWith('my topic');
+    expect(mockStore.createSession).toHaveBeenCalledWith('my topic', { depth: 'standard' });
   });
 
   it('shows planning phase', () => {

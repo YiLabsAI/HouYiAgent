@@ -20,7 +20,7 @@
 
 **HouYi** is a lightweight, extensible, production-grade multi-agent **framework** that ships with SOTA built-in agents (Deep Research, Chatbox, Memory Inbox). One `Agent` class, one SDK — define, orchestrate, evaluate, and ship agents from prototype to production without changing your API surface.
 
-**Why HouYi?**
+**Why HouYi**
 
 - **Full-lifecycle harness** — Not just execution: definition → orchestration → context engineering → evaluation → observability → governance. Every layer is pluggable, every extension point is documented for community and enterprise customization.
 - **Context engineering as first-class** — Token budgeting, persistent memory with emphasis-aware recall, RAG, context compression, and Reminders injection at the Transformer attention sweet spot — built into the SDK, not afterthoughts.

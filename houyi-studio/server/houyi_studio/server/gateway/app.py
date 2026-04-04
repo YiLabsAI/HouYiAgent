@@ -365,7 +365,6 @@ async def lifespan(app: FastAPI):
 
     # Initialize Research subsystem
     try:
-        from houyi.skills.web_search.providers import DuckDuckGoWebSearchProvider
         from houyi.skills.web_search.service import WebSearchService
 
         if shared_llm_adapter is None:
@@ -373,7 +372,7 @@ async def lifespan(app: FastAPI):
 
             shared_llm_adapter = LLMAdapterFactory.create()
 
-        web_search = WebSearchService(provider=DuckDuckGoWebSearchProvider())
+        web_search = WebSearchService.from_env()
         research_data_dir = Path(chat_data_dir).parent / "research"
         research_service = ResearchService(
             shared_llm_adapter,
