@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 
 import pytest
@@ -453,10 +454,8 @@ class TestExecute:
         session._emit = _capture  # type: ignore[assignment]
         session._session_timeout = lambda: 120  # type: ignore[assignment]
 
-        try:
+        with contextlib.suppress(Exception):
             await session.execute()
-        except Exception:
-            pass
 
         step_events = [e for e in captured if "elapsed_seconds" in e]
         assert len(step_events) > 0, "Step events must include elapsed_seconds"
