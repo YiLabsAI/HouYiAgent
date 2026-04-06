@@ -68,7 +68,7 @@ export interface ResearchReport {
 }
 
 export interface SessionSummary {
-  session_id: string;
+  run_id: string;
   query?: string;
   status: string;
   created_at?: string;
@@ -160,15 +160,15 @@ export const useResearchStore = create<ResearchState>((set, get) => ({
     set({ loading: true, error: null });
     try {
       const data = await researchFetch<{
-        session_id: string;
+        run_id: string;
         plan: ResearchPlan;
         status: string;
-      }>('/sessions', {
+      }>('/runs', {
         method: 'POST',
         body: JSON.stringify({ query, settings }),
       });
       set({
-        sessionId: data.session_id,
+        sessionId: data.run_id,
         plan: data.plan,
         phase: 'planning',
         loading: false,
@@ -184,7 +184,7 @@ export const useResearchStore = create<ResearchState>((set, get) => ({
     set({ loading: true, error: null });
     try {
       const data = await researchFetch<{ plan: ResearchPlan }>(
-        `/sessions/${sessionId}/plan`,
+        `/runs/${sessionId}/plan`,
         {
           method: 'PUT',
           body: JSON.stringify({
@@ -204,7 +204,7 @@ export const useResearchStore = create<ResearchState>((set, get) => ({
     if (!sessionId) return;
     set({ loading: true, error: null, phase: 'executing', progress: null, events: [] });
     try {
-      await researchFetch(`/sessions/${sessionId}/execute`, {
+      await researchFetch(`/runs/${sessionId}/start`, {
         method: 'POST',
         body: JSON.stringify({ resume_if_running: false }),
       });
@@ -212,8 +212,8 @@ export const useResearchStore = create<ResearchState>((set, get) => ({
       set({ loading: false });
     } catch (e) {
       const msg = (e as Error).message;
-      const friendly = msg.includes('max_concurrent_sessions')
-        ? 'Too many sessions running. Please wait for a session to finish or cancel one first.'
+      const friendly = msg.includes('max_concurrent_runs')
+        ? 'Too many runs are active. Please wait for one to finish or cancel one first.'
         : msg;
       set({ error: friendly, loading: false, phase: 'planning' });
     }
@@ -223,7 +223,7 @@ export const useResearchStore = create<ResearchState>((set, get) => ({
     const { sessionId, disconnectSSE } = get();
     if (!sessionId) return;
     try {
-      await researchFetch(`/sessions/${sessionId}/cancel`, {
+      await researchFetch(`/runs/${sessionId}/cancel`, {
         method: 'POST',
         body: JSON.stringify({ reason: 'user_cancelled' }),
       });
@@ -240,7 +240,7 @@ export const useResearchStore = create<ResearchState>((set, get) => ({
     set({ loading: true });
     try {
       const data = await researchFetch<{ report: ResearchReport }>(
-        `/sessions/${sessionId}/report`,
+        `/runs/${sessionId}/report`,
       );
       set({ report: data.report, phase: 'report', loading: false });
     } catch (e) {
@@ -250,8 +250,8 @@ export const useResearchStore = create<ResearchState>((set, get) => ({
 
   fetchSessions: async () => {
     try {
-      const data = await researchFetch<{ sessions: SessionSummary[] }>('/sessions');
-      set({ sessions: data.sessions });
+      const data = await researchFetch<{ runs: SessionSummary[] }>('/runs');
+      set({ sessions: data.runs });
     } catch {
       // silent
     }
@@ -259,8 +259,8 @@ export const useResearchStore = create<ResearchState>((set, get) => ({
 
   deleteSession: async (sessionId: string) => {
     try {
-      await researchFetch(`/sessions/${sessionId}`, { method: 'DELETE' });
-      set({ sessions: get().sessions.filter((s) => s.session_id !== sessionId) });
+      await researchFetch(`/runs/${sessionId}`, { method: 'DELETE' });
+      set({ sessions: get().sessions.filter((s) => s.run_id !== sessionId) });
     } catch {
       // silent
     }
@@ -273,7 +273,7 @@ export const useResearchStore = create<ResearchState>((set, get) => ({
     const abort = new AbortController();
     set({ sseAbort: abort });
 
-    const url = new URL(`${API_BASE}/sessions/${sessionId}/events`, window.location.origin);
+    const url = new URL(`${API_BASE}/runs/${sessionId}/events`, window.location.origin);
     if (lastEventId) url.searchParams.set('last_event_id', lastEventId);
 
     fetch(url.toString(), { signal: abort.signal, headers: { Accept: 'text/event-stream' } })
@@ -379,13 +379,13 @@ export const useResearchStore = create<ResearchState>((set, get) => ({
     });
     try {
       const data = await researchFetch<{
-        session_id: string;
+        run_id: string;
         status: string;
         plan: ResearchPlan | null;
         progress: ResearchProgress;
         error?: string | null;
         search_results?: SearchResultData[] | null;
-      }>(`/sessions/${sessionId}`);
+      }>(`/runs/${sessionId}`);
 
       const statusPhaseMap: Record<string, ResearchPhase> = {
         planning: 'planning',

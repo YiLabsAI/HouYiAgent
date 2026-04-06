@@ -25,6 +25,8 @@ from houyi.adapters.memory.types import (
     MemoryType,
 )
 
+pytestmark = pytest.mark.benchmark
+
 
 def _measure_async(coro_fn, iterations=50):
     """Run an async function N times and return p95 latency in ms."""

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from houyi.application.research.search import _extract_keywords, _filter_relevant
+from houyi.application.research.runtime.search import _extract_keywords, _filter_relevant
 from houyi.application.research.types import SourceReference
 
 

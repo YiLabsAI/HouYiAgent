@@ -81,146 +81,146 @@ def client(tmp_path):
 
 class TestCreateEndpoint:
     def test_create_201(self, client):
-        r = client.post("/api/research/sessions", json={"query": "AI frameworks"})
+        r = client.post("/api/research/runs", json={"query": "AI frameworks"})
         assert r.status_code == 201
         data = r.json()
-        assert "session_id" in data
+        assert "run_id" in data
         assert data["plan"] is not None
 
     def test_create_idempotent(self, client):
         body = {"query": "Q1", "idempotency_key": "k1"}
-        r1 = client.post("/api/research/sessions", json=body)
-        r2 = client.post("/api/research/sessions", json=body)
-        assert r1.json()["session_id"] == r2.json()["session_id"]
+        r1 = client.post("/api/research/runs", json=body)
+        r2 = client.post("/api/research/runs", json=body)
+        assert r1.json()["run_id"] == r2.json()["run_id"]
 
     def test_create_minimal_body(self, client):
-        r = client.post("/api/research/sessions", json={"query": "x"})
+        r = client.post("/api/research/runs", json={"query": "x"})
         assert r.status_code == 201
-        assert r.json()["session_id"]
+        assert r.json()["run_id"]
 
 
 class TestListEndpoint:
     def test_list_empty(self, client):
-        r = client.get("/api/research/sessions")
+        r = client.get("/api/research/runs")
         assert r.status_code == 200
-        assert r.json()["sessions"] == []
+        assert r.json()["runs"] == []
 
     def test_list_after_create(self, client):
-        client.post("/api/research/sessions", json={"query": "test"})
-        r = client.get("/api/research/sessions")
-        assert len(r.json()["sessions"]) == 1
+        client.post("/api/research/runs", json={"query": "test"})
+        r = client.get("/api/research/runs")
+        assert len(r.json()["runs"]) == 1
 
     def test_list_pagination_limit(self, client):
         for q in ["q1", "q2", "q3"]:
-            client.post("/api/research/sessions", json={"query": q})
-        r = client.get("/api/research/sessions?offset=0&limit=2")
+            client.post("/api/research/runs", json={"query": q})
+        r = client.get("/api/research/runs?offset=0&limit=2")
         assert r.status_code == 200
-        assert len(r.json()["sessions"]) == 2
+        assert len(r.json()["runs"]) == 2
 
 
-class TestGetSession:
+class TestGetRun:
     def test_get_existing(self, client):
-        r1 = client.post("/api/research/sessions", json={"query": "test"})
-        sid = r1.json()["session_id"]
-        r2 = client.get(f"/api/research/sessions/{sid}")
+        r1 = client.post("/api/research/runs", json={"query": "test"})
+        run_id = r1.json()["run_id"]
+        r2 = client.get(f"/api/research/runs/{run_id}")
         assert r2.status_code == 200
-        assert r2.json()["session_id"] == sid
+        assert r2.json()["run_id"] == run_id
 
     def test_get_nonexistent(self, client):
-        r = client.get("/api/research/sessions/nonexist")
+        r = client.get("/api/research/runs/nonexist")
         assert r.status_code == 404
 
 
 class TestEditPlan:
     def test_edit_bumps_version(self, client):
-        r = client.post("/api/research/sessions", json={"query": "test"})
-        sid = r.json()["session_id"]
+        r = client.post("/api/research/runs", json={"query": "test"})
+        run_id = r.json()["run_id"]
         r2 = client.put(
-            f"/api/research/sessions/{sid}/plan",
+            f"/api/research/runs/{run_id}/plan",
             json={"edits": [{"op": "add", "target_question": "New Q?"}]},
         )
         assert r2.status_code == 200
         assert r2.json()["plan"]["version"] == 2
 
     def test_edit_version_conflict(self, client):
-        r = client.post("/api/research/sessions", json={"query": "test"})
-        sid = r.json()["session_id"]
+        r = client.post("/api/research/runs", json={"query": "test"})
+        run_id = r.json()["run_id"]
         r2 = client.put(
-            f"/api/research/sessions/{sid}/plan",
+            f"/api/research/runs/{run_id}/plan",
             json={"edits": [], "client_plan_version": 99},
         )
         assert r2.status_code == 409
 
     def test_edit_nonexistent_404(self, client):
-        r = client.put("/api/research/sessions/bad/plan", json={"edits": []})
+        r = client.put("/api/research/runs/bad/plan", json={"edits": []})
         assert r.status_code == 404
 
 
 class TestExecuteEndpoint:
     def test_execute_returns_202(self, client):
-        r = client.post("/api/research/sessions", json={"query": "test"})
-        sid = r.json()["session_id"]
+        r = client.post("/api/research/runs", json={"query": "test"})
+        run_id = r.json()["run_id"]
         svc = client.app.state.research_service
-        svc.confirm_and_execute = AsyncMock()
-        r2 = client.post(f"/api/research/sessions/{sid}/execute", json={})
+        svc.launch_run = AsyncMock()
+        r2 = client.post(f"/api/research/runs/{run_id}/start", json={})
         assert r2.status_code == 202
         assert r2.json()["status"] == "executing"
 
     def test_execute_resume_running(self, client):
-        r = client.post("/api/research/sessions", json={"query": "test"})
-        sid = r.json()["session_id"]
+        r = client.post("/api/research/runs", json={"query": "test"})
+        run_id = r.json()["run_id"]
         svc = client.app.state.research_service
-        svc.get_session(sid)._status = ResearchStatus.EXECUTING
+        svc.get_run(run_id)._status = ResearchStatus.EXECUTING
         r2 = client.post(
-            f"/api/research/sessions/{sid}/execute",
+            f"/api/research/runs/{run_id}/start",
             json={"resume_if_running": True},
         )
         assert r2.status_code == 202
-        assert r2.json()["session_id"] == sid
+        assert r2.json()["run_id"] == run_id
 
     def test_execute_conflict_409(self, client):
-        r = client.post("/api/research/sessions", json={"query": "test"})
-        sid = r.json()["session_id"]
+        r = client.post("/api/research/runs", json={"query": "test"})
+        run_id = r.json()["run_id"]
         svc = client.app.state.research_service
-        svc.get_session(sid)._status = ResearchStatus.EXECUTING
-        r2 = client.post(f"/api/research/sessions/{sid}/execute", json={})
+        svc.get_run(run_id)._status = ResearchStatus.EXECUTING
+        r2 = client.post(f"/api/research/runs/{run_id}/start", json={})
         assert r2.status_code == 409
 
 
 class TestCancelEndpoint:
     def test_cancel(self, client):
-        r = client.post("/api/research/sessions", json={"query": "test"})
-        sid = r.json()["session_id"]
-        r2 = client.post(f"/api/research/sessions/{sid}/cancel", json={"reason": "done"})
+        r = client.post("/api/research/runs", json={"query": "test"})
+        run_id = r.json()["run_id"]
+        r2 = client.post(f"/api/research/runs/{run_id}/cancel", json={"reason": "done"})
         assert r2.status_code == 200
         assert r2.json()["status"] == "cancelled"
 
     def test_cancel_nonexistent_404(self, client):
-        r = client.post("/api/research/sessions/bad/cancel", json={})
+        r = client.post("/api/research/runs/bad/cancel", json={})
         assert r.status_code == 404
 
 
 class TestDeleteEndpoint:
     def test_delete_cancelled(self, client):
-        r = client.post("/api/research/sessions", json={"query": "test"})
-        sid = r.json()["session_id"]
-        client.post(f"/api/research/sessions/{sid}/cancel", json={})
-        r2 = client.delete(f"/api/research/sessions/{sid}")
+        r = client.post("/api/research/runs", json={"query": "test"})
+        run_id = r.json()["run_id"]
+        client.post(f"/api/research/runs/{run_id}/cancel", json={})
+        r2 = client.delete(f"/api/research/runs/{run_id}")
         assert r2.status_code == 204
 
     def test_delete_plan_ready(self, client):
-        """Non-executing sessions (e.g. plan_ready) can be deleted."""
-        r = client.post("/api/research/sessions", json={"query": "test"})
-        sid = r.json()["session_id"]
-        r2 = client.delete(f"/api/research/sessions/{sid}")
+        """Non-executing runs can be deleted."""
+        r = client.post("/api/research/runs", json={"query": "test"})
+        run_id = r.json()["run_id"]
+        r2 = client.delete(f"/api/research/runs/{run_id}")
         assert r2.status_code == 204
 
 
 class TestReportEndpoint:
     def test_report_not_ready(self, client):
-        r = client.post("/api/research/sessions", json={"query": "test"})
-        sid = r.json()["session_id"]
-        r2 = client.get(f"/api/research/sessions/{sid}/report")
+        r = client.post("/api/research/runs", json={"query": "test"})
+        run_id = r.json()["run_id"]
+        r2 = client.get(f"/api/research/runs/{run_id}/report")
         assert r2.status_code == 409
 
 

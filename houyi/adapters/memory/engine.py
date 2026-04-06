@@ -13,6 +13,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from houyi.adapters.memory.builder import MemoryCandidateBuilder
 from houyi.adapters.memory.classifier import MemoryClassifier
 from houyi.adapters.memory.deduplicator import MemoryDeduplicator
 from houyi.adapters.memory.embedding import EmbeddingProvider
@@ -24,11 +25,15 @@ from houyi.adapters.memory.types import (
     CandidateStatus,
     ExtractionContext,
     ForgettingPolicy,
+    MemoryBuildInput,
+    MemoryBuildItem,
     MemoryCandidate,
     MemoryPolicy,
     MemoryProvenance,
     MemoryRecall,
     MemoryRecord,
+    MemoryScope,
+    MemorySourceKind,
     SessionContext,
 )
 
@@ -48,6 +53,7 @@ class MemoryEngine:
         self,
         store: MemoryStore,
         *,
+        builder: MemoryCandidateBuilder | None = None,
         extractor: MemoryCandidateExtractor | None = None,
         classifier: MemoryClassifier | None = None,
         deduplicator: MemoryDeduplicator | None = None,
@@ -58,6 +64,7 @@ class MemoryEngine:
         forgetting_policy: ForgettingPolicy | None = None,
     ):
         self._store = store
+        self._builder = builder or MemoryCandidateBuilder(llm_adapter=llm_adapter)
         self._extractor = extractor or MemoryCandidateExtractor(llm_adapter=llm_adapter)
         self._classifier = classifier or MemoryClassifier()
         self._deduplicator = deduplicator or MemoryDeduplicator(embedding_provider)
@@ -88,9 +95,31 @@ class MemoryEngine:
 
         Returns candidates (approved ones are already written to store).
         """
-        existing = self._store.all_records()
+        ctx = context or ExtractionContext()
+        memory_input = MemoryBuildInput(
+            source_type=MemorySourceKind.CONVERSATION,
+            scope=MemoryScope.USER,
+            source_context=f"turn:{ctx.turn_index}",
+            items=[
+                MemoryBuildItem(
+                    content=str(message.get("content", "")),
+                    role=str(message.get("role", "")),
+                    source_ids=[str(message.get("id", ""))] if message.get("id") else [],
+                )
+                for message in messages
+            ],
+            metadata={"suggested_tags": ctx.active_tags},
+        )
+        return await self.process_input(memory_input, ctx)
 
-        candidates = await self._extractor.extract(messages, existing, context)
+    async def process_input(
+        self,
+        memory_input: MemoryBuildInput,
+        context: ExtractionContext | None = None,
+    ) -> list[MemoryCandidate]:
+        """Build → classify → dedup → optionally store."""
+        existing = self._store.all_records()
+        candidates = await self._builder.build(memory_input, context)
         if not candidates:
             return []
 
@@ -114,8 +143,8 @@ class MemoryEngine:
                 candidate.status = CandidateStatus.PENDING
 
         logger.debug(
-            "Processed %d messages → %d candidates",
-            len(messages),
+            "Processed %d input items → %d candidates",
+            len(memory_input.items),
             len(candidates),
         )
         return candidates
@@ -137,12 +166,13 @@ class MemoryEngine:
             key=self._derive_key(candidate),
             content=candidate.content,
             memory_type=candidate.memory_type,
+            metadata=candidate.metadata,
             tags=candidate.suggested_tags,
             confidence=candidate.confidence,
             provenance=MemoryProvenance(
-                source_type="conversation",
+                source_type=candidate.source_type,
                 source_ids=candidate.source_message_ids,
-                extracted_by="rule_extractor",
+                extracted_by="memory_candidate_builder",
                 extraction_timestamp=candidate.extracted_at,
             ),
             embedding=embedding,

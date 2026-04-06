@@ -239,6 +239,16 @@ def _apply_edit(plan: ResearchPlan, edit: PlanEdit) -> None:
         handler(plan, edit)
 
 
+def apply_plan_edits(plan: ResearchPlan, edits: list[PlanEdit]) -> ResearchPlan:
+    """Return a new plan with all edits applied and version incremented."""
+    updated = plan.model_copy(deep=True)
+    for edit in edits:
+        _apply_edit(updated, edit)
+    updated.version += 1
+    updated.status = PlanStatus.DRAFT
+    return updated
+
+
 def _edit_add(plan: ResearchPlan, edit: PlanEdit) -> None:
     plan.sub_questions.append(
         SubQuestion(

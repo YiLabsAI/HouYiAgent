@@ -7,7 +7,7 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 from houyi.adapters.llm.base import LLMAdapter, LLMResponse, StreamChunk
-from houyi.application.research.clarification import (
+from houyi.application.research.runtime.clarification import (
     ClarificationAgent,
     ClarificationResult,
     _parse_clarification,

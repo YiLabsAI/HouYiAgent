@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import time
 
+import pytest
+
 from houyi.infrastructure.observability.context import TraceContext
 from houyi.infrastructure.observability.trace_manager import Span
 from houyi.infrastructure.observability.types import SpanType
@@ -39,6 +41,7 @@ def _measure_span_overhead_absolute(iterations: int = 5000) -> float:
     return (elapsed / iterations) * 1e6  # microseconds
 
 
+@pytest.mark.benchmark
 class TestCollectionOverhead:
     """Verify that instrumentation overhead is < 2%.
 

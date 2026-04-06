@@ -1,5 +1,3 @@
-"""Unit tests for deep_research skill — Chatbox integration."""
-
 from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -37,7 +35,7 @@ class TestExecuteNoService:
     async def test_no_services_returns_stub(self):
         with patch("houyi.skills.builtin.deep_research._research_service_ref", None):
             result = await execute_deep_research(query="test", depth="quick")
-            assert result["session_id"] == ""
+            assert result["run_id"] == ""
             assert "No ResearchService" in result["summary"]
 
     async def test_depth_parameter_accepted(self):
@@ -48,7 +46,7 @@ class TestExecuteNoService:
 
 
 class TestExecuteWithService:
-    """When a ResearchService is injected, runs a full session."""
+    """When a ResearchService is injected, runs a full research run."""
 
     @pytest.fixture(autouse=True)
     def _mock_service(self):
@@ -65,21 +63,21 @@ class TestExecuteWithService:
         mock_report.quality_score.race_overall = 8.0
         mock_report.quality_score.fact_overall = 7.0
 
-        mock_session = MagicMock()
-        mock_session.session_id = "rs_test123"
+        mock_runtime = MagicMock()
+        mock_runtime.run_id = "rr_test123"
 
         self.svc = MagicMock()
-        self.svc.create_session = AsyncMock(return_value=(mock_session, MagicMock()))
-        self.svc.confirm_and_execute = AsyncMock()
+        self.svc.create_run = AsyncMock(return_value=(mock_runtime, MagicMock()))
+        self.svc.launch_run = AsyncMock()
         self.svc.get_report = AsyncMock(return_value=mock_report)
 
         set_research_service(self.svc)
         yield
         set_research_service(None)
 
-    async def test_returns_session_id(self):
+    async def test_returns_run_id(self):
         result = await execute_deep_research(query="AI frameworks", depth="standard")
-        assert result["session_id"] == "rs_test123"
+        assert result["run_id"] == "rr_test123"
 
     async def test_returns_report_summary(self):
         result = await execute_deep_research(query="AI frameworks")
@@ -88,7 +86,7 @@ class TestExecuteWithService:
 
     async def test_returns_report_url(self):
         result = await execute_deep_research(query="AI frameworks")
-        assert result["report_url"] == "#/research/rs_test123"
+        assert result["report_url"] == "#/research/rr_test123"
 
     async def test_returns_quality_score(self):
         result = await execute_deep_research(query="AI frameworks")
@@ -100,14 +98,14 @@ class TestExecuteWithService:
 
     async def test_calls_service_methods(self):
         await execute_deep_research(query="AI frameworks", depth="deep")
-        self.svc.create_session.assert_awaited_once()
-        self.svc.confirm_and_execute.assert_awaited_once_with("rs_test123")
-        self.svc.get_report.assert_awaited_once_with("rs_test123")
+        self.svc.create_run.assert_awaited_once()
+        self.svc.launch_run.assert_awaited_once_with("rr_test123")
+        self.svc.get_report.assert_awaited_once_with("rr_test123")
 
     async def test_handles_service_error_gracefully(self):
-        self.svc.create_session = AsyncMock(side_effect=RuntimeError("boom"))
+        self.svc.create_run = AsyncMock(side_effect=RuntimeError("boom"))
         result = await execute_deep_research(query="fail")
-        assert result["session_id"] == ""
+        assert result["run_id"] == ""
         assert "failed" in result["summary"].lower()
 
 
@@ -123,6 +121,6 @@ class TestInputModel:
 
 class TestOutputModel:
     def test_defaults(self):
-        out = DeepResearchOutput(session_id="s1", summary="done")
+        out = DeepResearchOutput(run_id="r1", summary="done")
         assert out.report_url is None
         assert out.sources_count == 0

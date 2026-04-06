@@ -1,15 +1,15 @@
 """Research API: FastAPI router for Deep Research endpoints.
 
 Endpoints:
-  POST   /api/research/sessions                          — Create session
-  GET    /api/research/sessions                          — List sessions
-  GET    /api/research/sessions/{id}                     — Get session
-  PUT    /api/research/sessions/{id}/plan                — Edit plan
-  POST   /api/research/sessions/{id}/execute             — Start execution
-  GET    /api/research/sessions/{id}/report              — Get report
-  POST   /api/research/sessions/{id}/cancel              — Cancel session
-  DELETE /api/research/sessions/{id}                     — Delete session
-  GET    /api/research/sessions/{id}/events              — SSE event stream
+  POST   /api/research/runs                              — Create run
+  GET    /api/research/runs                              — List runs
+  GET    /api/research/runs/{id}                         — Get run
+  PUT    /api/research/runs/{id}/plan                    — Edit plan
+  POST   /api/research/runs/{id}/start                   — Start execution
+  GET    /api/research/runs/{id}/report                  — Get report
+  POST   /api/research/runs/{id}/cancel                  — Cancel run
+  DELETE /api/research/runs/{id}                         — Delete run
+  GET    /api/research/runs/{id}/events                  — SSE event stream
   GET    /api/agents/types                               — Agent types
 """
 
@@ -29,8 +29,8 @@ from houyi.application.research.types import (
 
 from .service import (
     ResearchService,
-    SessionNotFoundError,
-    SessionNotTerminalError,
+    RunNotFoundError,
+    RunNotTerminalError,
     VersionConflictError,
 )
 from .sse import research_sse_stream
@@ -72,192 +72,192 @@ class CancelRequest(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-@router.post("/sessions", status_code=201)
-async def create_session(
+@router.post("/runs", status_code=201)
+async def create_run(
     body: CreateSessionRequest,
     request: Request,
 ) -> dict[str, Any]:
     svc: ResearchService = request.app.state.research_service
     try:
-        session, plan = await svc.create_session(
+        runtime, plan = await svc.create_run(
             query=body.query,
             settings=body.settings,
             idempotency_key=body.idempotency_key,
             memory_context=body.memory_context,
         )
     except Exception as exc:
-        logger.error("create_session failed: %s", exc, exc_info=True)
+        logger.error("create_run failed: %s", exc, exc_info=True)
         raise HTTPException(502, detail=f"LLM/planning error: {exc}") from exc
     return {
-        "session_id": session.session_id,
+        "run_id": runtime.run_id,
         "plan": plan.model_dump(),
-        "status": session.status.value,
+        "status": runtime.status.value,
     }
 
 
-@router.get("/sessions")
-async def list_sessions(
+@router.get("/runs")
+async def list_runs(
     request: Request,
     offset: int = 0,
     limit: int = 20,
 ) -> dict[str, Any]:
     svc: ResearchService = request.app.state.research_service
-    items = svc.list_sessions(offset=offset, limit=limit)
-    return {"sessions": items, "offset": offset, "limit": limit}
+    items = svc.list_runs(offset=offset, limit=limit)
+    return {"runs": items, "offset": offset, "limit": limit}
 
 
-@router.get("/sessions/{session_id}")
-async def get_session(session_id: str, request: Request) -> dict[str, Any]:
+@router.get("/runs/{run_id}")
+async def get_run(run_id: str, request: Request) -> dict[str, Any]:
     svc: ResearchService = request.app.state.research_service
-    session = svc.get_session(session_id)
-    if not session:
-        raise HTTPException(404, detail="session_not_found")
+    runtime = svc.get_run(run_id)
+    if not runtime:
+        raise HTTPException(404, detail="run_not_found")
     try:
-        from .service import _ArchivedSession
+        from .service import _ArchivedRun
 
         search_results = None
-        if isinstance(session, _ArchivedSession):
-            sr_data = session.search_results_data
+        if isinstance(runtime, _ArchivedRun):
+            sr_data = runtime.search_results_data
             if sr_data:
                 search_results = sr_data
-        elif hasattr(session, "_search_results") and session._search_results:
-            search_results = [sr.model_dump() for sr in session._search_results]
+        elif hasattr(runtime, "_search_results") and runtime._search_results:
+            search_results = [sr.model_dump() for sr in runtime._search_results]
 
         return {
-            "session_id": session.session_id,
-            "status": session.status.value,
-            "plan": session.plan.model_dump() if session.plan else None,
-            "progress": session.progress.model_dump(),
-            "error": getattr(session, "_error", None) or getattr(session, "error", None),
+            "run_id": runtime.run_id,
+            "status": runtime.status.value,
+            "plan": runtime.plan.model_dump() if runtime.plan else None,
+            "progress": runtime.progress.model_dump(),
+            "error": getattr(runtime, "_error", None) or getattr(runtime, "error", None),
             "search_results": search_results,
         }
     except Exception as exc:
-        logger.error("get_session serialization failed: %s", exc, exc_info=True)
-        raise HTTPException(500, detail=f"session data error: {exc}") from exc
+        logger.error("get_run serialization failed: %s", exc, exc_info=True)
+        raise HTTPException(500, detail=f"run data error: {exc}") from exc
 
 
-@router.put("/sessions/{session_id}/plan")
+@router.put("/runs/{run_id}/plan")
 async def edit_plan(
-    session_id: str,
+    run_id: str,
     body: EditPlanRequest,
     request: Request,
 ) -> dict[str, Any]:
     svc: ResearchService = request.app.state.research_service
     try:
         plan = await svc.edit_plan(
-            session_id,
+            run_id,
             body.edits,
             client_plan_version=body.client_plan_version,
         )
-    except SessionNotFoundError as exc:
-        raise HTTPException(404, detail="session_not_found") from exc
+    except RunNotFoundError as exc:
+        raise HTTPException(404, detail="run_not_found") from exc
     except VersionConflictError as exc:
         raise HTTPException(409, detail="plan_version_conflict") from exc
     return {"plan": plan.model_dump()}
 
 
-@router.post("/sessions/{session_id}/execute", status_code=202)
-async def execute_session(
-    session_id: str,
+@router.post("/runs/{run_id}/start", status_code=202)
+async def start_run(
+    run_id: str,
     body: ExecuteRequest,
     request: Request,
 ) -> dict[str, Any]:
     svc: ResearchService = request.app.state.research_service
-    session = svc.get_session(session_id)
-    if not session:
-        raise HTTPException(404, detail="session_not_found")
+    runtime = svc.get_run(run_id)
+    if not runtime:
+        raise HTTPException(404, detail="run_not_found")
 
     from houyi.application.research.types import ResearchStatus
 
-    if session.status == ResearchStatus.EXECUTING:
+    if runtime.status == ResearchStatus.EXECUTING:
         if body.resume_if_running:
-            return {"session_id": session_id, "status": session.status.value}
-        raise HTTPException(409, detail="session_already_executing")
+            return {"run_id": run_id, "status": runtime.status.value}
+        raise HTTPException(409, detail="run_already_executing")
 
-    running = svc.running_session_count()
-    if running >= svc.MAX_CONCURRENT_SESSIONS:
+    running = svc.running_run_count()
+    if running >= svc.MAX_CONCURRENT_RUNS:
         raise HTTPException(
             429,
-            detail=f"max_concurrent_sessions_reached: {running}/{svc.MAX_CONCURRENT_SESSIONS} running",
+            detail=f"max_concurrent_runs_reached: {running}/{svc.MAX_CONCURRENT_RUNS} running",
         )
 
     if (
         body.confirm_plan_version is not None
-        and session.plan
-        and body.confirm_plan_version != session.plan.version
+        and runtime.plan
+        and body.confirm_plan_version != runtime.plan.version
     ):
         raise HTTPException(
             409,
-            detail=f"plan_version_conflict: client={body.confirm_plan_version}, server={session.plan.version}",
+            detail=f"plan_version_conflict: client={body.confirm_plan_version}, server={runtime.plan.version}",
         )
 
     import asyncio
 
-    svc.prepare_for_execution(session_id)
-    task = asyncio.create_task(svc.confirm_and_execute(session_id))
+    svc.prepare_for_execution(run_id)
+    task = asyncio.create_task(svc.launch_run(run_id))
     request.app.state.research_tasks = getattr(request.app.state, "research_tasks", {})
-    request.app.state.research_tasks[session_id] = task
-    return {"session_id": session_id, "status": "executing"}
+    request.app.state.research_tasks[run_id] = task
+    return {"run_id": run_id, "status": "executing"}
 
 
-@router.get("/sessions/{session_id}/report")
-async def get_report(session_id: str, request: Request) -> dict[str, Any]:
+@router.get("/runs/{run_id}/report")
+async def get_report(run_id: str, request: Request) -> dict[str, Any]:
     svc: ResearchService = request.app.state.research_service
     try:
-        report = await svc.get_report(session_id)
-    except SessionNotFoundError as exc:
-        raise HTTPException(404, detail="session_not_found") from exc
+        report = await svc.get_report(run_id)
+    except RunNotFoundError as exc:
+        raise HTTPException(404, detail="run_not_found") from exc
     except RuntimeError as exc:
         raise HTTPException(409, detail="report_not_ready") from exc
     return {"report": report.model_dump()}
 
 
-@router.post("/sessions/{session_id}/cancel")
-async def cancel_session(
-    session_id: str,
+@router.post("/runs/{run_id}/cancel")
+async def cancel_run(
+    run_id: str,
     body: CancelRequest,
     request: Request,
 ) -> dict[str, Any]:
     svc: ResearchService = request.app.state.research_service
     try:
-        await svc.cancel_session(session_id, body.reason)
-    except SessionNotFoundError as exc:
-        raise HTTPException(404, detail="session_not_found") from exc
+        await svc.cancel_run(run_id, body.reason)
+    except RunNotFoundError as exc:
+        raise HTTPException(404, detail="run_not_found") from exc
 
     tasks: dict = getattr(request.app.state, "research_tasks", {})
-    task = tasks.pop(session_id, None)
+    task = tasks.pop(run_id, None)
     if task is not None and not task.done():
         task.cancel()
 
     return {"status": "cancelled"}
 
 
-@router.delete("/sessions/{session_id}", status_code=204)
-async def delete_session(session_id: str, request: Request) -> None:
+@router.delete("/runs/{run_id}", status_code=204)
+async def delete_run(run_id: str, request: Request) -> None:
     svc: ResearchService = request.app.state.research_service
     try:
-        await svc.delete_session(session_id)
-    except SessionNotFoundError as exc:
-        raise HTTPException(404, detail="session_not_found") from exc
-    except SessionNotTerminalError as exc:
-        raise HTTPException(409, detail="session_not_terminal") from exc
+        await svc.delete_run(run_id)
+    except RunNotFoundError as exc:
+        raise HTTPException(404, detail="run_not_found") from exc
+    except RunNotTerminalError as exc:
+        raise HTTPException(409, detail="run_not_terminal") from exc
 
 
-@router.get("/sessions/{session_id}/events")
-async def session_events(
-    session_id: str,
+@router.get("/runs/{run_id}/events")
+async def run_events(
+    run_id: str,
     request: Request,
     last_event_id: str | None = None,
 ) -> StreamingResponse:
     svc: ResearchService = request.app.state.research_service
-    emitter = svc.get_emitter(session_id)
+    emitter = svc.get_emitter(run_id)
     if not emitter:
-        raise HTTPException(404, detail="session_not_found")
-    event_buffer = svc.get_event_buffer(session_id)
+        raise HTTPException(404, detail="run_not_found")
+    event_buffer = svc.get_event_buffer(run_id)
     return StreamingResponse(
         research_sse_stream(
             emitter,
-            session_id,
+            run_id,
             last_event_id=last_event_id,
             event_buffer=event_buffer,
         ),

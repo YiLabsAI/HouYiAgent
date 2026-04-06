@@ -138,9 +138,11 @@ Restarts only the UI (useful when iterating on frontend code).
 - ✅ Changed-file complexity and class-size gates
 - ✅ SDK tests excluding `tests/integration/`
 - ✅ Studio server tests
-- ✅ SDK coverage check (must be ≥85%)
+- ✅ Runs SDK + server tests in parallel where possible
+- ✅ SDK-native coverage check across `tests/` → `houyi/` (must be ≥90%)
+- ✅ Combined SDK coverage check across SDK + server suites (must be ≥90%)
 
-**Note**: `check_code.sh` intentionally excludes env-backed integration tests under `tests/integration/`. Use `check_integration.sh` after `make check` when you need to validate provider-backed or credential-backed paths.
+**Note**: `check_code.sh` intentionally excludes integration tests and benchmark tests. It is the local static + unit gate that feeds `make check`.
 
 **When to use**: Before committing code, before opening PR
 
@@ -148,16 +150,18 @@ Restarts only the UI (useful when iterating on frontend code).
 
 ### `check_integration.sh`
 
-**Purpose**: Local-only integration gate for env-backed tests
+**Purpose**: Local-only integration gate for offline/mock integration coverage
 
 **What it does**:
 - ✅ Verifies local integration dependencies
-- ✅ Runs `tests/integration/`
-- ✅ Exercises real env / `.env` backed integrations, including provider-backed paths when configured
+- ✅ Seeds and isolates the fastembed cache for integration tests
+- ✅ Starts an isolated backend on a dedicated integration port
+- ✅ Runs SDK + server integration tests excluding `live/` and excluding `benchmark`
+- ✅ Clears common external API keys so covered tests do not accidentally hit real LLM or web providers
 
-**When to use**: After `make check` is green and you need to validate integration paths that depend on local credentials, provider SDKs, or other env-backed setup
+**When to use**: Before committing changes that touch integration behavior covered by the local gate. Real provider/live coverage belongs under `tests/integration/live/` and the explicit `test-*-integration-live` make targets.
 
-**Time**: Variable; depends on enabled integrations and network/provider latency
+**Time**: Usually tens of seconds; should stay local and deterministic
 
 ### `check_class_size.py`
 
@@ -184,6 +188,17 @@ Restarts only the UI (useful when iterating on frontend code).
 ### `warmup_embeddings.py`
 
 **Purpose**: Warm embedding runtime and cache before backend startup or provider troubleshooting
+
+### `run_make_check.py`
+
+**Purpose**: Aggregate `make check` wrapper with a global wall-clock budget
+
+**What it does**:
+- ✅ Runs `check-unit`, `check-integration`, and `check-e2e-smoke` in sequence
+- ✅ Enforces the top-level `make check` time budget
+- ✅ Prints a per-phase timing summary
+
+**When to use**: Usually indirectly via `make check`; run directly only when diagnosing total gate runtime
 
 ## README Maintenance Rule
 
@@ -212,7 +227,8 @@ Run before committing:
 
 ```bash
 make check
-make check-integration  # when env-backed integrations are part of your change
+make check-integration  # when your change touches local integration coverage
+make benchmark BENCH_TARGET=memory
 git add .
 git commit -m "your message"
 ```
@@ -256,7 +272,8 @@ make install-dev
 2. Fix the issues
 3. Run `make quick-check` to verify
 4. Run `make check` before committing
-5. If your change touches env-backed or provider-backed paths, run `make check-integration`
+5. If your change touches local integration behavior, run `make check-integration`
+6. If you are working on performance-sensitive code, run `make benchmark BENCH_TARGET=<memory|rag|runtime|verification|observability|all>` or `make benchmark BENCH_KIND=arena`
 
 ## CI/CD
 

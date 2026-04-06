@@ -18,11 +18,15 @@ import time
 import uuid
 from typing import Any
 
+from houyi.adapters.memory.builder import MemoryCandidateBuilder
 from houyi.adapters.memory.types import (
     ExtractionContext,
+    MemoryBuildInput,
+    MemoryBuildItem,
     MemoryCandidate,
     MemoryRecord,
     MemoryScope,
+    MemorySourceKind,
     MemoryType,
 )
 
@@ -115,6 +119,10 @@ class MemoryCandidateExtractor:
     ):
         self._min_confidence = min_confidence
         self._llm = llm_adapter
+        self._builder = MemoryCandidateBuilder(
+            min_confidence=min_confidence,
+            llm_adapter=llm_adapter,
+        )
 
     async def extract(
         self,
@@ -133,11 +141,22 @@ class MemoryCandidateExtractor:
             context: Extraction context metadata.
         """
         ctx = context or ExtractionContext()
-
-        if self._llm is not None:
-            return await self._extract_via_llm(messages, ctx)
-
-        return self._extract_via_rules(messages, ctx)
+        _ = existing_memories
+        memory_input = MemoryBuildInput(
+            source_type=MemorySourceKind.CONVERSATION,
+            scope=MemoryScope.USER,
+            source_context=f"turn:{ctx.turn_index}",
+            items=[
+                MemoryBuildItem(
+                    content=str(message.get("content", "")),
+                    role=str(message.get("role", "")),
+                    source_ids=[str(message.get("id", ""))] if message.get("id") else [],
+                )
+                for message in messages
+            ],
+            metadata={"suggested_tags": ctx.active_tags},
+        )
+        return await self._builder.build(memory_input, ctx)
 
     # ------------------------------------------------------------------
     # LLM-based extraction

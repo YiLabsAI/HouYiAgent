@@ -60,6 +60,14 @@ class MemoryLifecyclePolicy(str, Enum):
     EPHEMERAL = "ephemeral"
 
 
+class MemorySourceKind(str, Enum):
+    """Normalized source families supported by memory candidate building."""
+
+    CONVERSATION = "conversation"
+    SEARCH = "search"
+    AUTO_DREAM = "auto_dream"
+
+
 # ---------------------------------------------------------------------------
 # Supporting value objects
 # ---------------------------------------------------------------------------
@@ -97,6 +105,29 @@ class TTLPolicy(BaseModel):
 
     default_ttl: float | None = None
     per_type: dict[str, float | None] = Field(default_factory=dict)
+
+
+class MemoryBuildItem(BaseModel):
+    """A normalized source item that may become a memory candidate."""
+
+    content: str = ""
+    role: str = ""
+    source_ids: list[str] = Field(default_factory=list)
+    source_context: str = ""
+    suggested_tags: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    memory_type: MemoryType | None = None
+    confidence: float | None = None
+
+
+class MemoryBuildInput(BaseModel):
+    """Generic input payload for memory candidate building."""
+
+    source_type: MemorySourceKind = MemorySourceKind.CONVERSATION
+    scope: MemoryScope = MemoryScope.USER
+    source_context: str = ""
+    items: list[MemoryBuildItem] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -139,12 +170,14 @@ class MemoryCandidate(BaseModel):
     scope: MemoryScope = MemoryScope.USER
     content: str = ""
     memory_type: MemoryType = MemoryType.FACT
+    source_type: str = MemorySourceKind.CONVERSATION.value
     source_message_ids: list[str] = Field(default_factory=list)
     source_context: str = ""
     confidence: float = 0.0
     extracted_at: float = Field(default_factory=time.time)
     status: CandidateStatus = CandidateStatus.PENDING
     suggested_tags: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
     dedup_matches: list[DedupMatch] | None = None
 
 

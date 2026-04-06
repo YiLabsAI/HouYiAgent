@@ -11,6 +11,8 @@ from houyi.application.runtime.events import AgentEvent, AgentEventType, EventEm
 from houyi.application.runtime.runner import AgentRunner
 from houyi.domain.agent.spec import AgentSpec
 
+pytestmark = pytest.mark.benchmark
+
 
 def _spec(role: str = "bench") -> AgentSpec:
     return AgentSpec(role=role)

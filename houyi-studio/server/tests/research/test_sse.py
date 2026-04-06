@@ -15,12 +15,12 @@ class TestSSEEnvelope:
     def test_envelope_fields(self):
         env = ResearchSSEEnvelope(
             event_type="research.plan_generated",
-            session_id="s1",
+            run_id="s1",
             sequence=1,
             payload={"plan": {}},
         )
         assert env.event_type == "research.plan_generated"
-        assert env.session_id == "s1"
+        assert env.run_id == "s1"
         assert env.sequence == 1
         assert env.payload_version == 1
         assert not env.replayed

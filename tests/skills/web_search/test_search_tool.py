@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from unittest.mock import AsyncMock
 
-from houyi.application.research.tools import WebSearchTool
+from houyi.application.research.runtime.tools import WebSearchTool
 from houyi.skills.web_search.service import WebSearchService
 from houyi.skills.web_search.types import WebSearchMetadata, WebSearchResponse, WebSearchResult
 

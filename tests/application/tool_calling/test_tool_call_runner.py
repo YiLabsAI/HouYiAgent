@@ -22,6 +22,7 @@ import pytest
 from pydantic import BaseModel
 
 from houyi.application.tool_calling.budget import (
+    MessageBudget,
     prepare_tool_loop_messages,
     resolve_tool_loop_budget_chars,
 )
@@ -1880,6 +1881,41 @@ def test_keeps_tool_context() -> None:
     )
     assert any(message.get("content") == "latest request" for message in prepared)
     assert not any(message.get("content") == "earlier answer" for message in prepared)
+
+
+def test_budget_keep_system() -> None:
+    prepared = prepare_tool_loop_messages(
+        [
+            {"role": "system", "content": "s" * 300},
+            {"role": "user", "content": "u" * 80},
+        ],
+        max_message_chars=200,
+        max_total_chars=100,
+    )
+
+    assert len(prepared) == 1
+    assert prepared[0]["role"] == "system"
+
+
+def test_result_summary_list() -> None:
+    content = json.dumps([{"idx": idx, "value": "x" * 40} for idx in range(20)])
+
+    summarized, truncated = MessageBudget.summarize_tool_result(
+        content,
+        max_chars=400,
+        max_items=3,
+    )
+
+    assert truncated is True
+    assert '"_truncated": true' in summarized
+    assert '"_original_count": 20' in summarized
+
+
+def test_result_summary_text() -> None:
+    summarized, truncated = MessageBudget.summarize_tool_result("x" * 300, max_chars=80)
+
+    assert truncated is True
+    assert summarized.endswith("[truncated, original length: 300]")
 
 
 class TestToolCallRunnerBehavior:

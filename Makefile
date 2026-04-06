@@ -6,7 +6,14 @@
 	test-server-integration-live \
 	test-e2e test-e2e-smoke \
 	check check-unit check-integration check-e2e-smoke \
-	lint lint-fix lint-imports quick-check clean format typecheck
+	lint lint-fix lint-imports quick-check clean format typecheck \
+	benchmark
+
+BENCH_KIND ?= pytest
+BENCH_TARGET ?= all
+BENCH_DEPTH ?= deep
+BENCH_MODE ?= direct
+BENCH_CONCURRENCY ?= 3
 
 # Default target
 help:
@@ -34,6 +41,7 @@ help:
 	@echo "  make lint             Run all linters (ruff)"
 	@echo "  make lint-fix         Run linters with auto-fix"
 	@echo "  make lint-imports     Check import layer boundaries"
+	@echo "  make benchmark        Run benchmarks (default: pytest -m benchmark, use BENCH_TARGET=memory|rag|runtime|verification|observability|all or BENCH_PATH=...; use BENCH_KIND=arena for DeepResearch-Bench)"
 	@echo ""
 	@echo "Testing:"
 	@echo "  make test-sdk-unit    Run SDK unit tests"
@@ -94,9 +102,7 @@ quick-check:
 
 # Full checks (run before committing)
 check:
-	@$(MAKE) check-unit
-	@$(MAKE) check-integration
-	@$(MAKE) check-e2e-smoke
+	@python3 scripts/run_make_check.py --budget 60
 
 check-unit:
 	@./scripts/check_code.sh
@@ -195,23 +201,34 @@ test-server-integration-live:
 
 # E2E tests (requires backend running + Playwright browsers)
 test-e2e-smoke:
-	@cd houyi-studio/ui && pnpm install --frozen-lockfile && pnpm exec playwright test tests/e2e/smoke
+	@cd houyi-studio/ui && HOUYI_E2E_BACKEND_PORT=$${HOUYI_E2E_BACKEND_PORT:-19000} HOUYI_E2E_UI_PORT=$${HOUYI_E2E_UI_PORT:-13100} pnpm install --frozen-lockfile && HOUYI_E2E_BACKEND_PORT=$${HOUYI_E2E_BACKEND_PORT:-19000} HOUYI_E2E_UI_PORT=$${HOUYI_E2E_UI_PORT:-13100} pnpm exec playwright test tests/e2e/smoke
 
 test-e2e:
 	@cd houyi-studio/ui && pnpm install --frozen-lockfile && pnpm test:e2e
 
-# Benchmark (DeepResearch-Bench)
 benchmark:
-	$(UV_RUN) python scripts/run_benchmark.py --queries benchmark/data/query.jsonl --output benchmark/output/houyi.jsonl --depth deep --concurrency 3
-
-benchmark-smoke:
-	$(UV_RUN) python scripts/run_benchmark.py --queries benchmark/data/query.jsonl --output benchmark/output/houyi-smoke.jsonl --depth standard --limit 5 --concurrency 2
-
-benchmark-delegate:
-	$(UV_RUN) python scripts/run_benchmark.py --queries benchmark/data/query.jsonl --output benchmark/output/houyi-delegate.jsonl --depth deep --mode delegate --concurrency 3
-
-benchmark-autonomous:
-	$(UV_RUN) python scripts/run_benchmark.py --queries benchmark/data/query.jsonl --output benchmark/output/houyi-autonomous.jsonl --depth deep --mode autonomous --concurrency 3
+	@if [ "$(BENCH_KIND)" = "arena" ]; then \
+		BENCH_OUTPUT_PATH="$${BENCH_OUTPUT:-benchmark/output/houyi.jsonl}"; \
+		set -- uv run python scripts/run_benchmark.py --queries "$${BENCH_QUERIES:-benchmark/data/query.jsonl}" --output "$$BENCH_OUTPUT_PATH" --depth "$(BENCH_DEPTH)" --mode "$(BENCH_MODE)" --concurrency "$(BENCH_CONCURRENCY)"; \
+		if [ -n "$${BENCH_LIMIT:-}" ]; then set -- "$${@}" --limit "$${BENCH_LIMIT}"; fi; \
+		if [ -n "$${BENCH_TIMEOUT:-}" ]; then set -- "$${@}" --timeout "$${BENCH_TIMEOUT}"; fi; \
+		if [ "$${BENCH_NO_RESUME:-0}" = "1" ]; then set -- "$${@}" --no-resume; fi; \
+		echo "Running DeepResearch-Bench via scripts/run_benchmark.py"; \
+		echo "  output=$$BENCH_OUTPUT_PATH depth=$(BENCH_DEPTH) mode=$(BENCH_MODE) concurrency=$(BENCH_CONCURRENCY)"; \
+		"$$@"; \
+	else \
+		case "$(BENCH_TARGET)" in \
+			all) bench_path="$${BENCH_PATH:-tests/}" ;; \
+			memory) bench_path="tests/integration/benchmark/test_memory.py" ;; \
+			rag) bench_path="tests/rag/benchmark" ;; \
+			runtime) bench_path="tests/application/runtime/test_runtime_benchmark.py" ;; \
+			verification) bench_path="tests/integration/verification/test_performance.py" ;; \
+			observability) bench_path="tests/infrastructure/observability/test_golden_metrics.py" ;; \
+			*) bench_path="$${BENCH_PATH:-$(BENCH_TARGET)}" ;; \
+		esac; \
+		echo "Running pytest benchmarks from $$bench_path"; \
+		uv run pytest "$$bench_path" -m benchmark -v -s; \
+	fi
 
 # Cleanup
 clean:

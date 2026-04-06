@@ -14,10 +14,9 @@ import re
 import time
 import uuid
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from houyi.adapters.llm.base import LLMAdapter
-from houyi.application.research.intermediate import IntermediateReport
 from houyi.application.research.types import (
     AggregatedSources,
     Citation,
@@ -33,6 +32,9 @@ from houyi.application.research.types import (
 )
 
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from houyi.application.research.runtime.intermediate import IntermediateReport
 
 _SECTION_PROMPT = """\
 You are writing a section of an academic-grade research report.

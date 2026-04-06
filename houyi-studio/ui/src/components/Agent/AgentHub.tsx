@@ -261,15 +261,15 @@ export const AgentHub: React.FC = () => {
             <div className="space-y-2">
               {sessions.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE).map((session) => (
                 <div
-                  key={session.session_id}
+                  key={session.run_id}
                   className="flex items-center gap-2 group"
                 >
                   {session.status !== 'executing' && session.status !== 'generating_report' ? (
-                    pendingDeleteId === session.session_id ? (
+                    pendingDeleteId === session.run_id ? (
                       <div className="flex items-center gap-1 shrink-0">
                         <button
                           type="button"
-                          onClick={(e) => { e.stopPropagation(); deleteSession(session.session_id); setPendingDeleteId(null); }}
+                          onClick={(e) => { e.stopPropagation(); deleteSession(session.run_id); setPendingDeleteId(null); }}
                           className="px-1.5 py-0.5 text-[10px] bg-red-600 hover:bg-red-500 text-white rounded transition-colors"
                         >
                           Confirm
@@ -285,7 +285,7 @@ export const AgentHub: React.FC = () => {
                     ) : (
                       <button
                         type="button"
-                        onClick={(e) => { e.stopPropagation(); setPendingDeleteId(session.session_id); }}
+                        onClick={(e) => { e.stopPropagation(); setPendingDeleteId(session.run_id); }}
                         className="p-1.5 text-gray-700 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all shrink-0"
                         title="Delete session"
                       >
@@ -297,7 +297,7 @@ export const AgentHub: React.FC = () => {
                   )}
                   <button
                     type="button"
-                    onClick={() => handleOpenSession(session.session_id)}
+                    onClick={() => handleOpenSession(session.run_id)}
                     className="flex-1 flex items-center gap-3 px-4 py-3 rounded-lg bg-gray-800/40 border border-gray-700/50 hover:border-gray-600 transition-colors text-left min-w-0"
                   >
                     <div
@@ -305,7 +305,7 @@ export const AgentHub: React.FC = () => {
                       title={statusLabels[session.status] || session.status}
                     />
                     <div className="flex-1 min-w-0">
-                      <div className="text-sm text-gray-200 truncate">{session.query || `Session ${session.session_id.slice(0, 8)}`}</div>
+                      <div className="text-sm text-gray-200 truncate">{session.query || `Run ${session.run_id.slice(0, 8)}`}</div>
                       <div className="text-xs text-gray-500">Deep Research • {statusLabels[session.status] || session.status}</div>
                     </div>
                     {session.created_at && (

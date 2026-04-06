@@ -174,7 +174,7 @@ class ResearchPlan(BaseModel):
 class SearchContext(BaseModel):
     """Context passed to SearchCoordinator for a sub-question search."""
 
-    session_id: str
+    run_id: str
     plan_id: str
     user_query: str
     plan_version: int = 1

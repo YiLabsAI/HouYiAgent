@@ -7,14 +7,29 @@ from collections.abc import AsyncIterator
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
 from houyi.adapters.llm.base import LLMAdapter, LLMResponse, StreamChunk
-from houyi.application.research.intermediate import (
+from houyi.application.research.quality import QualityScore
+from houyi.application.research.runtime.intermediate import (
     IntermediateReport,
     IntermediateReportGenerator,
     _parse_response,
 )
-from houyi.application.research.report_pipeline import ReportPipeline
-from houyi.application.research.types import SearchResult, SourceReference, SubQuestion
+from houyi.application.research.runtime.report_pipeline import ReportPipeline
+from houyi.application.research.types import (
+    AggregatedSources,
+    Citation,
+    OutlineSection,
+    ReportSection,
+    ResearchPlan,
+    ResearchReport,
+    ResearchSettings,
+    SearchResult,
+    SourceReference,
+    SubQuestion,
+)
+from houyi.application.research.validation import SectionValidation, ValidationReport
 
 from .conftest import MockLLM
 
@@ -29,9 +44,7 @@ _IR_JSON = json.dumps(
     }
 )
 
-_IR_JSON_B = json.dumps(
-    {"analysis": "fresh", "key_findings": ["f"], "confidence": 0.6, "gaps": []}
-)
+_IR_JSON_B = json.dumps({"analysis": "fresh", "key_findings": ["f"], "confidence": 0.6, "gaps": []})
 
 
 def _refs(n: int = 3) -> list[SourceReference]:
@@ -186,6 +199,30 @@ def _pipeline(ir_gen: IntermediateReportGenerator) -> ReportPipeline:
     )
 
 
+def _plan() -> ResearchPlan:
+    return ResearchPlan(
+        query="topic",
+        outline=[OutlineSection(title="Overview", objective="Summarize the topic")],
+        sub_questions=[SubQuestion(question_id="q1", question="What about AI?")],
+        settings=ResearchSettings(depth="standard"),
+    )
+
+
+def _report() -> ResearchReport:
+    source = SourceReference(reference_id="ref_keep", url="https://example.com/keep", title="Keep")
+    return ResearchReport(
+        title="Demo",
+        sections=[
+            ReportSection(
+                title="Overview",
+                content="Body",
+                citations=[Citation(reference_id=source.reference_id)],
+            )
+        ],
+        references=[source],
+    )
+
+
 class TestPipelineIntermediates:
     async def test_checkpoint_reuses_without_llm(self) -> None:
         """Retry: cached intermediate + checkpoint qid must not call generate again."""
@@ -236,3 +273,101 @@ class TestPipelineIntermediates:
         assert len(out) == 1
         assert out[0].question_id == "q2"
         assert out[0].analysis == "fresh"
+
+
+class TestPipelineRuntime:
+    async def test_url_remove_broken(self) -> None:
+        pipe = _pipeline(IntermediateReportGenerator(MockLLM(responses=[_IR_JSON])))
+        broken = SourceReference(
+            reference_id="ref_dead",
+            url="https://example.com/dead",
+            title="Dead",
+            reliability_score=0.9,
+        )
+        report = ResearchReport(
+            title="Demo",
+            sections=[
+                ReportSection(
+                    title="Overview",
+                    content="Body",
+                    citations=[Citation(reference_id="ref_dead")],
+                )
+            ],
+            references=[broken],
+        )
+        aggregated = AggregatedSources(sources=[broken])
+        pipe._url_validator.validate = AsyncMock(
+            return_value=MagicMock(
+                results=[MagicMock(url=broken.url, reachable=False)],
+                total=1,
+                reachable=0,
+                unreachable=1,
+                error_rate=1.0,
+            )
+        )
+
+        await pipe._validate_urls(aggregated, report)
+
+        assert aggregated.sources[0].reliability_score == pytest.approx(0.6)
+        assert report.sections[0].citations == []
+        assert report.references == []
+
+    async def test_run_skip_failures(self) -> None:
+        pipe = _pipeline(IntermediateReportGenerator(MockLLM(responses=[_IR_JSON])))
+        report = _report()
+        pipe._reporter.generate = AsyncMock(return_value=report)
+        pipe._conflict_resolver.detect = AsyncMock(return_value=[])
+        pipe._url_validator.validate = AsyncMock(side_effect=RuntimeError("url fail"))
+        pipe._validator.validate = AsyncMock(side_effect=RuntimeError("validate fail"))
+        pipe._evaluator.evaluate = AsyncMock(side_effect=RuntimeError("quality fail"))
+
+        result = await pipe.run(
+            _plan(),
+            AggregatedSources(sources=report.references),
+            [_result()],
+            intermediate_reports=None,
+            settings=ResearchSettings(depth="standard"),
+        )
+
+        assert result.report is report
+        assert result.validation is None
+        assert result.quality is None
+
+    async def test_run_repair_sections(self) -> None:
+        pipe = _pipeline(IntermediateReportGenerator(MockLLM(responses=[_IR_JSON])))
+        report = _report()
+        repaired = ReportSection(title="Overview", content="Repaired")
+        pipe._reporter.generate = AsyncMock(return_value=report)
+        pipe._reporter._generate_section = AsyncMock(return_value=repaired)
+        pipe._conflict_resolver.detect = AsyncMock(return_value=[])
+        pipe._url_validator.validate = AsyncMock(
+            return_value=MagicMock(results=[], total=0, reachable=0, unreachable=0, error_rate=0.0)
+        )
+        pipe._validator.validate = AsyncMock(
+            return_value=ValidationReport(
+                sections=[
+                    SectionValidation(
+                        title="Overview",
+                        quality_score=20,
+                        needs_rewrite=True,
+                        suggested_queries=[],
+                    )
+                ],
+                overall_score=20.0,
+                sections_needing_rewrite=1,
+            )
+        )
+        pipe._evaluator.evaluate = AsyncMock(return_value=QualityScore(overall=88.0))
+
+        result = await pipe.run(
+            _plan(),
+            AggregatedSources(sources=report.references),
+            [_result()],
+            intermediate_reports=None,
+            settings=ResearchSettings(depth="standard"),
+        )
+
+        assert result.report.sections[0].content == "Repaired"
+        assert result.validation is not None
+        assert result.quality is not None
+        assert result.report.metadata.quality_overall == 88.0

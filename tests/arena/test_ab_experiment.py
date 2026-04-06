@@ -115,9 +115,9 @@ class TestABExperimentRun:
         ws = AsyncMock()
         exp = ABExperiment(llm, ws)
 
-        def _make_session(**kwargs):
+        def _make_runtime(**kwargs):
             s = AsyncMock()
-            s.session_id = "test_sid"
+            s.run_id = "test_rid"
             qs = MagicMock()
             qs.race.overall = 80.0
             qs.fact.citation_accuracy = 90.0
@@ -127,7 +127,7 @@ class TestABExperimentRun:
             s.get_report = AsyncMock(return_value=rpt)
             return s
 
-        with patch.object(_mod, "ResearchSession", side_effect=_make_session):
+        with patch.object(_mod, "ResearchRuntime", side_effect=_make_runtime):
             report = await exp.run("AI frameworks")
 
         assert report.arm_a is not None
@@ -148,13 +148,13 @@ class TestABExperimentRun:
         ws = AsyncMock()
         exp = ABExperiment(llm, ws)
 
-        def _make_failing_session(**kwargs):
+        def _make_failing_runtime(**kwargs):
             s = AsyncMock()
-            s.session_id = "fail_sid"
+            s.run_id = "fail_rid"
             s.start = AsyncMock(side_effect=RuntimeError("LLM connection lost"))
             return s
 
-        with patch.object(_mod, "ResearchSession", side_effect=_make_failing_session):
+        with patch.object(_mod, "ResearchRuntime", side_effect=_make_failing_runtime):
             report = await exp.run("test query")
 
         assert report.arm_a.error is not None

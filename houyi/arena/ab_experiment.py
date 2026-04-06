@@ -14,7 +14,7 @@ from typing import Any
 from pydantic import BaseModel
 
 from houyi.adapters.llm.base import LLMAdapter
-from houyi.application.research.session import ResearchSession
+from houyi.application.research.runtime import ResearchRuntime
 from houyi.application.research.types import (
     OrchestrationMode,
     ResearchSettings,
@@ -29,7 +29,7 @@ class ExperimentArm(BaseModel):
 
     arm_id: str
     mode: str
-    session_id: str = ""
+    run_id: str = ""
     quality_race: float | None = None
     quality_fact: float | None = None
     source_count: int = 0
@@ -97,25 +97,25 @@ class ABExperiment:
 
     async def _run_arm(self, arm_id: str, query: str, settings: ResearchSettings) -> ExperimentArm:
         start = time.monotonic()
-        session = ResearchSession(
+        runtime = ResearchRuntime(
             llm_adapter=self._llm,
             web_search=self._web_search,
             settings=settings,
             **self._llm_kwargs,
         )
         try:
-            await session.start(query)
-            await session.confirm_plan()
-            await session.execute()
-            report = await session.get_report()
+            await runtime.start(query)
+            await runtime.confirm_plan()
+            await runtime.execute()
+            report = await runtime.get_report()
 
-            race = session.quality_score.race.overall if session.quality_score else None
-            fact = session.quality_score.fact.citation_accuracy if session.quality_score else None
+            race = runtime.quality_score.race.overall if runtime.quality_score else None
+            fact = runtime.quality_score.fact.citation_accuracy if runtime.quality_score else None
 
             return ExperimentArm(
                 arm_id=arm_id,
                 mode=settings.orchestration_mode.value,
-                session_id=session.session_id,
+                run_id=runtime.run_id,
                 quality_race=race,
                 quality_fact=fact,
                 source_count=report.metadata.source_count,
@@ -125,7 +125,7 @@ class ABExperiment:
             return ExperimentArm(
                 arm_id=arm_id,
                 mode=settings.orchestration_mode.value,
-                session_id=session.session_id,
+                run_id=runtime.run_id,
                 duration_seconds=round(time.monotonic() - start, 2),
                 error=str(exc),
             )

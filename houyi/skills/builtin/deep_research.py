@@ -1,8 +1,8 @@
 """Built-in deep_research skill.
 
 Allows users to trigger lightweight deep research from the Chat interface.
-The skill creates a ResearchSession, executes it, and returns an inline
-summary with a link to the full Workspace session.
+The skill creates a research run, executes it, and returns an inline
+summary with a link to the full Workspace run.
 """
 
 from __future__ import annotations
@@ -33,7 +33,7 @@ class DeepResearchInput(BaseModel):
 
 
 class DeepResearchOutput(BaseModel):
-    session_id: str
+    run_id: str
     summary: str
     report_url: str | None = None
     quality_score: float | None = None
@@ -44,7 +44,7 @@ _research_service_ref: Any = None
 
 
 def set_research_service(svc: Any) -> None:
-    """Inject the server-side ResearchService so the skill can run real sessions."""
+    """Inject the server-side ResearchService so the skill can run real research."""
     global _research_service_ref
     _research_service_ref = svc
 
@@ -54,7 +54,7 @@ async def execute_deep_research(
     query: str,
     depth: str = "quick",
 ) -> dict:
-    """Execute a research session via the injected ResearchService.
+    """Execute a research run via the injected ResearchService.
 
     Falls back to a placeholder response when no service is available
     (e.g., standalone SDK usage without a server).
@@ -62,7 +62,7 @@ async def execute_deep_research(
     svc = _research_service_ref
     if svc is None:
         return {
-            "session_id": "",
+            "run_id": "",
             "summary": f"Research requested: {query} (depth={depth}). "
             "No ResearchService available — run inside HouYi server.",
             "report_url": None,
@@ -80,15 +80,15 @@ async def execute_deep_research(
         }
         resolved_depth = depth_map.get(depth, ResearchDepth.QUICK)
         settings = ResearchSettings(depth=resolved_depth)
-        session, _plan = await svc.create_session(
+        runtime, _plan = await svc.create_run(
             query=query,
             settings=settings,
         )
-        session_id = session.session_id
+        run_id = runtime.run_id
 
-        await svc.confirm_and_execute(session_id)
+        await svc.launch_run(run_id)
 
-        report = await svc.get_report(session_id)
+        report = await svc.get_report(run_id)
 
         sections_text = "\n\n".join(f"## {s.title}\n{s.content}" for s in report.sections)
         summary = f"# {report.title}\n\n{sections_text}"
@@ -100,16 +100,16 @@ async def execute_deep_research(
             quality = (report.quality_score.race_overall + report.quality_score.fact_overall) / 2
 
         return {
-            "session_id": session_id,
+            "run_id": run_id,
             "summary": summary,
-            "report_url": f"#/research/{session_id}",
+            "report_url": f"#/research/{run_id}",
             "quality_score": quality,
             "sources_count": len(report.references),
         }
     except Exception:
         logger.exception("deep_research skill execution failed for query: %s", query)
         return {
-            "session_id": "",
+            "run_id": "",
             "summary": f"Research failed for: {query}. Please try again.",
             "report_url": None,
             "quality_score": None,

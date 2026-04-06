@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from unittest.mock import AsyncMock
 
-from houyi.application.research.search import (
+from houyi.application.research.runtime.search import (
     SearchCoordinator,
     _parse_query_list,
     _parse_sufficiency,
@@ -13,11 +13,11 @@ from houyi.application.research.search import (
 from houyi.application.research.types import SearchContext, SubQuestion
 from houyi.skills.web_search.types import WebSearchMetadata, WebSearchResponse
 
-from .conftest import MockLLM, make_mock_web_search
+from ..conftest import MockLLM, make_mock_web_search
 
 
 def _context() -> SearchContext:
-    return SearchContext(session_id="s1", plan_id="p1", user_query="AI frameworks")
+    return SearchContext(run_id="r1", plan_id="p1", user_query="AI frameworks")
 
 
 class TestSearch:
@@ -68,7 +68,7 @@ class TestSearch:
         )
         ws = make_mock_web_search()
         ctx = SearchContext(
-            session_id="s1",
+            run_id="r1",
             plan_id="p1",
             user_query="test",
             excluded_urls=["https://example.com/1"],

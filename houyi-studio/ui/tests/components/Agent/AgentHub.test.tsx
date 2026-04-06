@@ -104,7 +104,7 @@ describe('AgentHub', () => {
   it('renders session list', async () => {
     mockStore.sessions = [
       {
-        session_id: 'sess-1',
+        run_id: 'rr-1',
         query: 'quantum widgets',
         status: 'executing',
         created_at: '2026-01-01',
@@ -143,13 +143,13 @@ describe('AgentHub', () => {
 
   it('opening a session resets store before loading', async () => {
     mockStore.sessions = [
-      { session_id: 'sess-nav', query: 'nav test', status: 'completed', created_at: '2026-01-01' },
+      { run_id: 'rr-nav', query: 'nav test', status: 'completed', created_at: '2026-01-01' },
     ];
     render(<AgentHub />);
     await flushHubEffects();
     fireEvent.click(screen.getByText('nav test'));
     expect(mockStore.reset).toHaveBeenCalled();
-    expect(mockStore.openSession).toHaveBeenCalledWith('sess-nav');
+    expect(mockStore.openSession).toHaveBeenCalledWith('rr-nav');
   });
 
   it('popstate event syncs view from hash', async () => {
@@ -165,7 +165,7 @@ describe('AgentHub', () => {
 
   it('pagination shows when > 10 sessions', async () => {
     mockStore.sessions = Array.from({ length: 12 }, (_, i) => ({
-      session_id: `sess-${i}`,
+      run_id: `rr-${i}`,
       query: `query ${i}`,
       status: 'completed',
       created_at: '2026-01-01',
@@ -180,7 +180,7 @@ describe('AgentHub', () => {
   it('delete confirmation flow', async () => {
     mockStore.sessions = [
       {
-        session_id: 'del-1',
+        run_id: 'rr-del-1',
         query: 'done topic',
         status: 'completed',
         created_at: '2026-01-01',
@@ -196,6 +196,6 @@ describe('AgentHub', () => {
     expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
-    expect(mockStore.deleteSession).toHaveBeenCalledWith('del-1');
+    expect(mockStore.deleteSession).toHaveBeenCalledWith('rr-del-1');
   });
 });

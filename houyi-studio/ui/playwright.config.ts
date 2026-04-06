@@ -1,8 +1,8 @@
 import { defineConfig } from '@playwright/test';
 
 const useSystemChrome = (globalThis as any).process?.env?.HOUYI_USE_SYSTEM_CHROME === '1';
-const e2eBackendPort = Number((globalThis as any).process?.env?.HOUYI_E2E_BACKEND_PORT || '9000');
-const e2eUiPort = Number((globalThis as any).process?.env?.HOUYI_E2E_UI_PORT || '3100');
+const e2eBackendPort = Number((globalThis as any).process?.env?.HOUYI_E2E_BACKEND_PORT || '19000');
+const e2eUiPort = Number((globalThis as any).process?.env?.HOUYI_E2E_UI_PORT || '13100');
 const e2eBaseUrl = `http://127.0.0.1:${e2eUiPort}`;
 const e2eWebServerCommand = [
   `HOUYI_PORT=${e2eBackendPort}`,

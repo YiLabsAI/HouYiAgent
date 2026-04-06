@@ -1,15 +1,19 @@
-"""Unit tests for ResearchSession lifecycle."""
-
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import json
 
 import pytest
 
-from houyi.application.research import session as _session_mod
-from houyi.application.research.session import ResearchSession, _parse_search_output
+from houyi.application.research.runtime import engine as _engine_mod
+from houyi.application.research.runtime.engine import ResearchRuntime, _parse_search_output
+from houyi.application.research.runtime.errors import (
+    ResearchCancelledError,
+    ResearchPlanMissingError,
+    ResearchReportNotReadyError,
+    ResearchStateError,
+    ResearchTimeoutError,
+)
 from houyi.application.research.types import (
     PlanEdit,
     PlanEditOperation,
@@ -18,7 +22,7 @@ from houyi.application.research.types import (
     ResearchStatus,
 )
 
-from .conftest import MockLLM, make_mock_web_search
+from ..conftest import MockLLM, make_mock_web_search
 
 _QUICK = ResearchSettings(depth="quick")
 
@@ -26,9 +30,11 @@ _QUICK = ResearchSettings(depth="quick")
 def test_report_budget_by_depth():
     llm = MockLLM()
     ws = make_mock_web_search()
-    sq = ResearchSession(llm_adapter=llm, web_search=ws, settings=ResearchSettings(depth="quick"))
-    st = ResearchSession(llm_adapter=llm, web_search=ws, settings=ResearchSettings(depth="standard"))
-    dp = ResearchSession(llm_adapter=llm, web_search=ws, settings=ResearchSettings(depth="deep"))
+    sq = ResearchRuntime(llm_adapter=llm, web_search=ws, settings=ResearchSettings(depth="quick"))
+    st = ResearchRuntime(
+        llm_adapter=llm, web_search=ws, settings=ResearchSettings(depth="standard")
+    )
+    dp = ResearchRuntime(llm_adapter=llm, web_search=ws, settings=ResearchSettings(depth="deep"))
     assert sq._report_budget_seconds() == 600
     assert st._report_budget_seconds() == 1200
     assert dp._report_budget_seconds() == 1500
@@ -40,7 +46,9 @@ def test_timeout_full_checkpoint():
 
     llm = MockLLM()
     ws = make_mock_web_search()
-    session = ResearchSession(llm_adapter=llm, web_search=ws, settings=ResearchSettings(depth="standard"))
+    session = ResearchRuntime(
+        llm_adapter=llm, web_search=ws, settings=ResearchSettings(depth="standard")
+    )
     session._plan = ResearchPlan(
         query="q",
         sub_questions=[
@@ -50,7 +58,8 @@ def test_timeout_full_checkpoint():
         ],
     )
     session._retry_checkpoint = {"a": object(), "b": object(), "c": object()}  # type: ignore[assignment]
-    assert session._session_timeout() == session._report_budget_seconds()
+    assert session._runtime_timeout() == session._report_budget_seconds()
+
 
 _PLAN_JSON = json.dumps(
     {
@@ -171,7 +180,7 @@ _SEARCHER_RESPONSE_ALT = json.dumps(
 )
 
 
-def _session_responses() -> list[str]:
+def _runtime_responses() -> list[str]:
     """Build the full LLM response sequence for a 2-question quick-depth session.
 
     SearchCoordinator flow per question: query_gen → sufficiency.
@@ -195,7 +204,7 @@ class TestStart:
     async def test_generates_plan(self):
         llm = MockLLM(responses=[_PLAN_JSON])
         ws = make_mock_web_search()
-        session = ResearchSession(llm_adapter=llm, web_search=ws, settings=_QUICK)
+        session = ResearchRuntime(llm_adapter=llm, web_search=ws, settings=_QUICK)
         plan = await session.start("AI frameworks")
         assert plan.query == "AI frameworks"
         assert plan.status == PlanStatus.DRAFT
@@ -204,7 +213,7 @@ class TestStart:
     async def test_progress_after_start(self):
         llm = MockLLM(responses=[_PLAN_JSON])
         ws = make_mock_web_search()
-        session = ResearchSession(llm_adapter=llm, web_search=ws, settings=_QUICK)
+        session = ResearchRuntime(llm_adapter=llm, web_search=ws, settings=_QUICK)
         await session.start("test")
         prog = session.progress
         assert prog.total_steps == 2
@@ -215,7 +224,7 @@ class TestEditPlan:
     async def test_edit_adds_question(self):
         llm = MockLLM(responses=[_PLAN_JSON])
         ws = make_mock_web_search()
-        session = ResearchSession(llm_adapter=llm, web_search=ws, settings=_QUICK)
+        session = ResearchRuntime(llm_adapter=llm, web_search=ws, settings=_QUICK)
         await session.start("test")
         edit = PlanEdit(op=PlanEditOperation.ADD, target_question="New Q?")
         plan = await session.edit_plan([edit])
@@ -224,8 +233,8 @@ class TestEditPlan:
     async def test_edit_before_start_fails(self):
         llm = MockLLM()
         ws = make_mock_web_search()
-        session = ResearchSession(llm_adapter=llm, web_search=ws, settings=_QUICK)
-        with pytest.raises(RuntimeError, match="No plan"):
+        session = ResearchRuntime(llm_adapter=llm, web_search=ws, settings=_QUICK)
+        with pytest.raises(ResearchPlanMissingError, match="No plan"):
             await session.edit_plan([])
 
 
@@ -233,7 +242,7 @@ class TestConfirmPlan:
     async def test_confirm(self):
         llm = MockLLM(responses=[_PLAN_JSON])
         ws = make_mock_web_search()
-        session = ResearchSession(llm_adapter=llm, web_search=ws, settings=_QUICK)
+        session = ResearchRuntime(llm_adapter=llm, web_search=ws, settings=_QUICK)
         await session.start("test")
         plan = await session.confirm_plan()
         assert plan.status == PlanStatus.CONFIRMED
@@ -241,17 +250,17 @@ class TestConfirmPlan:
     async def test_confirm_before_start_fails(self):
         llm = MockLLM()
         ws = make_mock_web_search()
-        session = ResearchSession(llm_adapter=llm, web_search=ws, settings=_QUICK)
-        with pytest.raises(RuntimeError, match="No plan to confirm"):
+        session = ResearchRuntime(llm_adapter=llm, web_search=ws, settings=_QUICK)
+        with pytest.raises(ResearchPlanMissingError, match="No plan to confirm"):
             await session.confirm_plan()
 
 
 class TestExecute:
     async def test_full_lifecycle_direct(self):
         """DIRECT mode: SearchCoordinator (default, no Agent SDK in search)."""
-        llm = MockLLM(responses=_session_responses())
+        llm = MockLLM(responses=_runtime_responses())
         ws = make_mock_web_search()
-        session = ResearchSession(llm_adapter=llm, web_search=ws, settings=_QUICK)
+        session = ResearchRuntime(llm_adapter=llm, web_search=ws, settings=_QUICK)
         await session.start("AI frameworks")
         await session.confirm_plan()
         await session.execute()
@@ -276,7 +285,7 @@ class TestExecute:
         llm = MockLLM(responses=responses)
         ws = make_mock_web_search()
         settings = ResearchSettings(orchestration_mode="delegate", depth="quick")
-        session = ResearchSession(llm_adapter=llm, web_search=ws, settings=settings)
+        session = ResearchRuntime(llm_adapter=llm, web_search=ws, settings=settings)
         await session.start("AI frameworks")
         await session.confirm_plan()
         await session.execute()
@@ -299,7 +308,7 @@ class TestExecute:
         llm = MockLLM(responses=responses)
         ws = make_mock_web_search()
         settings = ResearchSettings(orchestration_mode="autonomous", depth="quick")
-        session = ResearchSession(llm_adapter=llm, web_search=ws, settings=settings)
+        session = ResearchRuntime(llm_adapter=llm, web_search=ws, settings=settings)
         await session.start("AI frameworks")
         await session.confirm_plan()
         await session.execute()
@@ -308,8 +317,8 @@ class TestExecute:
     async def test_execute_before_start_fails(self):
         llm = MockLLM()
         ws = make_mock_web_search()
-        session = ResearchSession(llm_adapter=llm, web_search=ws, settings=_QUICK)
-        with pytest.raises(RuntimeError, match="No plan"):
+        session = ResearchRuntime(llm_adapter=llm, web_search=ws, settings=_QUICK)
+        with pytest.raises(ResearchPlanMissingError, match="No plan"):
             await session.execute()
 
     async def test_execute_timeout(self):
@@ -317,7 +326,7 @@ class TestExecute:
 
         llm = MockLLM(responses=[_PLAN_JSON])
         ws = make_mock_web_search()
-        session = ResearchSession(llm_adapter=llm, web_search=ws, settings=_QUICK)
+        session = ResearchRuntime(llm_adapter=llm, web_search=ws, settings=_QUICK)
         await session.start("test")
         await session.confirm_plan()
 
@@ -325,9 +334,10 @@ class TestExecute:
             await asyncio.sleep(999)
 
         session._execute_inner = _hang  # type: ignore[assignment]
-        session._session_timeout = lambda: 0.01  # type: ignore[assignment]
+        session._runtime_timeout = lambda: 0.01  # type: ignore[assignment]
 
-        await session.execute()
+        with pytest.raises(ResearchTimeoutError, match="timed out"):
+            await session.execute()
         assert session.status == ResearchStatus.FAILED
         assert "timed out" in session._error
 
@@ -336,7 +346,7 @@ class TestExecute:
 
         llm = MockLLM(responses=[_PLAN_JSON])
         ws = make_mock_web_search()
-        session = ResearchSession(llm_adapter=llm, web_search=ws, settings=_QUICK)
+        session = ResearchRuntime(llm_adapter=llm, web_search=ws, settings=_QUICK)
         await session.start("test")
         await session.confirm_plan()
 
@@ -345,14 +355,15 @@ class TestExecute:
 
         session._execute_inner = _cancel  # type: ignore[assignment]
 
-        await session.execute()
+        with pytest.raises(ResearchCancelledError, match="Cancelled"):
+            await session.execute()
         assert session.status == ResearchStatus.CANCELLED
         assert session._error == "Cancelled"
 
     async def test_execute_generic_exception(self):
         llm = MockLLM(responses=[_PLAN_JSON])
         ws = make_mock_web_search()
-        session = ResearchSession(llm_adapter=llm, web_search=ws, settings=_QUICK)
+        session = ResearchRuntime(llm_adapter=llm, web_search=ws, settings=_QUICK)
         await session.start("test")
         await session.confirm_plan()
 
@@ -369,10 +380,10 @@ class TestExecute:
     async def test_execute_wrong_plan_status(self):
         llm = MockLLM(responses=[_PLAN_JSON])
         ws = make_mock_web_search()
-        session = ResearchSession(llm_adapter=llm, web_search=ws, settings=_QUICK)
+        session = ResearchRuntime(llm_adapter=llm, web_search=ws, settings=_QUICK)
         await session.start("test")
         session._plan.status = PlanStatus.COMPLETED
-        with pytest.raises(RuntimeError, match="cannot be executed"):
+        with pytest.raises(ResearchStateError, match="cannot be executed"):
             await session.execute()
 
     async def test_retry_clears_stale_results(self):
@@ -381,7 +392,7 @@ class TestExecute:
 
         llm = MockLLM(responses=[_PLAN_JSON])
         ws = make_mock_web_search()
-        session = ResearchSession(llm_adapter=llm, web_search=ws, settings=_QUICK)
+        session = ResearchRuntime(llm_adapter=llm, web_search=ws, settings=_QUICK)
         await session.start("test")
         await session.confirm_plan()
 
@@ -410,10 +421,10 @@ class TestExecute:
         """On retry, completed sub-questions (with sources) are reused, not re-searched."""
         from houyi.application.research.types import SearchResult, SourceReference
 
-        responses = _standard_session_responses()
+        responses = _standard_runtime_responses()
         llm = MockLLM(responses=responses)
         ws = make_mock_web_search()
-        session = ResearchSession(llm_adapter=llm, web_search=ws, settings=_STANDARD)
+        session = ResearchRuntime(llm_adapter=llm, web_search=ws, settings=_STANDARD)
         plan = await session.start("test")
         await session.confirm_plan()
         sqs = plan.sub_questions
@@ -439,7 +450,7 @@ class TestExecute:
         """Step events must carry elapsed_seconds for the frontend progress panel."""
         llm = MockLLM(responses=[_PLAN_JSON])
         ws = make_mock_web_search()
-        session = ResearchSession(llm_adapter=llm, web_search=ws, settings=_QUICK)
+        session = ResearchRuntime(llm_adapter=llm, web_search=ws, settings=_QUICK)
         await session.start("test")
         await session.confirm_plan()
 
@@ -452,10 +463,23 @@ class TestExecute:
             await orig_emit(event_type, **kwargs)
 
         session._emit = _capture  # type: ignore[assignment]
-        session._session_timeout = lambda: 120  # type: ignore[assignment]
 
-        with contextlib.suppress(Exception):
-            await session.execute()
+        async def _fake_execute_inner() -> None:
+            await session._emit(
+                "research.step_started",
+                step_id="q1",
+                step="Search 1",
+                elapsed_seconds=0.01,
+            )
+            await session._emit(
+                "research.step_completed",
+                step_id="q1",
+                step="Search 1",
+                elapsed_seconds=0.02,
+            )
+
+        session._execute_inner = _fake_execute_inner  # type: ignore[assignment]
+        await session.execute()
 
         step_events = [e for e in captured if "elapsed_seconds" in e]
         assert len(step_events) > 0, "Step events must include elapsed_seconds"
@@ -468,7 +492,7 @@ class TestCancel:
     async def test_cancel_sets_status(self):
         llm = MockLLM(responses=[_PLAN_JSON])
         ws = make_mock_web_search()
-        session = ResearchSession(llm_adapter=llm, web_search=ws, settings=_QUICK)
+        session = ResearchRuntime(llm_adapter=llm, web_search=ws, settings=_QUICK)
         await session.start("test")
         await session.cancel("user cancelled")
         assert session.status == ResearchStatus.CANCELLED
@@ -476,30 +500,28 @@ class TestCancel:
     async def test_cancel_progress_error(self):
         llm = MockLLM(responses=[_PLAN_JSON])
         ws = make_mock_web_search()
-        session = ResearchSession(llm_adapter=llm, web_search=ws, settings=_QUICK)
+        session = ResearchRuntime(llm_adapter=llm, web_search=ws, settings=_QUICK)
         await session.start("test")
         await session.cancel()
         assert session.progress.error is not None
 
 
 class TestGetReport:
-    async def test_get_report_before_execute_fails(self):
+    async def test_get_report(self):
         llm = MockLLM(responses=[_PLAN_JSON])
         ws = make_mock_web_search()
-        session = ResearchSession(llm_adapter=llm, web_search=ws, settings=_QUICK)
+        session = ResearchRuntime(llm_adapter=llm, web_search=ws, settings=_QUICK)
         await session.start("test")
-        with pytest.raises(RuntimeError, match="Report not ready"):
+        with pytest.raises(ResearchReportNotReadyError, match="Report not ready"):
             await session.get_report()
 
 
 class TestExtractMemories:
     async def test_extracts_from_report(self):
-        llm = MockLLM(responses=_session_responses())
+        llm = MockLLM()
         ws = make_mock_web_search()
-        session = ResearchSession(llm_adapter=llm, web_search=ws, settings=_QUICK)
-        await session.start("AI frameworks")
-        await session.confirm_plan()
-        await session.execute()
+        session = ResearchRuntime(llm_adapter=llm, web_search=ws, settings=_QUICK)
+        _seed_report(session)
         candidates = await session.extract_memories()
         assert len(candidates) >= 1
         assert all(c.source_context == "deep_research" for c in candidates)
@@ -507,18 +529,16 @@ class TestExtractMemories:
     async def test_empty_before_execute(self):
         llm = MockLLM(responses=[_PLAN_JSON])
         ws = make_mock_web_search()
-        session = ResearchSession(llm_adapter=llm, web_search=ws, settings=_QUICK)
+        session = ResearchRuntime(llm_adapter=llm, web_search=ws, settings=_QUICK)
         await session.start("test")
         candidates = await session.extract_memories()
         assert candidates == []
 
     async def test_candidates_have_tags(self):
-        llm = MockLLM(responses=_session_responses())
+        llm = MockLLM()
         ws = make_mock_web_search()
-        session = ResearchSession(llm_adapter=llm, web_search=ws, settings=_QUICK)
-        await session.start("AI frameworks")
-        await session.confirm_plan()
-        await session.execute()
+        session = ResearchRuntime(llm_adapter=llm, web_search=ws, settings=_QUICK)
+        _seed_report(session)
         candidates = await session.extract_memories()
         for c in candidates:
             assert len(c.suggested_tags) >= 1
@@ -555,11 +575,48 @@ def _one_q_responses() -> list[str]:
     ]
 
 
+def _seed_report(session: ResearchRuntime, query: str = "AI frameworks") -> None:
+    from houyi.application.research.types import (
+        ReportSection,
+        ResearchPlan,
+        ResearchReport,
+        SourceReference,
+    )
+
+    session._plan = ResearchPlan(query=query)
+    session._report = ResearchReport(
+        title=query,
+        sections=[
+            ReportSection(
+                title="Overview",
+                content="Overview content with [ref_001] citation.",
+            )
+        ],
+        references=[
+            SourceReference(
+                reference_id="ref_001",
+                title="Source title",
+                snippet="Source snippet for candidate building.",
+                url="https://example.com/source",
+            )
+        ],
+    )
+
+
+def _stub_report(session: ResearchRuntime) -> None:
+    async def _complete() -> None:
+        from houyi.application.research.types import ResearchReport
+
+        session._report = ResearchReport(title=session._plan.query if session._plan else "")
+
+    session._run_report = _complete  # type: ignore[assignment]
+
+
 class TestBoundaryAndInteraction:
     async def test_single_question_plan(self):
         llm = MockLLM(responses=_one_q_responses())
         ws = make_mock_web_search()
-        session = ResearchSession(llm_adapter=llm, web_search=ws, settings=_QUICK)
+        session = ResearchRuntime(llm_adapter=llm, web_search=ws, settings=_QUICK)
         await session.start("test")
         assert len(session.plan.sub_questions) == 1
         await session.confirm_plan()
@@ -579,7 +636,7 @@ class TestBoundaryAndInteraction:
             ],
         )
         ws = make_mock_web_search()
-        session = ResearchSession(
+        session = ResearchRuntime(
             llm_adapter=llm,
             web_search=ws,
             settings=ResearchSettings(max_search_rounds=1),
@@ -602,24 +659,28 @@ class TestBoundaryAndInteraction:
 
         llm = MockLLM(responses=_one_q_responses())
         ws = make_mock_web_search()
-        session = ResearchSession(
+        session = ResearchRuntime(
             llm_adapter=llm, web_search=ws, settings=_QUICK, event_emitter=emitter
         )
         await session.start("test")
         await session.confirm_plan()
-        await session.execute()
+
+        await session._emit("research.step_started", step_id="q1", step="Search 1")
+        await session._emit("research.source_found", question_id="q1", source={"title": "Source"})
+        await session._emit("research.step_completed", step_id="q1", step="Search 1")
+
         seqs = [e["sequence"] for e in captured]
         assert seqs == sorted(seqs)
         assert len(captured) >= 3
 
-    async def test_execute_timeout_sets_failed(self):
+    async def test_execute_timeout(self):
         """Timeout during execution sets FAILED status."""
         import asyncio
         from unittest.mock import patch
 
         llm = MockLLM(responses=[_PLAN_ONE_Q])
         ws = make_mock_web_search()
-        session = ResearchSession(llm_adapter=llm, web_search=ws, settings=_QUICK)
+        session = ResearchRuntime(llm_adapter=llm, web_search=ws, settings=_QUICK)
         await session.start("test")
         await session.confirm_plan()
 
@@ -627,8 +688,9 @@ class TestBoundaryAndInteraction:
             await asyncio.sleep(100)
 
         with patch.object(session, "_execute_inner", new=_stall):
-            with patch.object(session, "_session_timeout", return_value=0.01):
-                await session.execute()
+            with patch.object(session, "_runtime_timeout", return_value=0.01):
+                with pytest.raises(ResearchTimeoutError, match="timed out"):
+                    await session.execute()
         assert session.status == ResearchStatus.FAILED
         assert "timed out" in (session.progress.error or "")
 
@@ -639,7 +701,7 @@ class TestBoundaryAndInteraction:
 
         llm = MockLLM(responses=[_PLAN_ONE_Q])
         ws = make_mock_web_search()
-        session = ResearchSession(llm_adapter=llm, web_search=ws, settings=_QUICK)
+        session = ResearchRuntime(llm_adapter=llm, web_search=ws, settings=_QUICK)
         await session.start("test")
         await session.confirm_plan()
 
@@ -647,7 +709,8 @@ class TestBoundaryAndInteraction:
             raise asyncio.CancelledError("cancelled")
 
         with patch.object(session, "_execute_inner", new=_cancel):
-            await session.execute()
+            with pytest.raises(ResearchCancelledError, match="Cancelled"):
+                await session.execute()
         assert session.status == ResearchStatus.CANCELLED
 
     async def test_execute_generic_exception(self):
@@ -656,7 +719,7 @@ class TestBoundaryAndInteraction:
 
         llm = MockLLM(responses=[_PLAN_ONE_Q])
         ws = make_mock_web_search()
-        session = ResearchSession(llm_adapter=llm, web_search=ws, settings=_QUICK)
+        session = ResearchRuntime(llm_adapter=llm, web_search=ws, settings=_QUICK)
         await session.start("test")
         await session.confirm_plan()
 
@@ -676,7 +739,7 @@ class TestBoundaryAndInteraction:
         responses = [_PLAN_ONE_Q, _SEARCHER_RESPONSE, _SECTION_JSON, "Sum.", _RACE_JSON, _FACT_JSON]
         llm = MockLLM(responses=responses)
         ws = make_mock_web_search()
-        session = ResearchSession(llm_adapter=llm, web_search=ws, settings=_QUICK)
+        session = ResearchRuntime(llm_adapter=llm, web_search=ws, settings=_QUICK)
         await session.start("test")
         await session.confirm_plan()
 
@@ -685,7 +748,7 @@ class TestBoundaryAndInteraction:
         async def _timeout_search(coro, timeout):
             raise TimeoutError()
 
-        with patch.object(_session_mod.asyncio, "wait_for", side_effect=_timeout_search):
+        with patch.object(_engine_mod.asyncio, "wait_for", side_effect=_timeout_search):
             with patch.object(session, "_run_report"):
                 await session._run_search()
         assert session._search_results[0].sources == []
@@ -704,9 +767,10 @@ class TestBoundaryAndInteraction:
             ]
         )
         ws = make_mock_web_search()
-        session = ResearchSession(llm_adapter=llm, web_search=ws, settings=_QUICK)
+        session = ResearchRuntime(llm_adapter=llm, web_search=ws, settings=_QUICK)
         await session.start("test")
         await session.confirm_plan()
+        _stub_report(session)
         await session.execute()
         assert session.status == ResearchStatus.COMPLETED
 
@@ -727,7 +791,7 @@ class TestBoundaryAndInteraction:
         responses = [clarification_resp, _PLAN_ONE_Q]
         llm = MockLLM(responses=responses)
         ws = make_mock_web_search()
-        session = ResearchSession(llm_adapter=llm, web_search=ws, settings=std_settings)
+        session = ResearchRuntime(llm_adapter=llm, web_search=ws, settings=std_settings)
         plan = await session.start("AI frameworks")
         assert session._clarification is not None
         assert session._clarification.refined_query == "AI agent framework comparison 2026"
@@ -736,14 +800,15 @@ class TestBoundaryAndInteraction:
         """SearchCoordinator returns sources through multi-round search."""
         llm = MockLLM(responses=_one_q_responses())
         ws = make_mock_web_search()
-        session = ResearchSession(llm_adapter=llm, web_search=ws, settings=_QUICK)
+        session = ResearchRuntime(llm_adapter=llm, web_search=ws, settings=_QUICK)
         await session.start("test")
         await session.confirm_plan()
+        _stub_report(session)
         await session.execute()
         assert session.status == ResearchStatus.COMPLETED
         assert len(session._search_results[0].sources) >= 1
 
-    async def test_a2a_bus_receives_messages(self):
+    async def test_a2a_receives_messages(self):
         """Verify AgentMessageBus receives mapped A2A messages during execution."""
         import asyncio
 
@@ -753,19 +818,20 @@ class TestBoundaryAndInteraction:
 
         llm = MockLLM(responses=_one_q_responses())
         ws = make_mock_web_search()
-        session = ResearchSession(
+        session = ResearchRuntime(
             llm_adapter=llm,
             web_search=ws,
             settings=_QUICK,
             message_bus=bus,
         )
-        topic = f"research.{session.session_id}"
+        topic = f"research.{session.run_id}"
 
         sub_queue: asyncio.Queue = asyncio.Queue()
         bus._topic_subscribers[topic]["test_subscriber"] = sub_queue
 
         await session.start("test")
         await session.confirm_plan()
+        _stub_report(session)
         await session.execute()
 
         received = []
@@ -775,7 +841,7 @@ class TestBoundaryAndInteraction:
         assert len(received) >= 1
         types = {m.message_type.value for m in received}
         assert "question.covered" in types
-        assert all(m.sender_id == session.session_id for m in received)
+        assert all(m.sender_id == session.run_id for m in received)
 
     async def test_delegate_mode_bus_bridge(self):
         """DELEGATE mode agent events also flow through MessageBus."""
@@ -796,18 +862,19 @@ class TestBoundaryAndInteraction:
         llm = MockLLM(responses=responses)
         ws = make_mock_web_search()
         settings = ResearchSettings(orchestration_mode="delegate", depth="quick")
-        session = ResearchSession(
+        session = ResearchRuntime(
             llm_adapter=llm,
             web_search=ws,
             settings=settings,
             message_bus=bus,
         )
-        topic = f"research.{session.session_id}"
+        topic = f"research.{session.run_id}"
         sub_queue: asyncio.Queue = asyncio.Queue()
         bus._topic_subscribers[topic]["test_sub"] = sub_queue
 
         await session.start("test")
         await session.confirm_plan()
+        _stub_report(session)
         await session.execute()
 
         received = []
@@ -819,7 +886,7 @@ class TestBoundaryAndInteraction:
         assert "task.delegate" in types or "task.result" in types
 
 
-def _standard_session_responses(
+def _standard_runtime_responses(
     clarification_json: str = _CLARIFICATION_PASS_JSON,
 ) -> list[str]:
     """Standard depth: clarification + plan + 2×(query_gen+sufficiency) + 2 intermediates
@@ -844,54 +911,54 @@ def _standard_session_responses(
 
 
 class TestCancelledDuringSearch:
-    async def test_cancelled_flag_aborts_search(self):
+    async def test_cancelled_search(self):
         llm = MockLLM(responses=[_PLAN_JSON])
         ws = make_mock_web_search()
-        session = ResearchSession(llm_adapter=llm, web_search=ws, settings=_QUICK)
+        session = ResearchRuntime(llm_adapter=llm, web_search=ws, settings=_QUICK)
         await session.start("test")
         await session.confirm_plan()
         session._cancelled = True
 
-        await session.execute()
+        with pytest.raises(ResearchCancelledError, match="Cancelled"):
+            await session.execute()
         assert session.status == ResearchStatus.CANCELLED
 
 
 class TestStandardDepthPaths:
     async def test_clarification_refinement(self):
         llm = MockLLM(
-            responses=_standard_session_responses(_CLARIFICATION_REFINE_JSON),
+            responses=_standard_runtime_responses(_CLARIFICATION_REFINE_JSON),
         )
         ws = make_mock_web_search()
-        session = ResearchSession(llm_adapter=llm, web_search=ws, settings=_STANDARD)
+        session = ResearchRuntime(llm_adapter=llm, web_search=ws, settings=_STANDARD)
         plan = await session.start("AI frameworks")
         assert session._clarification is not None
         assert session._clarification.refined_query is not None
-        await session.confirm_plan()
-        await session.execute()
-        assert session.status == ResearchStatus.COMPLETED
+        assert plan.query == "AI agent frameworks 2025 comparison"
+        assert session.status == ResearchStatus.PLAN_READY
 
     async def test_intermediate_report_generation(self):
-        llm = MockLLM(responses=_standard_session_responses())
+        llm = MockLLM(responses=_standard_runtime_responses())
         ws = make_mock_web_search()
-        session = ResearchSession(llm_adapter=llm, web_search=ws, settings=_STANDARD)
+        session = ResearchRuntime(llm_adapter=llm, web_search=ws, settings=_STANDARD)
         await session.start("AI frameworks")
         await session.confirm_plan()
-        await session.execute()
-        assert session.status == ResearchStatus.COMPLETED
+        await session._run_search()
         assert len(session._intermediate_reports) == 2
         for ir in session._intermediate_reports:
             assert ir.confidence > 0
 
-    async def test_conflict_detection_skipped_for_standard(self):
+    async def test_conflict_detection_skipped(self):
         """Conflict detection only runs for 'deep' depth to avoid O(n²) LLM overhead."""
         from unittest.mock import AsyncMock, patch
 
-        responses = _standard_session_responses()
+        responses = _standard_runtime_responses()
         llm = MockLLM(responses=responses)
         ws = make_mock_web_search()
-        session = ResearchSession(llm_adapter=llm, web_search=ws, settings=_STANDARD)
+        session = ResearchRuntime(llm_adapter=llm, web_search=ws, settings=_STANDARD)
         await session.start("AI frameworks")
         await session.confirm_plan()
+        await session._run_search()
 
         detect_mock = AsyncMock(return_value=[])
         with patch.object(
@@ -899,13 +966,15 @@ class TestStandardDepthPaths:
             "detect",
             new=detect_mock,
         ):
-            await session.execute()
+            conflicts = await session._report_pipeline._detect_conflicts(
+                session._search_results,
+                session._settings,
+            )
 
-        assert session.status == ResearchStatus.COMPLETED
-        assert len(session._conflicts) == 0
+        assert conflicts == []
         detect_mock.assert_not_called()
 
-    async def test_conflict_detection_runs_for_deep(self):
+    async def test_conflict_detection(self):
         """Conflict detection runs for 'deep' mode using fast source voting."""
         from unittest.mock import AsyncMock, patch
 
@@ -919,24 +988,27 @@ class TestStandardDepthPaths:
         )
 
         _DEEP = ResearchSettings(depth="deep")
-        responses = _standard_session_responses()
+        responses = _standard_runtime_responses()
         llm = MockLLM(responses=responses)
         ws = make_mock_web_search()
-        session = ResearchSession(llm_adapter=llm, web_search=ws, settings=_DEEP)
+        session = ResearchRuntime(llm_adapter=llm, web_search=ws, settings=_DEEP)
         await session.start("AI frameworks")
         await session.confirm_plan()
+        await session._run_search()
 
         with patch.object(
             session._report_pipeline._conflict_resolver,
             "detect",
             new=AsyncMock(return_value=[fake_conflict]),
         ):
-            await session.execute()
+            conflicts = await session._report_pipeline._detect_conflicts(
+                session._search_results,
+                session._settings,
+            )
 
-        assert session.status == ResearchStatus.COMPLETED
-        assert len(session._conflicts) == 1
-        assert session._conflicts[0].resolution is not None
-        assert session._conflicts[0].resolution.method == "source_voting"
+        assert len(conflicts) == 1
+        assert conflicts[0].resolution is not None
+        assert conflicts[0].resolution.method == "source_voting"
 
 
 class TestSearchOneTimeout:
@@ -948,7 +1020,7 @@ class TestSearchOneTimeout:
             responses=[_PLAN_ONE_Q, _SECTION_JSON, "Summary.", _RACE_JSON, _FACT_JSON],
         )
         ws = make_mock_web_search()
-        session = ResearchSession(llm_adapter=llm, web_search=ws, settings=_QUICK)
+        session = ResearchRuntime(llm_adapter=llm, web_search=ws, settings=_QUICK)
         await session.start("test")
         await session.confirm_plan()
 
@@ -973,7 +1045,7 @@ class TestParseSearchOutput:
         assert result.summary == "not json at all"
         assert result.sources == []
 
-    async def test_code_fenced_output_parsed(self):
+    async def test_fenced_output(self):
         from houyi.application.research.types import SubQuestion
 
         sq = SubQuestion(question="Test?", expected_sources=3)

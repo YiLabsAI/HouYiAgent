@@ -1,6 +1,6 @@
 """Post-search report pipeline: conflicts → report → validation → repair → quality.
 
-Extracted from ``ResearchSession`` to keep the session orchestrator lean.
+Extracted from ``ResearchRuntime`` to keep the runtime orchestrator lean.
 The pipeline is stateless — all mutable data flows in/out via parameters
 and the returned ``ReportPipelineResult``.
 """
@@ -14,9 +14,12 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from houyi.application.research.intermediate import IntermediateReport, IntermediateReportGenerator
 from houyi.application.research.quality import QualityEvaluator
 from houyi.application.research.report import ReportGenerator
+from houyi.application.research.runtime.intermediate import (
+    IntermediateReport,
+    IntermediateReportGenerator,
+)
 from houyi.application.research.types import (
     AggregatedSources,
     QualityScore,
@@ -75,10 +78,6 @@ class ReportPipeline:
         self._web_search = web_search
         self._emit = emit
 
-    # ------------------------------------------------------------------
-    # Helpers
-    # ------------------------------------------------------------------
-
     async def _generate_pending_intermediates(
         self,
         pending: list[tuple[SearchResult, str]],
@@ -93,7 +92,8 @@ class ReportPipeline:
             return {sr.question_id: ir for (sr, _), ir in zip(pending, results, strict=True)}
         except Exception:
             logger.warning(
-                "Parallel intermediate generation failed, falling back to serial", exc_info=True
+                "Parallel intermediate generation failed, falling back to serial",
+                exc_info=True,
             )
         gen_by_qid: dict[str, IntermediateReport] = {}
         for sr, qt in pending:
@@ -104,10 +104,6 @@ class ReportPipeline:
             except Exception:
                 logger.warning("Intermediate report failed for %s", sr.question_id, exc_info=True)
         return gen_by_qid
-
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
 
     async def generate_intermediates(
         self,
@@ -288,10 +284,6 @@ class ReportPipeline:
                 exc_info=True,
             )
             raise
-
-    # ------------------------------------------------------------------
-    # Internal steps
-    # ------------------------------------------------------------------
 
     async def _detect_conflicts(
         self,

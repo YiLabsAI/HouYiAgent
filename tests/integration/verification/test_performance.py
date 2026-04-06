@@ -14,6 +14,8 @@ from houyi.assurance.verification import (
     VerificationRule,
 )
 
+pytestmark = pytest.mark.benchmark
+
 
 class PerformanceMetrics:
     """Collect performance metrics."""

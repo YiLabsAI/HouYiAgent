@@ -7,7 +7,7 @@ import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
-const E2E_BACKEND_PORT = Number(process.env.HOUYI_E2E_BACKEND_PORT || '9000');
+const E2E_BACKEND_PORT = Number(process.env.HOUYI_E2E_BACKEND_PORT || '19000');
 const SERVER_URL = `http://127.0.0.1:${E2E_BACKEND_PORT}/`;
 const SERVER_PORT = E2E_BACKEND_PORT;
 const PID_FILE = path.join(os.tmpdir(), 'houyi-console-e2e.pid');

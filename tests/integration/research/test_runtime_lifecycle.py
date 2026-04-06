@@ -1,4 +1,4 @@
-"""Integration test: ResearchSession end-to-end lifecycle.
+"""Integration test: ResearchRuntime end-to-end lifecycle.
 
 Exercises the complete plan → search → aggregate → report → quality → memory
 pipeline with mock LLM and WebSearch, verifying cross-component integration
@@ -13,7 +13,7 @@ from typing import Any
 from unittest.mock import AsyncMock
 
 from houyi.adapters.llm.base import LLMAdapter, LLMResponse, StreamChunk
-from houyi.application.research.session import ResearchSession
+from houyi.application.research.runtime import ResearchRuntime
 from houyi.application.research.types import (
     PlanEdit,
     PlanEditOperation,
@@ -203,13 +203,13 @@ def _mock_web_search() -> WebSearchService:
 # ---------------------------------------------------------------------------
 
 
-class TestSessionLifecycle:
+class TestRuntimeLifecycle:
     """Full plan → execute → report → memory extraction lifecycle."""
 
     async def test_delegate_full_run(self):
         llm = _MockLLM(_build_responses())
         ws = _mock_web_search()
-        session = ResearchSession(llm_adapter=llm, web_search=ws)
+        session = ResearchRuntime(llm_adapter=llm, web_search=ws)
 
         plan = await session.start("Compare AI agent frameworks in 2026")
         assert plan.status == PlanStatus.DRAFT
@@ -238,7 +238,7 @@ class TestSessionLifecycle:
         llm = _MockLLM(_build_responses())
         ws = _mock_web_search()
         settings = ResearchSettings(orchestration_mode="autonomous", max_agents=3)
-        session = ResearchSession(llm_adapter=llm, web_search=ws, settings=settings)
+        session = ResearchRuntime(llm_adapter=llm, web_search=ws, settings=settings)
 
         await session.start("AI frameworks")
         await session.confirm_plan()
@@ -253,7 +253,7 @@ class TestPlanEditing:
     async def test_edit_and_confirm(self):
         llm = _MockLLM(_build_responses())
         ws = _mock_web_search()
-        session = ResearchSession(llm_adapter=llm, web_search=ws)
+        session = ResearchRuntime(llm_adapter=llm, web_search=ws)
 
         plan = await session.start("test")
         assert plan.version == 1
@@ -280,7 +280,7 @@ class TestEventSequence:
 
         llm = _MockLLM(_build_responses())
         ws = _mock_web_search()
-        session = ResearchSession(
+        session = ResearchRuntime(
             llm_adapter=llm,
             web_search=ws,
             event_emitter=emitter,
@@ -312,7 +312,7 @@ class TestEventSequence:
         llm = _MockLLM(_build_responses())
         ws = _mock_web_search()
         settings = ResearchSettings(orchestration_mode="autonomous", max_agents=3)
-        session = ResearchSession(
+        session = ResearchRuntime(
             llm_adapter=llm,
             web_search=ws,
             settings=settings,
@@ -332,7 +332,7 @@ class TestMemoryExtraction:
     async def test_extract_after_completion(self):
         llm = _MockLLM(_build_responses())
         ws = _mock_web_search()
-        session = ResearchSession(llm_adapter=llm, web_search=ws)
+        session = ResearchRuntime(llm_adapter=llm, web_search=ws)
 
         await session.start("AI frameworks")
         await session.confirm_plan()
@@ -348,7 +348,7 @@ class TestProgress:
     async def test_progress_updates(self):
         llm = _MockLLM(_build_responses())
         ws = _mock_web_search()
-        session = ResearchSession(llm_adapter=llm, web_search=ws)
+        session = ResearchRuntime(llm_adapter=llm, web_search=ws)
 
         await session.start("test")
         prog = session.progress
@@ -371,7 +371,7 @@ class TestCancelFlow:
     async def test_cancel_after_start(self):
         llm = _MockLLM(_build_responses())
         ws = _mock_web_search()
-        session = ResearchSession(llm_adapter=llm, web_search=ws)
+        session = ResearchRuntime(llm_adapter=llm, web_search=ws)
 
         await session.start("test")
         await session.cancel("changed mind")

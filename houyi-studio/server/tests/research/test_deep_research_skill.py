@@ -38,7 +38,7 @@ class TestSkillExecution:
         with patch.object(_dr_mod, "_research_service_ref", None):
             result = await skill.executor(query="AI frameworks", depth="standard")
         assert isinstance(result, dict)
-        assert "session_id" in result
+        assert "run_id" in result
         assert "summary" in result
 
     async def test_executor_placeholder(self):

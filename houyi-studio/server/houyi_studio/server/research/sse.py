@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 class ResearchSSEEnvelope:
     """Structured SSE envelope per spec §4.3.
 
-    Fields: event_id, event_type, session_id, sequence, timestamp,
+    Fields: event_id, event_type, run_id, sequence, timestamp,
     payload_version, payload.
     """
 
@@ -32,15 +32,15 @@ class ResearchSSEEnvelope:
         "payload",
         "payload_version",
         "replayed",
+        "run_id",
         "sequence",
-        "session_id",
         "timestamp",
     )
 
     def __init__(
         self,
         event_type: str,
-        session_id: str,
+        run_id: str,
         sequence: int,
         payload: dict[str, Any],
         *,
@@ -48,7 +48,7 @@ class ResearchSSEEnvelope:
     ) -> None:
         self.event_id = uuid.uuid4().hex[:16]
         self.event_type = event_type
-        self.session_id = session_id
+        self.run_id = run_id
         self.sequence = sequence
         self.timestamp = time.time()
         self.payload_version = 1
@@ -59,7 +59,7 @@ class ResearchSSEEnvelope:
         return {
             "event_id": self.event_id,
             "event_type": self.event_type,
-            "session_id": self.session_id,
+            "run_id": self.run_id,
             "sequence": self.sequence,
             "timestamp": self.timestamp,
             "payload_version": self.payload_version,
@@ -74,12 +74,12 @@ class ResearchSSEEnvelope:
 
 async def research_sse_stream(
     emitter: EventEmitter,
-    session_id: str,
+    run_id: str,
     *,
     last_event_id: str | None = None,
     event_buffer: list[ResearchSSEEnvelope] | None = None,
 ) -> AsyncGenerator[str, None]:
-    """Yield SSE-formatted events from the research session's emitter.
+    """Yield SSE-formatted events from the research run emitter.
 
     Supports reconnection via ``last_event_id``: replays buffered events
     that were emitted after the given event ID.
@@ -107,7 +107,7 @@ async def research_sse_stream(
                 env.replayed = True
                 yield env.to_sse()
 
-        yield f": connected session={session_id}\n\n"
+        yield f": connected run={run_id}\n\n"
 
         heartbeat_interval = 15.0
         last_heartbeat = time.monotonic()
@@ -120,7 +120,7 @@ async def research_sse_stream(
                 if now - last_heartbeat >= heartbeat_interval:
                     hb = ResearchSSEEnvelope(
                         event_type="research.heartbeat",
-                        session_id=session_id,
+                        run_id=run_id,
                         sequence=0,
                         payload={"status": "alive", "elapsed_seconds": round(now, 2)},
                     )
@@ -137,7 +137,7 @@ async def research_sse_stream(
 
             envelope = ResearchSSEEnvelope(
                 event_type=research_event,
-                session_id=session_id,
+                run_id=run_id,
                 sequence=sequence,
                 payload=payload,
             )

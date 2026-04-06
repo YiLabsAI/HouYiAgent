@@ -4,8 +4,8 @@ from houyi.application.research.aggregator import SourceAggregator
 from houyi.application.research.planner import ResearchPlanner
 from houyi.application.research.quality import QualityEvaluator
 from houyi.application.research.report import ReportGenerator
-from houyi.application.research.search import SearchCoordinator
-from houyi.application.research.session import ResearchSession
+from houyi.application.research.runtime import ResearchRuntime
+from houyi.application.research.runtime.search import SearchCoordinator
 from houyi.application.research.types import (
     AggregatedSources,
     Citation,
@@ -64,7 +64,7 @@ __all__ = [
     "ResearchPlanner",
     "ResearchProgress",
     "ResearchReport",
-    "ResearchSession",
+    "ResearchRuntime",
     "ResearchSettings",
     "ResearchStatus",
     "SearchContext",

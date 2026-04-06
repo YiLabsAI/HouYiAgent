@@ -123,7 +123,7 @@ class TestBoundaryAndInteraction:
 
 class TestIntermediateContext:
     async def test_section_with_intermediate_context(self):
-        from houyi.application.research.intermediate import IntermediateReport
+        from houyi.application.research.runtime.intermediate import IntermediateReport
 
         llm = MockLLM(responses=[_SECTION_JSON, _SECTION_JSON, "Summary."])
         gen = ReportGenerator(llm)
@@ -153,8 +153,8 @@ class TestIntermediateContext:
         assert report.summary == "Summary."
 
     async def test_intermediate_context_builds_analysis(self):
-        from houyi.application.research.intermediate import IntermediateReport
         from houyi.application.research.report import _intermediate_context
+        from houyi.application.research.runtime.intermediate import IntermediateReport
 
         ir = IntermediateReport(
             question_id="q1",
@@ -203,7 +203,7 @@ class TestParseSectionEdgeCases:
         """LLM sometimes prepends prose before the JSON object."""
         from houyi.application.research.report import _parse_section
 
-        raw = 'Here is the section:\n' + _SECTION_JSON
+        raw = "Here is the section:\n" + _SECTION_JSON
         section = _parse_section("Test Section", raw)
         assert "AI frameworks" in section.content
         assert len(section.citations) == 1

@@ -10,10 +10,10 @@ from unittest.mock import AsyncMock
 import pytest
 from houyi_studio.server.research.service import (
     ResearchService,
-    SessionNotFoundError,
-    SessionNotTerminalError,
+    RunNotFoundError,
+    RunNotTerminalError,
     VersionConflictError,
-    _ArchivedSession,
+    _ArchivedRun,
 )
 
 from houyi.adapters.llm.base import LLMAdapter, LLMResponse, StreamChunk
@@ -111,115 +111,115 @@ def _mock_ws() -> WebSearchService:
 # ---------------------------------------------------------------------------
 
 
-class TestCreateSession:
+class TestCreateRun:
     async def test_creates_plan(self, tmp_path):
         svc = ResearchService(_MockLLM(), _mock_ws(), data_dir=tmp_path)
-        session, plan = await svc.create_session("AI frameworks", settings=_QUICK)
+        runtime, plan = await svc.create_run("AI frameworks", settings=_QUICK)
         assert plan is not None
-        assert session.status == ResearchStatus.PLAN_READY
+        assert runtime.status == ResearchStatus.PLAN_READY
 
     async def test_idempotency_key(self, tmp_path):
         svc = ResearchService(_MockLLM([_PLAN_JSON, _PLAN_JSON]), _mock_ws(), data_dir=tmp_path)
-        s1, _ = await svc.create_session("Q1", idempotency_key="key1", settings=_QUICK)
-        s2, _ = await svc.create_session("Q2", idempotency_key="key1", settings=_QUICK)
-        assert s1.session_id == s2.session_id
+        r1, _ = await svc.create_run("Q1", idempotency_key="key1", settings=_QUICK)
+        r2, _ = await svc.create_run("Q2", idempotency_key="key1", settings=_QUICK)
+        assert r1.run_id == r2.run_id
 
     async def test_create_empty_settings(self, tmp_path):
         svc = ResearchService(_MockLLM(), _mock_ws(), data_dir=tmp_path)
-        session, plan = await svc.create_session("test", settings=_QUICK)
-        assert session.status == ResearchStatus.PLAN_READY
+        runtime, plan = await svc.create_run("test", settings=_QUICK)
+        assert runtime.status == ResearchStatus.PLAN_READY
         assert plan is not None
 
 
 class TestEditPlan:
     async def test_edit_bumps_version(self, tmp_path):
         svc = ResearchService(_MockLLM(), _mock_ws(), data_dir=tmp_path)
-        session, plan = await svc.create_session("test", settings=_QUICK)
+        runtime, plan = await svc.create_run("test", settings=_QUICK)
         edit = PlanEdit(op=PlanEditOperation.ADD, target_question="Extra?")
-        updated = await svc.edit_plan(session.session_id, [edit])
+        updated = await svc.edit_plan(runtime.run_id, [edit])
         assert updated.version == 2
 
     async def test_version_conflict(self, tmp_path):
         svc = ResearchService(_MockLLM(), _mock_ws(), data_dir=tmp_path)
-        session, _ = await svc.create_session("test", settings=_QUICK)
+        runtime, _ = await svc.create_run("test", settings=_QUICK)
         with pytest.raises(VersionConflictError):
-            await svc.edit_plan(session.session_id, [], client_plan_version=99)
+            await svc.edit_plan(runtime.run_id, [], client_plan_version=99)
 
 
 class TestNotFound:
-    async def test_require_session(self, tmp_path):
+    async def test_require_run(self, tmp_path):
         svc = ResearchService(_MockLLM(), _mock_ws(), data_dir=tmp_path)
-        with pytest.raises(SessionNotFoundError):
+        with pytest.raises(RunNotFoundError):
             svc.get_progress("nonexistent")
 
 
-class TestListSessions:
+class TestListRuns:
     async def test_list_after_create(self, tmp_path):
         svc = ResearchService(_MockLLM(), _mock_ws(), data_dir=tmp_path)
-        await svc.create_session("test", settings=_QUICK)
-        items = svc.list_sessions()
+        await svc.create_run("test", settings=_QUICK)
+        items = svc.list_runs()
         assert len(items) == 1
         assert items[0]["query"] == "test"
 
 
-class TestCancelSession:
+class TestCancelRun:
     async def test_cancel(self, tmp_path):
         svc = ResearchService(_MockLLM(), _mock_ws(), data_dir=tmp_path)
-        session, _ = await svc.create_session("test", settings=_QUICK)
-        await svc.cancel_session(session.session_id, "user cancelled")
-        assert session.status == ResearchStatus.CANCELLED
+        runtime, _ = await svc.create_run("test", settings=_QUICK)
+        await svc.cancel_run(runtime.run_id, "user cancelled")
+        assert runtime.status == ResearchStatus.CANCELLED
 
 
-class TestDeleteSession:
+class TestDeleteRun:
     async def test_delete_cancelled(self, tmp_path):
         svc = ResearchService(_MockLLM(), _mock_ws(), data_dir=tmp_path)
-        session, _ = await svc.create_session("test", settings=_QUICK)
-        await svc.cancel_session(session.session_id)
-        await svc.delete_session(session.session_id)
-        assert svc.get_session(session.session_id) is None
+        runtime, _ = await svc.create_run("test", settings=_QUICK)
+        await svc.cancel_run(runtime.run_id)
+        await svc.delete_run(runtime.run_id)
+        assert svc.get_run(runtime.run_id) is None
 
     async def test_delete_plan_ready(self, tmp_path):
-        """Non-executing sessions (e.g. plan_ready) can be deleted."""
+        """Non-executing runs can be deleted."""
         svc = ResearchService(_MockLLM(), _mock_ws(), data_dir=tmp_path)
-        session, _ = await svc.create_session("test", settings=_QUICK)
-        assert session.status == ResearchStatus.PLAN_READY
-        await svc.delete_session(session.session_id)
-        assert svc.get_session(session.session_id) is None
+        runtime, _ = await svc.create_run("test", settings=_QUICK)
+        assert runtime.status == ResearchStatus.PLAN_READY
+        await svc.delete_run(runtime.run_id)
+        assert svc.get_run(runtime.run_id) is None
 
     async def test_delete_executing_blocked(self, tmp_path):
-        """Executing sessions cannot be deleted."""
+        """Executing runs cannot be deleted."""
         svc = ResearchService(_MockLLM(), _mock_ws(), data_dir=tmp_path)
-        session, _ = await svc.create_session("test", settings=_QUICK)
-        session._status = ResearchStatus.EXECUTING
-        with pytest.raises(SessionNotTerminalError):
-            await svc.delete_session(session.session_id)
+        runtime, _ = await svc.create_run("test", settings=_QUICK)
+        runtime._status = ResearchStatus.EXECUTING
+        with pytest.raises(RunNotTerminalError):
+            await svc.delete_run(runtime.run_id)
 
 
 class TestExecuteLifecycle:
     async def test_full_execute_lifecycle(self, tmp_path):
         svc = ResearchService(_MockLLM(_all_responses()), _mock_ws(), data_dir=tmp_path)
-        session, _ = await svc.create_session("AI frameworks", settings=_QUICK)
-        await svc.confirm_and_execute(session.session_id)
-        assert session.status == ResearchStatus.COMPLETED
+        runtime, _ = await svc.create_run("AI frameworks", settings=_QUICK)
+        await svc.launch_run(runtime.run_id)
+        assert runtime.status == ResearchStatus.COMPLETED
 
     async def test_execute_nonexistent(self, tmp_path):
         svc = ResearchService(_MockLLM(), _mock_ws(), data_dir=tmp_path)
-        with pytest.raises(SessionNotFoundError):
-            await svc.confirm_and_execute("nonexistent")
+        with pytest.raises(RunNotFoundError):
+            await svc.launch_run("nonexistent")
 
 
 class TestGetters:
     async def test_progress_after_create(self, tmp_path):
         svc = ResearchService(_MockLLM(), _mock_ws(), data_dir=tmp_path)
-        session, _ = await svc.create_session("test", settings=_QUICK)
-        progress = svc.get_progress(session.session_id)
+        runtime, _ = await svc.create_run("test", settings=_QUICK)
+        progress = svc.get_progress(runtime.run_id)
         assert progress.status == ResearchStatus.PLAN_READY
         assert progress.total_steps == 1
 
     async def test_emitter_after_create(self, tmp_path):
         svc = ResearchService(_MockLLM(), _mock_ws(), data_dir=tmp_path)
-        session, _ = await svc.create_session("test", settings=_QUICK)
-        emitter = svc.get_emitter(session.session_id)
+        runtime, _ = await svc.create_run("test", settings=_QUICK)
+        emitter = svc.get_emitter(runtime.run_id)
         assert emitter is not None
 
     async def test_emitter_missing_none(self, tmp_path):
@@ -230,88 +230,88 @@ class TestGetters:
 class TestPersistence:
     async def test_json_written(self, tmp_path):
         svc = ResearchService(_MockLLM(), _mock_ws(), data_dir=tmp_path)
-        session, _ = await svc.create_session("test", settings=_QUICK)
-        path = tmp_path / f"{session.session_id}.json"
+        runtime, _ = await svc.create_run("test", settings=_QUICK)
+        path = tmp_path / f"{runtime.run_id}.json"
         assert path.exists()
         data = json.loads(path.read_text())
-        assert data["session_id"] == session.session_id
+        assert data["run_id"] == runtime.run_id
 
-    async def test_sessions_loaded_on_startup(self, tmp_path):
-        """Sessions persisted as JSON are hydrated when a new service starts."""
+    async def test_runs_loaded_on_startup(self, tmp_path):
+        """Runs persisted as JSON are hydrated when a new service starts."""
         svc1 = ResearchService(_MockLLM(), _mock_ws(), data_dir=tmp_path)
-        session, _ = await svc1.create_session("persisted query", settings=_QUICK)
-        sid = session.session_id
+        runtime, _ = await svc1.create_run("persisted query", settings=_QUICK)
+        run_id = runtime.run_id
 
         svc2 = ResearchService(_MockLLM(), _mock_ws(), data_dir=tmp_path)
-        items = svc2.list_sessions()
-        assert any(s["session_id"] == sid for s in items)
+        items = svc2.list_runs()
+        assert any(item["run_id"] == run_id for item in items)
 
-    async def test_archived_session_shows_plan(self, tmp_path):
-        """Archived session preserves the plan for display."""
+    async def test_archived_run_shows_plan(self, tmp_path):
+        """Archived run preserves the plan for display."""
         svc1 = ResearchService(_MockLLM(), _mock_ws(), data_dir=tmp_path)
-        session, plan = await svc1.create_session("test plan", settings=_QUICK)
-        sid = session.session_id
+        runtime, plan = await svc1.create_run("test plan", settings=_QUICK)
+        run_id = runtime.run_id
 
         svc2 = ResearchService(_MockLLM(), _mock_ws(), data_dir=tmp_path)
-        restored = svc2.get_session(sid)
+        restored = svc2.get_run(run_id)
         assert restored is not None
         assert restored.plan is not None
         assert restored.plan.query == "test plan"
 
-    async def test_archived_session_preserves_error(self, tmp_path):
-        """If a session had an error, it's visible after reload."""
+    async def test_archived_run_preserves_error(self, tmp_path):
+        """If a run had an error, it's visible after reload."""
         svc1 = ResearchService(_MockLLM(), _mock_ws(), data_dir=tmp_path)
-        session, _ = await svc1.create_session("will fail", settings=_QUICK)
-        session._error = "Research timed out after 420s"
-        session._status = ResearchStatus.FAILED
-        svc1._persist_session(session)
+        runtime, _ = await svc1.create_run("will fail", settings=_QUICK)
+        runtime._error = "Research timed out after 420s"
+        runtime._status = ResearchStatus.FAILED
+        svc1._persist_run(runtime)
 
         svc2 = ResearchService(_MockLLM(), _mock_ws(), data_dir=tmp_path)
-        restored = svc2.get_session(session.session_id)
+        restored = svc2.get_run(runtime.run_id)
         assert restored is not None
         assert restored.error == "Research timed out after 420s"
         assert restored.status == ResearchStatus.FAILED
 
-    async def test_delete_archived_session(self, tmp_path):
-        """Archived (terminal) sessions can be deleted."""
+    async def test_delete_archived_run(self, tmp_path):
+        """Archived terminal runs can be deleted."""
         svc1 = ResearchService(_MockLLM(), _mock_ws(), data_dir=tmp_path)
-        session, _ = await svc1.create_session("to delete", settings=_QUICK)
-        await svc1.cancel_session(session.session_id)
-        sid = session.session_id
+        runtime, _ = await svc1.create_run("to delete", settings=_QUICK)
+        await svc1.cancel_run(runtime.run_id)
+        run_id = runtime.run_id
 
         svc2 = ResearchService(_MockLLM(), _mock_ws(), data_dir=tmp_path)
-        await svc2.delete_session(sid)
-        assert svc2.get_session(sid) is None
-        assert not (tmp_path / f"{sid}.json").exists()
+        await svc2.delete_run(run_id)
+        assert svc2.get_run(run_id) is None
+        assert not (tmp_path / f"{run_id}.json").exists()
 
 
 class TestConcurrencyLimit:
     async def test_running_count_zero_initially(self, tmp_path):
         svc = ResearchService(_MockLLM(), _mock_ws(), data_dir=tmp_path)
-        assert svc.running_session_count() == 0
+        assert svc.running_run_count() == 0
 
     async def test_running_count_increments(self, tmp_path):
         svc = ResearchService(_MockLLM(), _mock_ws(), data_dir=tmp_path)
-        session, _ = await svc.create_session("running test", settings=_QUICK)
-        assert svc.running_session_count() == 0
-        session._status = ResearchStatus.EXECUTING
-        assert svc.running_session_count() == 1
-        session._status = ResearchStatus.GENERATING_REPORT
-        assert svc.running_session_count() == 1
-        session._status = ResearchStatus.PLAN_READY
-        assert svc.running_session_count() == 0
+        runtime, _ = await svc.create_run("running test", settings=_QUICK)
+        assert svc.running_run_count() == 0
+        runtime._status = ResearchStatus.EXECUTING
+        assert svc.running_run_count() == 1
+        runtime._status = ResearchStatus.GENERATING_REPORT
+        assert svc.running_run_count() == 1
+        runtime._status = ResearchStatus.PLAN_READY
+        assert svc.running_run_count() == 0
 
     async def test_max_concurrent_constant(self, tmp_path):
         svc = ResearchService(_MockLLM(), _mock_ws(), data_dir=tmp_path)
-        assert ResearchService.MAX_CONCURRENT_SESSIONS == 3
-        assert svc.MAX_CONCURRENT_SESSIONS == 3
+        assert ResearchService.MAX_CONCURRENT_RUNS == 3
+        assert svc.MAX_CONCURRENT_RUNS == 3
 
 
 class TestMemoryIntegration:
     """Research → Memory extraction pipeline."""
 
     async def test_memory_push_on_complete(self, tmp_path):
-        """Completed sessions push memory candidates to MemoryService."""
+        """Completed runs push memory candidates to MemoryService."""
         from houyi_studio.server.memory.service import MemoryService
 
         from houyi.adapters.memory.engine import MemoryEngine
@@ -327,9 +327,9 @@ class TestMemoryIntegration:
             data_dir=tmp_path,
             memory_service=mem_svc,
         )
-        session, _ = await svc.create_session("AI research", settings=_QUICK)
-        await svc.confirm_and_execute(session.session_id)
-        assert session.status == ResearchStatus.COMPLETED
+        runtime, _ = await svc.create_run("AI research", settings=_QUICK)
+        await svc.launch_run(runtime.run_id)
+        assert runtime.status == ResearchStatus.COMPLETED
         candidates = mem_svc.list_candidates()
         assert len(candidates) > 0
 
@@ -341,9 +341,9 @@ class TestMemoryIntegration:
             data_dir=tmp_path,
             memory_service=None,
         )
-        session, _ = await svc.create_session("AI research", settings=_QUICK)
-        await svc.confirm_and_execute(session.session_id)
-        assert session.status == ResearchStatus.COMPLETED
+        runtime, _ = await svc.create_run("AI research", settings=_QUICK)
+        await svc.launch_run(runtime.run_id)
+        assert runtime.status == ResearchStatus.COMPLETED
 
     async def test_memory_extraction_failure(self, tmp_path):
         """Memory extraction failure does not crash execution."""
@@ -358,32 +358,32 @@ class TestMemoryIntegration:
             data_dir=tmp_path,
             memory_service=broken_svc,
         )
-        session, _ = await svc.create_session("test", settings=_QUICK)
-        await svc.confirm_and_execute(session.session_id)
-        assert session.status == ResearchStatus.COMPLETED
+        runtime, _ = await svc.create_run("test", settings=_QUICK)
+        await svc.launch_run(runtime.run_id)
+        assert runtime.status == ResearchStatus.COMPLETED
 
 
 class TestRehydrate:
     async def test_rehydrate_resets_plan_to_draft(self, tmp_path):
         svc1 = ResearchService(_MockLLM(), _mock_ws(), data_dir=tmp_path)
-        session, _ = await svc1.create_session("rehydrate me", settings=_QUICK)
-        sid = session.session_id
-        await svc1.cancel_session(sid, "user cancelled")
+        runtime, _ = await svc1.create_run("rehydrate me", settings=_QUICK)
+        run_id = runtime.run_id
+        await svc1.cancel_run(run_id, "user cancelled")
 
         svc2 = ResearchService(_MockLLM(), _mock_ws(), data_dir=tmp_path)
-        archived = svc2.get_session(sid)
+        archived = svc2.get_run(run_id)
         assert archived is not None
-        assert isinstance(archived, _ArchivedSession)
+        assert isinstance(archived, _ArchivedRun)
 
-        live = svc2._require_live_session(sid)
+        live = svc2._require_live_run(run_id)
         assert live.plan is not None
         assert live.plan.status == PlanStatus.DRAFT
 
     async def test_restores_search_results(self, tmp_path):
-        """Rehydrated session must carry search_results so retry checkpoint works."""
+        """Rehydrated run must carry search_results so retry checkpoint works."""
         svc1 = ResearchService(_MockLLM(), _mock_ws(), data_dir=tmp_path)
-        session, _ = await svc1.create_session("checkpoint test", settings=_QUICK)
-        sid = session.session_id
+        runtime, _ = await svc1.create_run("checkpoint test", settings=_QUICK)
+        run_id = runtime.run_id
 
         sr = SearchResult(
             question_id="sq_test1",
@@ -392,11 +392,11 @@ class TestRehydrate:
             summary="done",
             coverage_score=0.9,
         )
-        session._search_results.append(sr)
-        svc1._persist_session(session)
+        runtime._search_results.append(sr)
+        svc1._persist_run(runtime)
 
         svc2 = ResearchService(_MockLLM(), _mock_ws(), data_dir=tmp_path)
-        live = svc2._require_live_session(sid)
+        live = svc2._require_live_run(run_id)
         assert len(live._search_results) == 1
         assert live._search_results[0].question_id == "sq_test1"
         assert live._search_results[0].summary == "done"

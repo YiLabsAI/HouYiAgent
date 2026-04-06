@@ -12,6 +12,14 @@ export UV_NO_CONFIG=1
 export UV_INDEX_URL=https://pypi.org/simple
 export UV_FROZEN=1
 
+COVERAGE_MIN=${HOUYI_SDK_COVERAGE_MIN:-90}
+CHECK_STARTED_AT=$(python3 -c 'import time; print(time.perf_counter())')
+STEP_TIMINGS=()
+CHECK_FAILED=0
+FAILED_STEP=""
+TIMING_FILE="${HOUYI_CHECK_TIMING_FILE:-}"
+SUPPRESS_SUMMARY="${HOUYI_CHECK_SUPPRESS_SUMMARY:-0}"
+
 echo "🔍 Running code quality checks..."
 echo ""
 
@@ -74,10 +82,27 @@ run_check() {
     local name=$1
     shift
     echo -e "${YELLOW}▶ Running $name...${NC}"
+    local started_at
+    local elapsed_s
+    started_at=$(python3 -c 'import time; print(time.perf_counter())')
     if "$@"; then
+        elapsed_s=$(python3 - "$started_at" <<'PY'
+import sys, time
+print(f"{time.perf_counter() - float(sys.argv[1]):.2f}")
+PY
+)
+        STEP_TIMINGS+=("$name:$elapsed_s")
         echo -e "${GREEN}✓ $name passed${NC}"
         echo ""
     else
+        elapsed_s=$(python3 - "$started_at" <<'PY'
+import sys, time
+print(f"{time.perf_counter() - float(sys.argv[1]):.2f}")
+PY
+)
+        STEP_TIMINGS+=("$name:$elapsed_s")
+        CHECK_FAILED=1
+        FAILED_STEP="$name"
         echo ""
         echo -e "${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
         echo -e "${RED}✗ $name FAILED — stopping here.${NC}"
@@ -86,6 +111,152 @@ run_check() {
         exit 1
     fi
 }
+
+run_parallel_test_checks() {
+    echo -e "${YELLOW}▶ Running SDK Tests + Coverage and Server Tests in parallel...${NC}"
+
+    local tmp_dir
+    local sdk_cov_dir
+    local server_cov_dir
+    local sdk_elapsed_file
+    local server_elapsed_file
+    local sdk_pid
+    local server_pid
+    local sdk_rc=0
+    local server_rc=0
+    local sdk_elapsed_s="0.00"
+    local server_elapsed_s="0.00"
+
+    tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/houyi-check-code.XXXXXX")
+    sdk_cov_dir="${tmp_dir}/sdk"
+    server_cov_dir="${tmp_dir}/server"
+    sdk_elapsed_file="${tmp_dir}/sdk.elapsed"
+    server_elapsed_file="${tmp_dir}/server.elapsed"
+    mkdir -p "${sdk_cov_dir}" "${server_cov_dir}"
+
+    (
+        started_at=$(python3 -c 'import time; print(time.perf_counter())')
+        COVERAGE_FILE="${sdk_cov_dir}/.coverage" uv run pytest tests/ --ignore=tests/integration -m "not benchmark" -x -n auto \
+            --cov=houyi --cov-report=
+        rc=$?
+        elapsed_s=$(python3 - "$started_at" <<'PY'
+import sys, time
+print(f"{time.perf_counter() - float(sys.argv[1]):.2f}")
+PY
+)
+        printf '%s\n' "$elapsed_s" > "$sdk_elapsed_file"
+        exit "$rc"
+    ) &
+    sdk_pid=$!
+
+    (
+        started_at=$(python3 -c 'import time; print(time.perf_counter())')
+        COVERAGE_FILE="${server_cov_dir}/.coverage" uv run pytest houyi-studio/server/tests/ -m "not benchmark" \
+            --ignore=houyi-studio/server/tests/integration -x -n 2 --cov=houyi --cov-report=
+        rc=$?
+        elapsed_s=$(python3 - "$started_at" <<'PY'
+import sys, time
+print(f"{time.perf_counter() - float(sys.argv[1]):.2f}")
+PY
+)
+        printf '%s\n' "$elapsed_s" > "$server_elapsed_file"
+        exit "$rc"
+    ) &
+    server_pid=$!
+
+    if wait "$sdk_pid"; then
+        sdk_rc=0
+    else
+        sdk_rc=$?
+    fi
+
+    if wait "$server_pid"; then
+        server_rc=0
+    else
+        server_rc=$?
+    fi
+
+    if [ -f "$sdk_elapsed_file" ]; then
+        sdk_elapsed_s=$(cat "$sdk_elapsed_file")
+    fi
+    if [ -f "$server_elapsed_file" ]; then
+        server_elapsed_s=$(cat "$server_elapsed_file")
+    fi
+
+    STEP_TIMINGS+=("SDK Tests + Coverage:$sdk_elapsed_s")
+    STEP_TIMINGS+=("Server Tests:$server_elapsed_s")
+
+    if [ "$sdk_rc" -ne 0 ] || [ "$server_rc" -ne 0 ]; then
+        CHECK_FAILED=1
+        if [ "$sdk_rc" -ne 0 ]; then
+            FAILED_STEP="SDK Tests + Coverage"
+        else
+            FAILED_STEP="Server Tests"
+        fi
+        echo ""
+        echo -e "${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+        echo -e "${RED}✗ ${FAILED_STEP} FAILED — stopping here.${NC}"
+        echo -e "${RED}  Fix the errors above, then re-run: make check${NC}"
+        echo -e "${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+        rm -rf "$tmp_dir"
+        exit 1
+    fi
+
+    echo -e "${GREEN}✓ SDK Tests + Coverage passed${NC}"
+    echo -e "${GREEN}✓ Server Tests passed${NC}"
+    echo ""
+
+    run_check "SDK Native Coverage Gate" \
+        env COVERAGE_FILE="${sdk_cov_dir}/.coverage" uv run coverage report --fail-under="$COVERAGE_MIN"
+    run_check "Coverage Data Combine" \
+        env COVERAGE_FILE="${tmp_dir}/.coverage" uv run coverage combine "${sdk_cov_dir}/.coverage" "${server_cov_dir}/.coverage"
+    run_check "SDK Coverage Gate" \
+        env COVERAGE_FILE="${tmp_dir}/.coverage" uv run coverage report --fail-under="$COVERAGE_MIN"
+
+    rm -rf "$tmp_dir"
+}
+
+print_timing_summary() {
+    local total_seconds
+    total_seconds=$(python3 - "$CHECK_STARTED_AT" <<'PY'
+import sys, time
+print(f"{time.perf_counter() - float(sys.argv[1]):.2f}")
+PY
+)
+
+    if [ -n "$TIMING_FILE" ]; then
+        : > "$TIMING_FILE"
+        for step in "${STEP_TIMINGS[@]}"; do
+            printf '%s\n' "$step" >> "$TIMING_FILE"
+        done
+        printf 'total:%s\n' "$total_seconds" >> "$TIMING_FILE"
+        if [ "$CHECK_FAILED" -eq 1 ]; then
+            printf 'status:failed:%s\n' "$FAILED_STEP" >> "$TIMING_FILE"
+        else
+            printf 'status:passed\n' >> "$TIMING_FILE"
+        fi
+    fi
+
+    if [ "$SUPPRESS_SUMMARY" = "1" ]; then
+        return
+    fi
+
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "check-unit timing summary"
+    for step in "${STEP_TIMINGS[@]}"; do
+        echo "  - ${step} s"
+    done
+    echo "  - total:${total_seconds} s"
+    if [ "$CHECK_FAILED" -eq 1 ]; then
+        echo "  - status: failed at ${FAILED_STEP}"
+    else
+        echo "  - status: passed"
+    fi
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+}
+
+trap print_timing_summary EXIT
 
 # ── 1. Ruff lint + format (changed files only) ────────────────────
 CHANGED_PY_FILES=$(
@@ -148,13 +319,8 @@ fi
 # ── 3. Type check ───────────────────────────────────────────────────
 run_check "Type Check (mypy)" uv run mypy houyi/
 
-# ── 4. SDK unit tests (with coverage, single pass) ──────────────────
-run_check "SDK Tests + Coverage" uv run pytest tests/ --ignore=tests/integration -x -n auto \
-    --cov=houyi --cov-report=term-missing --cov-fail-under=85
-
-# ── 5. Server tests ─────────────────────────────────────────────────
-run_check "Server Tests" uv run pytest houyi-studio/server/tests/ \
-    --ignore=houyi-studio/server/tests/integration -x
+# ── 4. SDK + server tests (parallel) with combined SDK coverage ─────
+run_parallel_test_checks
 
 # ── Done ─────────────────────────────────────────────────────────────
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

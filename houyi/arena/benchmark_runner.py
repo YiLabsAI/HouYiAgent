@@ -1,7 +1,7 @@
 """Benchmark runner for DeepResearch-Bench evaluation.
 
 Loads queries from a JSONL file (DeepResearch-Bench ``query.jsonl`` format),
-runs each through ``ResearchSession``, and writes results in the required
+runs each through ``ResearchRuntime``, and writes results in the required
 ``{id, prompt, article}`` JSONL format for benchmark scoring.
 
 Usage::
@@ -24,7 +24,8 @@ from pathlib import Path
 from typing import Any
 
 from houyi.adapters.llm.base import LLMAdapter
-from houyi.application.research.session import ResearchSession
+from houyi.application.research.runtime import ResearchRuntime
+from houyi.application.research.runtime.errors import ResearchReportNotReadyError
 from houyi.application.research.types import ResearchSettings
 from houyi.skills.web_search.service import WebSearchService
 
@@ -76,8 +77,8 @@ class BenchmarkRunner:
     settings:
         Default ``ResearchSettings`` applied to every query.
     concurrency:
-        Max parallel research sessions (default 3 to respect API limits).
-    session_timeout:
+        Max parallel research runs (default 3 to respect API limits).
+    run_timeout:
         Per-query timeout in seconds.
     """
 
@@ -87,14 +88,14 @@ class BenchmarkRunner:
         web_search: WebSearchService,
         settings: ResearchSettings | None = None,
         concurrency: int = 3,
-        session_timeout: float = 600,
+        run_timeout: float = 600,
         **llm_kwargs: Any,
     ) -> None:
         self._llm = llm_adapter
         self._ws = web_search
         self._settings = settings or ResearchSettings(depth="deep")
         self._concurrency = concurrency
-        self._timeout = session_timeout
+        self._timeout = run_timeout
         self._llm_kwargs = llm_kwargs
 
     async def run(
@@ -150,27 +151,27 @@ class BenchmarkRunner:
     async def _execute_query(self, query: BenchmarkQuery) -> BenchmarkResult:
         """Run a single research query end-to-end.
 
-        The session itself enforces a dynamic timeout whose budget varies by
+        The runtime itself enforces a dynamic timeout whose budget varies by
         orchestration mode (DIRECT 180s/q, DELEGATE 300s/q, AUTONOMOUS parallel).
         The benchmark runner adds a 60s buffer on top for plan generation + overhead.
         """
         start = time.monotonic()
         try:
-            session = ResearchSession(
+            runtime = ResearchRuntime(
                 llm_adapter=self._llm,
                 web_search=self._ws,
                 settings=self._settings,
                 **self._llm_kwargs,
             )
-            await session.start(query.prompt)
-            await session.confirm_plan()
-            outer_timeout = session._session_timeout() + 60
-            await asyncio.wait_for(session.execute(), timeout=outer_timeout)
+            await runtime.start(query.prompt)
+            await runtime.confirm_plan()
+            outer_timeout = runtime._runtime_timeout() + 60
+            await asyncio.wait_for(runtime.execute(), timeout=outer_timeout)
 
             try:
-                report = await session.get_report()
+                report = await runtime.get_report()
                 article = _report_to_article(report)
-            except RuntimeError:
+            except ResearchReportNotReadyError:
                 article = ""
                 logger.warning(
                     "Query %s: execute() completed but report not ready (internal timeout)",
@@ -178,7 +179,7 @@ class BenchmarkRunner:
                 )
 
             duration = time.monotonic() - start
-            score = session.quality_score
+            score = runtime.quality_score
             overall = score.overall if hasattr(score, "overall") else float(score or 0)
             return BenchmarkResult(
                 id=query.id,

@@ -587,13 +587,24 @@ class TestSendMessageTooling:
                         "description": "Search",
                         "parameters": {},
                     },
-                }
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "deep_research",
+                        "description": "Research",
+                        "parameters": {},
+                    },
+                },
             ],
         )
         monkeypatch.setattr(
             chat_service_module.ToolBridge,
             "collect_skills",
-            lambda self, skill_filter, include_core: [SimpleNamespace(name="houyi_web_search")],
+            lambda self, skill_filter, include_core: [
+                SimpleNamespace(name="houyi_web_search"),
+                SimpleNamespace(name="deep_research"),
+            ],
         )
 
         resp = assert_status_code(
@@ -1629,6 +1640,111 @@ class TestSendMessageTooling:
         assert usage["used_tokens"] > 0
         assert metadata["finish_reason"] == "stop"
         assert_delta_text(events, "Handled summarized tool result")
+
+    def test_send_deep_research_stub(self, app_and_client, monkeypatch):
+        _, client, store = app_and_client
+        conv_id = create_conversation_id(client, title="Deep Research Skill")
+        service = get_registered_chat_service()
+
+        class _In(BaseModel):
+            query: str
+            depth: str = "quick"
+
+        class _Out(BaseModel):
+            run_id: str
+            summary: str
+            report_url: str | None = None
+            quality_score: float | None = None
+            sources_count: int = 0
+
+        async def _execute_deep_research(**kwargs):
+            assert kwargs["query"] == "research skill.md"
+            return {
+                "run_id": "rr_chat_stub",
+                "summary": "Stub deep research summary",
+                "report_url": "#/research/rr_chat_stub",
+                "quality_score": 8.5,
+                "sources_count": 3,
+            }
+
+        skill = SkillSpec(
+            name="deep_research",
+            description="Deep research",
+            input_schema=_In,
+            output_schema=_Out,
+            executor=_execute_deep_research,
+        )
+
+        class _AdapterWithDeepResearchCall:
+            last_usage = {"prompt_tokens": 12, "completion_tokens": 7, "total_tokens": 19}
+            last_finish_reason = "stop"
+
+            def __init__(self) -> None:
+                self.calls = 0
+
+            async def chat(self, messages, tools=None, **kwargs):
+                _ = (messages, tools, kwargs)
+                self.calls += 1
+                if self.calls == 1:
+                    return SimpleNamespace(
+                        content="",
+                        tool_calls=[
+                            {
+                                "id": "call_dr",
+                                "type": "function",
+                                "function": {
+                                    "name": "deep_research",
+                                    "arguments": json.dumps(
+                                        {"query": "research skill.md", "depth": "quick"}
+                                    ),
+                                },
+                            }
+                        ],
+                        usage={},
+                        metadata={},
+                    )
+                return SimpleNamespace(
+                    content="Deep research handled",
+                    tool_calls=[],
+                    usage={"prompt_tokens": 12, "completion_tokens": 7, "total_tokens": 19},
+                    metadata={"finish_reason": "stop"},
+                )
+
+            async def stream_chat(self, *args, **kwargs):
+                raise AssertionError("deep research stub should finish via tool replay")
+
+        monkeypatch.setattr(service, "_default_adapter", _AdapterWithDeepResearchCall())
+        monkeypatch.setattr(
+            chat_service_module.ToolBridge,
+            "collect_tool_schemas",
+            lambda self, skill_filter, include_core: [skill.to_tool_schema()],
+        )
+        monkeypatch.setattr(
+            chat_service_module.ToolBridge,
+            "collect_skills",
+            lambda self, skill_filter, include_core: [skill],
+        )
+
+        resp = assert_status_code(
+            post_message(
+                client,
+                conv_id,
+                content="research skill.md",
+                enable_deep_research=True,
+                enable_skills=["deep_research"],
+                tool_call_strategy="aggressive",
+            )
+        )
+
+        events = get_sse_events(resp)
+        assert_delta_text(events, "Deep research handled")
+
+        conv = get_conversation_or_fail(store, conv_id)
+        tool_msg = next(msg for msg in conv.messages if msg.role.value == "tool")
+        payload = json.loads(tool_msg.content)
+        assert tool_msg.name == "deep_research"
+        assert payload["run_id"] == "rr_chat_stub"
+        assert payload["report_url"] == "#/research/rr_chat_stub"
 
     def test_send_round_limit(self, app_and_client, monkeypatch):
         _, client, _ = app_and_client
