@@ -743,9 +743,11 @@ class TestBoundaryAndInteraction:
         await session.start("test")
         await session.confirm_plan()
 
-        original_wait_for = asyncio.wait_for
-
-        async def _timeout_search(coro, timeout):
+        async def _timeout_search(aw, timeout):
+            # Real wait_for drives `aw`; raising immediately would leave the inner
+            # SearchCoordinator.search coroutine un-awaited (RuntimeWarning under xdist).
+            if asyncio.iscoroutine(aw):
+                aw.close()
             raise TimeoutError()
 
         with patch.object(_engine_mod.asyncio, "wait_for", side_effect=_timeout_search):

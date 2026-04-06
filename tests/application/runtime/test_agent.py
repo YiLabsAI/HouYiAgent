@@ -5,6 +5,7 @@ branches without making real LLM or tool calls.
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -135,7 +136,15 @@ class TestAgentRun:
 
     def test_run_routes_tool_loop(self) -> None:
         agent = Agent(role="r", tools=[MagicMock()])
-        with patch("asyncio.run", return_value="tl") as mock_arun:
+
+        def _consume_coro(coro):
+            # asyncio.run normally drives the coroutine; the mock must close it or the
+            # tool-loop coroutine is left un-awaited (RuntimeWarning under xdist GC).
+            if asyncio.iscoroutine(coro):
+                coro.close()
+            return "tl"
+
+        with patch("asyncio.run", side_effect=_consume_coro):
             out = agent.run("task")
         assert out == "tl"
 

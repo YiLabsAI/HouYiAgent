@@ -211,8 +211,10 @@ ensure_integration_deps
 ensure_fastembed_test_cache
 start_isolated_backend
 
+# Parallelize integration pytest (same isolated backend; HTTP is concurrent-safe).
+# -v/--tb=short: per-worker PASSED lines (easier to spot failures than -q progress dots).
 run_check "Integration Tests" \
-    env FASTEMBED_CACHE_PATH=${FASTEMBED_CACHE_PATH} HOUYI_PORT=${HOUYI_INTEGRATION_BACKEND_PORT} HOUYI_INTEGRATION_BACKEND_PORT=${HOUYI_INTEGRATION_BACKEND_PORT} OPENAI_API_KEY= SILICONFLOW_API_KEY= GOOGLE_API_KEY= GOOGLE_CLOUD_PROJECT= GOOGLE_APPLICATION_CREDENTIALS= GEMINI_API_KEY= TAVILY_API_KEY= SERPER_API_KEY= BOCHA_API_KEY= uv run python -m pytest tests/integration/ --ignore=tests/integration/live -m "not benchmark" houyi-studio/server/tests/integration/ -v -s
+    env FASTEMBED_CACHE_PATH=${FASTEMBED_CACHE_PATH} HOUYI_PORT=${HOUYI_INTEGRATION_BACKEND_PORT} HOUYI_INTEGRATION_BACKEND_PORT=${HOUYI_INTEGRATION_BACKEND_PORT} OPENAI_API_KEY= SILICONFLOW_API_KEY= GOOGLE_API_KEY= GOOGLE_CLOUD_PROJECT= GOOGLE_APPLICATION_CREDENTIALS= GEMINI_API_KEY= TAVILY_API_KEY= SERPER_API_KEY= BOCHA_API_KEY= uv run python -m pytest tests/integration/ --ignore=tests/integration/live -m "not benchmark" houyi-studio/server/tests/integration/ -v --tb=short -n auto
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo -e "${GREEN}✓ Local integration gate passed.${NC}"
