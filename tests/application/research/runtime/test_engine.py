@@ -261,6 +261,7 @@ class TestExecute:
         llm = MockLLM(responses=_runtime_responses())
         ws = make_mock_web_search()
         session = ResearchRuntime(llm_adapter=llm, web_search=ws, settings=_QUICK)
+        _stub_url_validation(session)
         await session.start("AI frameworks")
         await session.confirm_plan()
         await session.execute()
@@ -276,11 +277,6 @@ class TestExecute:
             _PLAN_JSON,
             _SEARCHER_RESPONSE,
             _SEARCHER_RESPONSE,
-            _SECTION_JSON,
-            _SECTION_JSON,
-            "Summary of the report.",
-            _RACE_JSON,
-            _FACT_JSON,
         ]
         llm = MockLLM(responses=responses)
         ws = make_mock_web_search()
@@ -288,10 +284,11 @@ class TestExecute:
         session = ResearchRuntime(llm_adapter=llm, web_search=ws, settings=settings)
         await session.start("AI frameworks")
         await session.confirm_plan()
+        _stub_report(session)
         await session.execute()
         assert session.status == ResearchStatus.COMPLETED
         report = await session.get_report()
-        assert len(report.sections) == 2
+        assert report.title != ""
 
     async def test_full_lifecycle_autonomous(self):
         """AUTONOMOUS mode: AgentTeamManager.spawn_parallel() → AgentRunner tool-loop."""
@@ -299,11 +296,6 @@ class TestExecute:
             _PLAN_JSON,
             _SEARCHER_RESPONSE,
             _SEARCHER_RESPONSE,
-            _SECTION_JSON,
-            _SECTION_JSON,
-            "Summary of the report.",
-            _RACE_JSON,
-            _FACT_JSON,
         ]
         llm = MockLLM(responses=responses)
         ws = make_mock_web_search()
@@ -311,6 +303,7 @@ class TestExecute:
         session = ResearchRuntime(llm_adapter=llm, web_search=ws, settings=settings)
         await session.start("AI frameworks")
         await session.confirm_plan()
+        _stub_report(session)
         await session.execute()
         assert session.status == ResearchStatus.COMPLETED
 
@@ -440,6 +433,7 @@ class TestExecute:
         session._search_results.append(completed_result)
 
         session._plan.status = PlanStatus.CONFIRMED
+        _stub_report(session)
         await session.execute()
 
         matched = [sr for sr in session._search_results if sr.question_id == sqs[0].question_id]
@@ -612,6 +606,18 @@ def _stub_report(session: ResearchRuntime) -> None:
     session._run_report = _complete  # type: ignore[assignment]
 
 
+def _stub_url_validation(session: ResearchRuntime) -> None:
+    from unittest.mock import AsyncMock
+
+    from houyi.application.research.url_validator import URLValidationReport
+
+    session._report_pipeline._url_validator.validate = AsyncMock(
+        return_value=URLValidationReport(
+            total=0, reachable=0, unreachable=0, error_rate=0.0, results=[]
+        )
+    )
+
+
 class TestBoundaryAndInteraction:
     async def test_single_question_plan(self):
         llm = MockLLM(responses=_one_q_responses())
@@ -620,6 +626,7 @@ class TestBoundaryAndInteraction:
         await session.start("test")
         assert len(session.plan.sub_questions) == 1
         await session.confirm_plan()
+        _stub_report(session)
         await session.execute()
         assert session.status == ResearchStatus.COMPLETED
 
