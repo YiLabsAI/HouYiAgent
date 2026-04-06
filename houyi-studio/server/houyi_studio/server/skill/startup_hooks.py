@@ -256,7 +256,7 @@ def _hydrate_external_runtime(
         hydrated_skill = external.model_copy(update=updates)
         skill_registry.register(hydrated_skill, overwrite=True)
         hydrated.append(name)
-        logger.info(
+        logger.debug(
             "Hydrated external skill runtime '%s' from core '%s'",
             name,
             core_name,
@@ -363,10 +363,13 @@ def register_console_skills() -> None:
     total_skills = len(DEFAULT_SKILL_REGISTRY.list())
     core_names, external_names = _group_registered_names(registered_skills)
     logger.info(
-        "Registered %d skills (core=%d, external=%d): core=[%s]; external=[%s]",
+        "Registered %d skills (core=%d, external=%d)",
         total_skills,
         len(core_names),
         len(external_names),
+    )
+    logger.debug(
+        "Skill registry names: core=[%s]; external=[%s]",
         ", ".join(core_names) if core_names else "-",
         ", ".join(external_names) if external_names else "-",
     )
@@ -413,10 +416,14 @@ def _load_external_skills(registered_skills: list[str]) -> None:
         registered_skills.extend(loaded)
         pruned = _prune_stale_external_skills(skills_dir, discovered_names)
         if pruned:
-            logger.info("Pruned %d stale external skills: %s", len(pruned), ", ".join(pruned))
+            logger.debug("Pruned %d stale external skills: %s", len(pruned), ", ".join(pruned))
         if loaded:
-            logger.info("Loaded %d external skills from %s", len(loaded), skills_dir)
-            logger.debug("External skills: %s", ", ".join(loaded))
+            logger.debug(
+                "Loaded %d external skills from %s: %s",
+                len(loaded),
+                skills_dir,
+                ", ".join(loaded),
+            )
 
 
 def _discover_external_skill_names(skills_dir) -> set[str]:

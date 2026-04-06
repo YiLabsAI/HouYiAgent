@@ -220,7 +220,7 @@ class EnvConfig:
                 with open(creds_path) as f:
                     self._google_project = json.load(f).get("project_id")
                 if self._google_project:
-                    logger.info(
+                    logger.debug(
                         "Auto-detected GOOGLE_CLOUD_PROJECT=%s from %s",
                         self._google_project,
                         creds_path,
@@ -313,7 +313,7 @@ class EnvConfig:
             provider_vertex=PROVIDER_VERTEX,
         )
 
-        logger.info(
+        logger.debug(
             "EnvConfig loaded: provider=%s, embedding=%s, knowledge_dir=%s",
             self._default_llm_provider,
             self._embedding_provider,

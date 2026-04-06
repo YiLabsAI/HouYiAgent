@@ -194,13 +194,16 @@ class WebSearchService:
         )
 
         logger.info(
-            "web_search init resolved primary provider '%s' (source=%s, auto_detected=%s, "
-            "WEB_SEARCH_PROVIDER_set=%s); proxy is %s (url_detected=%s); fallback chain=%s",
+            "web_search: primary=%s (proxy=%s)",
             resolved.provider_name,
+            "on" if resolved.proxy_enabled else "off",
+        )
+        logger.debug(
+            "web_search init detail: source=%s auto_detected=%s WEB_SEARCH_PROVIDER_set=%s "
+            "url_detected=%s fallback_chain=%s",
             resolved.provider_source,
             resolved.auto_detected,
             resolved.env_provider_set,
-            "enabled" if resolved.proxy_enabled else "disabled",
             bool(resolved.proxy_url),
             [p.name for p in fallbacks],
         )

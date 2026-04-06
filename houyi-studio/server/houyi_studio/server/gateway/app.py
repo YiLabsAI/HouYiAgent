@@ -314,7 +314,7 @@ async def lifespan(app: FastAPI):
         from houyi.adapters.llm.factory import LLMAdapterFactory
 
         shared_llm_adapter = LLMAdapterFactory.create()
-        logger.info("Shared LLM adapter initialized")
+        logger.debug("Shared LLM adapter initialized")
     except Exception:
         logger.warning("LLM adapter init failed — features degraded", exc_info=True)
 
@@ -392,10 +392,11 @@ async def lifespan(app: FastAPI):
     except Exception:
         logger.warning("Research subsystem init failed — routes unavailable", exc_info=True)
 
-    logger.info("=" * 60)
-    logger.info("HouYi Console Server Starting - %s", datetime.now())
-    logger.info("Logging level: %s", LOG_LEVEL)
-    logger.info("=" * 60)
+    logger.info(
+        "HouYi Console Server — %s — log level %s",
+        datetime.now().isoformat(timespec="seconds"),
+        LOG_LEVEL,
+    )
 
     # Log active LLM provider — only show the configured provider at INFO level.
     # Other providers are logged at DEBUG to reduce startup noise.
@@ -443,8 +444,8 @@ async def lifespan(app: FastAPI):
 
     configured_embedding_provider = os.getenv(ENV_EMBEDDING_PROVIDER, "")
     configured_embedding_model = os.getenv(ENV_EMBEDDING_MODEL, "")
-    logger.info(
-        "Embedding config requested: provider=%s model=%s",
+    logger.debug(
+        "Embedding env: provider=%s model=%s",
         configured_embedding_provider or "(auto)",
         configured_embedding_model or "(default)",
     )
@@ -478,13 +479,12 @@ async def lifespan(app: FastAPI):
         )
     else:
         logger.info(
-            "Embedding provider active: %s (model=%s, dim=%d)",
+            "Embedding active: %s — %s (dim=%d)",
             detected_provider,
             embedding_cfg.model,
             embedding_cfg.dimension,
         )
 
-    logger.info("=" * 60)
     yield
 
 
