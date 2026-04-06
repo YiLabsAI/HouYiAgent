@@ -70,12 +70,16 @@ def _run_phase(command: list[str], *, cwd: Path, timeout: float, env: dict[str, 
     except subprocess.TimeoutExpired as exc:
         with contextlib.suppress(ProcessLookupError):
             os.killpg(process.pid, signal.SIGTERM)
-        try:
+        with contextlib.suppress(subprocess.TimeoutExpired):
             process.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            with contextlib.suppress(ProcessLookupError):
-                os.killpg(process.pid, signal.SIGKILL)
-            process.wait()
+        # Always SIGKILL the entire group so child processes (Vite, uv,
+        # uvicorn) that are still gracefully shutting down are reaped and
+        # their ports released.  Without this, a budget-timeout during
+        # e2e-smoke leaves orphan listeners on the e2e ports.
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(process.pid, signal.SIGKILL)
+        with contextlib.suppress(ChildProcessError):
+            process.wait(timeout=3)
         raise exc
 
 

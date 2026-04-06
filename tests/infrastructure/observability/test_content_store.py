@@ -316,3 +316,73 @@ class TestGlobalContentStore:
 
         # Reset
         reset_content_store()
+
+
+class TestFileContentStoreExtra:
+    def test_md5_hash_algorithm(self, temp_dir) -> None:
+        config = ContentStoreConfig(base_path=temp_dir / "md5", hash_algorithm="md5")
+        store = FileContentStore(config)
+        ref = store.store("hello", ContentType.LLM_PROMPT, "s1", "t1")
+        assert ref.checksum
+        assert len(ref.checksum) == 32  # md5 hex length
+
+    def test_unknown_hash_falls_back(self, temp_dir) -> None:
+        config = ContentStoreConfig(base_path=temp_dir / "unk", hash_algorithm="unknown")
+        store = FileContentStore(config)
+        ref = store.store("hello", ContentType.LLM_PROMPT, "s1", "t1")
+        assert len(ref.checksum) == 64  # sha256 hex length
+
+    def test_retrieve_by_trace_miss(self, content_store) -> None:
+        result = content_store.retrieve_by_trace("no_trace", "no_id")
+        assert result is None
+
+    def test_delete_by_trace_empty(self, content_store) -> None:
+        count = content_store.delete_by_trace("nonexistent_trace")
+        assert count == 0
+
+    def test_cleanup_old_content(self, temp_dir) -> None:
+        import time
+        from datetime import UTC, datetime
+        from unittest.mock import patch
+
+        config = ContentStoreConfig(base_path=temp_dir / "cleanup")
+        store = FileContentStore(config)
+
+        store.store("old data", ContentType.LLM_PROMPT, "s1", "t_old")
+        # Use a future UTC timestamp so the stored entry looks old
+        future = time.time() + 3600
+        # Patch fromtimestamp to produce UTC-aware datetime
+        orig = datetime.fromtimestamp
+        with patch("houyi.infrastructure.observability.content_store.datetime") as mock_dt:
+            mock_dt.now = datetime.now
+            mock_dt.fromisoformat = datetime.fromisoformat
+            mock_dt.fromtimestamp = lambda ts: orig(ts, tz=UTC)
+            count = store.cleanup_old_content(future)
+        assert count == 1
+        assert store.list_refs("t_old") == []
+
+    def test_cleanup_preserves_recent(self, temp_dir) -> None:
+        import time
+        from datetime import UTC, datetime
+        from unittest.mock import patch
+
+        config = ContentStoreConfig(base_path=temp_dir / "cleanup2")
+        store = FileContentStore(config)
+
+        store.store("recent", ContentType.LLM_PROMPT, "s1", "t_recent")
+        past = time.time() - 3600
+        orig = datetime.fromtimestamp
+        with patch("houyi.infrastructure.observability.content_store.datetime") as mock_dt:
+            mock_dt.now = datetime.now
+            mock_dt.fromisoformat = datetime.fromisoformat
+            mock_dt.fromtimestamp = lambda ts: orig(ts, tz=UTC)
+            count = store.cleanup_old_content(past)
+        assert count == 0
+        assert len(store.list_refs("t_recent")) == 1
+
+    def test_short_trace_id_shard(self, temp_dir) -> None:
+        config = ContentStoreConfig(base_path=temp_dir / "short")
+        store = FileContentStore(config)
+        ref = store.store("x", ContentType.CUSTOM, "s1", "a")
+        retrieved = store.retrieve_by_trace("a", ref.content_id)
+        assert retrieved == "x"

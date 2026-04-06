@@ -62,3 +62,44 @@ def test_retry_policy_uses_content_policy_override() -> None:
 def test_retry_policy_uses_internal_override() -> None:
     policy = RetryPolicy(default_retries=1, internal_error_retries=8)
     assert get_num_retries_from_policy(InternalServerFailure("internal"), policy) == 8
+
+
+# ── from_settings / coercion / delay ──────────────────────────────
+
+
+def test_from_settings_none() -> None:
+    policy = RetryPolicy.from_settings(None)
+    assert policy.default_retries == 0
+    assert policy.timeout_retries is None
+
+
+def test_from_settings_custom() -> None:
+    policy = RetryPolicy.from_settings({"default_retries": 3, "timeout_retries": 5})
+    assert policy.default_retries == 3
+    assert policy.timeout_retries == 5
+
+
+def test_from_settings_invalid_coercion() -> None:
+    policy = RetryPolicy.from_settings({"timeout_retries": "not_a_number"})
+    assert policy.timeout_retries is None
+
+
+def test_delay_base_case() -> None:
+    from houyi.application.tool_calling.retry_policy import calculate_retry_delay
+
+    delay = calculate_retry_delay(attempt=0, min_delay=1.0, max_delay=10.0, jitter=0.0)
+    assert delay == 1.0
+
+
+def test_delay_capped_at_max() -> None:
+    from houyi.application.tool_calling.retry_policy import calculate_retry_delay
+
+    delay = calculate_retry_delay(attempt=20, min_delay=1.0, max_delay=5.0, jitter=0.0)
+    assert delay == 5.0
+
+
+def test_delay_jitter_adds() -> None:
+    from houyi.application.tool_calling.retry_policy import calculate_retry_delay
+
+    delay = calculate_retry_delay(attempt=0, min_delay=1.0, max_delay=10.0, jitter=2.0)
+    assert 1.0 <= delay <= 3.0

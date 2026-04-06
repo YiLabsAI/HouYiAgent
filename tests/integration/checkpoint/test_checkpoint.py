@@ -68,11 +68,11 @@ async def test_checkpoint_integration():
         last_execution_status = None
 
         start_time = time.time()
-        deadline_seconds = 90.0
+        deadline_seconds = 30.0
 
         while time.time() - start_time < deadline_seconds:
             try:
-                response = await asyncio.wait_for(websocket.recv(), timeout=5.0)
+                response = await asyncio.wait_for(websocket.recv(), timeout=1.0)
             except TimeoutError:
                 elapsed = time.time() - start_time
                 print(f"⏳ Waiting for events... ({elapsed:.1f}s)")
@@ -147,13 +147,13 @@ async def test_checkpoint_integration():
             print("✅ Sent restore checkpoint command")
 
             restore_start = time.time()
-            restore_deadline_seconds = 30.0
+            restore_deadline_seconds = 10.0
             restore_confirmed = False
             restore_events: list[str] = []
 
             while time.time() - restore_start < restore_deadline_seconds:
                 try:
-                    response = await asyncio.wait_for(websocket.recv(), timeout=5.0)
+                    response = await asyncio.wait_for(websocket.recv(), timeout=1.0)
                 except TimeoutError:
                     continue
 

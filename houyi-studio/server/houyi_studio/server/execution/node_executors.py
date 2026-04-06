@@ -115,7 +115,7 @@ class LLMNodeExecutor(NodeExecutor):
         else:
             logger.debug("Reasoning disabled for node %s", node.node_id)
 
-        if self.use_mock:
+        if self.use_mock or context.run_settings.get("use_mock_llm"):
             await self.execute_llm_mock(
                 context.session_id, context.execution, node.node_id, node_exec
             )

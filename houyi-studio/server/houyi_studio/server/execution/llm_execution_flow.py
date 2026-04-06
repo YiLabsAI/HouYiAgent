@@ -492,7 +492,7 @@ class LLMExecutionFlow:
             self.record_llm_call(
                 execution_id=execution.execution_id,
                 node_id=node_id,
-                model=model,
+                model=model or "unknown",
                 prompt=prompt,
                 response=node_exec.streaming_output,
                 metadata={

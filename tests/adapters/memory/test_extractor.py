@@ -304,3 +304,121 @@ class TestMultiplePatterns:
         ]
         cands = await extractor.extract(msgs)
         assert len(cands) == 2
+
+
+# ====================================================================
+# Internal method coverage
+# ====================================================================
+
+
+class TestExtractViaLLM:
+    """Direct tests for _extract_via_llm."""
+
+    async def test_llm_extracts_candidates(self):
+        llm = _make_llm_mock(
+            [{"content": "User likes Go", "type": "preference", "confidence": 0.8}]
+        )
+        ext = MemoryCandidateExtractor(llm_adapter=llm)
+        ctx = ExtractionContext(turn_index=1)
+        cands = await ext._extract_via_llm([{"role": "user", "content": "I like Go"}], ctx)
+        assert len(cands) == 1
+
+    async def test_llm_no_user_messages(self):
+        llm = _make_llm_mock([])
+        ext = MemoryCandidateExtractor(llm_adapter=llm)
+        cands = await ext._extract_via_llm(
+            [{"role": "assistant", "content": "hi"}], ExtractionContext()
+        )
+        assert cands == []
+
+    async def test_llm_error_falls_back(self):
+        mock = AsyncMock()
+        mock.chat.side_effect = RuntimeError("down")
+        ext = MemoryCandidateExtractor(llm_adapter=mock)
+        cands = await ext._extract_via_llm(
+            [{"role": "user", "content": "Remember X."}], ExtractionContext()
+        )
+        assert len(cands) >= 1
+
+
+class TestParseLLMResponse:
+    def test_valid_json(self):
+        ext = MemoryCandidateExtractor()
+        ctx = ExtractionContext()
+        cands = ext._parse_llm_response('[{"content":"A","type":"fact","confidence":0.9}]', ctx)
+        assert len(cands) == 1
+
+    def test_invalid_json(self):
+        ext = MemoryCandidateExtractor()
+        assert ext._parse_llm_response("not json", ExtractionContext()) == []
+
+    def test_non_list_json(self):
+        ext = MemoryCandidateExtractor()
+        assert ext._parse_llm_response('{"key":"val"}', ExtractionContext()) == []
+
+    def test_non_dict_items_skipped(self):
+        ext = MemoryCandidateExtractor()
+        cands = ext._parse_llm_response('["string_item"]', ExtractionContext())
+        assert cands == []
+
+    def test_empty_content_skipped(self):
+        ext = MemoryCandidateExtractor()
+        cands = ext._parse_llm_response(
+            '[{"content":"","type":"fact","confidence":0.9}]', ExtractionContext()
+        )
+        assert cands == []
+
+    def test_low_confidence_skipped(self):
+        ext = MemoryCandidateExtractor(min_confidence=0.8)
+        cands = ext._parse_llm_response(
+            '[{"content":"X","type":"fact","confidence":0.3}]', ExtractionContext()
+        )
+        assert cands == []
+
+    def test_code_fence_stripped(self):
+        ext = MemoryCandidateExtractor()
+        raw = '```json\n[{"content":"X","type":"fact","confidence":0.9}]\n```'
+        cands = ext._parse_llm_response(raw, ExtractionContext())
+        assert len(cands) == 1
+
+
+class TestExtractViaRules:
+    def test_rules_skip_non_user(self):
+        ext = MemoryCandidateExtractor()
+        cands = ext._extract_via_rules(
+            [{"role": "assistant", "content": "Remember X"}], ExtractionContext()
+        )
+        assert cands == []
+
+    def test_rules_extract_user(self):
+        ext = MemoryCandidateExtractor()
+        cands = ext._extract_via_rules(
+            [{"role": "user", "content": "Remember that the key is 42."}],
+            ExtractionContext(),
+        )
+        assert len(cands) >= 1
+
+
+class TestMakeCandidate:
+    def test_candidate_fields(self):
+        ctx = ExtractionContext(turn_index=7)
+        c = MemoryCandidateExtractor._make_candidate(
+            content="test",
+            memory_type=MemoryType.FACT,
+            confidence=0.9,
+            message_id="m1",
+            ctx=ctx,
+        )
+        assert c.content == "test"
+        assert c.source_context == "turn:7"
+        assert "m1" in c.source_message_ids
+
+    def test_empty_message_id(self):
+        c = MemoryCandidateExtractor._make_candidate(
+            content="x",
+            memory_type=MemoryType.PROFILE,
+            confidence=0.8,
+            message_id="",
+            ctx=ExtractionContext(),
+        )
+        assert c.source_message_ids == []
