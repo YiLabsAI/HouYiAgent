@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import AsyncIterator
 from typing import Any
@@ -371,3 +372,144 @@ class TestPipelineRuntime:
         assert result.validation is not None
         assert result.quality is not None
         assert result.report.metadata.quality_overall == 88.0
+
+    async def test_validation_parallel_with_url(self) -> None:
+        """URL validation and report validation execute concurrently."""
+        pipe = _pipeline(IntermediateReportGenerator(MockLLM(responses=[_IR_JSON])))
+        report = _report()
+        plan = _plan()
+
+        url_started = asyncio.Event()
+        validation_started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def _blocking_url_validate(_urls: list[str]) -> Any:
+            url_started.set()
+            await release.wait()
+            return MagicMock(results=[], total=0, reachable=0, unreachable=0, error_rate=0.0)
+
+        async def _blocking_validation(_report: ResearchReport, _query: str) -> ValidationReport:
+            validation_started.set()
+            await release.wait()
+            return ValidationReport(sections=[], overall_score=100.0, sections_needing_rewrite=0)
+
+        async def _release_when_both_started() -> None:
+            await asyncio.wait_for(url_started.wait(), timeout=0.2)
+            await asyncio.wait_for(validation_started.wait(), timeout=0.2)
+            release.set()
+
+        pipe._reporter.generate = AsyncMock(return_value=report)
+        pipe._conflict_resolver.detect = AsyncMock(return_value=[])
+        pipe._url_validator.validate = AsyncMock(side_effect=_blocking_url_validate)
+        pipe._validator.validate = AsyncMock(side_effect=_blocking_validation)
+        pipe._evaluator.evaluate = AsyncMock(return_value=QualityScore(overall=88.0))
+
+        gate = asyncio.create_task(_release_when_both_started())
+        result = await asyncio.wait_for(
+            pipe.run(
+                plan,
+                AggregatedSources(sources=report.references),
+                [_result()],
+                intermediate_reports=None,
+                settings=ResearchSettings(depth="standard"),
+            ),
+            timeout=0.6,
+        )
+        await gate
+
+        assert url_started.is_set()
+        assert validation_started.is_set()
+        assert result.validation is not None
+
+    async def test_repair_sections_parallel(self) -> None:
+        """Multiple section repairs execute concurrently under semaphore."""
+        pipe = _pipeline(IntermediateReportGenerator(MockLLM(responses=[_IR_JSON])))
+        report = ResearchReport(
+            title="Demo",
+            sections=[
+                ReportSection(title="Overview", content="Body A"),
+                ReportSection(title="Risks", content="Body B"),
+            ],
+            references=[
+                SourceReference(
+                    reference_id="ref_keep", url="https://example.com/keep", title="Keep"
+                )
+            ],
+        )
+        plan = ResearchPlan(
+            query="topic",
+            outline=[
+                OutlineSection(title="Overview", objective="Summarize"),
+                OutlineSection(title="Risks", objective="Assess risks"),
+            ],
+            sub_questions=[SubQuestion(question_id="q1", question="What about AI?")],
+            settings=ResearchSettings(depth="standard"),
+        )
+
+        release = asyncio.Event()
+        both_started = asyncio.Event()
+        started_count = 0
+
+        async def _blocking_generate_section(
+            _query: str,
+            title: str,
+            _objective: str,
+            _sources: list[SourceReference],
+            intermediate_context: str = "",
+        ) -> ReportSection:
+            nonlocal started_count
+            _ = intermediate_context
+            started_count += 1
+            if started_count >= 2:
+                both_started.set()
+            await release.wait()
+            return ReportSection(title=title, content=f"Repaired {title}")
+
+        async def _release_when_parallel_started() -> None:
+            await asyncio.wait_for(both_started.wait(), timeout=0.2)
+            release.set()
+
+        pipe._reporter.generate = AsyncMock(return_value=report)
+        pipe._reporter._generate_section = AsyncMock(side_effect=_blocking_generate_section)
+        pipe._conflict_resolver.detect = AsyncMock(return_value=[])
+        pipe._url_validator.validate = AsyncMock(
+            return_value=MagicMock(results=[], total=0, reachable=0, unreachable=0, error_rate=0.0)
+        )
+        pipe._validator.validate = AsyncMock(
+            return_value=ValidationReport(
+                sections=[
+                    SectionValidation(
+                        title="Overview",
+                        quality_score=20,
+                        needs_rewrite=True,
+                        suggested_queries=[],
+                    ),
+                    SectionValidation(
+                        title="Risks",
+                        quality_score=25,
+                        needs_rewrite=True,
+                        suggested_queries=[],
+                    ),
+                ],
+                overall_score=22.5,
+                sections_needing_rewrite=2,
+            )
+        )
+        pipe._evaluator.evaluate = AsyncMock(return_value=QualityScore(overall=90.0))
+
+        gate = asyncio.create_task(_release_when_parallel_started())
+        result = await asyncio.wait_for(
+            pipe.run(
+                plan,
+                AggregatedSources(sources=report.references),
+                [_result()],
+                intermediate_reports=None,
+                settings=ResearchSettings(depth="standard"),
+            ),
+            timeout=0.7,
+        )
+        await gate
+
+        assert both_started.is_set()
+        assert result.report.sections[0].content == "Repaired Overview"
+        assert result.report.sections[1].content == "Repaired Risks"
