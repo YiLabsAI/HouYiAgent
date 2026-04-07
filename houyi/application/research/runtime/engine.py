@@ -116,6 +116,7 @@ class ResearchRuntime:
     ) -> None:
         self.run_id = run_id or f"rr_{uuid.uuid4().hex[:12]}"
         self.created_at = time.strftime("%Y-%m-%dT%H:%M:%S")
+        self.started_at = 0.0
         self._settings = settings or ResearchSettings()
         self._emitter = event_emitter or EventEmitter()
         self._bus = message_bus
@@ -321,6 +322,7 @@ class ResearchRuntime:
         self._search_elapsed_ms = 0.0
         self._error = None
         self._started_at = time.time()
+        self.started_at = self._started_at
         self._execution_phase = "search"
         runtime_timeout = self._runtime_timeout()
 
@@ -496,6 +498,10 @@ class ResearchRuntime:
     @property
     def search_elapsed_ms(self) -> float:
         return self._search_elapsed_ms
+
+    @property
+    def started_at_timestamp(self) -> float:
+        return self.started_at
 
     @property
     def progress(self) -> ResearchProgress:

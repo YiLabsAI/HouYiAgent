@@ -116,6 +116,29 @@ function extractContentField(text: string): string | null {
   return scanJsonStringValue(text, m.index + m[0].length);
 }
 
+function stripTrailingCitationArtifacts(text: string): string | null {
+  const trimmed = text.trim();
+
+  const fenced = trimmed.match(/\n```(?:json)?\s*\n([\s\S]*?)\n\s*```\s*$/);
+  if (fenced && fenced.index !== undefined) {
+    const inner = fenced[1];
+    const isCitationPayload = /"citations"\s*:/.test(inner)
+      && (/"reference_id"\s*:/.test(inner) || /"text_span"\s*:/.test(inner));
+    if (isCitationPayload) {
+      const before = trimmed.slice(0, fenced.index).trim();
+      if (before) return before;
+    }
+  }
+
+  const rawStart = trimmed.match(/\n\s*\{\s*"citations"\s*:/);
+  if (rawStart && rawStart.index !== undefined) {
+    const before = trimmed.slice(0, rawStart.index).trim();
+    if (before) return before;
+  }
+
+  return null;
+}
+
 /**
  * Extract the actual content if the section body is (or ends with) a raw JSON
  * object with a "content" key. Covers three LLM failure modes:
@@ -124,48 +147,52 @@ function extractContentField(text: string): string | null {
  *  3. Normal markdown followed by a trailing JSON code fence or raw JSON block
  */
 function sanitizeSectionContent(raw: string): string {
-  if (!raw.includes('"content"')) return raw;
   const trimmed = raw.trim();
 
-  let text = trimmed;
-  if (text.startsWith('```')) {
-    const firstNl = text.indexOf('\n');
-    const lastFence = text.lastIndexOf('```');
-    if (firstNl !== -1 && lastFence > firstNl) {
-      text = text.slice(firstNl + 1, lastFence).trim();
+  if (trimmed.includes('"content"')) {
+    let text = trimmed;
+    if (text.startsWith('```')) {
+      const firstNl = text.indexOf('\n');
+      const lastFence = text.lastIndexOf('```');
+      if (firstNl !== -1 && lastFence > firstNl) {
+        text = text.slice(firstNl + 1, lastFence).trim();
+      }
     }
-  }
 
-  if (text.startsWith('{')) {
-    const result = extractContentField(text);
-    if (result !== null) return result;
-  }
-
-  const fenceRe = /\n```(?:json)?\s*\n(\s*\{[\s\S]*?"content"\s*:[\s\S]*)\n\s*```\s*$/;
-  const fenceMatch = trimmed.match(fenceRe);
-  if (fenceMatch) {
-    const before = trimmed.slice(0, fenceMatch.index!).trim();
-    const inner = fenceMatch[1].trim();
-    const extracted = extractContentField(inner);
-    if (extracted !== null) {
-      return before ? `${before}\n\n${extracted}` : extracted;
+    if (text.startsWith('{')) {
+      const result = extractContentField(text);
+      if (result !== null) return result;
     }
-  }
 
-  // Prose then raw JSON on following lines (no fence) — common LLM failure mode.
-  const proseJsonSplit = /\n\s*\{\s*"content"\s*:/;
-  const splitIdx = trimmed.search(proseJsonSplit);
-  if (splitIdx >= 0) {
-    const before = trimmed.slice(0, splitIdx).trim();
-    const braceStart = trimmed.indexOf('{', splitIdx);
-    if (braceStart !== -1) {
-      const jsonPart = trimmed.slice(braceStart);
-      const extracted = extractContentField(jsonPart);
+    const fenceRe = /\n```(?:json)?\s*\n(\s*\{[\s\S]*?"content"\s*:[\s\S]*)\n\s*```\s*$/;
+    const fenceMatch = trimmed.match(fenceRe);
+    if (fenceMatch) {
+      const before = trimmed.slice(0, fenceMatch.index!).trim();
+      const inner = fenceMatch[1].trim();
+      const extracted = extractContentField(inner);
       if (extracted !== null) {
         return before ? `${before}\n\n${extracted}` : extracted;
       }
     }
+
+    // Prose then raw JSON on following lines (no fence) — common LLM failure mode.
+    const proseJsonSplit = /\n\s*\{\s*"content"\s*:/;
+    const splitIdx = trimmed.search(proseJsonSplit);
+    if (splitIdx >= 0) {
+      const before = trimmed.slice(0, splitIdx).trim();
+      const braceStart = trimmed.indexOf('{', splitIdx);
+      if (braceStart !== -1) {
+        const jsonPart = trimmed.slice(braceStart);
+        const extracted = extractContentField(jsonPart);
+        if (extracted !== null) {
+          return before ? `${before}\n\n${extracted}` : extracted;
+        }
+      }
+    }
   }
+
+  const stripped = stripTrailingCitationArtifacts(trimmed);
+  if (stripped !== null) return stripped;
 
   return raw;
 }
@@ -221,7 +248,7 @@ const ReportBody: React.FC<{ markdown: string; animate?: boolean }> = ({ markdow
   }, [displayed]);
 
   return (
-    <div ref={ref} className="report-body rounded-xl border border-gray-700/50 bg-gray-800/50 p-6 text-xs text-gray-300 leading-relaxed">
+    <div ref={ref} className="report-body rounded-xl border border-gray-700/50 bg-gray-800/50 p-6 text-sm text-gray-300 leading-6">
       <MarkdownRenderer content={displayed} />
     </div>
   );
@@ -333,7 +360,7 @@ export const ReportViewer: React.FC<Props> = ({ report, plan, onRetry, animate: 
             className="w-full flex items-center gap-2 px-4 py-2.5 text-left hover:bg-gray-800/40 transition-colors"
           >
             <ListChecks size={14} className="text-purple-400 shrink-0" />
-            <span className="text-xs font-medium text-gray-400 flex-1">
+            <span className="text-sm font-medium text-gray-400 flex-1">
               Research Plan ({plan.sub_questions.length} sub-questions)
             </span>
             {showPlan
@@ -347,9 +374,9 @@ export const ReportViewer: React.FC<Props> = ({ report, plan, onRetry, animate: 
                 .sort((a, b) => b.priority - a.priority)
                 .map((sq, i) => (
                   <div key={sq.question_id} className="flex items-start gap-2 py-1.5">
-                    <span className="text-xs text-gray-600 pt-0.5 shrink-0 w-5 text-right">{i + 1}.</span>
-                    <span className="text-xs text-gray-300">{sq.question}</span>
-                    <span className="ml-auto text-[10px] text-gray-600 shrink-0">P{sq.priority}</span>
+                    <span className="text-sm text-gray-600 pt-0.5 shrink-0 w-5 text-right">{i + 1}.</span>
+                    <span className="text-sm text-gray-300">{sq.question}</span>
+                    <span className="ml-auto text-xs text-gray-600 shrink-0">P{sq.priority}</span>
                   </div>
                 ))}
             </div>
@@ -363,7 +390,7 @@ export const ReportViewer: React.FC<Props> = ({ report, plan, onRetry, animate: 
       {/* Sources panel — single source of truth for references */}
       {orderedRefs.length > 0 && (
         <div>
-          <h4 className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-2">
+          <h4 className="text-sm font-medium text-gray-500 uppercase tracking-wider mb-2">
             References ({orderedRefs.length})
           </h4>
           <div className="space-y-1.5">
@@ -375,13 +402,13 @@ export const ReportViewer: React.FC<Props> = ({ report, plan, onRetry, animate: 
                 rel="noopener noreferrer"
                 className="flex items-start gap-2 px-3 py-2 rounded-lg bg-gray-800/30 border border-gray-700/30 hover:border-gray-600 transition-colors group"
               >
-                <span className="text-xs text-gray-600 pt-0.5 shrink-0 w-5 text-right">[{i + 1}]</span>
+                <span className="text-sm text-gray-600 pt-0.5 shrink-0 w-10 text-right tabular-nums">[{i + 1}]</span>
                 <div className="min-w-0">
-                  <div className="text-xs text-gray-300 group-hover:text-purple-300 truncate">
+                  <div className="text-sm text-gray-300 group-hover:text-purple-300 truncate">
                     {ref.title || ref.url}
                   </div>
                   {ref.snippet && (
-                    <div className="text-xs text-gray-600 mt-0.5 line-clamp-2">{ref.snippet}</div>
+                    <div className="text-[13px] text-gray-600 mt-0.5 line-clamp-2">{ref.snippet}</div>
                   )}
                 </div>
               </a>

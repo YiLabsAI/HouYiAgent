@@ -50,7 +50,7 @@ describe('useResearchStore', () => {
     it('transitions to planning on success', async () => {
       mockFetch([{
         status: 201,
-        body: { session_id: 's1', plan: { query: 'test', sub_questions: [], outline: [], version: 1, status: 'draft' }, status: 'planning' },
+        body: { run_id: 's1', plan: { query: 'test', sub_questions: [], outline: [], version: 1, status: 'draft' }, status: 'planning' },
       }]);
       const { useResearchStore } = await loadStoreFresh();
       await useResearchStore.getState().createSession('test query');
@@ -74,7 +74,7 @@ describe('useResearchStore', () => {
         status: 201,
         statusText: 'Created',
         json: async () => ({
-          session_id: 's-depth',
+          run_id: 's-depth',
           plan: { query: 'test', sub_questions: [], outline: [], version: 1, status: 'draft' },
           status: 'planning',
         }),
@@ -86,7 +86,7 @@ describe('useResearchStore', () => {
       const { useResearchStore } = await loadStoreFresh();
       await useResearchStore.getState().createSession('topic', { depth: 'deep' });
       expect(fetchMock).toHaveBeenCalledWith(
-        '/api/research/sessions',
+        '/api/research/runs',
         expect.objectContaining({
           method: 'POST',
           body: JSON.stringify({ query: 'topic', settings: { depth: 'deep' } }),
@@ -98,7 +98,7 @@ describe('useResearchStore', () => {
   describe('editPlan', () => {
     it('updates plan version', async () => {
       mockFetch([
-        { status: 201, body: { session_id: 's1', plan: { query: 'q', sub_questions: [], outline: [], version: 1, status: 'draft' }, status: 'planning' } },
+        { status: 201, body: { run_id: 's1', plan: { query: 'q', sub_questions: [], outline: [], version: 1, status: 'draft' }, status: 'planning' } },
         { status: 200, body: { plan: { query: 'q', sub_questions: [{ question_id: 'q1', question: 'New?', priority: 3, search_strategy: 'web', expected_sources: 5, depends_on: [] }], outline: [], version: 2, status: 'draft' } } },
       ]);
       const { useResearchStore } = await loadStoreFresh();
@@ -112,7 +112,7 @@ describe('useResearchStore', () => {
   describe('cancelSession', () => {
     it('resets to input phase', async () => {
       mockFetch([
-        { status: 201, body: { session_id: 's1', plan: { query: 'q', sub_questions: [], outline: [], version: 1, status: 'draft' }, status: 'planning' } },
+        { status: 201, body: { run_id: 's1', plan: { query: 'q', sub_questions: [], outline: [], version: 1, status: 'draft' }, status: 'planning' } },
         { status: 200, body: { status: 'cancelled' } },
       ]);
       const { useResearchStore } = await loadStoreFresh();
@@ -126,7 +126,7 @@ describe('useResearchStore', () => {
     it('populates sessions list', async () => {
       mockFetch([{
         status: 200,
-        body: { sessions: [{ session_id: 'a', status: 'completed' }, { session_id: 'b', status: 'executing' }] },
+        body: { runs: [{ run_id: 'a', status: 'completed' }, { run_id: 'b', status: 'executing' }] },
       }]);
       const { useResearchStore } = await loadStoreFresh();
       await useResearchStore.getState().fetchSessions();
@@ -138,7 +138,7 @@ describe('useResearchStore', () => {
     it('clears all state', async () => {
       mockFetch([{
         status: 201,
-        body: { session_id: 's1', plan: { query: 'q', sub_questions: [], outline: [], version: 1, status: 'draft' }, status: 'planning' },
+        body: { run_id: 's1', plan: { query: 'q', sub_questions: [], outline: [], version: 1, status: 'draft' }, status: 'planning' },
       }]);
       const { useResearchStore } = await loadStoreFresh();
       await useResearchStore.getState().createSession('q');
@@ -154,8 +154,8 @@ describe('useResearchStore', () => {
     /** Phase 3.5 fix: openSession must fully reset stale state before fetching */
     it('resets plan/report/phase before loading new session', async () => {
       mockFetch([
-        { status: 201, body: { session_id: 's-old', plan: { query: 'old', sub_questions: [], outline: [], version: 1, status: 'draft' }, status: 'planning' } },
-        { status: 200, body: { session_id: 's-new', status: 'completed', plan: { query: 'new', sub_questions: [], outline: [], version: 2, status: 'completed' }, progress: { total_steps: 5, completed_steps: 5, current_step: 'done', elapsed_seconds: 10, sub_question_progress: {} } } },
+        { status: 201, body: { run_id: 's-old', plan: { query: 'old', sub_questions: [], outline: [], version: 1, status: 'draft' }, status: 'planning' } },
+        { status: 200, body: { run_id: 's-new', status: 'completed', plan: { query: 'new', sub_questions: [], outline: [], version: 2, status: 'completed' }, progress: { total_steps: 5, completed_steps: 5, current_step: 'done', elapsed_seconds: 10, sub_question_progress: {} } } },
         { status: 200, body: { report: { title: 'New Report', sections: [], references: [], quality_score: null } } },
       ]);
       const { useResearchStore } = await loadStoreFresh();
@@ -171,7 +171,7 @@ describe('useResearchStore', () => {
 
     it('loads existing completed session', async () => {
       mockFetch([
-        { status: 200, body: { session_id: 's2', status: 'completed', plan: { query: 'old', sub_questions: [], outline: [], version: 3, status: 'completed' }, progress: { total_steps: 5, completed_steps: 5, current_step: 'done', elapsed_seconds: 30, sub_question_progress: {} } } },
+        { status: 200, body: { run_id: 's2', status: 'completed', plan: { query: 'old', sub_questions: [], outline: [], version: 3, status: 'completed' }, progress: { total_steps: 5, completed_steps: 5, current_step: 'done', elapsed_seconds: 30, sub_question_progress: {} } } },
         { status: 200, body: { report: { title: 'Test', sections: [], references: [], quality_score: null } } },
       ]);
       const { useResearchStore } = await loadStoreFresh();
@@ -209,6 +209,7 @@ describe('useResearchStore', () => {
           status: 200,
           body: {
             session_id: 's-plan-ready',
+            run_id: 's-plan-ready',
             status: 'plan_ready',
             plan,
             progress,
@@ -240,6 +241,7 @@ describe('useResearchStore', () => {
           status: 200,
           body: {
             session_id: 's-failed',
+            run_id: 's-failed',
             status: 'failed',
             plan,
             progress,
@@ -272,6 +274,7 @@ describe('useResearchStore', () => {
           status: 200,
           body: {
             session_id: 's-cancelled',
+            run_id: 's-cancelled',
             status: 'cancelled',
             plan,
             progress,

@@ -11,6 +11,7 @@ import contextlib
 import json
 import logging
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -54,6 +55,7 @@ class _ArchivedRun:
         self._intermediate_reports_data: list[dict[str, Any]] = data.get("intermediate_reports", [])
         self.created_at: str = data.get("created_at", "")
         self.updated_at: float = data.get("updated_at", 0)
+        self.started_at: float = float(data.get("started_at", 0) or 0)
 
     @property
     def status(self) -> ResearchStatus:
@@ -103,6 +105,15 @@ class ResearchService:
     """
 
     MAX_CONCURRENT_RUNS = 3
+
+    @staticmethod
+    def _created_at_to_epoch(created_at: str | None) -> float:
+        if not created_at:
+            return 0.0
+        try:
+            return datetime.strptime(created_at, "%Y-%m-%dT%H:%M:%S").timestamp()
+        except Exception:
+            return 0.0
 
     def __init__(
         self,
@@ -278,9 +289,12 @@ class ResearchService:
         offset: int = 0,
         limit: int = 20,
     ) -> list[dict[str, Any]]:
-        """List runs with pagination (live + archived)."""
+        """List runs with pagination (live + archived), sorted by latest execution start."""
         items = []
         for runtime in self._runs.values():
+            started_at = float(getattr(runtime, "started_at", 0) or 0)
+            created_at = getattr(runtime, "created_at", None)
+            activity_ts = started_at or self._created_at_to_epoch(created_at)
             items.append(
                 {
                     "run_id": runtime.run_id,
@@ -288,10 +302,14 @@ class ResearchService:
                     "query": runtime.plan.query if runtime.plan else "",
                     "progress": runtime.progress.model_dump(),
                     "error": getattr(runtime, "_error", None) or getattr(runtime, "error", None),
-                    "created_at": getattr(runtime, "created_at", None),
+                    "created_at": created_at,
+                    "started_at": started_at,
+                    "activity_ts": activity_ts,
                 }
             )
-        items.sort(key=lambda x: x.get("created_at") or x["run_id"], reverse=True)
+        items.sort(key=lambda x: x["activity_ts"], reverse=True)
+        for item in items:
+            item.pop("activity_ts", None)
         return items[offset : offset + limit]
 
     async def delete_run(self, run_id: str) -> None:
@@ -341,6 +359,7 @@ class ResearchService:
             runtime._plan = plan
             runtime._status = ResearchStatus.PLAN_READY
         runtime.created_at = archived.created_at or runtime.created_at
+        runtime.started_at = archived.started_at or runtime.started_at
 
         for i, sr_data in enumerate(archived.search_results_data):
             try:
@@ -410,6 +429,7 @@ class ResearchService:
             "intermediate_reports": intermediate_data,
             "created_at": getattr(runtime, "created_at", ""),
             "updated_at": time.time(),
+            "started_at": float(getattr(runtime, "started_at", 0) or 0),
         }
         tmp = path.with_suffix(".tmp")
         tmp.write_text(json.dumps(data, default=str), encoding="utf-8")

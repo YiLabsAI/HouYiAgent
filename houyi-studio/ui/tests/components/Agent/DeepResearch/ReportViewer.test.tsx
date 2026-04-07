@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, within } from '@testing-library/react';
+import { render, screen, fireEvent, within, act } from '@testing-library/react';
 import { describe, it, expect, vi } from 'vitest';
 import { ReportViewer } from '@/components/Agent/DeepResearch/ReportViewer';
 import type { ResearchReport } from '@/stores/useResearchStore';
@@ -37,11 +37,11 @@ describe('ReportViewer', () => {
     expect(screen.getByText('Research Report')).toBeInTheDocument();
   });
 
-  it('report body uses compact text-xs and report-body class', () => {
+  it('report body uses compact text-sm and report-body class', () => {
     const { container } = render(<ReportViewer report={makeReport()} />);
     const reportBody = container.querySelector('.report-body');
     expect(reportBody).toBeTruthy();
-    expect(reportBody?.classList.contains('text-xs')).toBe(true);
+    expect(reportBody?.classList.contains('text-sm')).toBe(true);
   });
 
   it('renders quality scores', () => {
@@ -150,7 +150,10 @@ describe('ReportViewer', () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.assign(navigator, { clipboard: { writeText } });
     render(<ReportViewer report={makeReport()} />);
-    fireEvent.click(screen.getByRole('button', { name: /Copy/i }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Copy/i }));
+      await Promise.resolve();
+    });
     expect(writeText).toHaveBeenCalledTimes(1);
     expect(writeText.mock.calls[0][0]).toContain('AI Research Report');
   });
@@ -235,6 +238,22 @@ describe('ReportViewer', () => {
     expect(md.textContent).toContain('Line 1');
     expect(md.textContent).toContain('More text.');
     expect(md.textContent).not.toContain('"content"');
+  });
+
+  it('strips trailing citations-only raw JSON artifact after prose', () => {
+    const mixed = 'Conclusion paragraph is retained.\n{"citations": [{"reference_id": "ref_1", "text_span": "paragraph"}], "extra": 1}';
+    render(
+      <ReportViewer
+        report={makeReport({
+          sections: [{ title: 'S', content: mixed, citations: [] }],
+          references: [],
+        })}
+      />,
+    );
+    const md = screen.getByTestId('md-renderer');
+    expect(md.textContent).toContain('Conclusion paragraph is retained.');
+    expect(md.textContent).not.toContain('"citations"');
+    expect(md.textContent).not.toContain('"reference_id"');
   });
 
   it('sanitizes structurally-formatted JSON with actual newlines', () => {

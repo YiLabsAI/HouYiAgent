@@ -72,6 +72,7 @@ export interface SessionSummary {
   query?: string;
   status: string;
   created_at?: string;
+  started_at?: number;
   error?: string | null;
 }
 

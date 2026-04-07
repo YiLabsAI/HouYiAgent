@@ -17,6 +17,20 @@ type AgentView = 'hub' | 'deep_research' | 'memory_inbox';
 
 const PAGE_SIZE = 10;
 
+function formatTime(ts: string | number): string {
+  const d = typeof ts === 'number' ? new Date(ts * 1000) : new Date(ts);
+  if (Number.isNaN(d.getTime())) return String(ts);
+  const now = new Date();
+  const isToday = d.toDateString() === now.toDateString();
+  const pad = (n: number) => n.toString().padStart(2, '0');
+  const time = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  if (isToday) return `Today ${time}`;
+  const yesterday = new Date(now);
+  yesterday.setDate(yesterday.getDate() - 1);
+  if (d.toDateString() === yesterday.toDateString()) return `Yesterday ${time}`;
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${time}`;
+}
+
 function pushHash(path: string) {
   const target = path ? `#${path}` : window.location.pathname;
   if (window.location.hash === (path ? `#${path}` : '')) return;
@@ -308,8 +322,8 @@ export const AgentHub: React.FC = () => {
                       <div className="text-sm text-gray-200 truncate">{session.query || `Run ${session.run_id.slice(0, 8)}`}</div>
                       <div className="text-xs text-gray-500">Deep Research • {statusLabels[session.status] || session.status}</div>
                     </div>
-                    {session.created_at && (
-                      <span className="text-xs text-gray-600 shrink-0">{session.created_at}</span>
+                    {(session.started_at || session.created_at) && (
+                      <span className="text-xs text-gray-600 shrink-0">{formatTime(session.started_at || session.created_at!)}</span>
                     )}
                   </button>
                 </div>

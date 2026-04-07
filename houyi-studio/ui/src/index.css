@@ -197,11 +197,15 @@ body {
   padding: 2px 0;
 }
 
-/* Report body: compact typography for research reports */
-.report-body h1 { font-size: 0.875rem !important; /* 14px — text-sm */ }
-.report-body h2 { font-size: 0.8125rem !important; /* 13px */ }
-.report-body h3 { font-size: 0.75rem !important; /* 12px — text-xs */ }
+/* Report body: 14px base with clear heading hierarchy */
+.report-body h1 { font-size: 1.125rem !important; font-weight: 600 !important; color: rgb(209 213 219 / 1) !important; line-height: 1.75rem !important; margin-top: 1.5rem !important; margin-bottom: 0.75rem !important; }
+.report-body h2 { font-size: 1rem !important; font-weight: 600 !important; color: rgb(209 213 219 / 1) !important; line-height: 1.5rem !important; margin-top: 1.25rem !important; margin-bottom: 0.5rem !important; }
+.report-body h3 { font-size: 0.875rem !important; font-weight: 600 !important; color: rgb(156 163 175 / 1) !important; line-height: 1.5rem !important; margin-top: 1rem !important; margin-bottom: 0.5rem !important; }
 .report-body p,
-.report-body li { font-size: inherit; /* 12px from parent text-xs */ }
+.report-body li,
+.report-body td,
+.report-body th { font-size: 0.875rem !important; line-height: 1.5rem !important; }
 .report-body ul,
-.report-body ol { font-size: inherit; }
+.report-body ol { font-size: inherit; margin-top: 0.5rem !important; margin-bottom: 0.5rem !important; }
+.report-body table { font-size: 0.875rem !important; }
+.report-body sup { font-size: 0.625rem !important; vertical-align: baseline !important; line-height: inherit !important; white-space: nowrap !important; position: relative !important; top: -0.1em !important; }
