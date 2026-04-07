@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 from typing import Any
 
 from houyi.adapters.llm.base import LLMAdapter
@@ -25,6 +26,10 @@ from houyi.application.research.types import (
 )
 
 logger = logging.getLogger(__name__)
+
+_FACT_MAX_SECTION_CHARS = 3500
+_FACT_MAX_SOURCE_CHARS = 2200
+_FACT_MAX_TOKENS = 700
 
 _RACE_PROMPT = """\
 You are a research report quality evaluator using the RACE framework.
@@ -98,18 +103,48 @@ class QualityEvaluator:
         billing / rate-limit), the stage returns a zero-score placeholder
         instead of crashing the entire pipeline.
         """
+        score, _ = await self.evaluate_with_breakdown(report, sources, reference_answer)
+        return score
+
+    async def evaluate_with_breakdown(
+        self,
+        report: ResearchReport,
+        sources: AggregatedSources,
+        reference_answer: str | None = None,
+    ) -> tuple[QualityScore, dict[str, float]]:
+        """Run quality evaluation and return score + per-subphase timings."""
         import asyncio
 
-        race, fact = await asyncio.gather(
-            self._safe_race(report, reference_answer),
-            self._safe_fact(report, sources),
-        )
+        t_total = time.perf_counter()
+
+        async def _timed_race() -> tuple[RACEScore, float]:
+            t = time.perf_counter()
+            score = await self._safe_race(report, reference_answer)
+            return score, (time.perf_counter() - t) * 1000.0
+
+        async def _timed_fact() -> tuple[FACTScore, float]:
+            t = time.perf_counter()
+            score = await self._safe_fact(report, sources)
+            return score, (time.perf_counter() - t) * 1000.0
+
+        (race, race_ms), (fact, fact_ms) = await asyncio.gather(_timed_race(), _timed_fact())
+
+        t_combine = time.perf_counter()
         overall = race.overall * 0.6 + (fact.citation_accuracy * 0.4)
-        return QualityScore(
+        quality = QualityScore(
             race=race,
             fact=fact,
             overall=round(overall, 2),
         )
+        combine_ms = (time.perf_counter() - t_combine) * 1000.0
+        total_ms = (time.perf_counter() - t_total) * 1000.0
+
+        return quality, {
+            "quality_race_ms": round(race_ms, 1),
+            "quality_fact_ms": round(fact_ms, 1),
+            "quality_combine_ms": round(combine_ms, 1),
+            "quality_eval_total_ms": round(total_ms, 1),
+        }
 
     async def _safe_race(
         self,
@@ -168,16 +203,22 @@ class QualityEvaluator:
     ) -> FACTScore:
         """FACT framework evaluation for citation trustworthiness."""
         sections_text = _sections_with_citations(report)
-        sources_text = _sources_lookup_text(sources)
+        cited_ref_ids = {
+            citation.reference_id
+            for section in report.sections
+            for citation in section.citations
+            if citation.reference_id
+        }
+        sources_text = _sources_lookup_text(sources, preferred_ids=cited_ref_ids)
 
         prompt = _FACT_PROMPT.format(
-            sections_text=sections_text[:6000],
-            sources_text=sources_text[:4000],
+            sections_text=sections_text[:_FACT_MAX_SECTION_CHARS],
+            sources_text=sources_text[:_FACT_MAX_SOURCE_CHARS],
         )
         resp = await self._llm.chat(
             messages=[{"role": "user", "content": prompt}],
             temperature=0.1,
-            max_tokens=1000,
+            max_tokens=_FACT_MAX_TOKENS,
             **self._llm_kwargs,
         )
         return _parse_fact(resp.content)
@@ -201,15 +242,39 @@ def _sections_with_citations(report: ResearchReport) -> str:
     parts: list[str] = []
     for sec in report.sections:
         if sec.citations:
-            cites = ", ".join(f'[{c.reference_id}: "{c.text_span[:80]}"]' for c in sec.citations)
+            cites = ", ".join(
+                f'[{c.reference_id}: "{c.text_span[:60]}"]' for c in sec.citations[:6]
+            )
             parts.append(f"## {sec.title}\nCitations: {cites}")
     return "\n\n".join(parts) if parts else "(no citations found)"
 
 
-def _sources_lookup_text(sources: AggregatedSources) -> str:
-    return "\n".join(
-        f"{s.reference_id}: {s.title} — {s.snippet[:200]}" for s in sources.sources[:30]
-    )
+def _sources_lookup_text(
+    sources: AggregatedSources,
+    *,
+    preferred_ids: set[str] | None = None,
+) -> str:
+    preferred = preferred_ids or set()
+    selected: list[Any] = []
+    used: set[str] = set()
+
+    for src in sources.sources:
+        if src.reference_id in preferred and src.reference_id not in used:
+            selected.append(src)
+            used.add(src.reference_id)
+        if len(selected) >= 20:
+            break
+
+    if len(selected) < 20:
+        for src in sources.sources:
+            if src.reference_id in used:
+                continue
+            selected.append(src)
+            used.add(src.reference_id)
+            if len(selected) >= 20:
+                break
+
+    return "\n".join(f"{s.reference_id}: {s.title} — {s.snippet[:160]}" for s in selected)
 
 
 # ---------------------------------------------------------------------------

@@ -18,6 +18,7 @@ from houyi_studio.server.research.service import (
 
 from houyi.adapters.llm.base import LLMAdapter, LLMResponse, StreamChunk
 from houyi.application.research.types import (
+    OrchestrationMode,
     PlanEdit,
     PlanEditOperation,
     PlanStatus,
@@ -25,6 +26,10 @@ from houyi.application.research.types import (
     ResearchStatus,
     SearchResult,
     SourceReference,
+)
+from houyi.infrastructure.config.env_config import (
+    ENV_RESEARCH_MAX_AGENTS,
+    ENV_RESEARCH_ORCHESTRATION_MODE,
 )
 from houyi.skills.web_search.service import WebSearchService
 from houyi.skills.web_search.types import (
@@ -129,6 +134,23 @@ class TestCreateRun:
         runtime, plan = await svc.create_run("test", settings=_QUICK)
         assert runtime.status == ResearchStatus.PLAN_READY
         assert plan is not None
+
+    async def test_default_mode_delegate(self, tmp_path, monkeypatch):
+        monkeypatch.delenv(ENV_RESEARCH_ORCHESTRATION_MODE, raising=False)
+        monkeypatch.delenv(ENV_RESEARCH_MAX_AGENTS, raising=False)
+        svc = ResearchService(_MockLLM(), _mock_ws(), data_dir=tmp_path)
+        runtime, _ = await svc.create_run("test", settings=ResearchSettings(depth="quick"))
+        assert runtime._settings.orchestration_mode == OrchestrationMode.DELEGATE
+        assert runtime._settings.max_agents == 3
+
+    async def test_explicit_mode_kept(self, tmp_path, monkeypatch):
+        monkeypatch.setenv(ENV_RESEARCH_ORCHESTRATION_MODE, "delegate")
+        svc = ResearchService(_MockLLM(), _mock_ws(), data_dir=tmp_path)
+        runtime, _ = await svc.create_run(
+            "test",
+            settings=ResearchSettings(depth="quick", orchestration_mode=OrchestrationMode.DIRECT),
+        )
+        assert runtime._settings.orchestration_mode == OrchestrationMode.DIRECT
 
 
 class TestEditPlan:
@@ -235,6 +257,7 @@ class TestPersistence:
         assert path.exists()
         data = json.loads(path.read_text())
         assert data["run_id"] == runtime.run_id
+        assert data["settings"]["orchestration_mode"]
 
     async def test_runs_loaded_on_startup(self, tmp_path):
         """Runs persisted as JSON are hydrated when a new service starts."""

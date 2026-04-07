@@ -79,6 +79,19 @@ class TestCoverage:
         out = await agg.aggregate(results)
         assert len(out.grouped_by_question["q1"]) == 1
 
+    async def test_cross_question_dedup(self):
+        agg = SourceAggregator()
+        results = [
+            _result("q1", [_src("https://a.com", score=0.3)]),
+            _result("q2", [_src("https://a.com", score=0.8)]),
+        ]
+        out = await agg.aggregate(results)
+
+        assert len(out.sources) == 1
+        assert len(out.grouped_by_question["q1"]) == 1
+        assert len(out.grouped_by_question["q2"]) == 1
+        assert out.grouped_by_question["q1"][0] == out.grouped_by_question["q2"][0]
+
 
 class TestRanking:
     async def test_sorted_by_reliability(self):

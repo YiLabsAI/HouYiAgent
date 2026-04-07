@@ -46,13 +46,13 @@ class SourceAggregator:
             for src in result.sources:
                 raw.append((result.question_id, src))
 
-        deduped, dup_count = self._deduplicate(raw)
+        deduped, dup_count, question_groups = self._deduplicate(raw)
 
         deduped.sort(key=lambda s: s.reliability_score, reverse=True)
 
         grouped: dict[str, list[str]] = defaultdict(list)
-        for qid, src in raw:
-            if src.reference_id in {s.reference_id for s in deduped}:
+        for src in deduped:
+            for qid in sorted(question_groups.get(src.reference_id, set())):
                 grouped[qid].append(src.reference_id)
 
         coverage: dict[str, float] = {}
@@ -71,38 +71,46 @@ class SourceAggregator:
     def _deduplicate(
         self,
         raw: list[tuple[str, SourceReference]],
-    ) -> tuple[list[SourceReference], int]:
+    ) -> tuple[list[SourceReference], int, dict[str, set[str]]]:
         """Deduplicate by URL exact match, then content fingerprint."""
-        seen_urls: dict[str, SourceReference] = {}
-        seen_hashes: dict[str, SourceReference] = {}
+        seen_urls: dict[str, str] = {}
+        seen_hashes: dict[str, str] = {}
+        canonical_sources: dict[str, SourceReference] = {}
+        question_groups: dict[str, set[str]] = defaultdict(set)
         dup_count = 0
 
-        for _qid, src in raw:
+        for qid, src in raw:
+            canonical_id: str | None = None
+
             if src.url and src.url in seen_urls:
-                existing = seen_urls[src.url]
+                canonical_id = seen_urls[src.url]
+            else:
+                fp = _content_fingerprint(src)
+                if fp in seen_hashes:
+                    canonical_id = seen_hashes[fp]
+
+            if canonical_id is not None:
+                existing = canonical_sources[canonical_id]
                 if src.reliability_score > existing.reliability_score:
-                    fp_old = _content_fingerprint(existing)
-                    seen_urls[src.url] = src
-                    seen_hashes[fp_old] = src
+                    canonical_sources[canonical_id] = src.model_copy(
+                        update={"reference_id": canonical_id}
+                    )
+                if src.url:
+                    seen_urls[src.url] = canonical_id
                 dup_count += 1
+                question_groups[canonical_id].add(qid)
                 continue
 
+            canonical_id = src.reference_id
             fp = _content_fingerprint(src)
-            if fp in seen_hashes:
-                existing = seen_hashes[fp]
-                if src.reliability_score > existing.reliability_score:
-                    seen_hashes[fp] = src
-                    if src.url:
-                        seen_urls[src.url] = src
-                dup_count += 1
-                continue
-
-            seen_hashes[fp] = src
+            canonical_sources[canonical_id] = src
+            seen_hashes[fp] = canonical_id
             if src.url:
-                seen_urls[src.url] = src
+                seen_urls[src.url] = canonical_id
+            question_groups[canonical_id].add(qid)
 
-        unique = list(seen_hashes.values())
-        return unique, dup_count
+        unique = list(canonical_sources.values())
+        return unique, dup_count, question_groups
 
 
 def _content_fingerprint(src: SourceReference) -> str:

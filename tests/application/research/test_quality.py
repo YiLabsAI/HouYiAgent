@@ -84,6 +84,18 @@ class TestCombinedEval:
         assert score.fact.citation_accuracy == 95.0
         assert score.overall > 0
 
+    async def test_combined_score_with_breakdown(self):
+        llm = MockLLM(responses=[_RACE_JSON, _FACT_JSON])
+        ev = QualityEvaluator(llm)
+        score, timings = await ev.evaluate_with_breakdown(_report(), _sources())
+
+        assert score.race.overall > 0
+        assert score.fact.citation_accuracy == 95.0
+        assert score.overall > 0
+        assert timings["quality_race_ms"] >= 0
+        assert timings["quality_fact_ms"] >= 0
+        assert timings["quality_eval_total_ms"] >= 0
+
 
 class TestBoundaryAndInteraction:
     async def test_zero_scores_all_dims(self):

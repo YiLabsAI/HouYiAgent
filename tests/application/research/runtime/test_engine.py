@@ -894,6 +894,48 @@ class TestBoundaryAndInteraction:
         types = {m.message_type.value for m in received}
         assert "task.delegate" in types or "task.result" in types
 
+    async def test_autonomous_mode_bus_bridge(self):
+        """AUTONOMOUS mode agent events also flow through MessageBus."""
+        import asyncio
+
+        from houyi.application.runtime.message_bus import AgentMessageBus
+
+        bus = AgentMessageBus()
+
+        responses = [
+            _PLAN_ONE_Q,
+            _SEARCHER_RESPONSE,
+            _SECTION_JSON,
+            "Sum.",
+            _RACE_JSON,
+            _FACT_JSON,
+        ]
+        llm = MockLLM(responses=responses)
+        ws = make_mock_web_search()
+        settings = ResearchSettings(orchestration_mode="autonomous", depth="quick")
+        session = ResearchRuntime(
+            llm_adapter=llm,
+            web_search=ws,
+            settings=settings,
+            message_bus=bus,
+        )
+        topic = f"research.{session.run_id}"
+        sub_queue: asyncio.Queue = asyncio.Queue()
+        bus._topic_subscribers[topic]["test_sub"] = sub_queue
+
+        await session.start("test")
+        await session.confirm_plan()
+        _stub_report(session)
+        await session.execute()
+
+        received = []
+        while not sub_queue.empty():
+            received.append(sub_queue.get_nowait())
+
+        assert len(received) >= 1
+        types = {m.message_type.value for m in received}
+        assert "task.delegate" in types or "task.result" in types
+
 
 def _standard_runtime_responses(
     clarification_json: str = _CLARIFICATION_PASS_JSON,

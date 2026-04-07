@@ -8,6 +8,7 @@ summary with a link to the full Workspace run.
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -20,8 +21,19 @@ from houyi.domain.skill.policy import (
     SideEffect,
 )
 from houyi.domain.skill.spec import SkillSpec
+from houyi.infrastructure.config.env_config import (
+    ENV_RESEARCH_MAX_AGENTS,
+    ENV_RESEARCH_ORCHESTRATION_MODE,
+)
 
 logger = logging.getLogger(__name__)
+
+_MODE_DIRECT = "direct"
+_MODE_DELEGATE = "delegate"
+_MODE_AUTONOMOUS = "autonomous"
+_VALID_ORCHESTRATION_MODES = frozenset({_MODE_DIRECT, _MODE_DELEGATE, _MODE_AUTONOMOUS})
+_DEFAULT_ORCHESTRATION_MODE = _MODE_DELEGATE
+_DEFAULT_MAX_AGENTS = 3
 
 
 class DeepResearchInput(BaseModel):
@@ -41,6 +53,30 @@ class DeepResearchOutput(BaseModel):
 
 
 _research_service_ref: Any = None
+
+
+def _default_orchestration_mode() -> str:
+    raw = os.getenv(ENV_RESEARCH_ORCHESTRATION_MODE, _DEFAULT_ORCHESTRATION_MODE).strip().lower()
+    if raw in _VALID_ORCHESTRATION_MODES:
+        return raw
+    logger.warning(
+        "Invalid %s=%r, fallback to %s",
+        ENV_RESEARCH_ORCHESTRATION_MODE,
+        raw,
+        _DEFAULT_ORCHESTRATION_MODE,
+    )
+    return _DEFAULT_ORCHESTRATION_MODE
+
+
+def _default_max_agents() -> int:
+    raw = os.getenv(ENV_RESEARCH_MAX_AGENTS, str(_DEFAULT_MAX_AGENTS)).strip()
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        logger.warning(
+            "Invalid %s=%r, fallback to %d", ENV_RESEARCH_MAX_AGENTS, raw, _DEFAULT_MAX_AGENTS
+        )
+        return _DEFAULT_MAX_AGENTS
 
 
 def set_research_service(svc: Any) -> None:
@@ -70,7 +106,7 @@ async def execute_deep_research(
             "sources_count": 0,
         }
 
-    from houyi.application.research.types import ResearchDepth, ResearchSettings
+    from houyi.application.research.types import OrchestrationMode, ResearchDepth, ResearchSettings
 
     try:
         depth_map = {
@@ -78,8 +114,18 @@ async def execute_deep_research(
             "standard": ResearchDepth.STANDARD,
             "deep": ResearchDepth.DEEP,
         }
+        mode_map = {
+            _MODE_DIRECT: OrchestrationMode.DIRECT,
+            _MODE_DELEGATE: OrchestrationMode.DELEGATE,
+            _MODE_AUTONOMOUS: OrchestrationMode.AUTONOMOUS,
+        }
         resolved_depth = depth_map.get(depth, ResearchDepth.QUICK)
-        settings = ResearchSettings(depth=resolved_depth)
+        resolved_mode = mode_map[_default_orchestration_mode()]
+        settings = ResearchSettings(
+            depth=resolved_depth,
+            orchestration_mode=resolved_mode,
+            max_agents=_default_max_agents(),
+        )
         runtime, _plan = await svc.create_run(
             query=query,
             settings=settings,

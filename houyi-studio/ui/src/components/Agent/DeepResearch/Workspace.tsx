@@ -8,6 +8,32 @@ import { Search, Loader2 } from 'lucide-react';
 /** Matches backend `ResearchDepth`: drives planner (sub-question count), search rounds, and report pipeline. */
 export type ResearchDepthOption = 'quick' | 'standard' | 'deep';
 
+const DEPTH_CARDS: Array<{
+  value: ResearchDepthOption;
+  title: string;
+  subtitle: string;
+  meta: string;
+}> = [
+  {
+    value: 'quick',
+    title: 'Quick',
+    subtitle: 'Fast answer, lighter validation',
+    meta: '~2-3 sub-questions',
+  },
+  {
+    value: 'standard',
+    title: 'Standard',
+    subtitle: 'Balanced speed and coverage',
+    meta: '~4-6 sub-questions',
+  },
+  {
+    value: 'deep',
+    title: 'Deep',
+    subtitle: 'Broad exploration with strict checks',
+    meta: '~6-9 sub-questions',
+  },
+];
+
 export const DeepResearchWorkspace: React.FC = () => {
   const { phase, sessionId, plan, progress, report, searchResults, error, loading, createSession, confirmAndExecute, cancelSession, reset, events } = useResearchStore();
   const [query, setQuery] = useState('');
@@ -81,22 +107,37 @@ export const DeepResearchWorkspace: React.FC = () => {
                 }}
               />
             </div>
-            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-              <label className="flex items-center gap-2 text-xs text-gray-400">
-                <span className="whitespace-nowrap">Research depth</span>
-                <select
-                  value={depth}
-                  onChange={(e) => setDepth(e.target.value as ResearchDepthOption)}
-                  className="bg-gray-800 border border-gray-700 rounded-lg px-2.5 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-purple-500 min-w-[11rem]"
-                  aria-label="Research depth"
-                >
-                  <option value="quick">Quick — fewer steps, faster</option>
-                  <option value="standard">Standard — balanced</option>
-                  <option value="deep">Deep — more sub-questions, slower</option>
-                </select>
-              </label>
-              <p className="text-[11px] text-gray-600 sm:max-w-md sm:text-right leading-relaxed">
-                Depth sets how many angles the planner uses and how heavy validation is. You can still edit the plan before running.
+            <div className="space-y-2">
+              <p className="text-xs text-gray-400">Research depth</p>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                {DEPTH_CARDS.map((item) => {
+                  const active = item.value === depth;
+                  return (
+                    <button
+                      key={item.value}
+                      type="button"
+                      onClick={() => setDepth(item.value)}
+                      aria-pressed={active}
+                      className={`text-left rounded-xl border px-3 py-2.5 transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-purple-500/70 ${active
+                        ? 'border-purple-500 bg-purple-500/10 shadow-[0_0_0_1px_rgba(168,85,247,0.35)]'
+                        : 'border-gray-700 bg-gray-800/70 hover:border-gray-500'
+                      }`}
+                    >
+                      <div className={`text-sm font-medium ${active ? 'text-purple-300' : 'text-gray-200'}`}>
+                        {item.title}
+                      </div>
+                      <div className={`mt-0.5 text-[11px] ${active ? 'text-purple-200/90' : 'text-gray-400'}`}>
+                        {item.subtitle}
+                      </div>
+                      <div className={`mt-1 text-[10px] uppercase tracking-wide ${active ? 'text-purple-300/80' : 'text-gray-500'}`}>
+                        {item.meta}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+              <p className="text-[11px] text-gray-500 leading-relaxed">
+                Depth controls planning breadth and validation intensity. You can still edit the plan before running.
               </p>
             </div>
             <div className="flex justify-end">

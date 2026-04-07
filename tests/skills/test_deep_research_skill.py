@@ -4,6 +4,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from houyi.application.research.types import OrchestrationMode
+from houyi.infrastructure.config.env_config import ENV_RESEARCH_ORCHESTRATION_MODE
 from houyi.skills.builtin.deep_research import (
     DeepResearchInput,
     DeepResearchOutput,
@@ -102,7 +104,19 @@ class TestExecuteWithService:
         self.svc.launch_run.assert_awaited_once_with("rr_test123")
         self.svc.get_report.assert_awaited_once_with("rr_test123")
 
-    async def test_handles_service_error_gracefully(self):
+        kwargs = self.svc.create_run.await_args.kwargs
+        settings = kwargs["settings"]
+        assert settings.orchestration_mode == OrchestrationMode.DELEGATE
+        assert settings.max_agents == 3
+
+    async def test_mode_rollback_env(self):
+        with patch.dict("os.environ", {ENV_RESEARCH_ORCHESTRATION_MODE: "direct"}, clear=False):
+            await execute_deep_research(query="AI frameworks")
+        kwargs = self.svc.create_run.await_args.kwargs
+        settings = kwargs["settings"]
+        assert settings.orchestration_mode == OrchestrationMode.DIRECT
+
+    async def test_handles_service_error(self):
         self.svc.create_run = AsyncMock(side_effect=RuntimeError("boom"))
         result = await execute_deep_research(query="fail")
         assert result["run_id"] == ""

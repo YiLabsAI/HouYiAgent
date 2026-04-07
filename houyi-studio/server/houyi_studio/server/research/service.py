@@ -10,6 +10,7 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
+import os
 import time
 from datetime import datetime
 from pathlib import Path
@@ -22,6 +23,7 @@ from houyi.application.research.runtime import ResearchRuntime
 from houyi.application.research.runtime.errors import ResearchReportNotReadyError
 from houyi.application.research.runtime.intermediate import IntermediateReport
 from houyi.application.research.types import (
+    OrchestrationMode,
     PlanEdit,
     PlanStatus,
     ResearchPlan,
@@ -32,9 +34,19 @@ from houyi.application.research.types import (
     SearchResult,
 )
 from houyi.application.runtime.events import EventEmitter
+from houyi.infrastructure.config.env_config import (
+    ENV_RESEARCH_MAX_AGENTS,
+    ENV_RESEARCH_ORCHESTRATION_MODE,
+)
 from houyi.skills.web_search.service import WebSearchService
 
 logger = logging.getLogger(__name__)
+
+_DEFAULT_ORCHESTRATION_MODE = OrchestrationMode.DELEGATE
+_DEFAULT_MAX_AGENTS = 3
+_SETTINGS_FIELD_ORCHESTRATION_MODE = "orchestration_mode"
+_SETTINGS_FIELD_MAX_AGENTS = "max_agents"
+_SUB_AGENT_MODES = (OrchestrationMode.DELEGATE, OrchestrationMode.AUTONOMOUS)
 
 
 class _ArchivedRun:
@@ -56,6 +68,7 @@ class _ArchivedRun:
         self.created_at: str = data.get("created_at", "")
         self.updated_at: float = data.get("updated_at", 0)
         self.started_at: float = float(data.get("started_at", 0) or 0)
+        self._settings_data: dict[str, Any] | None = data.get("settings")
 
     @property
     def status(self) -> ResearchStatus:
@@ -96,6 +109,15 @@ class _ArchivedRun:
     def intermediate_reports_data(self) -> list[dict[str, Any]]:
         return self._intermediate_reports_data
 
+    @property
+    def settings(self) -> ResearchSettings | None:
+        if not self._settings_data:
+            return None
+        try:
+            return ResearchSettings.model_validate(self._settings_data)
+        except Exception:
+            return None
+
 
 class ResearchService:
     """Server-side service managing research runs.
@@ -105,6 +127,8 @@ class ResearchService:
     """
 
     MAX_CONCURRENT_RUNS = 3
+    _DEFAULT_ORCHESTRATION_ENV = ENV_RESEARCH_ORCHESTRATION_MODE
+    _DEFAULT_MAX_AGENTS_ENV = ENV_RESEARCH_MAX_AGENTS
 
     @staticmethod
     def _created_at_to_epoch(created_at: str | None) -> float:
@@ -114,6 +138,65 @@ class ResearchService:
             return datetime.strptime(created_at, "%Y-%m-%dT%H:%M:%S").timestamp()
         except Exception:
             return 0.0
+
+    @classmethod
+    def _default_orchestration_mode(cls) -> OrchestrationMode:
+        raw = (
+            os.getenv(cls._DEFAULT_ORCHESTRATION_ENV, _DEFAULT_ORCHESTRATION_MODE.value)
+            .strip()
+            .lower()
+        )
+        try:
+            return OrchestrationMode(raw)
+        except ValueError:
+            logger.warning(
+                "Invalid %s=%r, fallback to %s",
+                cls._DEFAULT_ORCHESTRATION_ENV,
+                raw,
+                _DEFAULT_ORCHESTRATION_MODE.value,
+            )
+            return _DEFAULT_ORCHESTRATION_MODE
+
+    @classmethod
+    def _default_max_agents(cls) -> int:
+        raw = os.getenv(cls._DEFAULT_MAX_AGENTS_ENV, str(_DEFAULT_MAX_AGENTS)).strip()
+        try:
+            return max(1, int(raw))
+        except ValueError:
+            logger.warning(
+                "Invalid %s=%r, fallback to %d",
+                cls._DEFAULT_MAX_AGENTS_ENV,
+                raw,
+                _DEFAULT_MAX_AGENTS,
+            )
+            return _DEFAULT_MAX_AGENTS
+
+    @classmethod
+    def _resolve_settings(cls, settings: ResearchSettings | None) -> ResearchSettings:
+        default_mode = cls._default_orchestration_mode()
+        default_agents = cls._default_max_agents()
+        if settings is None:
+            return ResearchSettings(
+                orchestration_mode=default_mode,
+                max_agents=default_agents,
+            )
+
+        resolved = settings.model_copy(deep=True)
+        fields = getattr(settings, "model_fields_set", set())
+        if _SETTINGS_FIELD_ORCHESTRATION_MODE not in fields:
+            resolved.orchestration_mode = default_mode
+        if (
+            _SETTINGS_FIELD_MAX_AGENTS not in fields
+            and resolved.orchestration_mode in _SUB_AGENT_MODES
+        ):
+            resolved.max_agents = default_agents
+        return resolved
+
+    @staticmethod
+    def _runtime_settings(runtime: ResearchRuntime | _ArchivedRun) -> ResearchSettings | None:
+        if isinstance(runtime, _ArchivedRun):
+            return runtime.settings
+        return getattr(runtime, "_settings", None)
 
     def __init__(
         self,
@@ -176,11 +259,12 @@ class ResearchService:
             runtime = self._runs[run_id]
             return runtime, runtime.plan  # type: ignore[return-value]
 
+        resolved_settings = self._resolve_settings(settings)
         emitter = EventEmitter()
         runtime = ResearchRuntime(
             llm_adapter=self._llm,
             web_search=self._web_search,
-            settings=settings,
+            settings=resolved_settings,
             event_emitter=emitter,
             memory_context=memory_context,
         )
@@ -292,6 +376,7 @@ class ResearchService:
         """List runs with pagination (live + archived), sorted by latest execution start."""
         items = []
         for runtime in self._runs.values():
+            runtime_settings = self._runtime_settings(runtime)
             started_at = float(getattr(runtime, "started_at", 0) or 0)
             created_at = getattr(runtime, "created_at", None)
             activity_ts = started_at or self._created_at_to_epoch(created_at)
@@ -304,6 +389,9 @@ class ResearchService:
                     "error": getattr(runtime, "_error", None) or getattr(runtime, "error", None),
                     "created_at": created_at,
                     "started_at": started_at,
+                    "orchestration_mode": runtime_settings.orchestration_mode.value
+                    if runtime_settings
+                    else None,
                     "activity_ts": activity_ts,
                 }
             )
@@ -351,6 +439,7 @@ class ResearchService:
             run_id=archived.run_id,
             llm_adapter=self._llm,
             web_search=self._web_search,
+            settings=archived.settings,
             event_emitter=emitter,
         )
         if archived.plan:
@@ -422,6 +511,7 @@ class ResearchService:
             "run_id": runtime.run_id,
             "status": runtime.status.value,
             "plan": runtime.plan.model_dump() if runtime.plan else None,
+            "settings": runtime._settings.model_dump() if hasattr(runtime, "_settings") else None,
             "progress": runtime.progress.model_dump(),
             "error": error,
             "report": report_data,

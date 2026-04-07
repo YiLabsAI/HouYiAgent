@@ -102,6 +102,16 @@ describe('DeepResearchWorkspace', () => {
     expect(mockStore.createSession).toHaveBeenCalledWith('my topic', { depth: 'standard' });
   });
 
+  it('submits selected depth card', () => {
+    render(<DeepResearchWorkspace />);
+    fireEvent.change(screen.getByPlaceholderText(/What would you like to research/), {
+      target: { value: 'topic' },
+    });
+    fireEvent.click(screen.getByText('Deep').closest('button')!);
+    fireEvent.click(screen.getByRole('button', { name: /Start Research/i }));
+    expect(mockStore.createSession).toHaveBeenCalledWith('topic', { depth: 'deep' });
+  });
+
   it('shows planning phase', () => {
     mockStore.phase = 'planning';
     mockStore.plan = samplePlan;

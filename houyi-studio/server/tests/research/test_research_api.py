@@ -108,6 +108,25 @@ class TestListEndpoint:
         r = client.get("/api/research/runs")
         assert len(r.json()["runs"]) == 1
 
+    def test_list_default_mode_delegate(self, client, monkeypatch):
+        monkeypatch.delenv("HOUYI_RESEARCH_ORCHESTRATION_MODE", raising=False)
+        client.post("/api/research/runs", json={"query": "mode test"})
+        r = client.get("/api/research/runs")
+        assert r.status_code == 200
+        assert r.json()["runs"][0]["orchestration_mode"] == "delegate"
+
+    def test_list_keeps_explicit_mode(self, client):
+        client.post(
+            "/api/research/runs",
+            json={
+                "query": "mode direct",
+                "settings": {"depth": "quick", "orchestration_mode": "direct"},
+            },
+        )
+        r = client.get("/api/research/runs")
+        assert r.status_code == 200
+        assert r.json()["runs"][0]["orchestration_mode"] == "direct"
+
     def test_list_pagination_limit(self, client):
         for q in ["q1", "q2", "q3"]:
             client.post("/api/research/runs", json={"query": q})

@@ -88,7 +88,13 @@ async def main(args: argparse.Namespace) -> None:
 
     llm = _build_llm()
     ws = _build_web_search()
-    settings = ResearchSettings(depth=args.depth, orchestration_mode=args.mode)
+    settings_kwargs = {
+        "depth": args.depth,
+        "orchestration_mode": args.mode,
+    }
+    if args.max_agents is not None:
+        settings_kwargs["max_agents"] = args.max_agents
+    settings = ResearchSettings(**settings_kwargs)
 
     query_path = _trim_queries(Path(args.queries), args.limit)
 
@@ -142,6 +148,12 @@ def cli() -> None:
         default="direct",
         choices=["direct", "delegate", "autonomous"],
         help="Orchestration mode: direct (serial SC), delegate (parallel isolated SC), autonomous (parallel SC + SharedState)",
+    )
+    parser.add_argument(
+        "--max-agents",
+        type=int,
+        default=None,
+        help="Max sub-agents for delegate/autonomous modes. Omit to keep historical default behavior.",
     )
     parser.add_argument("--concurrency", type=int, default=3)
     parser.add_argument("--timeout", type=float, default=600, help="Per-query timeout (seconds)")

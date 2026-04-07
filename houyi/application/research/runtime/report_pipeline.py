@@ -250,8 +250,12 @@ class ReportPipeline:
             try:
                 await self._emit("research.pipeline_phase", phase="quality_evaluation")
                 t = time.perf_counter()
-                quality = await self._evaluator.evaluate(report, aggregated)
+                quality, quality_timings = await self._evaluator.evaluate_with_breakdown(
+                    report,
+                    aggregated,
+                )
                 timings["quality_ms"] = (time.perf_counter() - t) * 1000.0
+                timings.update(quality_timings)
             except Exception:
                 logger.warning(
                     "Quality evaluation failed — skipping (report still usable)",

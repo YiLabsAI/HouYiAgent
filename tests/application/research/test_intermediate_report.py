@@ -320,7 +320,9 @@ class TestPipelineRuntime:
         pipe._conflict_resolver.detect = AsyncMock(return_value=[])
         pipe._url_validator.validate = AsyncMock(side_effect=RuntimeError("url fail"))
         pipe._validator.validate = AsyncMock(side_effect=RuntimeError("validate fail"))
-        pipe._evaluator.evaluate = AsyncMock(side_effect=RuntimeError("quality fail"))
+        pipe._evaluator.evaluate_with_breakdown = AsyncMock(
+            side_effect=RuntimeError("quality fail")
+        )
 
         result = await pipe.run(
             _plan(),
@@ -358,7 +360,17 @@ class TestPipelineRuntime:
                 sections_needing_rewrite=1,
             )
         )
-        pipe._evaluator.evaluate = AsyncMock(return_value=QualityScore(overall=88.0))
+        pipe._evaluator.evaluate_with_breakdown = AsyncMock(
+            return_value=(
+                QualityScore(overall=88.0),
+                {
+                    "quality_race_ms": 0.0,
+                    "quality_fact_ms": 0.0,
+                    "quality_combine_ms": 0.0,
+                    "quality_eval_total_ms": 0.0,
+                },
+            )
+        )
 
         result = await pipe.run(
             _plan(),
@@ -402,7 +414,17 @@ class TestPipelineRuntime:
         pipe._conflict_resolver.detect = AsyncMock(return_value=[])
         pipe._url_validator.validate = AsyncMock(side_effect=_blocking_url_validate)
         pipe._validator.validate = AsyncMock(side_effect=_blocking_validation)
-        pipe._evaluator.evaluate = AsyncMock(return_value=QualityScore(overall=88.0))
+        pipe._evaluator.evaluate_with_breakdown = AsyncMock(
+            return_value=(
+                QualityScore(overall=88.0),
+                {
+                    "quality_race_ms": 0.0,
+                    "quality_fact_ms": 0.0,
+                    "quality_combine_ms": 0.0,
+                    "quality_eval_total_ms": 0.0,
+                },
+            )
+        )
 
         gate = asyncio.create_task(_release_when_both_started())
         result = await asyncio.wait_for(
@@ -495,7 +517,17 @@ class TestPipelineRuntime:
                 sections_needing_rewrite=2,
             )
         )
-        pipe._evaluator.evaluate = AsyncMock(return_value=QualityScore(overall=90.0))
+        pipe._evaluator.evaluate_with_breakdown = AsyncMock(
+            return_value=(
+                QualityScore(overall=90.0),
+                {
+                    "quality_race_ms": 0.0,
+                    "quality_fact_ms": 0.0,
+                    "quality_combine_ms": 0.0,
+                    "quality_eval_total_ms": 0.0,
+                },
+            )
+        )
 
         gate = asyncio.create_task(_release_when_parallel_started())
         result = await asyncio.wait_for(
