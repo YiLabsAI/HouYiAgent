@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -27,6 +28,8 @@ from houyi.skills.web_search.service import WebSearchService
 from houyi.skills.web_search.types import WebSearchResult
 
 logger = logging.getLogger(__name__)
+
+_MAX_QUERY_LENGTH = 380
 
 SearchEventCallback = Callable[[str, dict[str, Any]], Awaitable[None]]
 
@@ -283,10 +286,44 @@ def _parse_query_list(content: str) -> list[str]:
     try:
         parsed = json.loads(text)
         if isinstance(parsed, list):
-            return [str(q) for q in parsed[:5]]
+            return _normalize_queries([str(q) for q in parsed[:5]])
     except json.JSONDecodeError:
         pass
-    return [text] if text else []
+
+    numbered = _extract_numbered_queries(text)
+    if numbered:
+        return _normalize_queries(numbered[:5])
+
+    return _normalize_queries([text]) if text else []
+
+
+def _extract_numbered_queries(text: str) -> list[str]:
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    queries: list[str] = []
+    for line in lines:
+        line = line.lstrip("-• ")
+        match = re.match(
+            r"(?:\*\*)?query\s*\d+\s*(?:\*\*)?\s*[:：]\s*(?:\*\*)?\s*(.+)",
+            line,
+            re.I,
+        )
+        if match:
+            candidate = match.group(1).strip()
+            if candidate:
+                queries.append(candidate)
+    return queries
+
+
+def _normalize_queries(queries: list[str]) -> list[str]:
+    normalized: list[str] = []
+    for query in queries:
+        candidate = " ".join(query.split()).strip()
+        if not candidate:
+            continue
+        candidate = candidate[:_MAX_QUERY_LENGTH].rstrip()
+        if candidate:
+            normalized.append(candidate)
+    return normalized
 
 
 def _parse_sufficiency(content: str) -> tuple[bool, str]:

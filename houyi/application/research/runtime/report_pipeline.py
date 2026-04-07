@@ -47,6 +47,7 @@ class ReportPipelineResult:
     quality: QualityScore | None = None
     validation: ValidationReport | None = None
     conflicts: list[ConflictRecord] = field(default_factory=list)
+    phase_timings_ms: dict[str, float] = field(default_factory=dict)
 
 
 class ReportPipeline:
@@ -269,11 +270,13 @@ class ReportPipeline:
                 depth_val,
                 {k: round(v, 1) for k, v in timings.items()},
             )
+            rounded_timings = {k: round(v, 1) for k, v in timings.items()}
             return ReportPipelineResult(
                 report=report,
                 quality=quality,
                 validation=validation,
                 conflicts=conflicts,
+                phase_timings_ms=rounded_timings,
             )
         except Exception:
             timings["partial_total_ms"] = (time.perf_counter() - t_run0) * 1000.0

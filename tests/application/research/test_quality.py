@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from houyi.application.research.quality import QualityEvaluator
+from houyi.application.research.quality import QualityEvaluator, _safe_json
 from houyi.application.research.types import (
     AggregatedSources,
     ReportSection,
@@ -141,6 +141,45 @@ class TestGracefulDegradation:
         score = await ev.evaluate(_report(), _sources())
         assert score.race.overall == 0.0
         assert score.fact.citation_accuracy == 95.0
+
+
+class TestSafeJsonHardening:
+    def test_extracts_wrapped_jsonobject(self):
+        payload = 'Result follows:\n{"citation_accuracy": 88.5, "effective_citations": 7}\nThanks.'
+        data = _safe_json(payload)
+        assert data["citation_accuracy"] == 88.5
+        assert data["effective_citations"] == 7
+
+    def test_repairs_trailing_comma(self):
+        payload = '{"citation_accuracy": 77.0, "effective_citations": 6,}'
+        data = _safe_json(payload)
+        assert data["citation_accuracy"] == 77.0
+        assert data["effective_citations"] == 6
+
+    def test_empty_content_returns(self):
+        assert _safe_json("") == {}
+
+    def test_parses_json_from_unclosed_codefence(self):
+        payload = '```json\n{"citation_accuracy": 66.6, "effective_citations": 3}\n'
+        data = _safe_json(payload)
+        assert data["citation_accuracy"] == 66.6
+        assert data["effective_citations"] == 3
+
+    def test_closes_truncated_json_fragment(self):
+        payload = '{"citation_accuracy": 9.3, "effective_citations": 4, "details": [{"reference_id": "ref_a", "accurate": true, "reasoning": "ok"}'
+        data = _safe_json(payload)
+        assert data["citation_accuracy"] == 9.3
+        assert data["effective_citations"] == 4
+
+    def test_extracts_scalars(self):
+        payload = (
+            '{"citation_accuracy": 8.9, "effective_citations": 1, "details": ['
+            '{"reference_id": "ref_a", "accurate": false, "reasoning": "broken" '
+            '"reference_id": "ref_b"}]'
+        )
+        data = _safe_json(payload)
+        assert data["citation_accuracy"] == 8.9
+        assert data["effective_citations"] == 1
 
 
 class _FailingLLM(MockLLM):

@@ -50,6 +50,8 @@ class BenchmarkResult:
     article: str
     quality_score: float = 0.0
     duration_seconds: float = 0.0
+    search_elapsed_ms: float = 0.0
+    phase_timings_ms: dict[str, float] = field(default_factory=dict)
     error: str | None = None
 
 
@@ -126,6 +128,7 @@ class BenchmarkRunner:
         results: list[BenchmarkResult] = []
         out_path = Path(output_path)
         out_path.parent.mkdir(parents=True, exist_ok=True)
+        metrics_path = _metrics_output_path(out_path)
 
         async def _run_one(query: BenchmarkQuery) -> BenchmarkResult:
             async with sem:
@@ -137,6 +140,7 @@ class BenchmarkRunner:
             result = await coro
             results.append(result)
             _append_result(out_path, result)
+            _append_metrics(metrics_path, result)
             status = "OK" if not result.error else f"FAIL: {result.error[:60]}"
             logger.info(
                 "[%s] %s (%.1fs, quality=%.1f)",
@@ -187,6 +191,8 @@ class BenchmarkRunner:
                 article=article,
                 quality_score=overall,
                 duration_seconds=round(duration, 2),
+                search_elapsed_ms=runtime.search_elapsed_ms,
+                phase_timings_ms=runtime.phase_timings_ms,
                 error="internal timeout (report incomplete)" if not article else None,
             )
         except Exception as exc:
@@ -197,6 +203,8 @@ class BenchmarkRunner:
                 prompt=query.prompt,
                 article="",
                 duration_seconds=round(duration, 2),
+                search_elapsed_ms=0.0,
+                phase_timings_ms={},
                 error=str(exc),
             )
 
@@ -295,6 +303,25 @@ def _append_result(path: Path, result: BenchmarkResult) -> None:
     }
     with path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+
+def _append_metrics(path: Path, result: BenchmarkResult) -> None:
+    """Append per-case runtime metrics to a sidecar JSONL file."""
+    entry = {
+        "id": result.id,
+        "prompt": result.prompt,
+        "duration_seconds": result.duration_seconds,
+        "search_elapsed_ms": result.search_elapsed_ms,
+        "quality_score": result.quality_score,
+        "error": result.error,
+        "phase_timings_ms": result.phase_timings_ms,
+    }
+    with path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+
+def _metrics_output_path(path: Path) -> Path:
+    return path.with_name(f"{path.stem}.metrics{path.suffix}")
 
 
 def _build_summary(results: list[BenchmarkResult]) -> BenchmarkSummary:

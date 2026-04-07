@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any
 
 from houyi.adapters.llm.base import LLMAdapter
@@ -118,7 +119,9 @@ class QualityEvaluator:
         try:
             return await self.evaluate_race(report, reference_answer)
         except Exception:
-            logger.warning("RACE evaluation failed — returning zero-score placeholder", exc_info=True)
+            logger.warning(
+                "RACE evaluation failed — returning zero-score placeholder", exc_info=True
+            )
             return RACEScore()
 
     async def _safe_fact(
@@ -129,7 +132,9 @@ class QualityEvaluator:
         try:
             return await self.evaluate_fact(report, sources)
         except Exception:
-            logger.warning("FACT evaluation failed — returning zero-score placeholder", exc_info=True)
+            logger.warning(
+                "FACT evaluation failed — returning zero-score placeholder", exc_info=True
+            )
             return FACTScore()
 
     async def evaluate_race(
@@ -246,13 +251,150 @@ def _parse_fact(content: str) -> FACTScore:
 
 
 def _safe_json(content: str) -> dict:
-    text = content.strip()
-    if text.startswith("```"):
-        first_nl = text.index("\n")
-        last_fence = text.rfind("```")
-        text = text[first_nl + 1 : last_fence].strip()
+    text = _strip_code_fence(content.strip())
+    attempts: list[str] = []
+    if text:
+        attempts.append(text)
+
+    extracted = _extract_first_json_object(text)
+    if extracted and extracted not in attempts:
+        attempts.append(extracted)
+
+    if extracted:
+        repaired = _remove_trailing_commas(extracted)
+        if repaired and repaired not in attempts:
+            attempts.append(repaired)
+
+    recoverable = _close_json_fragment(text)
+    if recoverable and recoverable not in attempts:
+        attempts.append(recoverable)
+
+    last_exc: json.JSONDecodeError | None = None
+    for candidate in attempts:
+        try:
+            data = json.loads(candidate)
+            if isinstance(data, dict):
+                return data
+        except json.JSONDecodeError as exc:
+            last_exc = exc
+
+    scalar_fallback = _extract_quality_scalars(text)
+    if scalar_fallback:
+        return scalar_fallback
+
+    err_type = type(last_exc).__name__ if last_exc else "Unknown"
+    err_msg = last_exc.msg if last_exc else "No JSON object found"
+    preview = text[:200].replace("\n", "\\n")
+    logger.warning(
+        "Failed to parse quality evaluation JSON error_type=%s error_msg=%s content_len=%d content_preview=%r",
+        err_type,
+        err_msg,
+        len(text),
+        preview,
+    )
+    return {}
+
+
+def _strip_code_fence(text: str) -> str:
+    if not text.startswith("```"):
+        return text
+    first_nl = text.find("\n")
+    if first_nl == -1:
+        return text
+    body = text[first_nl + 1 :].strip()
+    if body.endswith("```"):
+        body = body[:-3].rstrip()
+    return body
+
+
+def _extract_first_json_object(text: str) -> str | None:
+    start = text.find("{")
+    if start == -1:
+        return None
+    decoder = json.JSONDecoder()
     try:
-        return json.loads(text)
+        parsed, consumed = decoder.raw_decode(text[start:])
     except json.JSONDecodeError:
-        logger.warning("Failed to parse quality evaluation JSON")
-        return {}
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    return text[start : start + consumed]
+
+
+def _remove_trailing_commas(text: str) -> str:
+    return re.sub(r",\s*([}\]])", r"\1", text)
+
+
+def _advance_json_scan_state(
+    ch: str,
+    *,
+    in_string: bool,
+    escaped: bool,
+    brace_open: int,
+    bracket_open: int,
+) -> tuple[bool, bool, int, int]:
+    if in_string:
+        if escaped:
+            return True, False, brace_open, bracket_open
+        if ch == "\\":
+            return True, True, brace_open, bracket_open
+        if ch == '"':
+            return False, False, brace_open, bracket_open
+        return True, False, brace_open, bracket_open
+
+    if ch == '"':
+        return True, False, brace_open, bracket_open
+    if ch == "{":
+        return False, False, brace_open + 1, bracket_open
+    if ch == "}":
+        return False, False, max(0, brace_open - 1), bracket_open
+    if ch == "[":
+        return False, False, brace_open, bracket_open + 1
+    if ch == "]":
+        return False, False, brace_open, max(0, bracket_open - 1)
+    return False, False, brace_open, bracket_open
+
+
+def _close_json_fragment(text: str) -> str | None:
+    start = text.find("{")
+    if start == -1:
+        return None
+
+    fragment = text[start:]
+    in_string = False
+    escaped = False
+    brace_open = 0
+    bracket_open = 0
+
+    for ch in fragment:
+        in_string, escaped, brace_open, bracket_open = _advance_json_scan_state(
+            ch,
+            in_string=in_string,
+            escaped=escaped,
+            brace_open=brace_open,
+            bracket_open=bracket_open,
+        )
+
+    repaired = fragment
+    if in_string:
+        repaired += '"'
+    if bracket_open > 0:
+        repaired += "]" * bracket_open
+    if brace_open > 0:
+        repaired += "}" * brace_open
+    repaired = _remove_trailing_commas(repaired)
+    return repaired
+
+
+def _extract_quality_scalars(text: str) -> dict[str, Any]:
+    data: dict[str, Any] = {}
+
+    citation_match = re.search(r'"citation_accuracy"\s*:\s*(-?\d+(?:\.\d+)?)', text)
+    if citation_match:
+        data["citation_accuracy"] = float(citation_match.group(1))
+
+    effective_match = re.search(r'"effective_citations"\s*:\s*(-?\d+)', text)
+    if effective_match:
+        data["effective_citations"] = int(effective_match.group(1))
+
+    return data

@@ -11,10 +11,12 @@ import pytest
 from houyi.arena.benchmark_runner import (
     BenchmarkResult,
     BenchmarkRunner,
+    _append_metrics,
     _append_result,
     _build_summary,
     _load_done_ids,
     _load_queries,
+    _metrics_output_path,
     _report_to_article,
 )
 
@@ -66,6 +68,31 @@ class TestAppendResult:
         lines = p.read_text().strip().split("\n")
         assert len(lines) == 2
         assert json.loads(lines[0])["id"] == "t1"
+
+
+class TestAppendMetrics:
+    def test_appends_metrics_jsonl(self, tmp_path: Path):
+        out_path = tmp_path / "out.jsonl"
+        metrics_path = _metrics_output_path(out_path)
+        result = BenchmarkResult(
+            id="t1",
+            prompt="Q",
+            article="A",
+            duration_seconds=12.5,
+            search_elapsed_ms=210.4,
+            quality_score=88.8,
+            phase_timings_ms={"report_generate_ms": 100.1, "total_ms": 300.3},
+        )
+
+        _append_metrics(metrics_path, result)
+
+        lines = metrics_path.read_text().strip().split("\n")
+        assert len(lines) == 1
+        row = json.loads(lines[0])
+        assert row["id"] == "t1"
+        assert row["duration_seconds"] == 12.5
+        assert row["search_elapsed_ms"] == 210.4
+        assert row["phase_timings_ms"]["total_ms"] == 300.3
 
 
 class TestBuildSummary:
@@ -145,6 +172,13 @@ class TestRunnerExecute:
         assert summary.total == 1
         mock_exec.assert_called_once()
         assert mock_exec.call_args[0][0].id == "2"
+        metrics_path = _metrics_output_path(out_path)
+        metrics = metrics_path.read_text().strip().split("\n")
+        assert len(metrics) == 1
+        metrics_row = json.loads(metrics[0])
+        assert metrics_row["id"] == "2"
+        assert metrics_row["search_elapsed_ms"] == 0.0
+        assert metrics_row["phase_timings_ms"] == {}
 
     async def test_error_captured(self, tmp_path: Path):
         q_path = tmp_path / "q.jsonl"

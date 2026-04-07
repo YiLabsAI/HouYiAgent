@@ -258,6 +258,6 @@ HouYi is built on and contributes to open standards:
 | Standard | Role in HouYi |
 |----------|---------------|
 | **[OpenTelemetry](https://opentelemetry.io/)** | Zero-config distributed tracing across LLM calls, tools, and agent state transitions |
-| **[SimpleSkill](https://simpleskill.io/)** | HouYi's native skill specification — cross-platform, governable, evaluable capability units (originated from this project) |
+| **[SimpleSkill](./docs/simpleskill-spec.md)** | HouYi's native skill specification — cross-platform, governable, evaluable capability units (originated from this project) |
 | **[MCP](https://modelcontextprotocol.io/)** | Model Context Protocol integration for external context sources |
 | **[A2A](https://github.com/google/A2A)** | Agent-to-Agent protocol with native Pub/Sub messaging for distributed multi-agent communication |

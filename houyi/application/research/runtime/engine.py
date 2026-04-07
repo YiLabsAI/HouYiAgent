@@ -192,6 +192,8 @@ class ResearchRuntime:
         self._aggregated: AggregatedSources | None = None
         self._report: ResearchReport | None = None
         self._quality: QualityScore | None = None
+        self._phase_timings_ms: dict[str, float] = {}
+        self._search_elapsed_ms: float = 0.0
 
         self._clarification: ClarificationResult | None = None
         self._validation: ValidationReport | None = None
@@ -315,6 +317,8 @@ class ResearchRuntime:
         self._aggregated = None
         self._report = None
         self._quality = None
+        self._phase_timings_ms = {}
+        self._search_elapsed_ms = 0.0
         self._error = None
         self._started_at = time.time()
         self._execution_phase = "search"
@@ -486,6 +490,14 @@ class ResearchRuntime:
         return self._quality
 
     @property
+    def phase_timings_ms(self) -> dict[str, float]:
+        return dict(self._phase_timings_ms)
+
+    @property
+    def search_elapsed_ms(self) -> float:
+        return self._search_elapsed_ms
+
+    @property
     def progress(self) -> ResearchProgress:
         total = len(self._plan.sub_questions) if self._plan else 0
         completed = len(self._search_results)
@@ -526,6 +538,7 @@ class ResearchRuntime:
         self._search_results = result.search_results
         self._aggregated = result.aggregated_sources
         self._intermediate_reports = result.intermediate_reports
+        self._search_elapsed_ms = result.search_elapsed_ms
 
     def _check_cancelled(self) -> None:
         """Raise ``asyncio.CancelledError`` if the runtime was cancelled."""
@@ -548,6 +561,7 @@ class ResearchRuntime:
         self._quality = result.quality
         self._validation = result.validation
         self._conflicts = result.conflicts
+        self._phase_timings_ms = result.phase_timings_ms
 
     async def _emit(self, event_type: str, **data: Any) -> None:
         await self._event_bridge.emit(event_type, **data)

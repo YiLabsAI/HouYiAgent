@@ -1038,7 +1038,9 @@ class TestSearchOneTimeout:
         async def _slow_search(sq, ctx):
             await asyncio.sleep(999)
 
-        with patch.object(session._search_coordinator, "search", _slow_search):
+        from houyi.application.research.runtime.search import SearchCoordinator
+
+        with patch.object(SearchCoordinator, "search", _slow_search):
             await session.execute()
 
         assert session.status == ResearchStatus.COMPLETED

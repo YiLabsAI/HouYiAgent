@@ -89,6 +89,25 @@ class TestParseHelpers:
     def test_parse_query_list_fallback(self):
         assert _parse_query_list("just a query") == ["just a query"]
 
+    def test_parse_query_list(self):
+        payload = (
+            "Thoughts...\n"
+            "**Query 1:** first focused query\n"
+            "**Query 2:** second focused query\n"
+            "**Query 3:** third focused query"
+        )
+        assert _parse_query_list(payload) == [
+            "first focused query",
+            "second focused query",
+            "third focused query",
+        ]
+
+    def test_parse_query_list_truncates(self):
+        payload = ["x" * 500]
+        parsed = _parse_query_list(json.dumps(payload))
+        assert len(parsed) == 1
+        assert len(parsed[0]) == 380
+
     def test_parse_sufficiency_true(self):
         ok, _ = _parse_sufficiency('{"sufficient": true, "rationale": "ok"}')
         assert ok is True

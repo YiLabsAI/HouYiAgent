@@ -22,6 +22,7 @@ class SynthesisResult:
     quality: QualityScore | None
     validation: ValidationReport | None
     conflicts: list[ConflictRecord]
+    phase_timings_ms: dict[str, float]
 
 
 class SynthesisCoordinator:
@@ -49,4 +50,5 @@ class SynthesisCoordinator:
             quality=result.quality,
             validation=result.validation,
             conflicts=result.conflicts,
+            phase_timings_ms=result.phase_timings_ms,
         )

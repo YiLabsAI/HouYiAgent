@@ -83,6 +83,7 @@ class GatheringResult:
     search_results: list[SearchResult]
     aggregated_sources: AggregatedSources
     intermediate_reports: list[Any]
+    search_elapsed_ms: float
 
 
 class GatheringCoordinator:
@@ -129,46 +130,61 @@ class GatheringCoordinator:
 
         depth = self._deps.settings.depth
         depth_s = depth.value if hasattr(depth, "value") else str(depth)
+        search_elapsed_ms = (time.perf_counter() - t_search) * 1000.0
         logger.info(
             "research.phase.search_done run_id=%s depth=%s elapsed_s=%.2f sub_questions=%d",
             self._deps.run_id,
             depth_s,
-            time.perf_counter() - t_search,
+            search_elapsed_ms / 1000.0,
             len(plan.sub_questions),
         )
         return GatheringResult(
             search_results=list(self._search_results),
             aggregated_sources=aggregated,
             intermediate_reports=intermediate_reports,
+            search_elapsed_ms=round(search_elapsed_ms, 1),
         )
 
     async def _search_direct(self, questions: list[Any]) -> None:
         total = len(questions)
+        pending = [
+            question for question in questions if question.question_id not in self._retry_checkpoint
+        ]
+
         for sub_question in questions:
-            self._deps.check_cancelled()
             cached = self._retry_checkpoint.get(sub_question.question_id)
             if cached:
                 await self._reuse_checkpoint(sub_question, cached, total)
-                continue
-            await self._deps.emit(
-                "research.step_started",
-                step_id=sub_question.question_id,
-                step=sub_question.question[:60],
-                total_steps=total,
-                completed_steps=len(self._search_results),
-                elapsed_seconds=self._deps.elapsed_seconds(),
-            )
-            result = await self._search_question(sub_question)
-            self._search_results.append(result)
-            await self._deps.emit(
-                "research.step_completed",
-                step_id=sub_question.question_id,
-                step=sub_question.question[:60],
-                total_steps=total,
-                completed_steps=len(self._search_results),
-                sources=len(result.sources),
-                elapsed_seconds=self._deps.elapsed_seconds(),
-            )
+
+        semaphore = asyncio.Semaphore(self._deps.settings.max_agents)
+
+        async def _run_one(sub_question: Any) -> SearchResult:
+            async with semaphore:
+                self._deps.check_cancelled()
+                await self._deps.emit(
+                    "research.step_started",
+                    step_id=sub_question.question_id,
+                    step=sub_question.question[:60],
+                    total_steps=total,
+                    completed_steps=len(self._search_results),
+                    elapsed_seconds=self._deps.elapsed_seconds(),
+                )
+                result = await self._search_question_isolated(sub_question)
+                await self._deps.emit(
+                    "research.step_completed",
+                    step_id=sub_question.question_id,
+                    step=sub_question.question[:60],
+                    total_steps=total,
+                    sources=len(result.sources),
+                    elapsed_seconds=self._deps.elapsed_seconds(),
+                )
+                return result
+
+        results = await asyncio.gather(
+            *[_run_one(item) for item in pending], return_exceptions=True
+        )
+        for sub_question, result in zip(pending, results, strict=True):
+            self._search_results.append(self._normalize_result(sub_question, result, "DIRECT"))
 
     async def _search_delegate(self, questions: list[Any]) -> None:
         total = len(questions)
