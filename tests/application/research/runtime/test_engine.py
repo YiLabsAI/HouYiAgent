@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from houyi.application.research.runtime import engine as _engine_mod
 from houyi.application.research.runtime.engine import ResearchRuntime, _parse_search_output
 from houyi.application.research.runtime.errors import (
     ResearchCancelledError,
@@ -183,7 +183,7 @@ _SEARCHER_RESPONSE_ALT = json.dumps(
 def _runtime_responses() -> list[str]:
     """Build the full LLM response sequence for a 2-question quick-depth session.
 
-    SearchCoordinator flow per question: query_gen → sufficiency.
+    SearchExecutor flow per question: query_gen → sufficiency.
     Full sequence: plan → (query_gen + sufficiency) × 2 → section*2 → summary → RACE → FACT.
     """
     return [
@@ -257,17 +257,21 @@ class TestConfirmPlan:
 
 class TestExecute:
     async def test_full_lifecycle_direct(self):
-        """DIRECT mode: SearchCoordinator (default, no Agent SDK in search)."""
-        llm = MockLLM(responses=_runtime_responses())
+        """DIRECT mode: SearchExecutor (default, no Agent SDK in search)."""
+        llm = MockLLM(responses=_one_q_responses())
         ws = make_mock_web_search()
-        session = ResearchRuntime(llm_adapter=llm, web_search=ws, settings=_QUICK)
+        session = ResearchRuntime(
+            llm_adapter=llm,
+            web_search=ws,
+            settings=ResearchSettings(depth="quick", max_agents=1),
+        )
         _stub_url_validation(session)
         await session.start("AI frameworks")
         await session.confirm_plan()
         await session.execute()
         assert session.status == ResearchStatus.COMPLETED
         report = await session.get_report()
-        assert len(report.sections) == 2
+        assert len(report.sections) == 1
         assert session.quality_score is not None
         assert session.quality_score.overall > 0
 
@@ -287,6 +291,28 @@ class TestExecute:
         _stub_report(session)
         await session.execute()
         assert session.status == ResearchStatus.COMPLETED
+
+    async def test_autonomous_query_dedupe(self):
+        llm = MockLLM(responses=[_PLAN_JSON])
+        ws = make_mock_web_search()
+        settings = ResearchSettings(orchestration_mode="autonomous", depth="quick")
+        session = ResearchRuntime(llm_adapter=llm, web_search=ws, settings=settings)
+        await session.start("AI frameworks")
+        await session.confirm_plan()
+        _stub_report(session)
+        with (
+            patch(
+                "houyi.application.research.runtime.search.SearchExecutor._generate_queries",
+                new=AsyncMock(return_value=["shared query"]),
+            ),
+            patch(
+                "houyi.application.research.runtime.search.SearchExecutor._evaluate_sufficiency",
+                new=AsyncMock(return_value=(True, "ok")),
+            ),
+        ):
+            await session.execute()
+        assert session.status == ResearchStatus.COMPLETED
+        assert ws.search.await_count == 1
         report = await session.get_report()
         assert report.title != ""
 
@@ -738,7 +764,7 @@ class TestBoundaryAndInteraction:
                 await session.execute()
         assert session.status == ResearchStatus.FAILED
 
-    async def test_search_agent_timeout_fallback(self):
+    async def test_search_executor_timeout_fallback(self):
         """Per-agent timeout produces empty SearchResult."""
         import asyncio
         from unittest.mock import patch
@@ -752,18 +778,20 @@ class TestBoundaryAndInteraction:
 
         async def _timeout_search(aw, timeout):
             # Real wait_for drives `aw`; raising immediately would leave the inner
-            # SearchCoordinator.search coroutine un-awaited (RuntimeWarning under xdist).
+            # SearchExecutor.search coroutine un-awaited (RuntimeWarning under xdist).
             if asyncio.iscoroutine(aw):
                 aw.close()
             raise TimeoutError()
 
-        with patch.object(_engine_mod.asyncio, "wait_for", side_effect=_timeout_search):
+        from houyi.application.research.runtime.search import SearchExecutor
+
+        with patch.object(SearchExecutor, "search", side_effect=_timeout_search):
             with patch.object(session, "_run_report"):
                 await session._run_search()
         assert session._search_results[0].sources == []
 
-    async def test_search_coordinator_error_falls_back(self):
-        """SearchCoordinator failure triggers Agent fallback."""
+    async def test_search_executor_error_fallback(self):
+        """SearchExecutor failure triggers Agent fallback."""
         llm = MockLLM(
             responses=[
                 _PLAN_ONE_Q,
@@ -805,8 +833,8 @@ class TestBoundaryAndInteraction:
         assert session._clarification is not None
         assert session._clarification.refined_query == "AI agent framework comparison 2026"
 
-    async def test_coordinator_finds_sources(self):
-        """SearchCoordinator returns sources through multi-round search."""
+    async def test_executor_finds_sources(self):
+        """SearchExecutor returns sources through multi-round search."""
         llm = MockLLM(responses=_one_q_responses())
         ws = make_mock_web_search()
         session = ResearchRuntime(llm_adapter=llm, web_search=ws, settings=_QUICK)
@@ -893,6 +921,53 @@ class TestBoundaryAndInteraction:
         assert len(received) >= 1
         types = {m.message_type.value for m in received}
         assert "task.delegate" in types or "task.result" in types
+
+    async def test_autonomous_shared_metadata(self):
+        llm = MockLLM(responses=[_PLAN_JSON])
+        ws = make_mock_web_search()
+        settings = ResearchSettings(orchestration_mode="autonomous", depth="quick")
+        session = ResearchRuntime(llm_adapter=llm, web_search=ws, settings=settings)
+        await session.start("AI frameworks")
+        await session.confirm_plan()
+        _stub_report(session)
+        with (
+            patch(
+                "houyi.application.research.runtime.search.SearchExecutor._generate_queries",
+                new=AsyncMock(return_value=["shared query"]),
+            ),
+            patch(
+                "houyi.application.research.runtime.search.SearchExecutor._evaluate_sufficiency",
+                new=AsyncMock(return_value=(True, "ok")),
+            ),
+        ):
+            await session.execute()
+        state = await session._shared_state.read(f"research_{session.run_id}")
+        assert "query_ledger" in state.metadata
+        assert "shared query" in state.metadata["query_ledger"]
+        assert state.metadata["shared_source_count"] >= 1
+
+    async def test_autonomous_provider_profile(self):
+        llm = MockLLM(responses=[_PLAN_JSON])
+        ws = make_mock_web_search()
+        settings = ResearchSettings(orchestration_mode="autonomous", depth="quick")
+        session = ResearchRuntime(llm_adapter=llm, web_search=ws, settings=settings)
+        await session.start("AI frameworks")
+        await session.confirm_plan()
+        _stub_report(session)
+        with (
+            patch(
+                "houyi.application.research.runtime.search.SearchExecutor._generate_queries",
+                new=AsyncMock(return_value=["shared query"]),
+            ),
+            patch(
+                "houyi.application.research.runtime.search.SearchExecutor._evaluate_sufficiency",
+                new=AsyncMock(return_value=(True, "ok")),
+            ),
+        ):
+            await session.execute()
+        state = await session._shared_state.read(f"research_{session.run_id}")
+        assert "preferred_providers" in state.metadata
+        assert "provider_successes" in state.metadata
 
     async def test_autonomous_mode_bus_bridge(self):
         """AUTONOMOUS mode agent events also flow through MessageBus."""
@@ -1063,7 +1138,7 @@ class TestStandardDepthPaths:
 
 
 class TestSearchOneTimeout:
-    async def test_search_coordinator_timeout(self):
+    async def test_search_executor_timeout(self):
         import asyncio
         from unittest.mock import patch
 
@@ -1080,9 +1155,9 @@ class TestSearchOneTimeout:
         async def _slow_search(sq, ctx):
             await asyncio.sleep(999)
 
-        from houyi.application.research.runtime.search import SearchCoordinator
+        from houyi.application.research.runtime.search import SearchExecutor
 
-        with patch.object(SearchCoordinator, "search", _slow_search):
+        with patch.object(SearchExecutor, "search", _slow_search):
             await session.execute()
 
         assert session.status == ResearchStatus.COMPLETED

@@ -1,12 +1,11 @@
-"""Unit tests for SearchCoordinator."""
-
 from __future__ import annotations
 
+import asyncio
 import json
 from unittest.mock import AsyncMock
 
 from houyi.application.research.runtime.search import (
-    SearchCoordinator,
+    SearchExecutor,
     _parse_query_list,
     _parse_sufficiency,
 )
@@ -29,7 +28,7 @@ class TestSearch:
             ]
         )
         ws = make_mock_web_search()
-        coord = SearchCoordinator(llm, ws, max_search_rounds=3)
+        coord = SearchExecutor(llm, ws, max_search_rounds=3)
         result = await coord.search(SubQuestion(question="What frameworks?"), _context())
         assert len(result.rounds) == 1
         assert result.rounds[0].sufficient is True
@@ -42,7 +41,7 @@ class TestSearch:
             responses.append(json.dumps({"sufficient": False, "rationale": "need more"}))
         llm = MockLLM(responses=responses)
         ws = make_mock_web_search()
-        coord = SearchCoordinator(llm, ws, max_search_rounds=3)
+        coord = SearchExecutor(llm, ws, max_search_rounds=3)
         result = await coord.search(SubQuestion(question="Deep dive?"), _context())
         assert result.exhausted is True
         assert len(result.rounds) == 3
@@ -55,7 +54,7 @@ class TestSearch:
             ]
         )
         ws = make_mock_web_search()
-        coord = SearchCoordinator(llm, ws)
+        coord = SearchExecutor(llm, ws)
         result = await coord.search(SubQuestion(question="Q?", expected_sources=10), _context())
         assert 0 <= result.coverage_score <= 1.0
 
@@ -73,10 +72,161 @@ class TestSearch:
             user_query="test",
             excluded_urls=["https://example.com/1"],
         )
-        coord = SearchCoordinator(llm, ws)
+        coord = SearchExecutor(llm, ws)
         result = await coord.search(SubQuestion(question="Q?"), ctx)
         urls = [s.url for s in result.sources]
         assert "https://example.com/1" not in urls
+
+    async def test_query_parallelism(self):
+        llm = MockLLM(
+            responses=[
+                '["q1", "q2"]',
+                json.dumps({"sufficient": True, "rationale": "ok"}),
+            ]
+        )
+        ws = make_mock_web_search()
+        started: set[str] = set()
+        release = asyncio.Event()
+
+        async def _search(query: str, *, max_results: int, include_content: bool):
+            started.add(query)
+            if len(started) >= 2:
+                release.set()
+            await asyncio.wait_for(release.wait(), timeout=1)
+            return await make_mock_web_search().search(
+                query,
+                max_results=max_results,
+                include_content=include_content,
+            )
+
+        ws.search = AsyncMock(side_effect=_search)
+        executor = SearchExecutor(llm, ws, max_query_parallelism=2)
+        await executor.search(SubQuestion(question="Q?"), _context())
+        assert started == {"q1", "q2"}
+
+    async def test_query_dedupe(self):
+        llm = MockLLM(
+            responses=[
+                '["q1", "q1", "q2"]',
+                json.dumps({"sufficient": True, "rationale": "ok"}),
+            ]
+        )
+        ws = make_mock_web_search()
+        executor = SearchExecutor(llm, ws)
+        result = await executor.search(SubQuestion(question="Q?"), _context())
+        assert ws.search.await_count == 2
+        assert result.rounds[0].skipped_queries == 1
+
+    async def test_query_cancel(self):
+        llm = MockLLM(
+            responses=[
+                '["q1", "q2"]',
+                json.dumps({"sufficient": True, "rationale": "ok"}),
+            ]
+        )
+        ws = make_mock_web_search()
+        cancelled = asyncio.Event()
+        events: list[tuple[str, dict]] = []
+
+        async def _search(query: str, *, max_results: int, include_content: bool):
+            if query == "q1":
+                return WebSearchResponse(
+                    query=query,
+                    provider="mock",
+                    results=[make_mock_web_search().search.return_value.results[0]],
+                    metadata=WebSearchMetadata(
+                        cached=False,
+                        cache_hit=False,
+                        latency_ms=10,
+                        provider="mock",
+                    ),
+                )
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                cancelled.set()
+                raise
+            raise AssertionError("unreachable")
+
+        async def _on_event(event_type: str, data: dict) -> None:
+            events.append((event_type, data))
+
+        ws.search = AsyncMock(side_effect=_search)
+        executor = SearchExecutor(llm, ws, max_query_parallelism=2, on_event=_on_event)
+        result = await executor.search(SubQuestion(question="Q?", expected_sources=1), _context())
+        assert result.rounds[0].cancelled_queries == 1
+        assert cancelled.is_set()
+        assert any(name == "search.query_cancelled" for name, _ in events)
+
+    async def test_timing_events(self):
+        llm = MockLLM(
+            responses=[
+                '["q1"]',
+                json.dumps({"sufficient": True, "rationale": "ok"}),
+            ]
+        )
+        ws = make_mock_web_search()
+        events: list[tuple[str, dict]] = []
+
+        async def _on_event(event_type: str, data: dict) -> None:
+            events.append((event_type, data))
+
+        executor = SearchExecutor(llm, ws, on_event=_on_event)
+        await executor.search(SubQuestion(question="Q?"), _context())
+        event_names = [name for name, _ in events]
+        assert "search.query_timing" in event_names
+        assert "search.round_timing" in event_names
+
+    async def test_collaboration_prompt(self):
+        class _CapturingLLM(MockLLM):
+            def __init__(self, responses: list[str]) -> None:
+                super().__init__(responses=responses)
+                self.prompts: list[str] = []
+
+            async def chat(self, messages: list, **kwargs):
+                self.prompts.append(str(messages[0]["content"]))
+                return await super().chat(messages, **kwargs)
+
+        llm = _CapturingLLM(
+            responses=[
+                '["q1"]',
+                json.dumps({"sufficient": True, "rationale": "ok"}),
+            ]
+        )
+        ws = make_mock_web_search()
+        snapshots = [
+            {
+                "peer_findings": ["peer finding"],
+                "peer_queries": ["peer query"],
+                "peer_gaps": ["missing benchmark"],
+                "preferred_providers": ["mock"],
+                "shared_source_count": 2,
+            }
+        ]
+
+        async def _snapshot(round_number: int) -> dict:
+            return snapshots[round_number - 1]
+
+        executor = SearchExecutor(llm, ws, get_collaboration_snapshot=_snapshot)
+        await executor.search(SubQuestion(question="Q?"), _context())
+        assert "Peer findings: peer finding" in llm.prompts[0]
+        assert "Peer queries already attempted: peer query" in llm.prompts[0]
+        assert "Preferred providers from collaboration: mock" in llm.prompts[0]
+        assert "Collaboration summary: shared_sources=2" in llm.prompts[1]
+
+    async def test_collaboration_stop(self):
+        llm = MockLLM(responses=[])
+        ws = make_mock_web_search()
+
+        async def _snapshot(round_number: int) -> dict:
+            return {"stop_reason": "peer already covered it"}
+
+        executor = SearchExecutor(llm, ws, get_collaboration_snapshot=_snapshot)
+        result = await executor.search(SubQuestion(question="Q?"), _context())
+        assert len(result.rounds) == 1
+        assert result.rounds[0].sufficient is True
+        assert result.rounds[0].rationale == "peer already covered it"
+        assert ws.search.await_count == 0
 
 
 class TestParseHelpers:
@@ -140,7 +290,7 @@ class TestBoundaryAndInteraction:
                 ),
             )
         )
-        coord = SearchCoordinator(llm, ws)
+        coord = SearchExecutor(llm, ws)
         result = await coord.search(SubQuestion(question="Nothing?"), _context())
         assert result.sources == []
         assert result.coverage_score == 0.0
@@ -154,7 +304,7 @@ class TestBoundaryAndInteraction:
         )
         ws = make_mock_web_search()
         ws.search = AsyncMock(side_effect=RuntimeError("network down"))
-        coord = SearchCoordinator(llm, ws)
+        coord = SearchExecutor(llm, ws)
         result = await coord.search(SubQuestion(question="Q?"), _context())
         assert result.sources == []
         assert len(result.rounds) == 1
@@ -167,6 +317,6 @@ class TestBoundaryAndInteraction:
             ]
         )
         ws = make_mock_web_search()
-        coord = SearchCoordinator(llm, ws)
+        coord = SearchExecutor(llm, ws)
         await coord.search(SubQuestion(question="Q?"), _context())
         assert ws.search.call_count == 2

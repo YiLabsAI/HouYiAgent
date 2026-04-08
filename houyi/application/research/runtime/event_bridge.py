@@ -84,6 +84,40 @@ class ResearchEventBridge:
                 question_id=data.get("question_id", ""),
                 query=data.get("query", ""),
             )
+            return
+        if event_type == "search.query_timing":
+            await self.emit(
+                "research.search_query_timing",
+                question_id=data.get("question_id", ""),
+                round=data.get("round", 0),
+                query=data.get("query", ""),
+                elapsed_ms=data.get("elapsed_ms", 0.0),
+                hit_count=data.get("hit_count", 0),
+                cancelled=data.get("cancelled", False),
+            )
+            return
+        if event_type == "search.query_cancelled":
+            await self.emit(
+                "research.search_query_cancelled",
+                question_id=data.get("question_id", ""),
+                round=data.get("round", 0),
+                query=data.get("query", ""),
+                reason=data.get("reason", ""),
+            )
+            return
+        if event_type == "search.round_timing":
+            await self.emit(
+                "research.search_round_timing",
+                question_id=data.get("question_id", ""),
+                round=data.get("round", 0),
+                elapsed_ms=data.get("elapsed_ms", 0.0),
+                query_count=data.get("query_count", 0),
+                skipped_queries=data.get("skipped_queries", 0),
+                cancelled_queries=data.get("cancelled_queries", 0),
+                hit_count=data.get("hit_count", 0),
+                source_count=data.get("source_count", 0),
+                sufficient=data.get("sufficient", False),
+            )
 
     async def emit_report_generation_end(
         self,

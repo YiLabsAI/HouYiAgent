@@ -46,7 +46,7 @@ Multi-provider web search with automatic fallback, caching, and content extracti
 | `WEB_SEARCH_CACHE_ENABLED` | `true` | Enable result caching |
 | `WEB_SEARCH_CACHE_TTL` | `300` | Cache TTL (seconds) |
 | `WEB_SEARCH_CACHE_MAX_SIZE` | `256` | Max cached entries |
-| `WEB_SEARCH_PROXY_ENABLED` | `false` | Enable proxy for requests |
+| `WEB_SEARCH_PROXY_POLICY` | `auto` | Proxy policy: `auto` or `off` |
 
 ## Parameters
 
@@ -70,14 +70,14 @@ Fallback chain is only built in step 3 (auto-detected mode). If provider is expl
 
 ### Proxy behavior
 
-Proxy is enabled only when `WEB_SEARCH_PROXY_ENABLED=true`.
-
-When enabled, proxy URL resolution order is:
+`WEB_SEARCH_PROXY_POLICY=auto` uses the detected proxy source in this order:
 1. `HOUYI_PROXY_URL` (explicit override)
 2. System HTTPS proxy
 3. System HTTP proxy
 
-When disabled (default), providers are created with `proxy_url=None`.
+If no explicit or system proxy exists, `auto` resolves to direct network access.
+
+`WEB_SEARCH_PROXY_POLICY=off` disables explicit proxy injection and actively suppresses environment proxy inheritance inside provider requests.
 
 ### `mode="browse"` behavior
 
@@ -89,8 +89,8 @@ When disabled (default), providers are created with `proxy_url=None`.
 ## Troubleshooting quick checks
 
 1. **Unsure whether proxy is active**
-   - Check `WEB_SEARCH_PROXY_ENABLED` and `HOUYI_PROXY_URL` in runtime env.
-   - If enabled, verify system proxy is also correct.
+   - Check `WEB_SEARCH_PROXY_POLICY` and `HOUYI_PROXY_URL` in runtime env.
+   - If policy is `auto`, verify system proxy is also correct.
 2. **No fallback observed**
    - Confirm `provider` is not set in tool input and `WEB_SEARCH_PROVIDER` is unset.
 3. **`snippet` and `content` look similar in browse mode**

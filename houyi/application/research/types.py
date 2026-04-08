@@ -21,7 +21,7 @@ from pydantic import BaseModel, Field
 class OrchestrationMode(str, Enum):
     """Multi-agent orchestration strategy for a research session.
 
-    DIRECT     — SearchCoordinator (direct LLM + WebSearch, no Agent SDK).
+    DIRECT     — SearchExecutor (direct LLM + WebSearch, no Agent SDK).
     DELEGATE   — AgentTeamManager spawns one agent per sub-question, joins
                  sequentially (supervisor pattern).
     AUTONOMOUS — AgentTeamManager spawns all agents concurrently, joins all
@@ -172,7 +172,7 @@ class ResearchPlan(BaseModel):
 
 
 class SearchContext(BaseModel):
-    """Context passed to SearchCoordinator for a sub-question search."""
+    """Context passed to SearchExecutor for a sub-question search."""
 
     run_id: str
     plan_id: str
@@ -182,7 +182,8 @@ class SearchContext(BaseModel):
     prior_findings: list[str] = Field(default_factory=list)
     excluded_urls: list[str] = Field(default_factory=list)
     preferred_domains: list[str] = Field(default_factory=list)
-    max_results_per_round: int = 8
+    max_results_per_query: int = 0
+    max_query_parallelism: int = 0
     max_total_sources: int = 100
 
 
@@ -207,6 +208,9 @@ class SearchRound(BaseModel):
     hits: list[SearchHit] = Field(default_factory=list)
     sufficient: bool = False
     rationale: str = ""
+    elapsed_ms: float = 0.0
+    skipped_queries: int = 0
+    cancelled_queries: int = 0
 
 
 class SourceReference(BaseModel):

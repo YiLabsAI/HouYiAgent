@@ -2,8 +2,8 @@
 
 Three orchestration modes control the search phase:
 
-- **DIRECT** — single ``SearchCoordinator``, serial execution, shared context.
-- **DELEGATE** — Supervisor fans out N isolated ``SearchCoordinator`` instances
+- **DIRECT** — single ``SearchExecutor``, serial execution, shared context.
+- **DELEGATE** — Supervisor fans out N isolated ``SearchExecutor`` instances
   in parallel; each has a clean context with no prior_findings pollution.
 - **AUTONOMOUS** — parallel isolated coordinators with ``SharedState``
   collaboration; agents share discoveries and adjust search strategies.
@@ -35,6 +35,10 @@ from houyi.application.research.planner import ResearchPlanner
 from houyi.application.research.quality import QualityEvaluator
 from houyi.application.research.report import ReportGenerator
 from houyi.application.research.runtime.clarification import ClarificationAgent, ClarificationResult
+from houyi.application.research.runtime.coordinator import (
+    CoordinatorServices,
+    ResearchCoordinator,
+)
 from houyi.application.research.runtime.errors import (
     ResearchCancelledError,
     ResearchPlanMissingError,
@@ -43,7 +47,6 @@ from houyi.application.research.runtime.errors import (
     ResearchTimeoutError,
 )
 from houyi.application.research.runtime.event_bridge import ResearchEventBridge
-from houyi.application.research.runtime.gathering import GatheringCoordinator, GatheringDeps
 from houyi.application.research.runtime.intermediate import (
     IntermediateReport,
     IntermediateReportGenerator,
@@ -54,7 +57,7 @@ from houyi.application.research.runtime.planning import (
 )
 from houyi.application.research.runtime.processing import process_agent_search_output
 from houyi.application.research.runtime.report_pipeline import ReportPipeline
-from houyi.application.research.runtime.search import SearchCoordinator
+from houyi.application.research.runtime.search import SearchExecutor
 from houyi.application.research.runtime.synthesis import SynthesisCoordinator
 from houyi.application.research.runtime.time_policy import TimeBudgetPolicy
 from houyi.application.research.runtime.tools import WebSearchTool
@@ -135,11 +138,12 @@ class ResearchRuntime:
         self._planner = ResearchPlanner(llm_adapter, **llm_kwargs)
         self._aggregator = SourceAggregator()
         self._clarifier = ClarificationAgent(llm_adapter, **llm_kwargs)
-        self._search_coordinator = SearchCoordinator(
+        self._search_executor = SearchExecutor(
             llm_adapter,
             web_search,
             max_search_rounds=self._settings.max_search_rounds,
             on_event=self._event_bridge.on_search_event,
+            check_cancelled=self._check_cancelled,
             **llm_kwargs,
         )
         self._web_search_tool = WebSearchTool(web_search)
@@ -157,8 +161,8 @@ class ResearchRuntime:
             web_search=web_search,
             emit=self._emit,
         )
-        self._gathering = GatheringCoordinator(
-            GatheringDeps(
+        self._research = ResearchCoordinator(
+            CoordinatorServices(
                 run_id=self.run_id,
                 llm_adapter=self._llm_adapter,
                 web_search=self._web_search,
@@ -167,7 +171,7 @@ class ResearchRuntime:
                 shared_state=self._shared_state,
                 aggregator=self._aggregator,
                 report_pipeline=self._report_pipeline,
-                search_coordinator=self._search_coordinator,
+                search_executor=self._search_executor,
                 search_event_handler=self._event_bridge.on_search_event,
                 event_emitter=self._emitter,
                 emit=self._emit,
@@ -287,7 +291,7 @@ class ResearchRuntime:
         Timeout varies by mode and depth (report budget: quick 600s / standard 1200s / deep 1500s):
         - DIRECT: remaining×120s + report budget (remaining = sub-questions not in checkpoint).
         - DELEGATE/AUTONOMOUS: batch×300 + report budget + extras; all-checkpoint → report budget only.
-        Each individual SearchCoordinator also has a 300s hard cap.
+        Each individual SearchExecutor also has a 300s hard cap.
         """
         if not self._plan:
             raise ResearchPlanMissingError("No plan — call start() first")
@@ -525,18 +529,18 @@ class ResearchRuntime:
         """Search all sub-questions using the configured orchestration mode.
 
         Modes:
-          DIRECT     — Single SearchCoordinator, serial, shared context
+          DIRECT     — Single SearchExecutor, serial, shared context
                        (prior_findings accumulate across questions).
-          DELEGATE   — Supervisor fans out N isolated SearchCoordinators
+          DELEGATE   — Supervisor fans out N isolated SearchExecutors
                        in parallel; no prior_findings pollution.
-          AUTONOMOUS — Parallel isolated SearchCoordinators with SharedState
+          AUTONOMOUS — Parallel isolated SearchExecutors with SharedState
                        collaboration; agents see each other's discoveries.
 
         Respects ``depends_on``: questions are topologically sorted so
         dependencies are searched first, with priority as tiebreaker.
         """
         assert self._plan is not None
-        result = await self._gathering.run(
+        result = await self._research.run(
             plan=self._plan,
             retry_checkpoint=getattr(self, "_retry_checkpoint", {}),
             intermediate_reuse_by_qid=getattr(self, "_intermediate_reuse_by_qid", None) or {},

@@ -1,3 +1,12 @@
+"""Research search orchestration core.
+
+This module owns cross-sub-question execution for Deep Research. The
+coordinator selects the orchestration strategy for `direct`, `delegate`, and
+`autonomous` modes, controls concurrency, emits lifecycle events, and routes
+each sub-question into the shared `SearchExecutor` kernel or the agent-based
+fallback path when needed.
+"""
+
 from __future__ import annotations
 
 import asyncio
@@ -14,7 +23,7 @@ from houyi.application.research.runtime.processing import (
     process_sub_question_execution_order,
 )
 from houyi.application.research.runtime.report_pipeline import ReportPipeline
-from houyi.application.research.runtime.search import SearchCoordinator
+from houyi.application.research.runtime.search import SearchExecutor
 from houyi.application.research.runtime.tools import WebSearchTool
 from houyi.application.research.types import (
     AggregatedSources,
@@ -58,7 +67,14 @@ When finished, respond with ONLY a JSON object (no markdown fences):
 
 
 @dataclass(slots=True)
-class GatheringDeps:
+class CoordinatorServices:
+    """Immutable runtime dependencies injected into `ResearchCoordinator`.
+
+    This keeps the coordinator itself focused on orchestration logic instead
+    of construction logic, and makes the execution contract explicit at the
+    top-level runtime composition boundary.
+    """
+
     run_id: str
     llm_adapter: LLMAdapter
     web_search: WebSearchService
@@ -67,7 +83,7 @@ class GatheringDeps:
     shared_state: SharedStateBackend
     aggregator: SourceAggregator
     report_pipeline: ReportPipeline
-    search_coordinator: SearchCoordinator
+    search_executor: SearchExecutor
     search_event_handler: Callable[[str, dict[str, Any]], Awaitable[None]]
     event_emitter: EventEmitter | None
     emit: Callable[..., Awaitable[None]]
@@ -79,15 +95,127 @@ class GatheringDeps:
 
 
 @dataclass(slots=True)
-class GatheringResult:
+class SearchPhaseResult:
+    """Search-phase outputs produced by `ResearchCoordinator.run()`."""
+
     search_results: list[SearchResult]
     aggregated_sources: AggregatedSources
     intermediate_reports: list[Any]
     search_elapsed_ms: float
 
 
-class GatheringCoordinator:
-    def __init__(self, deps: GatheringDeps) -> None:
+@dataclass(slots=True)
+class _AutonomousCollaborationState:
+    lock: asyncio.Lock
+    seen_queries: set[str]
+    seen_urls: set[str]
+    findings_by_question: dict[str, list[dict[str, str]]]
+    provider_successes: dict[str, int]
+    provider_failures: dict[str, int]
+    gaps_by_question: dict[str, list[str]]
+
+    async def claim_query(self, query: str) -> bool:
+        async with self.lock:
+            if query in self.seen_queries:
+                return False
+            self.seen_queries.add(query)
+            return True
+
+    async def claim_url(self, url: str) -> bool:
+        async with self.lock:
+            if url in self.seen_urls:
+                return False
+            self.seen_urls.add(url)
+            return True
+
+    async def record_query_outcome(self, provider: str, hit_count: int) -> None:
+        provider_name = (provider or "").strip().lower()
+        if not provider_name:
+            return
+        async with self.lock:
+            target = self.provider_successes if hit_count > 0 else self.provider_failures
+            target[provider_name] = target.get(provider_name, 0) + 1
+
+    async def record_findings(self, question_id: str, findings: list[dict[str, str]]) -> None:
+        if not findings:
+            return
+        async with self.lock:
+            existing = self.findings_by_question.setdefault(question_id, [])
+            seen = {
+                (item.get("url", ""), item.get("snippet", ""), item.get("title", ""))
+                for item in existing
+            }
+            for finding in findings:
+                key = (
+                    finding.get("url", ""),
+                    finding.get("snippet", ""),
+                    finding.get("title", ""),
+                )
+                if key in seen:
+                    continue
+                existing.append(finding)
+                seen.add(key)
+
+    async def record_gaps(self, question_id: str, gaps: list[str]) -> None:
+        async with self.lock:
+            cleaned = [gap.strip() for gap in gaps if gap and gap.strip()]
+            self.gaps_by_question[question_id] = cleaned
+
+    async def snapshot(
+        self, *, question_id: str, expected_sources: int, round_number: int
+    ) -> dict[str, Any]:
+        async with self.lock:
+            peer_findings = [
+                finding.get("snippet", "")
+                for owner, findings in self.findings_by_question.items()
+                if owner != question_id
+                for finding in findings
+                if finding.get("snippet")
+            ]
+            peer_queries = sorted(self.seen_queries)
+            peer_gaps = [
+                gap
+                for owner, gaps in self.gaps_by_question.items()
+                if owner != question_id
+                for gap in gaps
+            ]
+            preferred_providers = _rank_provider_preferences(
+                self.provider_successes,
+                self.provider_failures,
+            )
+            stop_reason = None
+            if (
+                round_number > 1
+                and len(self.seen_urls) >= max(expected_sources, 1)
+                and not peer_gaps
+            ):
+                stop_reason = (
+                    "Peer collaboration already covers enough sources; stop duplicate search"
+                )
+            return {
+                "peer_findings": peer_findings,
+                "peer_queries": peer_queries,
+                "peer_gaps": peer_gaps,
+                "preferred_providers": preferred_providers,
+                "shared_source_count": len(self.seen_urls),
+                "stop_reason": stop_reason,
+                "provider_successes": dict(self.provider_successes),
+                "provider_failures": dict(self.provider_failures),
+            }
+
+
+class ResearchCoordinator:
+    """Top-level orchestrator for the research search phase.
+
+    Responsibilities:
+    - choose mode-specific sub-question execution strategy
+    - enforce cross-question concurrency limits
+    - preserve retry / checkpoint semantics
+    - bridge shared-state collaboration for `autonomous`
+    - degrade to the agent fallback path when the core search executor fails
+    """
+
+    def __init__(self, deps: CoordinatorServices) -> None:
         self._deps = deps
         self._plan: ResearchPlan | None = None
         self._retry_checkpoint: dict[str, SearchResult] = {}
@@ -100,7 +228,7 @@ class GatheringCoordinator:
         plan: ResearchPlan,
         retry_checkpoint: dict[str, SearchResult],
         intermediate_reuse_by_qid: dict[str, Any],
-    ) -> GatheringResult:
+    ) -> SearchPhaseResult:
         self._plan = plan
         self._retry_checkpoint = retry_checkpoint
         self._intermediate_reuse_by_qid = intermediate_reuse_by_qid
@@ -128,17 +256,13 @@ class GatheringCoordinator:
                 checkpoint_question_ids=frozenset(self._retry_checkpoint.keys()),
             )
 
-        depth = self._deps.settings.depth
-        depth_s = depth.value if hasattr(depth, "value") else str(depth)
         search_elapsed_ms = (time.perf_counter() - t_search) * 1000.0
         logger.info(
-            "research.phase.search_done run_id=%s depth=%s elapsed_s=%.2f sub_questions=%d",
-            self._deps.run_id,
-            depth_s,
+            "Research search completed in %.2fs for %d questions",
             search_elapsed_ms / 1000.0,
             len(plan.sub_questions),
         )
-        return GatheringResult(
+        return SearchPhaseResult(
             search_results=list(self._search_results),
             aggregated_sources=aggregated,
             intermediate_reports=intermediate_reports,
@@ -238,76 +362,37 @@ class GatheringCoordinator:
     async def _search_autonomous(self, questions: list[Any]) -> None:
         total = len(questions)
         state_id = f"research_{self._deps.run_id}"
+        collaboration = _AutonomousCollaborationState(
+            lock=asyncio.Lock(),
+            seen_queries=set(),
+            seen_urls=set(),
+            findings_by_question={},
+            provider_successes={},
+            provider_failures={},
+            gaps_by_question={},
+        )
         pending = [
             question for question in questions if question.question_id not in self._retry_checkpoint
         ]
 
-        for sub_question in pending:
-            await self._deps.emit(
-                "research.agent_spawned",
-                agent_id=f"{self._deps.run_id}_{sub_question.question_id}",
-                agent_name=sub_question.question[:60],
-                task=sub_question.question,
-            )
-
-        for sub_question in questions:
-            cached = self._retry_checkpoint.get(sub_question.question_id)
-            if not cached:
-                continue
-            await self._reuse_checkpoint(sub_question, cached, total)
-            for source in cached.sources:
-                if source.snippet:
-                    await self._deps.shared_state.write(
-                        state_id,
-                        {
-                            "findings": [
-                                {"question_id": sub_question.question_id, "snippet": source.snippet}
-                            ]
-                        },
-                    )
+        await self._emit_autonomous_spawns(pending)
+        await self._seed_autonomous_collaboration(
+            questions=questions,
+            total=total,
+            state_id=state_id,
+            collaboration=collaboration,
+        )
 
         semaphore = asyncio.Semaphore(self._deps.settings.max_agents)
 
         async def _run_one(sub_question: Any) -> SearchResult:
             async with semaphore:
-                self._deps.check_cancelled()
-                await self._deps.emit(
-                    "research.step_started",
-                    step_id=sub_question.question_id,
-                    step=sub_question.question[:60],
-                    total_steps=total,
-                    completed_steps=len(self._search_results),
-                    elapsed_seconds=self._deps.elapsed_seconds(),
+                return await self._run_autonomous_question(
+                    sub_question=sub_question,
+                    total=total,
+                    state_id=state_id,
+                    collaboration=collaboration,
                 )
-                state = await self._deps.shared_state.read(state_id)
-                peer_findings = [
-                    item.get("snippet", "")
-                    for item in state.findings
-                    if item.get("question_id") != sub_question.question_id
-                ]
-                result = await self._search_question_isolated(
-                    sub_question,
-                    peer_findings=[item for item in peer_findings if item],
-                )
-                await self._deps.shared_state.write(
-                    state_id,
-                    {
-                        "findings": [
-                            {"question_id": sub_question.question_id, "snippet": source.snippet}
-                            for source in result.sources
-                            if source.snippet
-                        ],
-                    },
-                )
-                await self._deps.emit(
-                    "research.step_completed",
-                    step_id=sub_question.question_id,
-                    step=sub_question.question[:60],
-                    total_steps=total,
-                    sources=len(result.sources),
-                    elapsed_seconds=self._deps.elapsed_seconds(),
-                )
-                return result
 
         results = await asyncio.gather(
             *[_run_one(item) for item in pending], return_exceptions=True
@@ -321,6 +406,172 @@ class GatheringCoordinator:
                 status="completed" if normalized.sources else "failed",
                 summary=normalized.summary[:200],
             )
+
+    async def _emit_autonomous_spawns(self, pending: list[Any]) -> None:
+        for sub_question in pending:
+            await self._deps.emit(
+                "research.agent_spawned",
+                agent_id=f"{self._deps.run_id}_{sub_question.question_id}",
+                agent_name=sub_question.question[:60],
+                task=sub_question.question,
+            )
+
+    async def _seed_autonomous_collaboration(
+        self,
+        *,
+        questions: list[Any],
+        total: int,
+        state_id: str,
+        collaboration: _AutonomousCollaborationState,
+    ) -> None:
+        for sub_question in questions:
+            cached = self._retry_checkpoint.get(sub_question.question_id)
+            if not cached:
+                continue
+            await self._reuse_checkpoint(sub_question, cached, total)
+            await self._claim_cached_round_queries(cached, collaboration)
+            await self._claim_cached_source_urls(cached, collaboration)
+            await self._record_autonomous_result(collaboration, sub_question.question_id, cached)
+            await self._write_shared_findings(state_id, sub_question.question_id, cached.sources)
+            await self._write_shared_metadata(state_id, collaboration)
+
+    async def _claim_cached_round_queries(
+        self,
+        cached: SearchResult,
+        collaboration: _AutonomousCollaborationState,
+    ) -> None:
+        for search_round in cached.rounds:
+            for query in search_round.queries:
+                normalized = _canonical_collaboration_query(query)
+                if normalized:
+                    await collaboration.claim_query(normalized)
+
+    async def _claim_cached_source_urls(
+        self,
+        cached: SearchResult,
+        collaboration: _AutonomousCollaborationState,
+    ) -> None:
+        for source in cached.sources:
+            if source.url:
+                await collaboration.claim_url(source.url)
+
+    async def _run_autonomous_question(
+        self,
+        *,
+        sub_question: Any,
+        total: int,
+        state_id: str,
+        collaboration: _AutonomousCollaborationState,
+    ) -> SearchResult:
+        self._deps.check_cancelled()
+        await self._deps.emit(
+            "research.step_started",
+            step_id=sub_question.question_id,
+            step=sub_question.question[:60],
+            total_steps=total,
+            completed_steps=len(self._search_results),
+            elapsed_seconds=self._deps.elapsed_seconds(),
+        )
+        peer_findings = await self._read_peer_findings(state_id, sub_question.question_id)
+        result = await self._search_question_isolated(
+            sub_question,
+            peer_findings=peer_findings,
+            claim_query=collaboration.claim_query,
+            claim_url=collaboration.claim_url,
+            on_event=self._build_autonomous_event_handler(collaboration),
+            get_collaboration_snapshot=lambda round_number: collaboration.snapshot(
+                question_id=sub_question.question_id,
+                expected_sources=sub_question.expected_sources,
+                round_number=round_number,
+            ),
+        )
+        await self._record_autonomous_result(collaboration, sub_question.question_id, result)
+        await self._write_shared_findings(state_id, sub_question.question_id, result.sources)
+        await self._write_shared_metadata(state_id, collaboration)
+        await self._deps.emit(
+            "research.step_completed",
+            step_id=sub_question.question_id,
+            step=sub_question.question[:60],
+            total_steps=total,
+            sources=len(result.sources),
+            elapsed_seconds=self._deps.elapsed_seconds(),
+        )
+        return result
+
+    async def _read_peer_findings(self, state_id: str, question_id: str) -> list[str]:
+        state = await self._deps.shared_state.read(state_id)
+        return [
+            item.get("snippet", "")
+            for item in state.findings
+            if item.get("question_id") != question_id and item.get("snippet")
+        ]
+
+    async def _write_shared_findings(
+        self,
+        state_id: str,
+        question_id: str,
+        sources: list[Any],
+    ) -> None:
+        findings = [
+            {"question_id": question_id, "snippet": source.snippet}
+            for source in sources
+            if source.snippet
+        ]
+        if findings:
+            await self._deps.shared_state.write(state_id, {"findings": findings})
+
+    async def _write_shared_metadata(
+        self,
+        state_id: str,
+        collaboration: _AutonomousCollaborationState,
+    ) -> None:
+        snapshot = await collaboration.snapshot(question_id="", expected_sources=1, round_number=1)
+        metadata = {
+            "query_ledger": snapshot.get("peer_queries", []),
+            "preferred_providers": snapshot.get("preferred_providers", []),
+            "provider_successes": snapshot.get("provider_successes", {}),
+            "provider_failures": snapshot.get("provider_failures", {}),
+            "peer_gaps": snapshot.get("peer_gaps", []),
+            "shared_source_count": snapshot.get("shared_source_count", 0),
+        }
+        await self._deps.shared_state.write(state_id, {"metadata": metadata})
+
+    async def _record_autonomous_result(
+        self,
+        collaboration: _AutonomousCollaborationState,
+        question_id: str,
+        result: SearchResult,
+    ) -> None:
+        findings = [
+            {
+                "url": source.url or "",
+                "title": source.title,
+                "snippet": source.snippet,
+            }
+            for source in result.sources
+            if source.snippet or source.url or source.title
+        ]
+        await collaboration.record_findings(question_id, findings)
+        gaps = [
+            search_round.rationale
+            for search_round in result.rounds
+            if not search_round.sufficient and search_round.rationale
+        ]
+        await collaboration.record_gaps(question_id, gaps)
+
+    def _build_autonomous_event_handler(
+        self,
+        collaboration: _AutonomousCollaborationState,
+    ) -> Callable[[str, dict[str, Any]], Awaitable[None]]:
+        async def _handler(event_type: str, data: dict[str, Any]) -> None:
+            if event_type == "search.query_timing":
+                await collaboration.record_query_outcome(
+                    str(data.get("provider", "")),
+                    int(data.get("hit_count", 0) or 0),
+                )
+            await self._deps.search_event_handler(event_type, data)
+
+        return _handler
 
     async def _reuse_checkpoint(self, sub_question: Any, cached: SearchResult, total: int) -> None:
         self._search_results.append(cached)
@@ -379,12 +630,12 @@ class GatheringCoordinator:
                 ],
             )
             return await asyncio.wait_for(
-                self._deps.search_coordinator.search(sub_question, context),
+                self._deps.search_executor.search(sub_question, context),
                 timeout=self._deps.agent_timeout_seconds(),
             )
         except TimeoutError:
             logger.warning(
-                "SearchCoordinator timed out after %ds for %s",
+                "SearchExecutor timed out after %ds for %s",
                 self._deps.agent_timeout_seconds(),
                 sub_question.question_id,
             )
@@ -397,7 +648,7 @@ class GatheringCoordinator:
             )
         except Exception:
             logger.warning(
-                "SearchCoordinator failed for %s, falling back to agent",
+                "SearchExecutor failed for %s, falling back to agent",
                 sub_question.question_id,
                 exc_info=True,
             )
@@ -426,14 +677,22 @@ class GatheringCoordinator:
         sub_question: Any,
         *,
         peer_findings: list[str] | None = None,
+        claim_query: Callable[[str], Awaitable[bool]] | None = None,
+        claim_url: Callable[[str], Awaitable[bool]] | None = None,
+        on_event: Callable[[str, dict[str, Any]], Awaitable[None]] | None = None,
+        get_collaboration_snapshot: Callable[[int], Awaitable[dict[str, Any]]] | None = None,
     ) -> SearchResult:
         self._deps.check_cancelled()
         assert self._plan is not None
-        coordinator = SearchCoordinator(
+        search_executor = SearchExecutor(
             self._deps.llm_adapter,
             self._deps.web_search,
             max_search_rounds=self._deps.settings.max_search_rounds,
-            on_event=self._deps.search_event_handler,
+            on_event=on_event or self._deps.search_event_handler,
+            claim_query=claim_query,
+            claim_url=claim_url,
+            check_cancelled=self._deps.check_cancelled,
+            get_collaboration_snapshot=get_collaboration_snapshot,
             **self._deps.llm_kwargs,
         )
         context = SearchContext(
@@ -445,7 +704,7 @@ class GatheringCoordinator:
         )
         try:
             return await asyncio.wait_for(
-                coordinator.search(sub_question, context),
+                search_executor.search(sub_question, context),
                 timeout=self._deps.agent_timeout_seconds(),
             )
         except TimeoutError:
@@ -479,3 +738,23 @@ class GatheringCoordinator:
             f"Expected sources: {sub_question.expected_sources}\n\n"
             f"Search the web and collect relevant, diverse sources."
         )
+
+
+def _canonical_collaboration_query(query: str) -> str:
+    return " ".join(query.split()).strip().lower()
+
+
+def _rank_provider_preferences(
+    successes: dict[str, int],
+    failures: dict[str, int],
+) -> list[str]:
+    providers = set(successes) | set(failures)
+    ranked = sorted(
+        providers,
+        key=lambda item: (
+            -(successes.get(item, 0) - failures.get(item, 0)),
+            -successes.get(item, 0),
+            item,
+        ),
+    )
+    return [provider for provider in ranked if successes.get(provider, 0) > 0][:3]

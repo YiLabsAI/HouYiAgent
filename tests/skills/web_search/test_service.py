@@ -14,7 +14,7 @@ from houyi.infrastructure.config.env_config import (
     ENV_WEB_SEARCH_CACHE_ENABLED,
     ENV_WEB_SEARCH_CACHE_TTL,
     ENV_WEB_SEARCH_PROVIDER,
-    ENV_WEB_SEARCH_PROXY_ENABLED,
+    ENV_WEB_SEARCH_PROXY_POLICY,
 )
 from houyi.skills.web_search import service as web_search_service_module
 from houyi.skills.web_search.errors import (
@@ -564,20 +564,23 @@ async def test_from_env_bocha(monkeypatch):
     assert service.provider.name == "bocha"
 
 
-def test_env_proxy_off(monkeypatch):
-    """Proxy should be disabled by default."""
+def test_proxy_auto(monkeypatch):
+    """Proxy policy should default to auto and inherit detected system proxy."""
 
-    monkeypatch.delenv(ENV_WEB_SEARCH_PROXY_ENABLED, raising=False)
-    _reset_global_cache_for_tests()
-    service = WebSearchService.from_env(provider="ddg")
-    assert getattr(service.provider, "proxy_url", None) is None
-
-
-def test_from_env_proxy(monkeypatch):
-    """When WEB_SEARCH_PROXY_ENABLED=true, proxy should be detected and injected."""
-
-    monkeypatch.setenv(ENV_WEB_SEARCH_PROXY_ENABLED, "true")
+    monkeypatch.delenv(ENV_WEB_SEARCH_PROXY_POLICY, raising=False)
     monkeypatch.setenv(ENV_PROXY_URL, "http://127.0.0.1:7890")
     _reset_global_cache_for_tests()
     service = WebSearchService.from_env(provider="ddg")
     assert getattr(service.provider, "proxy_url", None) == "http://127.0.0.1:7890"
+    assert getattr(service.provider, "proxy_policy", None) == "auto"
+
+
+def test_proxy_off(monkeypatch):
+    """WEB_SEARCH_PROXY_POLICY=off should disable explicit proxy injection."""
+
+    monkeypatch.setenv(ENV_WEB_SEARCH_PROXY_POLICY, "off")
+    monkeypatch.setenv(ENV_PROXY_URL, "http://127.0.0.1:7890")
+    _reset_global_cache_for_tests()
+    service = WebSearchService.from_env(provider="ddg")
+    assert getattr(service.provider, "proxy_url", None) is None
+    assert getattr(service.provider, "proxy_policy", None) == "off"

@@ -17,9 +17,9 @@ from houyi.infrastructure.config.env_config import (
     ENV_WEB_SEARCH_CACHE_MAX_SIZE,
     ENV_WEB_SEARCH_CACHE_TTL,
     ENV_WEB_SEARCH_PROVIDER,
-    ENV_WEB_SEARCH_PROXY_ENABLED,
     ENV_WEB_SEARCH_TIMEOUT,
 )
+from houyi.infrastructure.net.proxy import ProxyResolution, resolve_web_search_proxy
 from houyi.skills.web_search.content_fetchers import JinaContentFetcher, ReadabilityContentFetcher
 from houyi.skills.web_search.errors import (
     ContentFetchError,
@@ -134,8 +134,9 @@ class _ResolvedEnvConfig:
     env_provider_set: bool
     cache: LRUCache | None
     cache_ttl: int
-    proxy_enabled: bool
+    proxy_policy: str
     proxy_url: str | None
+    proxy_source: str
 
 
 @dataclass(slots=True)
@@ -186,21 +187,33 @@ class WebSearchService:
     @classmethod
     def from_env(cls, *, provider: str | None = None) -> WebSearchService:
         resolved = cls._resolve_env_config(provider)
-        primary = cls._build_provider(resolved.provider_name, proxy_url=resolved.proxy_url)
+        primary = cls._build_provider(
+            resolved.provider_name,
+            proxy=ProxyResolution(
+                policy=resolved.proxy_policy,
+                proxy_url=resolved.proxy_url,
+                proxy_source=resolved.proxy_source,
+            ),
+        )
         fallbacks = cls._build_fallback_providers(
             resolved.provider_name,
             auto_detected=resolved.auto_detected,
-            proxy_url=resolved.proxy_url,
+            proxy=ProxyResolution(
+                policy=resolved.proxy_policy,
+                proxy_url=resolved.proxy_url,
+                proxy_source=resolved.proxy_source,
+            ),
         )
 
         logger.info(
-            "web_search: primary=%s (proxy=%s)",
+            "web_search: primary=%s proxy_policy=%s proxy_source=%s",
             resolved.provider_name,
-            "on" if resolved.proxy_enabled else "off",
+            resolved.proxy_policy,
+            resolved.proxy_source,
         )
         logger.debug(
             "web_search init detail: source=%s auto_detected=%s WEB_SEARCH_PROVIDER_set=%s "
-            "url_detected=%s fallback_chain=%s",
+            "proxy_url=%s fallback_chain=%s",
             resolved.provider_source,
             resolved.auto_detected,
             resolved.env_provider_set,
@@ -225,7 +238,7 @@ class WebSearchService:
         provider_source = "tool_input" if explicit_provider else ("env" if env_provider else "auto")
         cache_ttl = cls._resolve_cache_ttl()
         cache = cls._resolve_cache(cache_ttl)
-        proxy_enabled, proxy_url = cls._resolve_proxy()
+        proxy = cls._resolve_proxy()
         return _ResolvedEnvConfig(
             provider_name=provider_name,
             provider_source=provider_source,
@@ -233,8 +246,9 @@ class WebSearchService:
             env_provider_set=bool(env_provider),
             cache=cache,
             cache_ttl=cache_ttl,
-            proxy_enabled=proxy_enabled,
-            proxy_url=proxy_url,
+            proxy_policy=proxy.policy,
+            proxy_url=proxy.proxy_url,
+            proxy_source=proxy.proxy_source,
         )
 
     @staticmethod
@@ -284,14 +298,8 @@ class WebSearchService:
         return _GLOBAL_CACHE
 
     @staticmethod
-    def _resolve_proxy() -> tuple[bool, str | None]:
-        proxy_enabled = _is_truthy(os.getenv(ENV_WEB_SEARCH_PROXY_ENABLED, "false"))
-        if not proxy_enabled:
-            return False, None
-
-        from houyi.infrastructure.net.proxy import detect_proxy
-
-        return True, detect_proxy()
+    def _resolve_proxy() -> ProxyResolution:
+        return resolve_web_search_proxy()
 
     @classmethod
     def _build_fallback_providers(
@@ -299,7 +307,7 @@ class WebSearchService:
         provider_name: str,
         *,
         auto_detected: bool,
-        proxy_url: str | None,
+        proxy: ProxyResolution,
     ) -> list[WebSearchProvider]:
         if not auto_detected:
             return []
@@ -309,7 +317,7 @@ class WebSearchService:
             if name == provider_name:
                 continue
             try:
-                fallbacks.append(cls._build_provider(name, proxy_url=proxy_url))
+                fallbacks.append(cls._build_provider(name, proxy=proxy))
             except (ProviderAuthError, DependencyMissingError, ValueError):
                 continue
         return fallbacks
@@ -319,7 +327,7 @@ class WebSearchService:
         name: str,
         *,
         timeout: float | None = None,
-        proxy_url: str | None = None,
+        proxy: ProxyResolution,
     ) -> WebSearchProvider:
         normalised = (name or "").strip().lower()
         timeout_raw = (os.getenv(ENV_WEB_SEARCH_TIMEOUT) or "").strip()
@@ -329,30 +337,36 @@ class WebSearchService:
         if normalised == "ddg":
             return DuckDuckGoWebSearchProvider(
                 timeout=resolved_timeout,
-                proxy_url=proxy_url,
+                proxy_url=proxy.proxy_url,
+                proxy_policy=proxy.policy,
             )
         if normalised == "searxng":
             return SearxNGWebSearchProvider(
                 base_url=os.getenv(ENV_SEARXNG_BASE_URL),
                 timeout=resolved_timeout,
-                proxy_url=proxy_url,
+                proxy_url=proxy.proxy_url,
+                proxy_policy=proxy.policy,
             )
         if normalised == "tavily":
             return TavilyWebSearchProvider(
                 api_key=os.getenv(ENV_TAVILY_API_KEY),
                 timeout=resolved_timeout,
+                proxy_url=proxy.proxy_url,
+                proxy_policy=proxy.policy,
             )
         if normalised == "serper":
             return SerperWebSearchProvider(
                 api_key=os.getenv(ENV_SERPER_API_KEY),
                 timeout=resolved_timeout,
-                proxy_url=proxy_url,
+                proxy_url=proxy.proxy_url,
+                proxy_policy=proxy.policy,
             )
         if normalised == "bocha":
             return BochaWebSearchProvider(
                 api_key=os.getenv(ENV_BOCHA_API_KEY),
                 timeout=resolved_timeout,
-                proxy_url=proxy_url,
+                proxy_url=proxy.proxy_url,
+                proxy_policy=proxy.policy,
             )
         raise ValueError(f"Unsupported web search provider: {normalised}")
 

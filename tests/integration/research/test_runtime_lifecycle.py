@@ -206,10 +206,14 @@ def _mock_web_search() -> WebSearchService:
 class TestRuntimeLifecycle:
     """Full plan → execute → report → memory extraction lifecycle."""
 
-    async def test_delegate_full_run(self):
+    async def test_standard_full_run(self):
         llm = _MockLLM(_build_responses())
         ws = _mock_web_search()
-        session = ResearchRuntime(llm_adapter=llm, web_search=ws)
+        session = ResearchRuntime(
+            llm_adapter=llm,
+            web_search=ws,
+            settings=ResearchSettings(depth="standard", max_agents=1),
+        )
 
         plan = await session.start("Compare AI agent frameworks in 2026")
         assert plan.status == PlanStatus.DRAFT

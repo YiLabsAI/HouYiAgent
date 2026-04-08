@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import os
 import ssl
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -43,6 +44,14 @@ from houyi.skills.web_search.types import WebSearchResult
 DEFAULT_PROVIDER_TIMEOUT: float = 10.0
 
 _DEFAULT_USER_AGENT = "houyi/web-search"
+_PROXY_ENV_KEYS = (
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "all_proxy",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -95,6 +104,7 @@ def _http_json_request(
     method: str = "GET",
     timeout: float = DEFAULT_PROVIDER_TIMEOUT,
     proxy_url: str | None = None,
+    proxy_policy: str = "auto",
     label: str = "Provider",
 ) -> dict[str, Any]:
     """Execute HTTP request → parse JSON → map errors to ``ProviderError``.
@@ -113,7 +123,10 @@ def _http_json_request(
     req = request.Request(url, data=data, headers=final_headers, method=method)
 
     try:
-        if proxy_url:
+        if proxy_policy == "off":
+            opener = request.build_opener(request.ProxyHandler({}))
+            resp_ctx = opener.open(req, timeout=timeout)
+        elif proxy_url:
             proxy_handler = request.ProxyHandler({"http": proxy_url, "https": proxy_url})
             opener = request.build_opener(proxy_handler)
             resp_ctx = opener.open(req, timeout=timeout)
@@ -151,6 +164,25 @@ def _http_json_request(
         raise ProviderTimeoutError(f"{label} request failed: {exc}") from exc
 
 
+@contextlib.contextmanager
+def _proxy_env_scope(*, proxy_policy: str, proxy_url: str | None) -> Any:
+    previous = {key: os.environ.get(key) for key in _PROXY_ENV_KEYS}
+    try:
+        if proxy_policy == "off":
+            for key in _PROXY_ENV_KEYS:
+                os.environ.pop(key, None)
+        elif proxy_url:
+            for key in _PROXY_ENV_KEYS:
+                os.environ[key] = proxy_url
+        yield
+    finally:
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
 # ---------------------------------------------------------------------------
 # Serper (Google via serper.dev)
 # ---------------------------------------------------------------------------
@@ -165,6 +197,7 @@ class SerperWebSearchProvider:
     endpoint: str = "https://google.serper.dev/search"
     timeout: float = DEFAULT_PROVIDER_TIMEOUT
     proxy_url: str | None = None
+    proxy_policy: str = "auto"
     last_raw_payload: dict[str, Any] | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -186,6 +219,7 @@ class SerperWebSearchProvider:
             method="POST",
             timeout=self.timeout,
             proxy_url=self.proxy_url,
+            proxy_policy=self.proxy_policy,
             label=self.name,
         )
         self.last_raw_payload = response if isinstance(response, dict) else None
@@ -231,7 +265,9 @@ class TavilyWebSearchProvider:
     name: str = "tavily"
     api_key: str | None = None
     timeout: float = DEFAULT_PROVIDER_TIMEOUT
-    _client: object = field(init=False, repr=False)
+    proxy_url: str | None = None
+    proxy_policy: str = "auto"
+    _client: Any = field(init=False, repr=False)
     last_raw_payload: dict[str, Any] | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -247,12 +283,15 @@ class TavilyWebSearchProvider:
         self._client = TavilyClient(api_key=self.api_key)
 
     async def search(self, query: str, *, max_results: int) -> list[WebSearchResult]:
-        response = await asyncio.to_thread(
-            self._client.search,  # type: ignore[attr-defined]
-            query,
-            max_results=max_results,
-            search_depth="basic",
-        )
+        def _search() -> Any:
+            with _proxy_env_scope(proxy_policy=self.proxy_policy, proxy_url=self.proxy_url):
+                return self._client.search(
+                    query,
+                    max_results=max_results,
+                    search_depth="basic",
+                )
+
+        response = await asyncio.to_thread(_search)
         if isinstance(response, dict):
             self.last_raw_payload = response
         results = response.get("results") if isinstance(response, dict) else None
@@ -294,6 +333,7 @@ class SearxNGWebSearchProvider:
     base_url: str | None = None
     timeout: float = DEFAULT_PROVIDER_TIMEOUT
     proxy_url: str | None = None
+    proxy_policy: str = "auto"
     last_raw_payload: dict[str, Any] | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -310,6 +350,7 @@ class SearxNGWebSearchProvider:
             url,
             timeout=self.timeout,
             proxy_url=self.proxy_url,
+            proxy_policy=self.proxy_policy,
             label=self.name,
         )
         if isinstance(response, dict):
@@ -360,6 +401,7 @@ class DuckDuckGoWebSearchProvider:
     name: str = "ddg"
     timeout: float = DEFAULT_PROVIDER_TIMEOUT
     proxy_url: str | None = None
+    proxy_policy: str = "auto"
     region: str = "wt-wt"
     last_raw_payload: dict[str, Any] | None = field(default=None, init=False, repr=False)
 
@@ -372,7 +414,7 @@ class DuckDuckGoWebSearchProvider:
             ) from exc
 
         try:
-            raw_results = await self._do_search(DDGS, query, max_results)
+            response = await self._do_search(DDGS, query, max_results)
         except DependencyMissingError:
             raise
         except Exception as exc:
@@ -381,11 +423,11 @@ class DuckDuckGoWebSearchProvider:
                 raise ProviderRateLimitError(f"DDG rate limited: {exc}") from exc
             raise ProviderTimeoutError(f"DDG search failed: {exc}") from exc
 
-        if isinstance(raw_results, list):
-            self.last_raw_payload = {"results": raw_results}
+        if isinstance(response, list):
+            self.last_raw_payload = {"results": response}
 
         results: list[WebSearchResult] = []
-        for item in raw_results or []:
+        for item in response or []:
             if not isinstance(item, dict):
                 continue
             title = (item.get("title") or "").strip()
@@ -409,8 +451,9 @@ class DuckDuckGoWebSearchProvider:
         import asyncio
 
         def _sync_search() -> list:
-            ddgs = ddgs_cls(proxy=self.proxy_url, timeout=int(self.timeout))
-            return ddgs.text(query, max_results=max_results, region=self.region)
+            with _proxy_env_scope(proxy_policy=self.proxy_policy, proxy_url=self.proxy_url):
+                ddgs = ddgs_cls(proxy=self.proxy_url, timeout=int(self.timeout))
+                return ddgs.text(query, max_results=max_results, region=self.region)
 
         return await asyncio.to_thread(_sync_search)
 
@@ -434,6 +477,7 @@ class BochaWebSearchProvider:
     endpoint: str = "https://api.bochaai.com/v1/web-search"
     timeout: float = DEFAULT_PROVIDER_TIMEOUT
     proxy_url: str | None = None
+    proxy_policy: str = "auto"
     last_raw_payload: dict[str, Any] | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -462,6 +506,7 @@ class BochaWebSearchProvider:
             method="POST",
             timeout=self.timeout,
             proxy_url=self.proxy_url,
+            proxy_policy=self.proxy_policy,
             label=self.name,
         )
         self.last_raw_payload = response if isinstance(response, dict) else None

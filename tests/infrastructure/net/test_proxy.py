@@ -4,9 +4,12 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-from houyi.infrastructure.config.env_config import ENV_PROXY_URL
+from houyi.infrastructure.config.env_config import (
+    ENV_PROXY_URL,
+    ENV_WEB_SEARCH_PROXY_POLICY,
+)
 from houyi.infrastructure.net import proxy as proxy_module
-from houyi.infrastructure.net.proxy import detect_proxy
+from houyi.infrastructure.net.proxy import detect_proxy, resolve_web_search_proxy
 
 
 class TestDetectProxy:
@@ -47,7 +50,26 @@ class TestDetectProxy:
         ):
             assert detect_proxy() is None
 
-    def test_empty_explicit_url_falls_through(self, monkeypatch) -> None:
+    def test_empty_explicit_url(self, monkeypatch) -> None:
         monkeypatch.setenv(ENV_PROXY_URL, "  ")
         with patch.object(proxy_module, "getproxies", return_value={"https": "http://sys:9999"}):
             assert detect_proxy() == "http://sys:9999"
+
+
+class TestResolveWebSearchProxy:
+    def test_auto(self, monkeypatch) -> None:
+        monkeypatch.delenv(ENV_WEB_SEARCH_PROXY_POLICY, raising=False)
+        monkeypatch.delenv(ENV_PROXY_URL, raising=False)
+        with patch.object(proxy_module, "getproxies", return_value={"https": "http://sys:7890"}):
+            resolution = resolve_web_search_proxy()
+        assert resolution.policy == "auto"
+        assert resolution.proxy_url == "http://sys:7890"
+        assert resolution.proxy_source == "system"
+
+    def test_off(self, monkeypatch) -> None:
+        monkeypatch.setenv(ENV_WEB_SEARCH_PROXY_POLICY, "off")
+        monkeypatch.setenv(ENV_PROXY_URL, "http://explicit:1234")
+        resolution = resolve_web_search_proxy()
+        assert resolution.policy == "off"
+        assert resolution.proxy_url is None
+        assert resolution.proxy_source == "direct"
