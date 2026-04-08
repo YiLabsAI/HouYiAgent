@@ -185,6 +185,9 @@ class SearchContext(BaseModel):
     max_results_per_query: int = 0
     max_query_parallelism: int = 0
     max_total_sources: int = 100
+    max_query_budget_ms: int = 0
+    max_round_budget_ms: int = 0
+    max_sub_question_budget_ms: int = 0
 
 
 class SearchHit(BaseModel):
@@ -200,6 +203,34 @@ class SearchHit(BaseModel):
     rank: int = 0
 
 
+class SufficiencyFeatures(BaseModel):
+    """Structured evidence features used for stop/continue decisions."""
+
+    source_count: int = 0
+    relevant_source_count: int = 0
+    domain_count: int = 0
+    provider_count: int = 0
+    authority_source_count: int = 0
+    recent_source_count: int = 0
+    relevance_score: float = 0.0
+    diversity_score: float = 0.0
+    authority_score: float = 0.0
+    recency_score: float = 0.0
+    has_primary_source: bool = False
+    missing_dimensions: list[str] = Field(default_factory=list)
+
+
+class SufficiencyDecision(BaseModel):
+    """Structured sufficiency decision with explainable provenance."""
+
+    sufficient: bool = False
+    rationale: str = ""
+    decision_by: str = "guardrail"
+    reason_code: str = ""
+    missing_dimensions: list[str] = Field(default_factory=list)
+    features: SufficiencyFeatures | None = None
+
+
 class SearchRound(BaseModel):
     """One round of search within a sub-question investigation."""
 
@@ -211,6 +242,11 @@ class SearchRound(BaseModel):
     elapsed_ms: float = 0.0
     skipped_queries: int = 0
     cancelled_queries: int = 0
+    decision_by: str = ""
+    reason_code: str = ""
+    stop_layer: str = ""
+    missing_dimensions: list[str] = Field(default_factory=list)
+    features: SufficiencyFeatures | None = None
 
 
 class SourceReference(BaseModel):
@@ -221,6 +257,7 @@ class SourceReference(BaseModel):
     title: str = ""
     snippet: str = ""
     source_type: str = "web"
+    provider: str = ""
     reliability_score: float = 0.5
     accessed_at: float = Field(default_factory=time.time)
 

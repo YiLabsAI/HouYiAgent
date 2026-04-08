@@ -57,7 +57,7 @@ from houyi.application.research.runtime.planning import (
 )
 from houyi.application.research.runtime.processing import process_agent_search_output
 from houyi.application.research.runtime.report_pipeline import ReportPipeline
-from houyi.application.research.runtime.search import SearchExecutor
+from houyi.application.research.runtime.search_executor import SearchExecutor
 from houyi.application.research.runtime.synthesis import SynthesisCoordinator
 from houyi.application.research.runtime.time_policy import TimeBudgetPolicy
 from houyi.application.research.runtime.tools import WebSearchTool

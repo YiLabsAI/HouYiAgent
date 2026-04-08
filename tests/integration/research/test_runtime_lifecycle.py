@@ -162,17 +162,53 @@ class _MockLLM(LLMAdapter):
     def __init__(self, responses: list[str]) -> None:
         self._responses = responses
         self._idx = 0
+        self._query_idx = 0
+        self._sufficiency_idx = 0
+        self._intermediate_idx = 0
+        self._section_idx = 0
+        self._validation_idx = 0
 
-    def _next_content(self) -> str:
+    def _next_linear_content(self) -> str:
         content = self._responses[self._idx] if self._idx < len(self._responses) else "{}"
         self._idx += 1
         return content
 
+    def _route_content(self, prompt: str) -> str:
+        text = prompt.strip()
+        if "needs_clarification" in text:
+            return _CLARIFICATION_PASS
+        if '"sub_questions"' in text and '"outline"' in text:
+            return _PLAN_JSON
+        if "Respond ONLY with a JSON array of query strings" in text:
+            self._query_idx += 1
+            return _QUERY_GEN
+        if "Structured evidence:" in text and '"sufficient"' in text:
+            self._sufficiency_idx += 1
+            return _SUFFICIENCY
+        if '"key_findings"' in text and '"confidence"' in text and '"gaps"' in text:
+            self._intermediate_idx += 1
+            return _INTERMEDIATE_JSON
+        if '"citations"' in text and '"content"' in text:
+            self._section_idx += 1
+            return _SECTION_JSON
+        if '"quality_score"' in text and '"needs_rewrite"' in text:
+            self._validation_idx += 1
+            return _VALIDATION_JSON
+        if "RACE framework" in text:
+            return _RACE_JSON
+        if '"citation_accuracy"' in text and '"effective_citations"' in text:
+            return _FACT_JSON
+        if "Summary of the report" in text or "summary" in text.lower():
+            return "Summary of the research findings on AI agent frameworks."
+        return self._next_linear_content()
+
     async def chat(self, messages: list, **kwargs: Any) -> LLMResponse:
-        return LLMResponse(content=self._next_content(), finish_reason="stop", model="mock")
+        prompt = str(messages[0].get("content", "")) if messages else ""
+        return LLMResponse(content=self._route_content(prompt), finish_reason="stop", model="mock")
 
     async def stream_chat(self, messages: list, **kwargs: Any) -> AsyncIterator[StreamChunk]:
-        yield StreamChunk(content_delta=self._next_content())
+        prompt = str(messages[0].get("content", "")) if messages else ""
+        yield StreamChunk(content_delta=self._route_content(prompt))
 
 
 def _mock_web_search() -> WebSearchService:

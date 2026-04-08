@@ -23,7 +23,7 @@ from houyi.application.research.runtime.processing import (
     process_sub_question_execution_order,
 )
 from houyi.application.research.runtime.report_pipeline import ReportPipeline
-from houyi.application.research.runtime.search import SearchExecutor
+from houyi.application.research.runtime.search_executor import SearchExecutor
 from houyi.application.research.runtime.tools import WebSearchTool
 from houyi.application.research.types import (
     AggregatedSources,
@@ -628,6 +628,7 @@ class ResearchCoordinator:
                     for source in result.sources
                     if source.url
                 ],
+                max_sub_question_budget_ms=int(self._deps.agent_timeout_seconds() * 1000),
             )
             return await asyncio.wait_for(
                 self._deps.search_executor.search(sub_question, context),
@@ -701,6 +702,7 @@ class ResearchCoordinator:
             user_query=self._plan.query,
             prior_findings=peer_findings or [],
             excluded_urls=[],
+            max_sub_question_budget_ms=int(self._deps.agent_timeout_seconds() * 1000),
         )
         try:
             return await asyncio.wait_for(

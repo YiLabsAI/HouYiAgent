@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from houyi.application.research.runtime.search import _extract_keywords, _filter_relevant
+from houyi.application.research.runtime.search_sufficiency import (
+    _extract_keywords,
+    _filter_relevant,
+)
 from houyi.application.research.types import SourceReference
 
 
@@ -20,7 +23,7 @@ class TestFilterRelevant:
         assert len(filtered) == 1
         assert filtered[0].title == "AI Agent Framework Comparison"
 
-    def test_keeps_all_when_all_relevant(self):
+    def test_keeps_all_relevant(self):
         sources = [
             _src("Python programming guide", "Learn Python basics"),
             _src("Python tutorial for beginners", "Step by step Python"),

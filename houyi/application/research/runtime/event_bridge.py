@@ -94,6 +94,8 @@ class ResearchEventBridge:
                 elapsed_ms=data.get("elapsed_ms", 0.0),
                 hit_count=data.get("hit_count", 0),
                 cancelled=data.get("cancelled", False),
+                provider=data.get("provider", ""),
+                reason_code=data.get("reason_code", ""),
             )
             return
         if event_type == "search.query_cancelled":
@@ -117,6 +119,52 @@ class ResearchEventBridge:
                 hit_count=data.get("hit_count", 0),
                 source_count=data.get("source_count", 0),
                 sufficient=data.get("sufficient", False),
+                rationale=data.get("rationale", ""),
+                decision_by=data.get("decision_by", ""),
+                reason_code=data.get("reason_code", ""),
+                stop_layer=data.get("stop_layer", ""),
+                missing_dimensions=data.get("missing_dimensions", []),
+            )
+            return
+        if event_type == "search.budget_consumed":
+            await self.emit(
+                "research.search_budget",
+                question_id=data.get("question_id", ""),
+                round=data.get("round", 0),
+                layer=data.get("layer", ""),
+                reason_code=data.get("reason_code", ""),
+                budget_ms=data.get("budget_ms", 0),
+                remaining_ms=data.get("remaining_ms", 0),
+            )
+            return
+        if event_type == "search.sufficiency_features":
+            await self.emit(
+                "research.search_sufficiency",
+                question_id=data.get("question_id", ""),
+                round=data.get("round", 0),
+                source_count=data.get("source_count", 0),
+                relevant_source_count=data.get("relevant_source_count", 0),
+                domain_count=data.get("domain_count", 0),
+                provider_count=data.get("provider_count", 0),
+                authority_source_count=data.get("authority_source_count", 0),
+                recent_source_count=data.get("recent_source_count", 0),
+                relevance_score=data.get("relevance_score", 0.0),
+                diversity_score=data.get("diversity_score", 0.0),
+                authority_score=data.get("authority_score", 0.0),
+                recency_score=data.get("recency_score", 0.0),
+                missing_dimensions=data.get("missing_dimensions", []),
+            )
+            return
+        if event_type == "search.sufficiency_decision":
+            await self.emit(
+                "research.search_stop_reason",
+                question_id=data.get("question_id", ""),
+                round=data.get("round", 0),
+                sufficient=data.get("sufficient", False),
+                rationale=data.get("rationale", ""),
+                decision_by=data.get("decision_by", ""),
+                reason_code=data.get("reason_code", ""),
+                missing_dimensions=data.get("missing_dimensions", []),
             )
 
     async def emit_report_generation_end(

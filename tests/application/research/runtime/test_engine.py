@@ -14,12 +14,14 @@ from houyi.application.research.runtime.errors import (
     ResearchStateError,
     ResearchTimeoutError,
 )
+from houyi.application.research.runtime.search_executor import SearchExecutor
 from houyi.application.research.types import (
     PlanEdit,
     PlanEditOperation,
     PlanStatus,
     ResearchSettings,
     ResearchStatus,
+    SufficiencyDecision,
 )
 
 from ..conftest import MockLLM, make_mock_web_search
@@ -301,13 +303,15 @@ class TestExecute:
         await session.confirm_plan()
         _stub_report(session)
         with (
-            patch(
-                "houyi.application.research.runtime.search.SearchExecutor._generate_queries",
+            patch.object(
+                SearchExecutor,
+                "_generate_queries",
                 new=AsyncMock(return_value=["shared query"]),
             ),
-            patch(
-                "houyi.application.research.runtime.search.SearchExecutor._evaluate_sufficiency",
-                new=AsyncMock(return_value=(True, "ok")),
+            patch.object(
+                SearchExecutor,
+                "_evaluate_sufficiency",
+                new=AsyncMock(return_value=SufficiencyDecision(sufficient=True, rationale="ok")),
             ),
         ):
             await session.execute()
@@ -405,7 +409,7 @@ class TestExecute:
         with pytest.raises(ResearchStateError, match="cannot be executed"):
             await session.execute()
 
-    async def test_retry_clears_stale_results(self):
+    async def test_retry(self):
         """Retrying execute() must clear previous search_results to avoid duplication (200% bug)."""
         from houyi.application.research.types import SearchResult, SourceReference
 
@@ -764,7 +768,7 @@ class TestBoundaryAndInteraction:
                 await session.execute()
         assert session.status == ResearchStatus.FAILED
 
-    async def test_search_executor_timeout_fallback(self):
+    async def test_search_executor_timeout(self):
         """Per-agent timeout produces empty SearchResult."""
         import asyncio
         from unittest.mock import patch
@@ -782,8 +786,6 @@ class TestBoundaryAndInteraction:
             if asyncio.iscoroutine(aw):
                 aw.close()
             raise TimeoutError()
-
-        from houyi.application.research.runtime.search import SearchExecutor
 
         with patch.object(SearchExecutor, "search", side_effect=_timeout_search):
             with patch.object(session, "_run_report"):
@@ -931,13 +933,15 @@ class TestBoundaryAndInteraction:
         await session.confirm_plan()
         _stub_report(session)
         with (
-            patch(
-                "houyi.application.research.runtime.search.SearchExecutor._generate_queries",
+            patch.object(
+                SearchExecutor,
+                "_generate_queries",
                 new=AsyncMock(return_value=["shared query"]),
             ),
-            patch(
-                "houyi.application.research.runtime.search.SearchExecutor._evaluate_sufficiency",
-                new=AsyncMock(return_value=(True, "ok")),
+            patch.object(
+                SearchExecutor,
+                "_evaluate_sufficiency",
+                new=AsyncMock(return_value=SufficiencyDecision(sufficient=True, rationale="ok")),
             ),
         ):
             await session.execute()
@@ -946,7 +950,7 @@ class TestBoundaryAndInteraction:
         assert "shared query" in state.metadata["query_ledger"]
         assert state.metadata["shared_source_count"] >= 1
 
-    async def test_autonomous_provider_profile(self):
+    async def test_autonomous_provider(self):
         llm = MockLLM(responses=[_PLAN_JSON])
         ws = make_mock_web_search()
         settings = ResearchSettings(orchestration_mode="autonomous", depth="quick")
@@ -955,13 +959,15 @@ class TestBoundaryAndInteraction:
         await session.confirm_plan()
         _stub_report(session)
         with (
-            patch(
-                "houyi.application.research.runtime.search.SearchExecutor._generate_queries",
+            patch.object(
+                SearchExecutor,
+                "_generate_queries",
                 new=AsyncMock(return_value=["shared query"]),
             ),
-            patch(
-                "houyi.application.research.runtime.search.SearchExecutor._evaluate_sufficiency",
-                new=AsyncMock(return_value=(True, "ok")),
+            patch.object(
+                SearchExecutor,
+                "_evaluate_sufficiency",
+                new=AsyncMock(return_value=SufficiencyDecision(sufficient=True, rationale="ok")),
             ),
         ):
             await session.execute()
@@ -1154,8 +1160,6 @@ class TestSearchOneTimeout:
 
         async def _slow_search(sq, ctx):
             await asyncio.sleep(999)
-
-        from houyi.application.research.runtime.search import SearchExecutor
 
         with patch.object(SearchExecutor, "search", _slow_search):
             await session.execute()
