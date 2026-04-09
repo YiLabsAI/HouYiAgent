@@ -36,6 +36,8 @@ from houyi.skills.web_search.service import WebSearchService
 
 logger = logging.getLogger(__name__)
 _REPAIR_SECTION_CONCURRENCY = 2
+_REPAIR_QUERY_CONCURRENCY = 2
+_ENABLE_PRE_REPAIR_QUALITY = True
 
 EmitFn = Callable[..., Awaitable[None]]
 
@@ -231,12 +233,22 @@ class ReportPipeline:
             else:
                 timings["url_validate_ms"] = await self._execute_url_validation(aggregated, report)
 
+            repaired = False
             if validation and validation.sections_needing_rewrite > 0:
                 await self._emit(
                     "research.validation_issues",
                     sections_flagged=validation.sections_needing_rewrite,
                     overall_score=validation.overall_score,
                 )
+                if _ENABLE_PRE_REPAIR_QUALITY:
+                    pre_quality, pre_quality_timings = await self._execute_quality_evaluation(
+                        report,
+                        aggregated,
+                        phase_name="quality_evaluation_pre_repair",
+                        timing_prefix="quality_pre_",
+                    )
+                    if pre_quality:
+                        timings.update(pre_quality_timings)
                 t = time.perf_counter()
                 await self._repair_weak_sections(
                     validation,
@@ -245,22 +257,19 @@ class ReportPipeline:
                     aggregated,
                 )
                 timings["repair_ms"] = (time.perf_counter() - t) * 1000.0
+                repaired = True
 
             quality = None
-            try:
-                await self._emit("research.pipeline_phase", phase="quality_evaluation")
-                t = time.perf_counter()
-                quality, quality_timings = await self._evaluator.evaluate_with_breakdown(
-                    report,
-                    aggregated,
-                )
-                timings["quality_ms"] = (time.perf_counter() - t) * 1000.0
+            quality, quality_timings = await self._execute_quality_evaluation(
+                report,
+                aggregated,
+                phase_name=(
+                    "quality_evaluation_post_repair" if repaired else "quality_evaluation"
+                ),
+                timing_prefix="quality_",
+            )
+            if quality:
                 timings.update(quality_timings)
-            except Exception:
-                logger.warning(
-                    "Quality evaluation failed — skipping (report still usable)",
-                    exc_info=True,
-                )
             if quality:
                 report.metadata.quality_overall = quality.overall
 
@@ -326,6 +335,38 @@ class ReportPipeline:
                 exc_info=True,
             )
             return None, 0.0
+
+    async def _execute_quality_evaluation(
+        self,
+        report: ResearchReport,
+        aggregated: AggregatedSources,
+        *,
+        phase_name: str,
+        timing_prefix: str,
+    ) -> tuple[QualityScore | None, dict[str, float]]:
+        try:
+            await self._emit("research.pipeline_phase", phase=phase_name)
+            t = time.perf_counter()
+            quality, quality_timings = await self._evaluator.evaluate_with_breakdown(
+                report,
+                aggregated,
+            )
+            elapsed_ms = (time.perf_counter() - t) * 1000.0
+            timings = {f"{timing_prefix}ms": elapsed_ms}
+            timings.update(
+                {
+                    f"{timing_prefix}{key[len('quality_'): ]}" if key.startswith("quality_") else f"{timing_prefix}{key}": value
+                    for key, value in quality_timings.items()
+                }
+            )
+            timings[f"{timing_prefix}score"] = quality.overall
+            return quality, timings
+        except Exception:
+            logger.warning(
+                "Quality evaluation failed — skipping (report still usable)",
+                exc_info=True,
+            )
+            return None, {}
 
     async def _detect_conflicts(
         self,
@@ -554,20 +595,33 @@ class ReportPipeline:
         predictable. Failures are logged but do not block the repair
         (best-effort enrichment).
         """
-        extra_sources: list[SourceReference] = []
-        for q in queries[:2]:
+        bounded_queries = queries[:2]
+        if not bounded_queries:
+            return []
+
+        semaphore = asyncio.Semaphore(_REPAIR_QUERY_CONCURRENCY)
+
+        async def _search_one(query: str) -> list[SourceReference]:
             try:
-                response = await self._web_search.search(q, max_results=3, include_content=True)
-                for r in response.results:
-                    extra_sources.append(
-                        SourceReference(
-                            url=r.url,
-                            title=r.title,
-                            snippet=r.snippet,
-                            source_type="web",
-                            reliability_score=0.5,
-                        )
+                async with semaphore:
+                    response = await self._web_search.search(
+                        query,
+                        max_results=3,
+                        include_content=True,
                     )
+                return [
+                    SourceReference(
+                        url=result.url,
+                        title=result.title,
+                        snippet=result.snippet,
+                        source_type="web",
+                        reliability_score=0.5,
+                    )
+                    for result in response.results
+                ]
             except Exception:
-                logger.warning("Re-search failed for query: %s", q, exc_info=True)
-        return extra_sources
+                logger.warning("Re-search failed for query: %s", query, exc_info=True)
+                return []
+
+        extra_groups = await asyncio.gather(*[_search_one(query) for query in bounded_queries])
+        return [source for group in extra_groups for source in group]

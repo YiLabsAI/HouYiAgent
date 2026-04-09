@@ -360,16 +360,29 @@ class TestPipelineRuntime:
                 sections_needing_rewrite=1,
             )
         )
+        pre_quality = QualityScore(overall=40.0)
+        post_quality = QualityScore(overall=88.0)
         pipe._evaluator.evaluate_with_breakdown = AsyncMock(
-            return_value=(
-                QualityScore(overall=88.0),
-                {
-                    "quality_race_ms": 0.0,
-                    "quality_fact_ms": 0.0,
-                    "quality_combine_ms": 0.0,
-                    "quality_eval_total_ms": 0.0,
-                },
-            )
+            side_effect=[
+                (
+                    pre_quality,
+                    {
+                        "quality_race_ms": 11.0,
+                        "quality_fact_ms": 12.0,
+                        "quality_combine_ms": 0.0,
+                        "quality_eval_total_ms": 23.0,
+                    },
+                ),
+                (
+                    post_quality,
+                    {
+                        "quality_race_ms": 21.0,
+                        "quality_fact_ms": 22.0,
+                        "quality_combine_ms": 0.0,
+                        "quality_eval_total_ms": 43.0,
+                    },
+                ),
+            ]
         )
 
         result = await pipe.run(
@@ -384,6 +397,81 @@ class TestPipelineRuntime:
         assert result.validation is not None
         assert result.quality is not None
         assert result.report.metadata.quality_overall == 88.0
+        assert pipe._evaluator.evaluate_with_breakdown.await_count == 2
+        assert result.phase_timings_ms["quality_pre_ms"] >= 0
+        assert result.phase_timings_ms["quality_pre_race_ms"] == 11.0
+        assert result.phase_timings_ms["quality_pre_fact_ms"] == 12.0
+        assert result.phase_timings_ms["quality_pre_eval_total_ms"] == 23.0
+        assert result.phase_timings_ms["quality_pre_score"] == 40.0
+        assert result.phase_timings_ms["quality_ms"] >= 0
+        assert result.phase_timings_ms["quality_race_ms"] == 21.0
+        assert result.phase_timings_ms["quality_fact_ms"] == 22.0
+        assert result.phase_timings_ms["quality_eval_total_ms"] == 43.0
+        assert result.phase_timings_ms["quality_score"] == 88.0
+
+    async def test_pre_post_repair(self) -> None:
+        pipe = _pipeline(IntermediateReportGenerator(MockLLM(responses=[_IR_JSON])))
+        report = _report()
+        pipe._reporter.generate = AsyncMock(return_value=report)
+        pipe._reporter._generate_section = AsyncMock(
+            return_value=ReportSection(title="Overview", content="Repaired")
+        )
+        pipe._conflict_resolver.detect = AsyncMock(return_value=[])
+        pipe._url_validator.validate = AsyncMock(
+            return_value=MagicMock(results=[], total=0, reachable=0, unreachable=0, error_rate=0.0)
+        )
+        pipe._validator.validate = AsyncMock(
+            return_value=ValidationReport(
+                sections=[
+                    SectionValidation(
+                        title="Overview",
+                        quality_score=20,
+                        needs_rewrite=True,
+                        suggested_queries=[],
+                    )
+                ],
+                overall_score=20.0,
+                sections_needing_rewrite=1,
+            )
+        )
+        pipe._evaluator.evaluate_with_breakdown = AsyncMock(
+            side_effect=[
+                (
+                    QualityScore(overall=40.0),
+                    {
+                        "quality_race_ms": 0.0,
+                        "quality_fact_ms": 0.0,
+                        "quality_combine_ms": 0.0,
+                        "quality_eval_total_ms": 0.0,
+                    },
+                ),
+                (
+                    QualityScore(overall=88.0),
+                    {
+                        "quality_race_ms": 0.0,
+                        "quality_fact_ms": 0.0,
+                        "quality_combine_ms": 0.0,
+                        "quality_eval_total_ms": 0.0,
+                    },
+                ),
+            ]
+        )
+
+        await pipe.run(
+            _plan(),
+            AggregatedSources(sources=report.references),
+            [_result()],
+            intermediate_reports=None,
+            settings=ResearchSettings(depth="standard"),
+        )
+
+        emitted_phases = [
+            call.kwargs["phase"]
+            for call in pipe._emit.await_args_list
+            if call.args and call.args[0] == "research.pipeline_phase"
+        ]
+        assert "quality_evaluation_pre_repair" in emitted_phases
+        assert "quality_evaluation_post_repair" in emitted_phases
 
     async def test_validation_parallel_with_url(self) -> None:
         """URL validation and report validation execute concurrently."""
@@ -545,3 +633,64 @@ class TestPipelineRuntime:
         assert both_started.is_set()
         assert result.report.sections[0].content == "Repaired Overview"
         assert result.report.sections[1].content == "Repaired Risks"
+
+    async def test_repair_search_parallel(self) -> None:
+        pipe = _pipeline(IntermediateReportGenerator(MockLLM(responses=[_IR_JSON])))
+        started: set[str] = set()
+        release = asyncio.Event()
+        both_started = asyncio.Event()
+
+        async def _blocking_search(query: str, **_: Any) -> Any:
+            started.add(query)
+            if len(started) >= 2:
+                both_started.set()
+            await release.wait()
+            return MagicMock(
+                results=[
+                    MagicMock(
+                        url=f"https://example.com/{query}",
+                        title=f"Title {query}",
+                        snippet=f"Snippet {query}",
+                    )
+                ]
+            )
+
+        async def _release_when_parallel_started() -> None:
+            await asyncio.wait_for(both_started.wait(), timeout=0.2)
+            release.set()
+
+        pipe._web_search.search = AsyncMock(side_effect=_blocking_search)
+
+        gate = asyncio.create_task(_release_when_parallel_started())
+        sources = await asyncio.wait_for(
+            pipe._search_extra_sources_for_repair(["q1", "q2"]),
+            timeout=0.5,
+        )
+        await gate
+
+        assert both_started.is_set()
+        assert len(sources) == 2
+        assert {source.title for source in sources} == {"Title q1", "Title q2"}
+
+    async def test_repair_search_skips_failed(self) -> None:
+        pipe = _pipeline(IntermediateReportGenerator(MockLLM(responses=[_IR_JSON])))
+
+        async def _search(query: str, **_: Any) -> Any:
+            if query == "bad":
+                raise RuntimeError("boom")
+            return MagicMock(
+                results=[
+                    MagicMock(
+                        url="https://example.com/good",
+                        title="Good",
+                        snippet="Good snippet",
+                    )
+                ]
+            )
+
+        pipe._web_search.search = AsyncMock(side_effect=_search)
+
+        sources = await pipe._search_extra_sources_for_repair(["bad", "good"])
+
+        assert len(sources) == 1
+        assert sources[0].title == "Good"
