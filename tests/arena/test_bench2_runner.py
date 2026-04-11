@@ -63,7 +63,10 @@ class TestBench2SidecarRunner:
         assert workspace.cleaned_data_dir.is_dir()
         assert workspace.race_output_dir.is_dir()
         assert workspace.fact_output_dir.is_dir()
-        assert workspace.artifact_paths()["fact_result_path"].endswith("fact/houyi/fact_result.txt")
+        assert (
+            Path(workspace.artifact_paths()["fact_result_path"])
+            == workspace.fact_output_dir / "fact_result.txt"
+        )
 
     def test_normalizes_query_ids(self, tmp_path: Path) -> None:
         repo_root = _create_bench_repo(tmp_path / "bench")
@@ -97,7 +100,7 @@ class TestBench2SidecarRunner:
         assert (workspace.repo_root / "utils" / "api.py").exists()
         assert (workspace.repo_root / "utils" / "stat.py").exists()
 
-    def test_compat_root_clears_stale_upstream_results(self, tmp_path: Path) -> None:
+    def test_clears_stale_results(self, tmp_path: Path) -> None:
         repo_root = _create_bench_repo(tmp_path / "bench")
         stale = repo_root / "results" / "fact" / "claude-3-7-sonnet-latest"
         stale.mkdir(parents=True, exist_ok=True)
@@ -166,8 +169,8 @@ class TestBench2SidecarRunner:
         assert "--skip_cleaning" in race_cmd
         assert "--only_en" in race_cmd
         assert "--force" in race_cmd
-        assert workspace.raw_data_dir.as_posix() in race_cmd
-        assert str(workspace.query_file) in race_cmd
+        assert any(Path(arg) == workspace.raw_data_dir for arg in race_cmd)
+        assert any(Path(arg) == workspace.query_file for arg in race_cmd)
 
     def test_run_copies(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         monkeypatch.setenv("GEMINI_API_KEY", "test-gemini")
@@ -346,6 +349,7 @@ class TestBench2SidecarRunner:
         assert payload["runtime_mode"] == "adapted_env"
         assert payload["generation"]["succeeded"] == 2
         assert payload["sidecar"]["race_scores"]["Overall Score"] == pytest.approx(0.51)
-        assert payload["sidecar"]["artifacts"]["race_result_path"].endswith(
-            "race/houyi/race_result.txt"
+        assert (
+            Path(payload["sidecar"]["artifacts"]["race_result_path"])
+            == workspace.race_output_dir / "race_result.txt"
         )
