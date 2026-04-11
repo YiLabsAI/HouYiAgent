@@ -14,6 +14,7 @@ from __future__ import annotations
 import os
 from unittest.mock import patch
 
+from houyi.adapters.llm.models import DEFAULT_MODEL
 from houyi.infrastructure.config.env_config import EnvConfig
 
 
@@ -122,6 +123,33 @@ class TestEnvConfigOverrides:
             EnvConfig._reset()
             cfg = EnvConfig.get()
             assert cfg.siliconflow_base_url == "https://custom.api/v1"
+
+    def test_qwen_model_override(self):
+        with patch.dict(os.environ, {"QWEN_MODEL": "Qwen/Qwen3-32B"}, clear=True):
+            EnvConfig._reset()
+            cfg = EnvConfig.get()
+            assert cfg.siliconflow_model == "Qwen/Qwen3-32B"
+            assert cfg.deepseek_model == "Qwen/Qwen3-32B"
+
+    def test_siliconflow_model_beats_legacy_aliases(self):
+        with patch.dict(
+            os.environ,
+            {
+                "SILICONFLOW_MODEL": "deepseek-ai/DeepSeek-V3.2",
+                "QWEN_MODEL": "Qwen/Qwen3-32B",
+                "DEEPSEEK_MODEL": "Pro/moonshotai/Kimi-K2.5",
+            },
+            clear=True,
+        ):
+            EnvConfig._reset()
+            cfg = EnvConfig.get()
+            assert cfg.siliconflow_model == "deepseek-ai/DeepSeek-V3.2"
+
+    def test_default_siliconflow_model_uses_default_model(self):
+        with patch.dict(os.environ, {}, clear=True):
+            EnvConfig._reset()
+            cfg = EnvConfig.get()
+            assert cfg.siliconflow_model == DEFAULT_MODEL
 
     def test_rag_knowledge_dir_override(self):
         with patch.dict(os.environ, {"RAG_KNOWLEDGE_DIR": "/data/kb/"}):
@@ -244,13 +272,14 @@ class TestEnvConfigSummary:
         expected_keys = {
             "siliconflow_api_key",
             "siliconflow_base_url",
-            "deepseek_model",
+            "siliconflow_model",
             "default_llm_provider",
             "google_api_key",
             "google_credentials_path",
             "google_project",
             "google_location",
             "gemini_model",
+            "jina_api_key",
             "rag_knowledge_dir",
             "startup_skills_dir",
             "embedding_provider",

@@ -51,7 +51,13 @@ export const ProgressPanel: React.FC<Props> = ({
   const completedSteps = Math.min(rawCompleted, totalSteps);
   const pct = totalSteps > 0 ? Math.min(Math.round((completedSteps / totalSteps) * 100), 100) : 0;
   const allSearchDone = totalSteps > 0 && completedSteps >= totalSteps;
-  const terminated = !!error;
+  const terminalEvent = [...events].reverse().find(
+    (evt) => evt.event_type === 'research.failed' || evt.event_type === 'research.cancelled',
+  );
+  const terminated = !!terminalEvent;
+  const visibleError = terminalEvent
+    ? ((terminalEvent.payload.error as string) || (terminalEvent.payload.reason as string) || error || null)
+    : null;
   const elapsed = useElapsedTimer(events, terminated);
 
   const barColor = terminated
@@ -125,6 +131,12 @@ export const ProgressPanel: React.FC<Props> = ({
 
       {/* Thinking Trajectory (replaces flat Activity Log) */}
       <ThinkingTrajectory events={events} subQuestions={subQuestions} />
+
+      {visibleError && (
+        <div className="px-4 py-3 rounded-lg bg-red-900/30 border border-red-700/50 text-sm text-red-300">
+          {visibleError}
+        </div>
+      )}
 
       {/* Cancel — only when still running */}
       {!terminated && (

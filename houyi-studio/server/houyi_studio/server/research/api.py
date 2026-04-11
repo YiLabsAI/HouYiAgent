@@ -85,6 +85,9 @@ async def create_run(
             idempotency_key=body.idempotency_key,
             memory_context=body.memory_context,
         )
+    except TimeoutError as exc:
+        logger.error("create_run planning timeout: %s", exc)
+        raise HTTPException(504, detail=str(exc)) from exc
     except Exception as exc:
         logger.error("create_run failed: %s", exc, exc_info=True)
         raise HTTPException(502, detail=f"LLM/planning error: {exc}") from exc

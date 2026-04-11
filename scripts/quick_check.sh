@@ -2,6 +2,24 @@
 # Quick code quality check (faster, for frequent use)
 # Use this during development for quick feedback
 
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+    cat <<'EOF'
+Usage: ./scripts/quick_check.sh
+
+Run the fast local development checks.
+
+Options:
+  -h, --help    Show this help message and exit
+EOF
+    exit 0
+fi
+
+if [[ "$#" -gt 0 ]]; then
+    echo "Unknown option: $1" >&2
+    echo "Run ./scripts/quick_check.sh -h for usage." >&2
+    exit 2
+fi
+
 set -e
 
 echo "⚡ Running quick checks..."

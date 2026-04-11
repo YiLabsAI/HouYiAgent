@@ -15,9 +15,8 @@ import json
 import logging
 from typing import Any
 
-from pydantic import BaseModel, Field
-
 from houyi.adapters.llm.base import LLMAdapter
+from houyi.application.research.types import ClarificationResult
 
 logger = logging.getLogger(__name__)
 
@@ -44,16 +43,6 @@ Respond ONLY with JSON:
 """
 
 
-class ClarificationResult(BaseModel):
-    """Result of the clarification analysis."""
-
-    needs_clarification: bool = False
-    confidence: float = 0.8
-    issues: list[str] = Field(default_factory=list)
-    suggested_questions: list[str] = Field(default_factory=list)
-    refined_query: str | None = None
-
-
 class ClarificationAgent:
     """Analyzes query clarity and suggests improvements.
 
@@ -68,6 +57,8 @@ class ClarificationAgent:
 
     async def analyze(self, query: str) -> ClarificationResult:
         """Analyze query for ambiguity and suggest clarifications."""
+        if not query.strip():
+            return ClarificationResult(confidence=0.5)
         prompt = _CLARIFICATION_PROMPT.format(query=query)
         try:
             resp = await self._llm.chat(

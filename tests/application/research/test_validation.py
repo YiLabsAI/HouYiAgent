@@ -19,8 +19,10 @@ from houyi.application.research.validation import (
 class _MockLLM(LLMAdapter):
     def __init__(self, response: str) -> None:
         self._response = response
+        self.messages: list[list] = []
 
     async def chat(self, messages: list, **kw: Any) -> LLMResponse:
+        self.messages.append(messages)
         return LLMResponse(content=self._response, finish_reason="stop", model="mock")
 
     async def stream_chat(self, messages: list, **kw: Any) -> AsyncIterator[StreamChunk]:
@@ -110,6 +112,27 @@ class TestValidate:
         result = await agent.validate(report, "test query")
         assert result.sections == []
         assert result.overall_score == 0.0
+
+    async def test_validate_selected_sections(self):
+        llm = _MockLLM(_GOOD_SECTION)
+        agent = ValidationAgent(llm)
+        report = _report(3)
+        result = await agent.validate(report, "test query", section_titles={"Section 1"})
+        assert len(result.sections) == 1
+        assert result.sections[0].title == "Section 1"
+        assert len(llm.messages) == 1
+
+    async def test_validate_caps_content(self):
+        llm = _MockLLM(_GOOD_SECTION)
+        agent = ValidationAgent(llm)
+        report = ResearchReport(
+            report_id="rpt_long",
+            sections=[ReportSection(section_id="sec_long", title="Long", content="A" * 5000)],
+            summary="Test summary",
+        )
+        await agent.validate(report, "test query", content_char_limit=120)
+        prompt = llm.messages[0][0]["content"]
+        assert "A" * 121 not in prompt
 
 
 class TestParseValidation:

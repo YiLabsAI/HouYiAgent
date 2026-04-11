@@ -17,8 +17,10 @@ from houyi.application.research.runtime.clarification import (
 class _MockLLM(LLMAdapter):
     def __init__(self, response: str) -> None:
         self._response = response
+        self.call_count = 0
 
     async def chat(self, messages: list, **kw: Any) -> LLMResponse:
+        self.call_count += 1
         return LLMResponse(content=self._response, finish_reason="stop", model="mock")
 
     async def stream_chat(self, messages: list, **kw: Any) -> AsyncIterator[StreamChunk]:
@@ -63,6 +65,16 @@ class TestAnalyze:
         result = await agent.analyze("Compare HouYi vs LangChain in 2026")
         assert result.needs_clarification is False
         assert result.confidence > 0.9
+
+    async def test_clear_query_calls_llm(self):
+        llm = _MockLLM(_CLEAR_QUERY)
+        agent = ClarificationAgent(llm)
+        result = await agent.analyze(
+            "Compare HouYi and LangChain for enterprise agent orchestration in 2026"
+        )
+        assert result.needs_clarification is False
+        assert result.confidence > 0.9
+        assert llm.call_count == 1
 
     async def test_ambiguous_query(self):
         agent = ClarificationAgent(_MockLLM(_AMBIGUOUS_QUERY))

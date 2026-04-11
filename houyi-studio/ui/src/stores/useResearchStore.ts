@@ -5,8 +5,10 @@
  * reconnection support, and report retrieval.
  */
 import { create } from 'zustand';
+import { buildVisibleChatError, type ChatErrorPayload } from '@/utils/chatErrors';
 
 const API_BASE = '/api/research';
+const CREATE_RUN_TIMEOUT_MS = 90000;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -121,7 +123,7 @@ interface ResearchState {
   deleteSession: (sessionId: string) => Promise<void>;
   connectSSE: (sessionId: string) => void;
   disconnectSSE: () => void;
-  openSession: (sessionId: string) => Promise<void>;
+  openSession: (sessionId: string, options?: { preserveState?: boolean }) => Promise<void>;
   reset: () => void;
 }
 
@@ -136,6 +138,70 @@ async function researchFetch<T>(path: string, init?: RequestInit): Promise<T> {
   }
   if (res.status === 204) return undefined as T;
   return res.json();
+}
+
+function normalizeResearchError(message: string): string {
+  const raw = message.trim();
+  if (!raw) return 'Research request failed. Please try again.';
+
+  const payload = _toResearchChatErrorPayload(raw);
+  const mapped = buildVisibleChatError(payload, 'generic');
+  if (mapped && mapped.trim()) {
+    return mapped;
+  }
+  return 'Research request failed. Please try again.';
+}
+
+function _toResearchChatErrorPayload(raw: string): ChatErrorPayload {
+  const text = _extractErrorDetail(raw);
+  const normalized = text.replace(/^LLM\/planning error:\s*/i, '').trim();
+  const upper = normalized.toUpperCase();
+
+  if (
+    upper.includes('TIMED OUT') ||
+    upper.includes('TIMEOUT') ||
+    upper.includes('DEADLINE_EXCEEDED') ||
+    upper.includes('ABORTERROR')
+  ) {
+    return { error_code: 'provider_timeout', error: normalized };
+  }
+
+  if (
+    upper.includes('SERVER DISCONNECTED WITHOUT SENDING A RESPONSE') ||
+    upper.includes('REMOTEPROTOCOLERROR') ||
+    upper.includes('ECONNRESET') ||
+    upper.includes('NETWORK') ||
+    upper.includes('CONNECTION RESET')
+  ) {
+    return { error_code: 'provider_network_error', error: normalized };
+  }
+
+  if (upper.includes('429') || upper.includes('RESOURCE_EXHAUSTED') || upper.includes('RATE LIMIT')) {
+    return { error_code: 'provider_rate_limited', error: normalized };
+  }
+
+  if (upper.includes('401') || upper.includes('UNAUTHENTICATED') || upper.includes('INVALID API KEY')) {
+    return { error_code: 'provider_auth_failed', error: normalized };
+  }
+
+  return { error: normalized, error_code: 'provider_request_failed' };
+}
+
+function _extractErrorDetail(raw: string): string {
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    if (typeof parsed.public_message === 'string' && parsed.public_message.trim()) {
+      return parsed.public_message;
+    }
+    if (typeof parsed.detail === 'string' && parsed.detail.trim()) {
+      return parsed.detail;
+    }
+    if (typeof parsed.error === 'string' && parsed.error.trim()) {
+      return parsed.error;
+    }
+  } catch {
+  }
+  return raw;
 }
 
 const initialState = {
@@ -158,7 +224,9 @@ export const useResearchStore = create<ResearchState>((set, get) => ({
   ...initialState,
 
   createSession: async (query, settings) => {
-    set({ loading: true, error: null });
+    set({ loading: true, error: null, phase: 'planning', plan: null, sessionId: null });
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), CREATE_RUN_TIMEOUT_MS);
     try {
       const data = await researchFetch<{
         run_id: string;
@@ -167,6 +235,7 @@ export const useResearchStore = create<ResearchState>((set, get) => ({
       }>('/runs', {
         method: 'POST',
         body: JSON.stringify({ query, settings }),
+        signal: controller.signal,
       });
       set({
         sessionId: data.run_id,
@@ -175,7 +244,13 @@ export const useResearchStore = create<ResearchState>((set, get) => ({
         loading: false,
       });
     } catch (e) {
-      set({ error: (e as Error).message, loading: false });
+      set({
+        error: normalizeResearchError((e as Error).message),
+        loading: false,
+        phase: 'input',
+      });
+    } finally {
+      window.clearTimeout(timeout);
     }
   },
 
@@ -196,14 +271,24 @@ export const useResearchStore = create<ResearchState>((set, get) => ({
       );
       set({ plan: data.plan, loading: false });
     } catch (e) {
-      set({ error: (e as Error).message, loading: false });
+      set({ error: normalizeResearchError((e as Error).message), loading: false });
     }
   },
 
   confirmAndExecute: async () => {
     const { sessionId, connectSSE } = get();
     if (!sessionId) return;
-    set({ loading: true, error: null, phase: 'executing', progress: null, events: [] });
+    set({
+      loading: true,
+      error: null,
+      phase: 'executing',
+      progress: null,
+      events: [],
+      report: null,
+      searchResults: null,
+      lastEventId: null,
+      lastSequence: 0,
+    });
     try {
       await researchFetch(`/runs/${sessionId}/start`, {
         method: 'POST',
@@ -320,8 +405,12 @@ export const useResearchStore = create<ResearchState>((set, get) => ({
               }
 
               if (evt.event_type === 'research.completed') {
+                updates.phase = 'report';
+                updates.error = null;
                 get().disconnectSSE();
-                get().fetchReport();
+                set(updates);
+                void get().fetchReport();
+                continue;
               }
 
               if (evt.event_type === 'research.failed') {
@@ -339,6 +428,11 @@ export const useResearchStore = create<ResearchState>((set, get) => ({
               // skip malformed events
             }
           }
+        }
+
+        const latest = get();
+        if (latest.phase === 'executing' && latest.sessionId === sessionId) {
+          await latest.openSession(sessionId);
         }
       })
       .catch((e) => {
@@ -363,21 +457,26 @@ export const useResearchStore = create<ResearchState>((set, get) => ({
     }
   },
 
-  openSession: async (sessionId: string) => {
+  openSession: async (sessionId: string, options) => {
+    const preserveState = options?.preserveState ?? false;
     get().disconnectSSE();
-    set({
-      loading: true,
-      error: null,
-      sessionId,
-      events: [],
-      lastEventId: null,
-      lastSequence: 0,
-      plan: null,
-      report: null,
-      searchResults: null,
-      progress: null,
-      phase: 'input',
-    });
+    if (!preserveState) {
+      set({
+        loading: true,
+        error: null,
+        sessionId,
+        events: [],
+        lastEventId: null,
+        lastSequence: 0,
+        plan: null,
+        report: null,
+        searchResults: null,
+        progress: null,
+        phase: 'input',
+      });
+    } else {
+      set({ loading: true, error: null, sessionId });
+    }
     try {
       const data = await researchFetch<{
         run_id: string;
@@ -406,16 +505,38 @@ export const useResearchStore = create<ResearchState>((set, get) => ({
         phase = 'report';
       }
 
+      const isPlanningWithoutPlan = phase === 'planning' && !data.plan;
+      const isPendingPlanning = isPlanningWithoutPlan && !data.error;
+
+      const resolvedPhase: ResearchPhase =
+        isPlanningWithoutPlan && !isPendingPlanning ? 'input' : phase;
+      const resolvedError =
+        isPlanningWithoutPlan && !isPendingPlanning
+          ? normalizeResearchError(
+              data.error || 'This session has an incomplete plan state. Please start a new research run.',
+            )
+          : (data.error ? normalizeResearchError(data.error) : null);
+
       set({
         plan: data.plan,
         progress: data.progress,
         searchResults: data.search_results || null,
-        phase,
-        loading: false,
-        error: data.error || null,
+        phase: resolvedPhase,
+        loading: isPendingPlanning,
+        error: resolvedError,
       });
 
-      if (data.status === 'executing') {
+      if (isPendingPlanning) {
+        window.setTimeout(() => {
+          const current = get();
+          if (current.sessionId === sessionId && current.phase === 'planning' && !current.plan) {
+            void current.openSession(sessionId, { preserveState: true });
+          }
+        }, 1500);
+        return;
+      }
+
+      if (data.status === 'executing' || data.status === 'generating_report') {
         get().connectSSE(sessionId);
       } else if (data.status === 'completed') {
         get().fetchReport();

@@ -24,7 +24,6 @@ from houyi.infrastructure.config import (
     ENV_CHAT_DATA_DIR,
     ENV_CHAT_SETTINGS_PATH,
     ENV_CHAT_SYSTEM_PROMPT,
-    ENV_DEEPSEEK_MODEL,
     ENV_DEFAULT_LLM_PROVIDER,
     ENV_EMBEDDING_MODEL,
     ENV_EMBEDDING_PROVIDER,
@@ -35,6 +34,7 @@ from houyi.infrastructure.config import (
     ENV_HOUYI_PORT,
     ENV_SILICONFLOW_API_KEY,
     ENV_SILICONFLOW_BASE_URL,
+    EnvConfig,
 )
 from houyi.interface.protocol.ir import ExecutionStatus, PlanIR
 
@@ -345,10 +345,11 @@ async def lifespan(app: FastAPI):
     settings_path = os.getenv(ENV_CHAT_SETTINGS_PATH, "data/settings.json")
     json_store = JsonStore(data_dir=chat_data_dir)
     settings_store = SettingsStore(settings_path=settings_path)
+    env_config = EnvConfig.get()
     chat_service = ChatService(
         json_store=json_store,
         memory_store=memory_store,
-        default_model=os.getenv(ENV_DEEPSEEK_MODEL, DEFAULT_MODEL),
+        default_model=env_config.siliconflow_model or DEFAULT_MODEL,
         default_system_instructions=os.getenv(ENV_CHAT_SYSTEM_PROMPT, ""),
         settings_store=settings_store,
     )
@@ -410,7 +411,7 @@ async def lifespan(app: FastAPI):
             "  Base URL: %s",
             os.getenv(ENV_SILICONFLOW_BASE_URL, "https://api.siliconflow.cn/v1"),
         )
-        logger.info("  Model: %s", os.getenv(ENV_DEEPSEEK_MODEL, "deepseek-chat"))
+        logger.info("  Model: %s", EnvConfig.get().siliconflow_model or DEFAULT_MODEL)
     elif active_provider in ("vertex", "google", "vertex_ai", "gemini"):
         google_project = os.getenv(ENV_GOOGLE_CLOUD_PROJECT, "")
         google_creds = os.getenv(ENV_GOOGLE_APPLICATION_CREDENTIALS, "")

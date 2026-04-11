@@ -10,6 +10,8 @@ The canonical developer entrypoints are the `make` targets in the repo root. The
 
 - Shell scripts use `#!/usr/bin/env bash`.
 - Python scripts use `#!/usr/bin/env python3`.
+- Every top-level script in this directory should support `-h` / `--help` as a self-describing entrypoint.
+- Keep this README as a lightweight index. Detailed flags and examples belong to each script's own help output.
 
 This is the current repo convention for portability across environments where the interpreter location may differ.
 
@@ -53,152 +55,23 @@ make check-integration
 
 These commands are the canonical entrypoints. The shell scripts below are convenience wrappers.
 
-## Startup Scripts (Development)
+## Script Index
 
-### All-in-one: `dev.sh`
+Use `-h` or `--help` on the script itself for detailed flags and examples.
 
-Starts the backend and the UI in a single tmux session.
-
-```bash
-./scripts/dev.sh
-```
-
-Notes:
-- This script expects `tmux` to be installed.
-- The backend is started via `python -m houyi_studio.server`.
-- Before backend startup, it also runs embedding warmup (`scripts/warmup_embeddings.py`).
-
-### Split: `restart-backend.sh`
-
-Restarts only the backend (useful when iterating on Python code).
-
-```bash
-./scripts/restart-backend.sh
-```
-
-Notes:
-- This script runs embedding warmup before launching the backend.
-- Default embedding cache path is `${HOME}/.cache/fastembed`.
-- You can override it via environment variable:
-
-```bash
-FASTEMBED_CACHE_PATH=/custom/cache/path ./scripts/restart-backend.sh
-```
-
-### Warmup Helper: `warmup_embeddings.py`
-
-You can run warmup directly:
-
-```bash
-uv run python scripts/warmup_embeddings.py
-```
-
-Or run it as an executable script:
-
-```bash
-chmod +x scripts/warmup_embeddings.py
-./scripts/warmup_embeddings.py
-```
-
-It logs:
-- resolved embedding provider/model
-- cache directory snapshots (before/after)
-- warmup duration and likely cache-hit / first-download hint
-
-### Split: `restart-frontend.sh`
-
-Restarts only the UI (useful when iterating on frontend code).
-
-```bash
-./scripts/restart-frontend.sh
-```
-
-## Scripts
-
-### `quick_check.sh`
-
-**Purpose**: Fast feedback during development
-
-**What it does**:
-- ✅ Ruff auto-fix (formatting + basic linting)
-- ✅ Quick test run (fail fast)
-
-**When to use**: Run frequently during development for quick feedback
-
-**Time**: ~5-10 seconds
-
-### `check_code.sh`
-
-**Purpose**: Comprehensive checks before committing
-
-**What it does**:
-- ✅ Ruff formatting and linting (source code)
-- ✅ Ruff basic checks (tests)
-- ✅ Mypy type checking
-- ✅ Changed-file complexity and class-size gates
-- ✅ SDK tests excluding `tests/integration/`
-- ✅ Studio server tests
-- ✅ Runs SDK + server tests in parallel where possible
-- ✅ SDK-native coverage check across `tests/` → `houyi/` (must be ≥90%)
-- ✅ Combined SDK coverage check across SDK + server suites (must be ≥90%)
-
-**Note**: `check_code.sh` intentionally excludes integration tests and benchmark tests. It is the local static + unit gate that feeds `make check`.
-
-**When to use**: Before committing code, before opening PR
-
-**Time**: ~1-3 minutes (depends on test runtime)
-
-### `check_integration.sh`
-
-**Purpose**: Local-only integration gate for offline/mock integration coverage
-
-**What it does**:
-- ✅ Verifies local integration dependencies
-- ✅ Seeds and isolates the fastembed cache for integration tests
-- ✅ Starts an isolated backend on a dedicated integration port
-- ✅ Runs SDK + server integration tests excluding `live/` and excluding `benchmark`
-- ✅ Clears common external API keys so covered tests do not accidentally hit real LLM or web providers
-
-**When to use**: Before committing changes that touch integration behavior covered by the local gate. Real provider/live coverage belongs under `tests/integration/live/` and the explicit `test-*-integration-live` make targets.
-
-**Time**: Usually tens of seconds; should stay local and deterministic
-
-### `check_class_size.py`
-
-**Purpose**: Report or gate oversized SDK classes
-
-**What it does**:
-- ✅ Evaluates SDK class size against warning/error thresholds
-- ✅ Supports changed-file-only gating from `check_code.sh`
-
-**When to use**: Usually indirectly via `make check`; run directly only when investigating class-size warnings or tuning thresholds
-
-### `dev.sh`
-
-**Purpose**: Start backend and frontend together in tmux
-
-### `restart-backend.sh`
-
-**Purpose**: Restart only the backend during Python iteration
-
-### `restart-frontend.sh`
-
-**Purpose**: Restart only the frontend during UI iteration
-
-### `warmup_embeddings.py`
-
-**Purpose**: Warm embedding runtime and cache before backend startup or provider troubleshooting
-
-### `run_make_check.py`
-
-**Purpose**: Aggregate `make check` wrapper with a global wall-clock budget
-
-**What it does**:
-- ✅ Runs `check-unit`, `check-integration`, and `check-e2e-smoke` in sequence
-- ✅ Enforces the top-level `make check` time budget
-- ✅ Prints a per-phase timing summary
-
-**When to use**: Usually indirectly via `make check`; run directly only when diagnosing total gate runtime
+| Script | Category | Purpose |
+|---|---|---|
+| `quick_check.sh` | Quality gate | Fast local development checks |
+| `check_code.sh` | Quality gate | Main local code-quality gate behind `make check` |
+| `check_integration.sh` | Quality gate | Local integration gate for env-backed coverage |
+| `check_class_size.py` | Quality gate | Report or gate oversized SDK classes |
+| `run_make_check.py` | Quality gate | Wrapper that enforces a global wall-clock budget for `make check` |
+| `dev.sh` | Dev startup | Start backend and frontend together in tmux |
+| `restart-backend.sh` | Dev startup | Restart the local backend service |
+| `restart-frontend.sh` | Dev startup | Restart the local frontend dev server |
+| `warmup_embeddings.py` | Dev startup | Warm local embedding runtime and print cache diagnostics |
+| `run_benchmark.py` | Benchmark | Legacy HouYi benchmark runner for internal/raw benchmark generation |
+| `run_benchmark_v2.py` | Benchmark | Bench II-aligned runner: generate HouYi articles, then invoke the official-style sidecar scoring flow |
 
 ## README Maintenance Rule
 

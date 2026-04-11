@@ -19,6 +19,7 @@ from houyi.application.research.types import (
     PlanEdit,
     PlanEditOperation,
     PlanStatus,
+    ResearchPlan,
     ResearchSettings,
     ResearchStatus,
     SufficiencyDecision,
@@ -153,6 +154,13 @@ _CLARIFICATION_PASS_JSON = json.dumps(
     }
 )
 
+
+def _plan_with_clarification(plan_json: str, clarification_json: str) -> str:
+    plan_data = json.loads(plan_json)
+    plan_data["clarification"] = json.loads(clarification_json)
+    return json.dumps(plan_data)
+
+
 _VALIDATION_JSON = json.dumps(
     {
         "quality_score": 80,
@@ -256,6 +264,14 @@ class TestConfirmPlan:
         with pytest.raises(ResearchPlanMissingError, match="No plan to confirm"):
             await session.confirm_plan()
 
+    async def test_confirm_rejects_invalid_plan(self):
+        llm = MockLLM()
+        ws = make_mock_web_search()
+        session = ResearchRuntime(llm_adapter=llm, web_search=ws, settings=_QUICK)
+        session._plan = ResearchPlan(query="test")
+        with pytest.raises(ResearchStateError, match="no sub-questions"):
+            await session.confirm_plan()
+
 
 class TestExecute:
     async def test_full_lifecycle_direct(self):
@@ -306,7 +322,7 @@ class TestExecute:
             patch.object(
                 SearchExecutor,
                 "_generate_queries",
-                new=AsyncMock(return_value=["shared query"]),
+                new=AsyncMock(return_value=(["shared query"], {})),
             ),
             patch.object(
                 SearchExecutor,
@@ -342,6 +358,14 @@ class TestExecute:
         ws = make_mock_web_search()
         session = ResearchRuntime(llm_adapter=llm, web_search=ws, settings=_QUICK)
         with pytest.raises(ResearchPlanMissingError, match="No plan"):
+            await session.execute()
+
+    async def test_execute_rejects_invalid_plan(self):
+        llm = MockLLM()
+        ws = make_mock_web_search()
+        session = ResearchRuntime(llm_adapter=llm, web_search=ws, settings=_QUICK)
+        session._plan = ResearchPlan(query="test", status=PlanStatus.DRAFT)
+        with pytest.raises(ResearchStateError, match="no sub-questions"):
             await session.execute()
 
     async def test_execute_timeout(self):
@@ -661,11 +685,11 @@ class TestBoundaryAndInteraction:
         assert session.status == ResearchStatus.COMPLETED
 
     async def test_search_failure_propagates(self):
-        no_sources = json.dumps({"sources": [], "summary": "No results found", "queries_used": []})
         llm = MockLLM(
             responses=[
                 _PLAN_ONE_Q,
-                no_sources,
+                _QUERY_GEN_RESPONSE,
+                _SUFFICIENCY_TRUE,
                 _SECTION_JSON,
                 "Summary.",
                 _RACE_JSON,
@@ -673,10 +697,11 @@ class TestBoundaryAndInteraction:
             ],
         )
         ws = make_mock_web_search()
+        ws.search.return_value.results = []
         session = ResearchRuntime(
             llm_adapter=llm,
             web_search=ws,
-            settings=ResearchSettings(max_search_rounds=1),
+            settings=ResearchSettings(depth="quick", max_search_rounds=1),
         )
         await session.start("test")
         await session.confirm_plan()
@@ -814,26 +839,50 @@ class TestBoundaryAndInteraction:
         assert session.status == ResearchStatus.COMPLETED
 
     async def test_clarification_refines_query(self):
-        """Standard depth triggers ClarificationAgent; low confidence uses refined query."""
-        import json as _json
-
-        clarification_resp = _json.dumps(
-            {
-                "needs_clarification": True,
-                "confidence": 0.5,
-                "issues": ["ambiguous"],
-                "suggested_questions": ["Which aspect?"],
-                "refined_query": "AI agent framework comparison 2026",
-            }
+        """Standard depth replans only when the planner returns low-confidence refinement metadata."""
+        first_plan = _plan_with_clarification(
+            _PLAN_ONE_Q,
+            json.dumps(
+                {
+                    "needs_clarification": True,
+                    "confidence": 0.5,
+                    "issues": ["Query scope is ambiguous"],
+                    "suggested_questions": ["What time period?"],
+                    "refined_query": "AI agent frameworks 2025 comparison",
+                }
+            ),
         )
         std_settings = ResearchSettings(depth="standard")
-        responses = [clarification_resp, _PLAN_ONE_Q]
+        responses = [first_plan, _PLAN_ONE_Q]
         llm = MockLLM(responses=responses)
         ws = make_mock_web_search()
         session = ResearchRuntime(llm_adapter=llm, web_search=ws, settings=std_settings)
         plan = await session.start("AI frameworks")
         assert session._clarification is not None
-        assert session._clarification.refined_query == "AI agent framework comparison 2026"
+        assert session._clarification.refined_query == "AI agent frameworks 2025 comparison"
+        assert plan.query == "AI agent frameworks 2025 comparison"
+        assert session.status == ResearchStatus.PLAN_READY
+
+    async def test_clear_standard_query_skips_replan(self):
+        first_plan = _plan_with_clarification(
+            _PLAN_ONE_Q,
+            json.dumps(
+                {
+                    "needs_clarification": False,
+                    "confidence": 0.9,
+                    "issues": [],
+                    "suggested_questions": [],
+                    "refined_query": None,
+                }
+            ),
+        )
+        llm = MockLLM(responses=[first_plan])
+        ws = make_mock_web_search()
+        session = ResearchRuntime(
+            llm_adapter=llm, web_search=ws, settings=ResearchSettings(depth="standard")
+        )
+        await session.start("AI frameworks")
+        assert llm._call_count == 1
 
     async def test_executor_finds_sources(self):
         """SearchExecutor returns sources through multi-round search."""
@@ -923,6 +972,9 @@ class TestBoundaryAndInteraction:
         assert len(received) >= 1
         types = {m.message_type.value for m in received}
         assert "task.delegate" in types or "task.result" in types
+        delegate_payloads = [m.payload for m in received if m.message_type.value == "task.delegate"]
+        assert delegate_payloads
+        assert all(payload.get("question_id") for payload in delegate_payloads)
 
     async def test_autonomous_shared_metadata(self):
         llm = MockLLM(responses=[_PLAN_JSON])
@@ -936,7 +988,7 @@ class TestBoundaryAndInteraction:
             patch.object(
                 SearchExecutor,
                 "_generate_queries",
-                new=AsyncMock(return_value=["shared query"]),
+                new=AsyncMock(return_value=(["shared query"], {})),
             ),
             patch.object(
                 SearchExecutor,
@@ -1021,11 +1073,14 @@ class TestBoundaryAndInteraction:
 def _standard_runtime_responses(
     clarification_json: str = _CLARIFICATION_PASS_JSON,
 ) -> list[str]:
-    """Standard depth: clarification + plan + 2×(query_gen+sufficiency) + 2 intermediates
+    """Standard depth: planner draft (+ optional replan) + 2×(query_gen+sufficiency) + 2 intermediates
     + 2 sections + summary + 2 validations + RACE + FACT."""
+    clarification = json.loads(clarification_json)
+    plan_responses = [_plan_with_clarification(_PLAN_JSON, clarification_json)]
+    if clarification.get("needs_clarification") and clarification.get("refined_query"):
+        plan_responses.append(_PLAN_JSON)
     return [
-        clarification_json,
-        _PLAN_JSON,
+        *plan_responses,
         _QUERY_GEN_RESPONSE,
         _SUFFICIENCY_TRUE,
         _QUERY_GEN_RESPONSE,

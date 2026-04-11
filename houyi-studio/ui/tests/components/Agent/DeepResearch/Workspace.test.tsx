@@ -7,9 +7,12 @@ import { DeepResearchWorkspace } from '@/components/Agent/DeepResearch/Workspace
 
 const mockStore: Record<string, any> = {
   phase: 'input',
+  sessionId: null,
   plan: null,
   progress: null,
   report: null,
+  searchResults: null,
+  sessions: [],
   error: null,
   loading: false,
   createSession: vi.fn(),
@@ -67,9 +70,12 @@ describe('DeepResearchWorkspace', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockStore.phase = 'input';
+    mockStore.sessionId = null;
     mockStore.plan = null;
     mockStore.progress = null;
     mockStore.report = null;
+    mockStore.searchResults = null;
+    mockStore.sessions = [];
     mockStore.error = null;
     mockStore.loading = false;
     mockStore.createSession = vi.fn().mockResolvedValue(undefined);
@@ -77,6 +83,15 @@ describe('DeepResearchWorkspace', () => {
     mockStore.cancelSession = vi.fn();
     mockStore.reset = vi.fn();
     mockStore.events = [];
+  });
+
+  it('restores query text from recent failed session metadata', () => {
+    mockStore.phase = 'input';
+    mockStore.sessionId = 's-failed';
+    mockStore.error = 'Planning failed';
+    mockStore.sessions = [{ run_id: 's-failed', query: 'impact of ai on healthcare', status: 'failed' }];
+    render(<DeepResearchWorkspace />);
+    expect(screen.getByPlaceholderText(/what would you like to research/i)).toHaveValue('impact of ai on healthcare');
   });
 
   it('renders input phase — textarea and Start Research disabled when empty', () => {
@@ -120,10 +135,26 @@ describe('DeepResearchWorkspace', () => {
     expect(screen.getByTestId('plan-editor')).toHaveAttribute('data-version', '2');
   });
 
+  it('shows planning placeholder while plan is loading', () => {
+    mockStore.phase = 'planning';
+    mockStore.plan = null;
+    mockStore.loading = true;
+    render(<DeepResearchWorkspace />);
+    expect(screen.getByText('Generating research plan...')).toBeInTheDocument();
+  });
+
   it('shows executing phase', () => {
     mockStore.phase = 'executing';
     render(<DeepResearchWorkspace />);
     expect(screen.getByTestId('progress-panel')).toBeInTheDocument();
+  });
+
+  it('hides stale error banner while executing', () => {
+    mockStore.phase = 'executing';
+    mockStore.error = 'Previous attempt failed';
+    render(<DeepResearchWorkspace />);
+    expect(screen.getByTestId('progress-panel')).toBeInTheDocument();
+    expect(screen.queryByText('Previous attempt failed')).not.toBeInTheDocument();
   });
 
   it('shows report phase', () => {

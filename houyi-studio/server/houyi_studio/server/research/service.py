@@ -7,6 +7,7 @@ Runs are persisted as JSON and rehydrated on startup so that history
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import json
 import logging
@@ -37,6 +38,7 @@ from houyi.application.runtime.events import EventEmitter
 from houyi.infrastructure.config.env_config import (
     ENV_RESEARCH_MAX_AGENTS,
     ENV_RESEARCH_ORCHESTRATION_MODE,
+    ENV_RESEARCH_PLAN_TIMEOUT_SECONDS,
 )
 from houyi.skills.web_search.service import WebSearchService
 
@@ -44,6 +46,7 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_ORCHESTRATION_MODE = OrchestrationMode.DELEGATE
 _DEFAULT_MAX_AGENTS = 3
+_DEFAULT_PLAN_TIMEOUT_SECONDS = 120
 _SETTINGS_FIELD_ORCHESTRATION_MODE = "orchestration_mode"
 _SETTINGS_FIELD_MAX_AGENTS = "max_agents"
 _SUB_AGENT_MODES = (OrchestrationMode.DELEGATE, OrchestrationMode.AUTONOMOUS)
@@ -59,6 +62,7 @@ class _ArchivedRun:
     def __init__(self, data: dict[str, Any]) -> None:
         self.run_id: str = data["run_id"]
         self._status_str: str = data.get("status", "failed")
+        self._input_query: str = data.get("input_query", "")
         self._plan_data: dict[str, Any] | None = data.get("plan")
         self._progress_data: dict[str, Any] = data.get("progress", {})
         self._error: str | None = data.get("error")
@@ -129,6 +133,7 @@ class ResearchService:
     MAX_CONCURRENT_RUNS = 3
     _DEFAULT_ORCHESTRATION_ENV = ENV_RESEARCH_ORCHESTRATION_MODE
     _DEFAULT_MAX_AGENTS_ENV = ENV_RESEARCH_MAX_AGENTS
+    _PLAN_TIMEOUT_ENV = ENV_RESEARCH_PLAN_TIMEOUT_SECONDS
 
     @staticmethod
     def _created_at_to_epoch(created_at: str | None) -> float:
@@ -170,6 +175,20 @@ class ResearchService:
                 _DEFAULT_MAX_AGENTS,
             )
             return _DEFAULT_MAX_AGENTS
+
+    @classmethod
+    def _plan_timeout_seconds(cls) -> int:
+        raw = os.getenv(cls._PLAN_TIMEOUT_ENV, str(_DEFAULT_PLAN_TIMEOUT_SECONDS)).strip()
+        try:
+            return max(10, int(raw))
+        except ValueError:
+            logger.warning(
+                "Invalid %s=%r, fallback to %d",
+                cls._PLAN_TIMEOUT_ENV,
+                raw,
+                _DEFAULT_PLAN_TIMEOUT_SECONDS,
+            )
+            return _DEFAULT_PLAN_TIMEOUT_SECONDS
 
     @classmethod
     def _resolve_settings(cls, settings: ResearchSettings | None) -> ResearchSettings:
@@ -268,12 +287,28 @@ class ResearchService:
             event_emitter=emitter,
             memory_context=memory_context,
         )
-        plan = await runtime.start(query)
+        runtime._input_query = query
         self._runs[runtime.run_id] = runtime
         self._emitters[runtime.run_id] = emitter
         self._attach_buffer_listener(runtime.run_id, emitter)
         if idempotency_key:
             self._idempotency[idempotency_key] = runtime.run_id
+
+        self._persist_run(runtime)
+        timeout_seconds = self._plan_timeout_seconds()
+        try:
+            async with asyncio.timeout(timeout_seconds):
+                plan = await runtime.start(query)
+        except TimeoutError as exc:
+            runtime._error = f"Planning timed out after {timeout_seconds}s"
+            runtime._status = ResearchStatus.FAILED
+            self._persist_run(runtime)
+            raise TimeoutError(runtime._error) from exc
+        except Exception as exc:
+            runtime._error = str(exc)
+            runtime._status = ResearchStatus.FAILED
+            self._persist_run(runtime)
+            raise
 
         self._persist_run(runtime)
         return runtime, plan
@@ -315,7 +350,14 @@ class ResearchService:
         Must be called synchronously before ``asyncio.create_task`` so that
         the ``EventEmitter`` is registered before the frontend connects SSE.
         """
-        return self._require_live_run(run_id)
+        runtime = self._require_live_run(run_id)
+        # Retry reuses the same run_id, so stale buffered envelopes must be
+        # cleared in place before the next attempt starts. Reassigning the list
+        # would not help because the always-on emitter listener closes over it.
+        buffer = self._event_buffers.get(run_id)
+        if buffer is not None:
+            buffer.clear()
+        return runtime
 
     async def launch_run(self, run_id: str) -> None:
         """Confirm plan, execute, and extract memory candidates on success."""
@@ -384,7 +426,9 @@ class ResearchService:
                 {
                     "run_id": runtime.run_id,
                     "status": runtime.status.value,
-                    "query": runtime.plan.query if runtime.plan else "",
+                    "query": runtime.plan.query
+                    if runtime.plan
+                    else getattr(runtime, "_input_query", ""),
                     "progress": runtime.progress.model_dump(),
                     "error": getattr(runtime, "_error", None) or getattr(runtime, "error", None),
                     "created_at": created_at,
@@ -510,6 +554,7 @@ class ResearchService:
         data = {
             "run_id": runtime.run_id,
             "status": runtime.status.value,
+            "input_query": getattr(runtime, "_input_query", ""),
             "plan": runtime.plan.model_dump() if runtime.plan else None,
             "settings": runtime._settings.model_dump() if hasattr(runtime, "_settings") else None,
             "progress": runtime.progress.model_dump(),

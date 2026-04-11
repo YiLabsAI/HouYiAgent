@@ -96,11 +96,26 @@ class ValidationAgent:
         self._threshold = quality_threshold
         self._llm_kwargs = llm_kwargs
 
-    async def validate(self, report: ResearchReport, query: str) -> ValidationReport:
+    async def validate(
+        self,
+        report: ResearchReport,
+        query: str,
+        *,
+        section_titles: set[str] | None = None,
+        content_char_limit: int | None = None,
+    ) -> ValidationReport:
         """Validate all sections and return a quality report."""
         import asyncio
 
-        coros = [self._validate_section(section, query) for section in report.sections]
+        sections = [
+            section
+            for section in report.sections
+            if not section_titles or section.title in section_titles
+        ]
+        coros = [
+            self._validate_section(section, query, content_char_limit=content_char_limit)
+            for section in sections
+        ]
         results = list(await asyncio.gather(*coros))
 
         needs_rewrite = sum(1 for r in results if r.needs_rewrite)
@@ -115,10 +130,16 @@ class ValidationAgent:
             total_issues=total_issues,
         )
 
-    async def _validate_section(self, section: ReportSection, query: str) -> SectionValidation:
+    async def _validate_section(
+        self,
+        section: ReportSection,
+        query: str,
+        *,
+        content_char_limit: int | None = None,
+    ) -> SectionValidation:
         prompt = _VALIDATION_PROMPT.format(
             title=section.title,
-            content=section.content[:3000],
+            content=section.content[: content_char_limit or 3000],
             query=query,
         )
         try:

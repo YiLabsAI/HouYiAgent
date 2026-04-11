@@ -1,13 +1,13 @@
-"""Tests for houyi.arena.benchmark_runner."""
-
 from __future__ import annotations
 
 import json
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 
+import houyi.arena.benchmark_runner as benchmark_runner_module
+from houyi.application.research.types import ResearchSettings
 from houyi.arena.benchmark_runner import (
     BenchmarkResult,
     BenchmarkRunner,
@@ -82,6 +82,14 @@ class TestAppendMetrics:
             search_elapsed_ms=210.4,
             quality_score=88.8,
             phase_timings_ms={"report_generate_ms": 100.1, "total_ms": 300.3},
+            section_input_metrics=[
+                {
+                    "section_id": "sec_1",
+                    "title": "Overview",
+                    "relevant_source_count": 7,
+                    "intermediate_context_chars": 320,
+                }
+            ],
         )
 
         _append_metrics(metrics_path, result)
@@ -93,6 +101,8 @@ class TestAppendMetrics:
         assert row["duration_seconds"] == 12.5
         assert row["search_elapsed_ms"] == 210.4
         assert row["phase_timings_ms"]["total_ms"] == 300.3
+        assert row["section_input_metrics"][0]["relevant_source_count"] == 7
+        assert row["section_input_metrics"][0]["intermediate_context_chars"] == 320
 
 
 class TestBuildSummary:
@@ -140,8 +150,30 @@ class TestReportToArticle:
 
         article = _report_to_article(report)
         assert "# Test Report" in article
-        assert "[ref_1](https://example.com)" in article
+        assert "[Source 1](https://example.com)" in article
         assert "## References" in article
+
+    def test_falls_back_to_reference_id_when_title_missing(self):
+        report = MagicMock()
+        report.title = "Test Report"
+        report.summary = ""
+
+        ref = MagicMock()
+        ref.reference_id = "ref_1"
+        ref.url = "https://example.com"
+        ref.title = ""
+        report.references = [ref]
+
+        section = MagicMock()
+        section.title = "Section 1"
+        section.content = "Claim A [ref_1]."
+        cit = MagicMock()
+        cit.reference_id = "ref_1"
+        section.citations = [cit]
+        report.sections = [section]
+
+        article = _report_to_article(report)
+        assert "[ref_1](https://example.com)" in article
 
 
 class TestRunnerInit:
@@ -196,3 +228,31 @@ class TestRunnerExecute:
             summary = await runner.run(q_path, out_path, resume=False)
 
         assert summary.failed == 1
+
+    async def test_keeps_phase_timings(self, tmp_path: Path):
+        q_path = tmp_path / "q.jsonl"
+        q_path.write_text('{"id": "1", "prompt": "Q1"}\n')
+        out_path = tmp_path / "out.jsonl"
+
+        llm = MagicMock()
+        ws = MagicMock()
+        runner = BenchmarkRunner(
+            llm_adapter=llm, web_search=ws, settings=ResearchSettings(depth="quick"), concurrency=1
+        )
+
+        runtime = AsyncMock()
+        runtime.start = AsyncMock(return_value=None)
+        runtime.confirm_plan = AsyncMock(return_value=None)
+        runtime.execute = AsyncMock(side_effect=RuntimeError("boom"))
+        runtime.phase_timings_ms = {"partial_total_ms": 321.0}
+        runtime.aggregate_ms = 12.0
+        runtime.intermediate_ms = 0.0
+        runtime.search_elapsed_ms = 45.0
+        runtime._runtime_timeout = Mock(return_value=1)
+
+        with patch.object(benchmark_runner_module, "ResearchRuntime", return_value=runtime):
+            result = await runner._execute_query(_load_queries(q_path)[0])
+
+        assert result.error == "boom"
+        assert result.phase_timings_ms["partial_total_ms"] == 321.0
+        assert result.phase_timings_ms["aggregate_ms"] == 12.0

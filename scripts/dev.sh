@@ -1,6 +1,24 @@
 #!/usr/bin/env bash
 # Dev startup script - uses tmux to run backend + frontend and show logs
 
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+    cat <<'EOF'
+Usage: ./scripts/dev.sh
+
+Start the local backend and frontend together in a tmux session.
+
+Options:
+  -h, --help    Show this help message and exit
+EOF
+    exit 0
+fi
+
+if [[ "$#" -gt 0 ]]; then
+    echo "Unknown option: $1" >&2
+    echo "Run ./scripts/dev.sh -h for usage." >&2
+    exit 2
+fi
+
 SESSION_NAME="houyi-dev"
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 

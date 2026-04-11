@@ -134,6 +134,7 @@ class ResearchSettings(BaseModel):
         default_factory=lambda: [ExportFormat.MARKDOWN],
     )
     max_search_rounds: int = 0
+    enable_quality_evaluation: bool = True
 
     def model_post_init(self, __context: Any) -> None:
         if self.max_search_rounds == 0:
@@ -150,6 +151,16 @@ class PlanEdit(BaseModel):
     new_priority: int | None = None
     new_search_strategy: SearchStrategy | None = None
     reason: str | None = None
+
+
+class ClarificationResult(BaseModel):
+    """Structured clarification metadata attached to planning decisions."""
+
+    needs_clarification: bool = False
+    confidence: float = 0.8
+    issues: list[str] = Field(default_factory=list)
+    suggested_questions: list[str] = Field(default_factory=list)
+    refined_query: str | None = None
 
 
 class ResearchPlan(BaseModel):
@@ -182,12 +193,16 @@ class SearchContext(BaseModel):
     prior_findings: list[str] = Field(default_factory=list)
     excluded_urls: list[str] = Field(default_factory=list)
     preferred_domains: list[str] = Field(default_factory=list)
+    # Optional runtime caps. `0` means "let the budget policy decide" instead of forcing a hard limit here.
     max_results_per_query: int = 0
     max_query_parallelism: int = 0
     max_total_sources: int = 100
     max_query_budget_ms: int = 0
     max_round_budget_ms: int = 0
     max_sub_question_budget_ms: int = 0
+    # Only enabled on timeout-managed benchmark/runtime paths where returning the last complete round is
+    # better than discarding all search evidence. Normal user cancellation should still propagate directly.
+    salvage_on_cancel: bool = False
 
 
 class SearchHit(BaseModel):
@@ -206,17 +221,22 @@ class SearchHit(BaseModel):
 class SufficiencyFeatures(BaseModel):
     """Structured evidence features used for stop/continue decisions."""
 
+    # Absolute evidence counts collected so far.
     source_count: int = 0
     relevant_source_count: int = 0
     domain_count: int = 0
     provider_count: int = 0
     authority_source_count: int = 0
     recent_source_count: int = 0
+    # Normalized quality signals derived from the counts above. These are the core observability features
+    # used by guardrails / sufficiency decisions and are persisted for later attribution.
     relevance_score: float = 0.0
     diversity_score: float = 0.0
     authority_score: float = 0.0
     recency_score: float = 0.0
+    # Fast boolean for "do we already have at least one primary / authoritative source".
     has_primary_source: bool = False
+    # Human-readable gaps still open after evaluating the current evidence set.
     missing_dimensions: list[str] = Field(default_factory=list)
 
 
@@ -244,8 +264,17 @@ class SearchRound(BaseModel):
     cancelled_queries: int = 0
     decision_by: str = ""
     reason_code: str = ""
+    # Which layer stopped the round: empty string means "normal continue/sufficiency path".
     stop_layer: str = ""
+    # Round-level marginal-yield telemetry: how much genuinely new evidence this round produced.
+    new_unique_urls: int = 0
+    new_domains: int = 0
+    zero_hit_query_count: int = 0
+    duplicate_url_rate: float = 0.0
+    # Cached count form of `missing_dimensions` for quick telemetry / aggregation consumers.
+    missing_dimensions_count: int = 0
     missing_dimensions: list[str] = Field(default_factory=list)
+    # Snapshot of structured evidence state at the moment this round finished.
     features: SufficiencyFeatures | None = None
 
 
@@ -335,6 +364,7 @@ class ReportMetadata(BaseModel):
     quality_overall: float | None = None
     generated_by_mode: OrchestrationMode = OrchestrationMode.DELEGATE
     duration_seconds: float | None = None
+    section_input_metrics: list[dict[str, int | str]] = Field(default_factory=list)
 
 
 class ResearchReport(BaseModel):

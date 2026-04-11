@@ -35,11 +35,12 @@ const DEPTH_CARDS: Array<{
 ];
 
 export const DeepResearchWorkspace: React.FC = () => {
-  const { phase, sessionId, plan, progress, report, searchResults, error, loading, createSession, confirmAndExecute, cancelSession, reset, events } = useResearchStore();
+  const { phase, sessionId, plan, progress, report, searchResults, sessions, error, loading, createSession, confirmAndExecute, cancelSession, reset, events } = useResearchStore();
   const [query, setQuery] = useState('');
   const [depth, setDepth] = useState<ResearchDepthOption>('standard');
   const prevPhaseRef = React.useRef(phase);
   const [justCompleted, setJustCompleted] = React.useState(false);
+  const showErrorBanner = !!error && phase !== 'executing' && !loading;
 
   React.useEffect(() => {
     if (prevPhaseRef.current === 'executing' && phase === 'report') {
@@ -55,6 +56,16 @@ export const DeepResearchWorkspace: React.FC = () => {
       window.history.replaceState(null, '', `#/research/${sessionId}`);
     }
   }, [sessionId]);
+
+  React.useEffect(() => {
+    if (phase !== 'input' || !sessionId || query.trim()) {
+      return;
+    }
+    const session = sessions.find((s) => s.run_id === sessionId);
+    if (session?.query) {
+      setQuery(session.query);
+    }
+  }, [phase, sessionId, query, sessions]);
 
   const handleSubmit = async () => {
     if (!query.trim()) return;
@@ -87,7 +98,7 @@ export const DeepResearchWorkspace: React.FC = () => {
           )}
         </div>
 
-        {error && (
+        {showErrorBanner && (
           <div className="px-4 py-3 rounded-lg bg-red-900/30 border border-red-700/50 text-sm text-red-300">
             {error}
           </div>
@@ -154,6 +165,24 @@ export const DeepResearchWorkspace: React.FC = () => {
           </div>
         )}
 
+        {phase === 'planning' && !plan && !loading && (
+          <div className="rounded-xl border border-amber-700/50 bg-amber-900/20 p-6 space-y-3">
+            <p className="text-sm text-amber-200">Plan is unavailable for this session.</p>
+            <p className="text-xs text-amber-300/80">
+              This usually means the run was interrupted before plan generation completed.
+            </p>
+            <div className="flex justify-end">
+              <button
+                type="button"
+                onClick={reset}
+                className="px-4 py-2 text-xs rounded border border-amber-600/60 text-amber-200 hover:bg-amber-700/20 transition-colors"
+              >
+                Start New Research
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Phase: Planning */}
         {phase === 'planning' && plan && (
           <PlanEditor
@@ -161,6 +190,20 @@ export const DeepResearchWorkspace: React.FC = () => {
             onConfirm={confirmAndExecute}
             loading={loading}
           />
+        )}
+
+        {phase === 'planning' && !plan && loading && (
+          <div className="rounded-xl border border-gray-700/50 bg-gray-800/30 p-6">
+            <div className="flex items-center gap-3">
+              <Loader2 size={16} className="text-purple-400 animate-spin" />
+              <div className="space-y-1">
+                <p className="text-sm text-gray-200">Generating research plan...</p>
+                <p className="text-xs text-gray-500">
+                  Analyzing the query and decomposing it into sub-questions.
+                </p>
+              </div>
+            </div>
+          </div>
         )}
 
         {/* Phase: Executing */}

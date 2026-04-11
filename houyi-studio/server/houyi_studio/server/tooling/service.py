@@ -33,13 +33,10 @@ from houyi.application.tool_calling.tool_hooks.web_search import build_web_searc
 from houyi.domain.skill.hooks import DEFAULT_HOOKS_MANAGER
 from houyi.domain.skill.registry import DEFAULT_SKILL_REGISTRY, SkillRegistry
 from houyi.infrastructure.config import (
-    ENV_DEEPSEEK_MODEL,
     ENV_FRESH_REPLAY_USE_TOOL_CACHE,
     ENV_FRESH_REPLAY_USE_WEB_SEARCH_CACHE,
     ENV_OPENAI_API_KEY,
     ENV_OPENAI_BASE_URL,
-    ENV_SILICONFLOW_API_KEY,
-    ENV_SILICONFLOW_BASE_URL,
     ENV_TOOLCALL_ADAPTER,
     ENV_TOOLCALL_FAST_PATH,
     ENV_TOOLCALL_MAX_PARALLEL_CALLS,
@@ -47,6 +44,7 @@ from houyi.infrastructure.config import (
     ENV_TOOLCALL_MAX_TOKENS,
     ENV_TOOLCALL_MODEL,
     ENV_TOOLCALL_TIMEOUT,
+    EnvConfig,
 )
 from houyi.interface.protocol.ir import ExecutionIR, NodeExecutionIR
 from houyi.interface.protocol.ir.tooling_ir import LLMToolCallOutputIR
@@ -142,10 +140,12 @@ class ToolCallService:
             skill_filter=tool_names,
             include_core=False,
         )
-        api_key = os.getenv(ENV_SILICONFLOW_API_KEY) or os.getenv(ENV_OPENAI_API_KEY)
-        base_url = os.getenv(ENV_SILICONFLOW_BASE_URL) or os.getenv(ENV_OPENAI_BASE_URL)
+        env_config = EnvConfig.get()
+        env_config.reload()
+        api_key = env_config.siliconflow_api_key or os.getenv(ENV_OPENAI_API_KEY)
+        base_url = env_config.siliconflow_base_url or os.getenv(ENV_OPENAI_BASE_URL)
         tool_model = (
-            os.getenv(ENV_TOOLCALL_MODEL) or model or os.getenv(ENV_DEEPSEEK_MODEL) or DEFAULT_MODEL
+            os.getenv(ENV_TOOLCALL_MODEL) or model or env_config.siliconflow_model or DEFAULT_MODEL
         )
         toolcall_adapter = (os.getenv(ENV_TOOLCALL_ADAPTER) or "real").strip().lower()
         toolcall_max_tokens = os.getenv(ENV_TOOLCALL_MAX_TOKENS)

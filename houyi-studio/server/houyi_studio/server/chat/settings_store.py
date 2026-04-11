@@ -9,11 +9,15 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, Field
+
+from houyi.adapters.llm.models import DEEPSEEK_R1, DEEPSEEK_V3, DEEPSEEK_V3_2, QWEN3_32B
+from houyi.infrastructure.config import ENV_SILICONFLOW_API_KEY, EnvConfig
 
 logger = logging.getLogger(__name__)
 
@@ -149,10 +153,6 @@ class SettingsStore:
         Returns:
             List of dicts with 'model' and 'provider' keys.
         """
-        import os
-
-        from houyi.infrastructure.config import ENV_DEEPSEEK_MODEL, ENV_SILICONFLOW_API_KEY
-
         settings = self.get()
         models = []
         has_siliconflow = False
@@ -172,16 +172,9 @@ class SettingsStore:
 
         # Auto-include env-configured SiliconFlow models if not in settings
         if not has_siliconflow and os.getenv(ENV_SILICONFLOW_API_KEY):
-            from houyi.adapters.llm import DEFAULT_MODEL
-
-            env_model = os.getenv(ENV_DEEPSEEK_MODEL, DEFAULT_MODEL)
+            env_model = EnvConfig.get().siliconflow_model
             env_models = [env_model]
-            # Add common DeepSeek models if the default is one of them
-            common = [
-                "deepseek-ai/DeepSeek-V3",
-                "deepseek-ai/DeepSeek-V3.1",
-                "deepseek-ai/DeepSeek-R1",
-            ]
+            common = [DEEPSEEK_V3_2, DEEPSEEK_V3, DEEPSEEK_R1, QWEN3_32B]
             for m in common:
                 if m not in env_models:
                     env_models.append(m)

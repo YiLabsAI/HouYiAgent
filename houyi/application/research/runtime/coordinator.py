@@ -102,6 +102,8 @@ class SearchPhaseResult:
     aggregated_sources: AggregatedSources
     intermediate_reports: list[Any]
     search_elapsed_ms: float
+    aggregate_ms: float = 0.0
+    intermediate_ms: float = 0.0
 
 
 @dataclass(slots=True)
@@ -245,21 +247,34 @@ class ResearchCoordinator:
         else:
             await self._search_direct(questions)
 
+        t_aggregate = time.perf_counter()
         aggregated = await self._deps.aggregator.aggregate(self._search_results)
+        aggregate_ms = (time.perf_counter() - t_aggregate) * 1000.0
+
         intermediate_reports: list[Any] = []
+        intermediate_ms = 0.0
         if self._deps.settings.depth in ("standard", "deep"):
+            t_intermediate = time.perf_counter()
             intermediate_reports = await self._deps.report_pipeline.generate_intermediates(
                 self._search_results,
                 questions,
                 plan.query,
+                depth=(
+                    self._deps.settings.depth.value
+                    if hasattr(self._deps.settings.depth, "value")
+                    else str(self._deps.settings.depth)
+                ),
                 reuse_by_question_id=self._intermediate_reuse_by_qid,
                 checkpoint_question_ids=frozenset(self._retry_checkpoint.keys()),
             )
+            intermediate_ms = (time.perf_counter() - t_intermediate) * 1000.0
 
         search_elapsed_ms = (time.perf_counter() - t_search) * 1000.0
         logger.info(
-            "Research search completed in %.2fs for %d questions",
+            "Research search completed in %.2fs (aggregate=%.2fms, intermediate=%.2fms) for %d questions",
             search_elapsed_ms / 1000.0,
+            aggregate_ms,
+            intermediate_ms,
             len(plan.sub_questions),
         )
         return SearchPhaseResult(
@@ -267,6 +282,8 @@ class ResearchCoordinator:
             aggregated_sources=aggregated,
             intermediate_reports=intermediate_reports,
             search_elapsed_ms=round(search_elapsed_ms, 1),
+            aggregate_ms=round(aggregate_ms, 1),
+            intermediate_ms=round(intermediate_ms, 1),
         )
 
     async def _search_direct(self, questions: list[Any]) -> None:
@@ -320,6 +337,7 @@ class ResearchCoordinator:
             await self._deps.emit(
                 "research.agent_spawned",
                 agent_id=f"{self._deps.run_id}_{sub_question.question_id}",
+                question_id=sub_question.question_id,
                 agent_name=sub_question.question[:60],
                 task=sub_question.question,
             )
@@ -403,6 +421,7 @@ class ResearchCoordinator:
             await self._deps.emit(
                 "research.agent_completed",
                 agent_id=f"{self._deps.run_id}_{sub_question.question_id}",
+                question_id=sub_question.question_id,
                 status="completed" if normalized.sources else "failed",
                 summary=normalized.summary[:200],
             )
@@ -412,6 +431,7 @@ class ResearchCoordinator:
             await self._deps.emit(
                 "research.agent_spawned",
                 agent_id=f"{self._deps.run_id}_{sub_question.question_id}",
+                question_id=sub_question.question_id,
                 agent_name=sub_question.question[:60],
                 task=sub_question.question,
             )
@@ -614,6 +634,7 @@ class ResearchCoordinator:
     async def _search_question(self, sub_question: Any) -> SearchResult:
         self._deps.check_cancelled()
         assert self._plan is not None
+        sub_question_timeout_s = self._sub_question_timeout_seconds(sub_question)
         try:
             context = SearchContext(
                 run_id=self._deps.run_id,
@@ -628,16 +649,17 @@ class ResearchCoordinator:
                     for source in result.sources
                     if source.url
                 ],
-                max_sub_question_budget_ms=int(self._deps.agent_timeout_seconds() * 1000),
+                max_sub_question_budget_ms=int(sub_question_timeout_s * 1000),
+                salvage_on_cancel=True,
             )
             return await asyncio.wait_for(
                 self._deps.search_executor.search(sub_question, context),
-                timeout=self._deps.agent_timeout_seconds(),
+                timeout=sub_question_timeout_s,
             )
         except TimeoutError:
             logger.warning(
                 "SearchExecutor timed out after %ds for %s",
-                self._deps.agent_timeout_seconds(),
+                sub_question_timeout_s,
                 sub_question.question_id,
             )
             return SearchResult(
@@ -664,10 +686,11 @@ class ResearchCoordinator:
             event_emitter=self._deps.event_emitter,
             max_turns=self._deps.settings.max_search_rounds * 3 + 1,
         )
+        sub_question_timeout_s = self._sub_question_timeout_seconds(sub_question)
         try:
             output = await asyncio.wait_for(
                 agent.arun(self._build_search_task(sub_question)),
-                timeout=self._deps.agent_timeout_seconds(),
+                timeout=sub_question_timeout_s,
             )
         except TimeoutError:
             output = '{"sources": [], "summary": "Search timed out", "queries_used": []}'
@@ -685,6 +708,7 @@ class ResearchCoordinator:
     ) -> SearchResult:
         self._deps.check_cancelled()
         assert self._plan is not None
+        sub_question_timeout_s = self._sub_question_timeout_seconds(sub_question)
         search_executor = SearchExecutor(
             self._deps.llm_adapter,
             self._deps.web_search,
@@ -702,17 +726,18 @@ class ResearchCoordinator:
             user_query=self._plan.query,
             prior_findings=peer_findings or [],
             excluded_urls=[],
-            max_sub_question_budget_ms=int(self._deps.agent_timeout_seconds() * 1000),
+            max_sub_question_budget_ms=int(sub_question_timeout_s * 1000),
+            salvage_on_cancel=True,
         )
         try:
             return await asyncio.wait_for(
                 search_executor.search(sub_question, context),
-                timeout=self._deps.agent_timeout_seconds(),
+                timeout=sub_question_timeout_s,
             )
         except TimeoutError:
             logger.warning(
                 "Isolated SC timed out after %ds for %s",
-                self._deps.agent_timeout_seconds(),
+                sub_question_timeout_s,
                 sub_question.question_id,
             )
             return SearchResult(
@@ -740,6 +765,16 @@ class ResearchCoordinator:
             f"Expected sources: {sub_question.expected_sources}\n\n"
             f"Search the web and collect relevant, diverse sources."
         )
+
+    def _sub_question_timeout_seconds(self, sub_question: Any) -> int:
+        configured = int(self._deps.agent_timeout_seconds())
+        rounds = max(1, int(self._deps.settings.max_search_rounds))
+        expected_sources = max(1, int(getattr(sub_question, "expected_sources", 1) or 1))
+        # Bench evidence: a flat 300s isolated sub-question cap creates long-tail
+        # stalls where one low-yield SC blocks a whole delegate batch. We keep a
+        # bounded dynamic cap that scales with planned depth but still converges.
+        derived = (rounds * 30) + (min(expected_sources, 6) * 10)
+        return max(45, min(configured, 180, derived))
 
 
 def _canonical_collaboration_query(query: str) -> str:

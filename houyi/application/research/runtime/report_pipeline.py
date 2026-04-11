@@ -38,6 +38,8 @@ logger = logging.getLogger(__name__)
 _REPAIR_SECTION_CONCURRENCY = 2
 _REPAIR_QUERY_CONCURRENCY = 2
 _ENABLE_PRE_REPAIR_QUALITY = True
+_MAX_REPAIR_SECTIONS = 2
+_INTERMEDIATE_TARGET_BY_DEPTH = {"standard": 3, "deep": 5}
 
 EmitFn = Callable[..., Awaitable[None]]
 
@@ -115,6 +117,7 @@ class ReportPipeline:
         questions: list[Any],
         plan_query: str,
         *,
+        depth: str = "standard",
         reuse_by_question_id: dict[str, IntermediateReport] | None = None,
         checkpoint_question_ids: frozenset[str] | None = None,
     ) -> list[IntermediateReport]:
@@ -130,12 +133,15 @@ class ReportPipeline:
         ck = checkpoint_question_ids or frozenset()
         t0 = time.perf_counter()
         reused_count = 0
+        selected_ids = _select_intermediate_targets(search_results, questions, depth)
 
         pending: list[tuple[SearchResult, str]] = []
         for sr in search_results:
             q_text = qid_to_text.get(sr.question_id, "")
             if sr.question_id in ck and sr.question_id in reuse:
                 reused_count += 1
+                continue
+            if sr.question_id not in selected_ids:
                 continue
             pending.append((sr, q_text))
 
@@ -174,11 +180,13 @@ class ReportPipeline:
 
         elapsed = time.perf_counter() - t0
         logger.info(
-            "research.intermediate_reports phase=done elapsed_s=%.2f reused=%d generated=%d pending_llm=%d",
+            "research.intermediate_reports phase=done elapsed_s=%.2f reused=%d generated=%d pending_llm=%d selected=%d total=%d",
             elapsed,
             reused_count,
             len(gen_by_qid),
             len(pending),
+            len(selected_ids),
+            len(search_results),
         )
         return out
 
@@ -194,98 +202,55 @@ class ReportPipeline:
         depth_val = (
             settings.depth.value if hasattr(settings.depth, "value") else str(settings.depth)
         )
+        quality_enabled = settings.enable_quality_evaluation
         timings: dict[str, float] = {}
         t_run0 = time.perf_counter()
 
         try:
-            await self._emit("research.pipeline_phase", phase="conflict_detection")
-            t = time.perf_counter()
-            conflicts = await self._detect_conflicts(search_results, settings)
-            timings["conflicts_ms"] = (time.perf_counter() - t) * 1000.0
-
-            await self._emit("research.pipeline_phase", phase="report_generation")
-            t = time.perf_counter()
-            report = await self._reporter.generate(
+            conflicts = await self._run_conflict_phase(search_results, settings, timings)
+            report, timing_budget = await self._run_generation_phase(
                 plan,
                 aggregated,
-                intermediate_reports=intermediate_reports or None,
+                intermediate_reports,
+                settings,
+                timings,
             )
-            timings["report_generate_ms"] = (time.perf_counter() - t) * 1000.0
-            for section in report.sections:
-                await self._emit(
-                    "research.report_section",
-                    chunk={
-                        "section_id": section.section_id,
-                        "title": section.title,
-                        "citations": len(section.citations),
-                    },
-                )
-
-            validation: ValidationReport | None = None
-            if settings.depth in ("standard", "deep"):
-                url_elapsed, validation_result = await asyncio.gather(
-                    self._execute_url_validation(aggregated, report),
-                    self._execute_validation(report, plan.query),
-                )
-                timings["url_validate_ms"] = url_elapsed
-                validation, validation_elapsed = validation_result
-                timings["validation_ms"] = validation_elapsed
-            else:
-                timings["url_validate_ms"] = await self._execute_url_validation(aggregated, report)
-
-            repaired = False
-            if validation and validation.sections_needing_rewrite > 0:
-                await self._emit(
-                    "research.validation_issues",
-                    sections_flagged=validation.sections_needing_rewrite,
-                    overall_score=validation.overall_score,
-                )
-                if _ENABLE_PRE_REPAIR_QUALITY:
-                    pre_quality, pre_quality_timings = await self._execute_quality_evaluation(
-                        report,
-                        aggregated,
-                        phase_name="quality_evaluation_pre_repair",
-                        timing_prefix="quality_pre_",
-                    )
-                    if pre_quality:
-                        timings.update(pre_quality_timings)
-                t = time.perf_counter()
-                await self._repair_weak_sections(
-                    validation,
-                    report,
-                    plan,
-                    aggregated,
-                )
-                timings["repair_ms"] = (time.perf_counter() - t) * 1000.0
-                repaired = True
-
-            quality = None
-            quality, quality_timings = await self._execute_quality_evaluation(
-                report,
+            validation = await self._run_validation_phase(
                 aggregated,
-                phase_name=(
-                    "quality_evaluation_post_repair" if repaired else "quality_evaluation"
-                ),
-                timing_prefix="quality_",
+                report,
+                plan,
+                settings,
+                timing_budget,
+                timings,
             )
-            if quality:
-                timings.update(quality_timings)
-            if quality:
-                report.metadata.quality_overall = quality.overall
-
-            timings["total_ms"] = (time.perf_counter() - t_run0) * 1000.0
-            logger.info(
-                "research.report_pipeline phase=done depth=%s timings_ms=%s",
+            repaired = await self._run_repair_phase(
+                validation,
+                report,
+                plan,
+                aggregated,
+                quality_enabled,
+                timing_budget,
+                timings,
+            )
+            quality = None
+            if quality_enabled:
+                quality = await self._run_final_quality_phase(
+                    report,
+                    aggregated,
+                    repaired,
+                    timing_budget,
+                    timings,
+                )
+            else:
+                timings["quality_disabled"] = 1.0
+            return self._build_pipeline_result(
+                report,
+                quality,
+                validation,
+                conflicts,
                 depth_val,
-                {k: round(v, 1) for k, v in timings.items()},
-            )
-            rounded_timings = {k: round(v, 1) for k, v in timings.items()}
-            return ReportPipelineResult(
-                report=report,
-                quality=quality,
-                validation=validation,
-                conflicts=conflicts,
-                phase_timings_ms=rounded_timings,
+                timings,
+                t_run0,
             )
         except Exception:
             timings["partial_total_ms"] = (time.perf_counter() - t_run0) * 1000.0
@@ -296,6 +261,204 @@ class ReportPipeline:
                 exc_info=True,
             )
             raise
+
+    async def _run_conflict_phase(
+        self,
+        search_results: list[SearchResult],
+        settings: ResearchSettings,
+        timings: dict[str, float],
+    ) -> list[ConflictRecord]:
+        await self._emit("research.pipeline_phase", phase="conflict_detection")
+        t = time.perf_counter()
+        conflicts = await self._detect_conflicts(search_results, settings)
+        timings["conflicts_ms"] = (time.perf_counter() - t) * 1000.0
+        return conflicts
+
+    async def _run_generation_phase(
+        self,
+        plan: ResearchPlan,
+        aggregated: AggregatedSources,
+        intermediate_reports: list[IntermediateReport] | None,
+        settings: ResearchSettings,
+        timings: dict[str, float],
+    ) -> tuple[ResearchReport, dict[str, Any]]:
+        await self._emit("research.pipeline_phase", phase="report_generation")
+        t = time.perf_counter()
+        report, gen_timings = await self._reporter.generate(
+            plan,
+            aggregated,
+            intermediate_reports=intermediate_reports or None,
+        )
+        timings["report_generate_ms"] = (time.perf_counter() - t) * 1000.0
+        timings["report_sections_ms"] = gen_timings.get("report_sections_ms", 0.0)
+        timings["report_summary_ms"] = gen_timings.get("report_summary_ms", 0.0)
+        timing_budget = self._record_budget_timings(gen_timings, settings, timings)
+        await self._emit_report_sections(report)
+        return report, timing_budget
+
+    async def _emit_report_sections(self, report: ResearchReport) -> None:
+        for section in report.sections:
+            await self._emit(
+                "research.report_section",
+                chunk={
+                    "section_id": section.section_id,
+                    "title": section.title,
+                    "citations": len(section.citations),
+                },
+            )
+
+    def _record_budget_timings(
+        self,
+        gen_timings: dict[str, Any],
+        settings: ResearchSettings,
+        timings: dict[str, float],
+    ) -> dict[str, Any]:
+        section_input_metrics = gen_timings.get("section_input_metrics", [])
+        timing_budget = _timing_budget(section_input_metrics, settings)
+        validation_titles = timing_budget["validation_titles"] or set()
+        timings["validation_target_sections"] = float(len(validation_titles))
+        timings["repair_budget_sections"] = float(timing_budget["repair_limit"])
+        timings["quality_budget_mode"] = 1.0 if timing_budget["quality_compact"] else 0.0
+        return timing_budget
+
+    async def _run_validation_phase(
+        self,
+        aggregated: AggregatedSources,
+        report: ResearchReport,
+        plan: ResearchPlan,
+        settings: ResearchSettings,
+        timing_budget: dict[str, Any],
+        timings: dict[str, float],
+    ) -> ValidationReport | None:
+        validation_titles = timing_budget["validation_titles"] or set()
+        if settings.depth in ("standard", "deep"):
+            url_elapsed, validation_result = await asyncio.gather(
+                self._execute_url_validation(aggregated, report),
+                self._execute_validation(
+                    report,
+                    plan.query,
+                    section_titles=validation_titles or None,
+                    content_char_limit=timing_budget["validation_char_limit"],
+                ),
+            )
+            timings["url_validate_ms"] = url_elapsed
+            validation, validation_elapsed = validation_result
+            timings["validation_ms"] = validation_elapsed
+            return validation
+        timings["url_validate_ms"] = await self._execute_url_validation(aggregated, report)
+        return None
+
+    async def _run_repair_phase(
+        self,
+        validation: ValidationReport | None,
+        report: ResearchReport,
+        plan: ResearchPlan,
+        aggregated: AggregatedSources,
+        quality_enabled: bool,
+        timing_budget: dict[str, Any],
+        timings: dict[str, float],
+    ) -> bool:
+        if validation is None or validation.sections_needing_rewrite <= 0:
+            return False
+        await self._emit(
+            "research.validation_issues",
+            sections_flagged=validation.sections_needing_rewrite,
+            overall_score=validation.overall_score,
+        )
+        await self._run_pre_repair_quality(
+            report,
+            aggregated,
+            quality_enabled,
+            timing_budget,
+            timings,
+        )
+        t = time.perf_counter()
+        await self._repair_weak_sections(
+            validation,
+            report,
+            plan,
+            aggregated,
+            limit=timing_budget["repair_limit"],
+        )
+        timings["repair_ms"] = (time.perf_counter() - t) * 1000.0
+        return True
+
+    async def _run_pre_repair_quality(
+        self,
+        report: ResearchReport,
+        aggregated: AggregatedSources,
+        quality_enabled: bool,
+        timing_budget: dict[str, Any],
+        timings: dict[str, float],
+    ) -> None:
+        if not quality_enabled:
+            timings["quality_pre_disabled"] = 1.0
+            return
+        should_run_pre_quality = (
+            _ENABLE_PRE_REPAIR_QUALITY and not timing_budget["skip_pre_quality"]
+        )
+        if should_run_pre_quality:
+            pre_quality, pre_quality_timings = await self._execute_quality_evaluation(
+                report,
+                aggregated,
+                phase_name="quality_evaluation_pre_repair",
+                timing_prefix="quality_pre_",
+                report_char_limit=timing_budget["quality_report_chars"],
+                fact_section_char_limit=timing_budget["quality_fact_section_chars"],
+                fact_source_char_limit=timing_budget["quality_fact_source_chars"],
+            )
+            if pre_quality:
+                timings.update(pre_quality_timings)
+            return
+        if _ENABLE_PRE_REPAIR_QUALITY:
+            timings["quality_pre_skipped"] = 1.0
+
+    async def _run_final_quality_phase(
+        self,
+        report: ResearchReport,
+        aggregated: AggregatedSources,
+        repaired: bool,
+        timing_budget: dict[str, Any],
+        timings: dict[str, float],
+    ) -> QualityScore | None:
+        quality, quality_timings = await self._execute_quality_evaluation(
+            report,
+            aggregated,
+            phase_name="quality_evaluation_post_repair" if repaired else "quality_evaluation",
+            timing_prefix="quality_",
+            report_char_limit=timing_budget["quality_report_chars"],
+            fact_section_char_limit=timing_budget["quality_fact_section_chars"],
+            fact_source_char_limit=timing_budget["quality_fact_source_chars"],
+        )
+        if quality:
+            timings.update(quality_timings)
+            report.metadata.quality_overall = quality.overall
+        return quality
+
+    def _build_pipeline_result(
+        self,
+        report: ResearchReport,
+        quality: QualityScore | None,
+        validation: ValidationReport | None,
+        conflicts: list[ConflictRecord],
+        depth_val: str,
+        timings: dict[str, float],
+        t_run0: float,
+    ) -> ReportPipelineResult:
+        timings["total_ms"] = (time.perf_counter() - t_run0) * 1000.0
+        logger.info(
+            "research.report_pipeline phase=done depth=%s timings_ms=%s",
+            depth_val,
+            {k: round(v, 1) for k, v in timings.items()},
+        )
+        rounded_timings = {k: round(v, 1) for k, v in timings.items()}
+        return ReportPipelineResult(
+            report=report,
+            quality=quality,
+            validation=validation,
+            conflicts=conflicts,
+            phase_timings_ms=rounded_timings,
+        )
 
     async def _execute_url_validation(
         self,
@@ -317,6 +480,9 @@ class ReportPipeline:
         self,
         report: ResearchReport,
         query: str,
+        *,
+        section_titles: set[str] | None = None,
+        content_char_limit: int | None = None,
     ) -> tuple[ValidationReport | None, float]:
         """Execute report validation and return (result, elapsed_ms).
 
@@ -327,7 +493,12 @@ class ReportPipeline:
         try:
             await self._emit("research.pipeline_phase", phase="validation")
             t = time.perf_counter()
-            validation = await self._validator.validate(report, query)
+            validation = await self._validator.validate(
+                report,
+                query,
+                section_titles=section_titles,
+                content_char_limit=content_char_limit,
+            )
             return validation, (time.perf_counter() - t) * 1000.0
         except Exception:
             logger.warning(
@@ -343,6 +514,9 @@ class ReportPipeline:
         *,
         phase_name: str,
         timing_prefix: str,
+        report_char_limit: int | None = None,
+        fact_section_char_limit: int | None = None,
+        fact_source_char_limit: int | None = None,
     ) -> tuple[QualityScore | None, dict[str, float]]:
         try:
             await self._emit("research.pipeline_phase", phase=phase_name)
@@ -350,12 +524,17 @@ class ReportPipeline:
             quality, quality_timings = await self._evaluator.evaluate_with_breakdown(
                 report,
                 aggregated,
+                report_char_limit=report_char_limit,
+                fact_section_char_limit=fact_section_char_limit,
+                fact_source_char_limit=fact_source_char_limit,
             )
             elapsed_ms = (time.perf_counter() - t) * 1000.0
             timings = {f"{timing_prefix}ms": elapsed_ms}
             timings.update(
                 {
-                    f"{timing_prefix}{key[len('quality_'): ]}" if key.startswith("quality_") else f"{timing_prefix}{key}": value
+                    f"{timing_prefix}{key[len('quality_') :]}"
+                    if key.startswith("quality_")
+                    else f"{timing_prefix}{key}": value
                     for key, value in quality_timings.items()
                 }
             )
@@ -453,6 +632,8 @@ class ReportPipeline:
         report: ResearchReport,
         plan: ResearchPlan,
         aggregated: AggregatedSources,
+        *,
+        limit: int = _MAX_REPAIR_SECTIONS,
     ) -> None:
         """Rewrite low-quality sections concurrently using bounded parallelism.
 
@@ -461,15 +642,18 @@ class ReportPipeline:
         2. Spawn parallel rewrite tasks with a semaphore to protect LLM API.
         3. Apply results atomically to avoid partial report state exposure.
 
-        The semaphore value (_REPAIR_SECTION_CONCURRENCY) caps concurrent
-        LLM calls to prevent rate-limit thrashing while still reducing
-        tail latency for multi-section repairs.
+        Uses two semaphores:
+        - section_semaphore: caps concurrent section LLM rewrites
+        - query_semaphore: global budget for repair search queries across all sections
         """
-        sections_to_repair = self._collect_sections_to_repair(validation, report, plan)
+        sections_to_repair = self._collect_sections_to_repair(validation, report, plan, limit=limit)
         if not sections_to_repair:
             return
 
-        semaphore = asyncio.Semaphore(_REPAIR_SECTION_CONCURRENCY)
+        section_semaphore = asyncio.Semaphore(_REPAIR_SECTION_CONCURRENCY)
+        # Global query semaphore shared across all repair sections to enforce
+        # cross-section budget constraint.
+        query_semaphore = asyncio.Semaphore(_REPAIR_QUERY_CONCURRENCY)
         tasks = [
             self._rewrite_single_section(
                 index=index,
@@ -477,7 +661,8 @@ class ReportPipeline:
                 outline_section=outline_section,
                 plan_query=plan.query,
                 aggregated=aggregated,
-                semaphore=semaphore,
+                section_semaphore=section_semaphore,
+                query_semaphore=query_semaphore,
             )
             for index, section_validation, outline_section in sections_to_repair
         ]
@@ -503,6 +688,8 @@ class ReportPipeline:
         validation: ValidationReport,
         report: ResearchReport,
         plan: ResearchPlan,
+        *,
+        limit: int = _MAX_REPAIR_SECTIONS,
     ) -> list[tuple[int, Any, Any]]:
         """Scan validation results and return (index, validation, outline) tuples.
 
@@ -520,7 +707,8 @@ class ReportPipeline:
             if outline_section is None:
                 continue
             sections_to_repair.append((report_index, section_validation, outline_section))
-        return sections_to_repair
+        sections_to_repair.sort(key=lambda item: getattr(item[1], "quality_score", 100))
+        return sections_to_repair[: max(limit, 1)]
 
     def _find_report_section_index(self, report: ResearchReport, title: str) -> int | None:
         for index, section in enumerate(report.sections):
@@ -542,17 +730,25 @@ class ReportPipeline:
         outline_section: Any,
         plan_query: str,
         aggregated: AggregatedSources,
-        semaphore: asyncio.Semaphore,
+        section_semaphore: asyncio.Semaphore,
+        query_semaphore: asyncio.Semaphore,
     ) -> tuple[int, Any] | None:
         """Rewrite one section under semaphore guard.
 
-        Acquires the semaphore before calling the LLM to enforce the concurrency
-        limit. Returns (index, new_section) on success, None on failure so
-        the caller can apply results atomically without partial mutations.
+        Acquires the section_semaphore before calling the LLM to enforce the
+        concurrency limit. The query_semaphore is passed down for best-effort
+        repair search to enforce global query budget across all sections.
+        Returns (index, new_section) on success, None on failure so the caller
+        can apply results atomically without partial mutations.
         """
         try:
-            repair_sources = await self._gather_repair_sources(section_validation, aggregated)
-            async with semaphore:
+            repair_sources = await self._gather_repair_sources(
+                section_validation,
+                outline_section,
+                aggregated,
+                query_semaphore,
+            )
+            async with section_semaphore:
                 new_section = await self._reporter._generate_section(
                     plan_query,
                     outline_section.title,
@@ -568,38 +764,69 @@ class ReportPipeline:
     async def _gather_repair_sources(
         self,
         section_validation: Any,
+        outline_section: Any,
         aggregated: AggregatedSources,
+        query_semaphore: asyncio.Semaphore,
     ) -> list[SourceReference]:
         """Assemble source material for a section rewrite.
 
-        Combines the top 20 aggregated sources with optional extra web search
-        results when the validation suggests specific queries. The extra
-        search is bounded to 2 queries to limit latency.
+        We intentionally reuse the same section-targeted ranking strategy as
+        first-pass report generation. Benchmark regressions showed that repair
+        quality becomes unstable when we hand the LLM a blunt "top 20" global
+        source bag: latency rises, prompt focus drops, and post-repair score can
+        even regress. Targeted evidence is both faster and easier to repair well.
         """
-        repair_sources = list(aggregated.sources[:20])
+        repair_sources = list(aggregated.sources)
         if (
             hasattr(section_validation, "suggested_queries")
             and section_validation.suggested_queries
         ):
             extra = await self._search_extra_sources_for_repair(
-                section_validation.suggested_queries
+                section_validation.suggested_queries,
+                query_semaphore,
             )
             if extra:
                 repair_sources.extend(extra)
-        return repair_sources
+        selector = getattr(self._reporter, "select_section_sources", None)
+        if selector is None:
+            return repair_sources[:20]
+        selected = selector(
+            outline_section.related_question_ids,
+            AggregatedSources(
+                sources=repair_sources,
+                grouped_by_question=aggregated.grouped_by_question,
+                coverage_by_question=aggregated.coverage_by_question,
+                deduplicated_count=aggregated.deduplicated_count,
+            ),
+            section_title=outline_section.title,
+            objective=outline_section.objective,
+        )
+        if isinstance(selected, tuple) and len(selected) == 2:
+            return list(selected[0])
+        return list(selected) if selected else repair_sources[:20]
 
-    async def _search_extra_sources_for_repair(self, queries: list[str]) -> list[SourceReference]:
+    async def _search_extra_sources_for_repair(
+        self,
+        queries: list[str],
+        query_semaphore: asyncio.Semaphore | None = None,
+    ) -> list[SourceReference]:
         """Fetch additional sources for repair via web search.
 
         Bounded to 2 queries and 3 results per query to keep latency
         predictable. Failures are logged but do not block the repair
-        (best-effort enrichment).
+        (best-effort enrichment). Uses the provided query_semaphore if
+        available; otherwise creates a local semaphore for backward compatibility.
         """
         bounded_queries = queries[:2]
         if not bounded_queries:
             return []
 
-        semaphore = asyncio.Semaphore(_REPAIR_QUERY_CONCURRENCY)
+        # Use provided semaphore (global budget) or create local one
+        semaphore = (
+            query_semaphore
+            if query_semaphore is not None
+            else asyncio.Semaphore(_REPAIR_QUERY_CONCURRENCY)
+        )
 
         async def _search_one(query: str) -> list[SourceReference]:
             try:
@@ -625,3 +852,69 @@ class ReportPipeline:
 
         extra_groups = await asyncio.gather(*[_search_one(query) for query in bounded_queries])
         return [source for group in extra_groups for source in group]
+
+
+def _select_intermediate_targets(
+    search_results: list[SearchResult],
+    questions: list[Any],
+    depth: str,
+) -> set[str]:
+    target = _INTERMEDIATE_TARGET_BY_DEPTH.get(depth, len(search_results))
+    if len(search_results) <= target:
+        return {sr.question_id for sr in search_results if sr.sources}
+    priority_by_qid = {
+        getattr(question, "question_id", ""): int(getattr(question, "priority", 0) or 0)
+        for question in questions
+    }
+    ranked = sorted(
+        search_results,
+        key=lambda sr: (
+            priority_by_qid.get(sr.question_id, 0),
+            len(sr.sources),
+            sr.coverage_score,
+            1 if sr.error is None else 0,
+        ),
+        reverse=True,
+    )
+    return {sr.question_id for sr in ranked[:target] if sr.sources}
+
+
+def _timing_budget(
+    section_input_metrics: list[dict[str, Any]],
+    settings: ResearchSettings,
+) -> dict[str, Any]:
+    metrics = list(section_input_metrics or [])
+    ranked = sorted(
+        metrics,
+        key=lambda item: (
+            int(item.get("relevant_source_count", 0) or 0),
+            int(item.get("intermediate_context_chars", 0) or 0),
+        ),
+        reverse=True,
+    )
+    depth_val = settings.depth.value if hasattr(settings.depth, "value") else str(settings.depth)
+    dense = any(
+        int(item.get("relevant_source_count", 0) or 0) >= 24
+        or int(item.get("intermediate_context_chars", 0) or 0) >= 1200
+        for item in ranked
+    )
+    if depth_val == "deep":
+        validation_limit = 5 if dense else len(ranked)
+    else:
+        validation_limit = 3 if dense else min(len(ranked), 4)
+    validation_titles = {
+        str(item.get("title", ""))
+        for item in ranked[:validation_limit]
+        if str(item.get("title", ""))
+    }
+    quality_compact = dense or len(ranked) >= 5
+    return {
+        "validation_titles": validation_titles or None,
+        "validation_char_limit": 2200 if quality_compact else None,
+        "repair_limit": 1 if dense and depth_val != "deep" else _MAX_REPAIR_SECTIONS,
+        "skip_pre_quality": dense,
+        "quality_compact": quality_compact,
+        "quality_report_chars": 5500 if quality_compact else None,
+        "quality_fact_section_chars": 2200 if quality_compact else None,
+        "quality_fact_source_chars": 1400 if quality_compact else None,
+    }

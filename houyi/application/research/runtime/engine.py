@@ -8,7 +8,7 @@ Three orchestration modes control the search phase:
 - **AUTONOMOUS** — parallel isolated coordinators with ``SharedState``
   collaboration; agents share discoveries and adjust search strategies.
 
-Pipeline stages (serial): ClarificationAgent → PlannerAgent → *search* →
+Pipeline stages (serial): PlannerAgent → *search* →
 SourceAggregator → ConflictResolver → ValidationAgent → ReportGenerator →
 QualityEvaluator.
 """
@@ -31,10 +31,9 @@ from houyi.adapters.memory.types import (
     MemorySourceKind,
 )
 from houyi.application.research.aggregator import SourceAggregator
-from houyi.application.research.planner import ResearchPlanner
+from houyi.application.research.planner import ResearchPlanner, validate_research_plan
 from houyi.application.research.quality import QualityEvaluator
 from houyi.application.research.report import ReportGenerator
-from houyi.application.research.runtime.clarification import ClarificationAgent, ClarificationResult
 from houyi.application.research.runtime.coordinator import (
     CoordinatorServices,
     ResearchCoordinator,
@@ -63,6 +62,7 @@ from houyi.application.research.runtime.time_policy import TimeBudgetPolicy
 from houyi.application.research.runtime.tools import WebSearchTool
 from houyi.application.research.types import (
     AggregatedSources,
+    ClarificationResult,
     PlanEdit,
     PlanStatus,
     QualityScore,
@@ -137,7 +137,6 @@ class ResearchRuntime:
         self._web_search = web_search
         self._planner = ResearchPlanner(llm_adapter, **llm_kwargs)
         self._aggregator = SourceAggregator()
-        self._clarifier = ClarificationAgent(llm_adapter, **llm_kwargs)
         self._search_executor = SearchExecutor(
             llm_adapter,
             web_search,
@@ -183,7 +182,7 @@ class ResearchRuntime:
             )
         )
         self._synthesis = SynthesisCoordinator(self._report_pipeline)
-        self._planning = PlanningCoordinator(self._planner, self._clarifier, self._emit)
+        self._planning = PlanningCoordinator(self._planner, self._emit)
         self._memory_builder = MemoryCandidateBuilder()
 
         if self._bus is not None:
@@ -199,6 +198,8 @@ class ResearchRuntime:
         self._quality: QualityScore | None = None
         self._phase_timings_ms: dict[str, float] = {}
         self._search_elapsed_ms: float = 0.0
+        self._aggregate_ms: float = 0.0
+        self._intermediate_ms: float = 0.0
 
         self._clarification: ClarificationResult | None = None
         self._validation: ValidationReport | None = None
@@ -217,9 +218,9 @@ class ResearchRuntime:
     async def start(self, query: str) -> ResearchPlan:
         """Generate the initial research plan.
 
-        For standard/deep depth, runs ClarificationAgent first to detect
-        ambiguity. If the query can be refined without user input, the
-        improved version is used for planning.
+        The planner always generates the first draft. For standard/deep
+        depth, it may return an internal clarification signal and a refined
+        query when missing constraints would materially change the plan.
         """
         self._status = ResearchStatus.PLANNING
 
@@ -247,7 +248,10 @@ class ResearchRuntime:
         """Mark the plan as confirmed and ready for execution."""
         if not self._plan:
             raise ResearchPlanMissingError("No plan to confirm")
-        self._plan = await self._planning.confirm(self._plan)
+        try:
+            self._plan = await self._planning.confirm(self._plan)
+        except ValueError as exc:
+            raise ResearchStateError(str(exc)) from exc
         self._status = ResearchStatus.PLAN_READY
         return self._plan
 
@@ -285,6 +289,20 @@ class ResearchRuntime:
             len(checkpoint),
         )
 
+    def _reset_execution_state(self) -> None:
+        """Reset mutable execution state before a new run."""
+        self._search_results.clear()
+        self._intermediate_reports.clear()
+        self._conflicts.clear()
+        self._aggregated = None
+        self._report = None
+        self._quality = None
+        self._phase_timings_ms = {}
+        self._search_elapsed_ms = 0.0
+        self._aggregate_ms = 0.0
+        self._intermediate_ms = 0.0
+        self._error = None
+
     async def execute(self) -> None:
         """Execute the research plan: search all sub-questions and generate report.
 
@@ -297,6 +315,9 @@ class ResearchRuntime:
             raise ResearchPlanMissingError("No plan — call start() first")
         if self._plan.status not in (PlanStatus.CONFIRMED, PlanStatus.DRAFT):
             raise ResearchStateError(f"Plan status {self._plan.status.value} cannot be executed")
+        validation_error = validate_research_plan(self._plan)
+        if validation_error is not None:
+            raise ResearchStateError(validation_error)
 
         self._plan.status = PlanStatus.EXECUTING
         self._status = ResearchStatus.EXECUTING
@@ -316,15 +337,7 @@ class ResearchRuntime:
                 "— will generate %d intermediate reports (LLM); persist after last run enables reuse",
                 total_sq,
             )
-        self._search_results.clear()
-        self._intermediate_reports.clear()
-        self._conflicts.clear()
-        self._aggregated = None
-        self._report = None
-        self._quality = None
-        self._phase_timings_ms = {}
-        self._search_elapsed_ms = 0.0
-        self._error = None
+        self._reset_execution_state()
         self._started_at = time.time()
         self.started_at = self._started_at
         self._execution_phase = "search"
@@ -357,6 +370,10 @@ class ResearchRuntime:
             await self._emit("research.cancelled", reason=self._error)
             raise ResearchCancelledError(self._error) from None
         except Exception as exc:
+            if not self._phase_timings_ms and self._execution_phase == "report":
+                self._phase_timings_ms = {
+                    "partial_total_ms": round((time.time() - self._started_at) * 1000.0, 1)
+                }
             self._error = str(exc)
             self._plan.status = PlanStatus.FAILED
             self._status = ResearchStatus.FAILED
@@ -504,6 +521,14 @@ class ResearchRuntime:
         return self._search_elapsed_ms
 
     @property
+    def aggregate_ms(self) -> float:
+        return self._aggregate_ms
+
+    @property
+    def intermediate_ms(self) -> float:
+        return self._intermediate_ms
+
+    @property
     def started_at_timestamp(self) -> float:
         return self.started_at
 
@@ -549,6 +574,8 @@ class ResearchRuntime:
         self._aggregated = result.aggregated_sources
         self._intermediate_reports = result.intermediate_reports
         self._search_elapsed_ms = result.search_elapsed_ms
+        self._aggregate_ms = result.aggregate_ms
+        self._intermediate_ms = result.intermediate_ms
 
     def _check_cancelled(self) -> None:
         """Raise ``asyncio.CancelledError`` if the runtime was cancelled."""

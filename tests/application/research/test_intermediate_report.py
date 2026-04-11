@@ -275,6 +275,32 @@ class TestPipelineIntermediates:
         assert out[0].question_id == "q2"
         assert out[0].analysis == "fresh"
 
+    async def test_limits_intermediate_targets(self) -> None:
+        llm = MockLLM(responses=[_IR_JSON, _IR_JSON, _IR_JSON])
+        ir_gen = IntermediateReportGenerator(llm)
+        spy = AsyncMock(wraps=ir_gen.generate)
+        ir_gen.generate = spy  # type: ignore[method-assign]
+        search_results = [
+            SearchResult(
+                question_id=f"q{i}", sources=_refs(3), summary=f"summary {i}", coverage_score=0.8
+            )
+            for i in range(5)
+        ]
+        questions = [
+            SubQuestion(question_id=f"q{i}", question=f"Question {i}", priority=5 - i)
+            for i in range(5)
+        ]
+
+        out = await _pipeline(ir_gen).generate_intermediates(
+            search_results,
+            questions,
+            "topic",
+            depth="standard",
+        )
+
+        assert len(out) == 3
+        assert spy.await_count == 3
+
 
 class TestPipelineRuntime:
     async def test_url_remove_broken(self) -> None:
@@ -316,7 +342,9 @@ class TestPipelineRuntime:
     async def test_run_skip_failures(self) -> None:
         pipe = _pipeline(IntermediateReportGenerator(MockLLM(responses=[_IR_JSON])))
         report = _report()
-        pipe._reporter.generate = AsyncMock(return_value=report)
+        pipe._reporter.generate = AsyncMock(
+            return_value=(report, {"report_sections_ms": 100.0, "report_summary_ms": 20.0})
+        )
         pipe._conflict_resolver.detect = AsyncMock(return_value=[])
         pipe._url_validator.validate = AsyncMock(side_effect=RuntimeError("url fail"))
         pipe._validator.validate = AsyncMock(side_effect=RuntimeError("validate fail"))
@@ -340,7 +368,9 @@ class TestPipelineRuntime:
         pipe = _pipeline(IntermediateReportGenerator(MockLLM(responses=[_IR_JSON])))
         report = _report()
         repaired = ReportSection(title="Overview", content="Repaired")
-        pipe._reporter.generate = AsyncMock(return_value=report)
+        pipe._reporter.generate = AsyncMock(
+            return_value=(report, {"report_sections_ms": 100.0, "report_summary_ms": 20.0})
+        )
         pipe._reporter._generate_section = AsyncMock(return_value=repaired)
         pipe._conflict_resolver.detect = AsyncMock(return_value=[])
         pipe._url_validator.validate = AsyncMock(
@@ -412,7 +442,9 @@ class TestPipelineRuntime:
     async def test_pre_post_repair(self) -> None:
         pipe = _pipeline(IntermediateReportGenerator(MockLLM(responses=[_IR_JSON])))
         report = _report()
-        pipe._reporter.generate = AsyncMock(return_value=report)
+        pipe._reporter.generate = AsyncMock(
+            return_value=(report, {"report_sections_ms": 100.0, "report_summary_ms": 20.0})
+        )
         pipe._reporter._generate_section = AsyncMock(
             return_value=ReportSection(title="Overview", content="Repaired")
         )
@@ -488,7 +520,14 @@ class TestPipelineRuntime:
             await release.wait()
             return MagicMock(results=[], total=0, reachable=0, unreachable=0, error_rate=0.0)
 
-        async def _blocking_validation(_report: ResearchReport, _query: str) -> ValidationReport:
+        async def _blocking_validation(
+            _report: ResearchReport,
+            _query: str,
+            *,
+            section_titles: set[str] | None = None,
+            content_char_limit: int | None = None,
+        ) -> ValidationReport:
+            _ = (section_titles, content_char_limit)
             validation_started.set()
             await release.wait()
             return ValidationReport(sections=[], overall_score=100.0, sections_needing_rewrite=0)
@@ -498,7 +537,9 @@ class TestPipelineRuntime:
             await asyncio.wait_for(validation_started.wait(), timeout=0.2)
             release.set()
 
-        pipe._reporter.generate = AsyncMock(return_value=report)
+        pipe._reporter.generate = AsyncMock(
+            return_value=(report, {"report_sections_ms": 100.0, "report_summary_ms": 20.0})
+        )
         pipe._conflict_resolver.detect = AsyncMock(return_value=[])
         pipe._url_validator.validate = AsyncMock(side_effect=_blocking_url_validate)
         pipe._validator.validate = AsyncMock(side_effect=_blocking_validation)
@@ -579,7 +620,9 @@ class TestPipelineRuntime:
             await asyncio.wait_for(both_started.wait(), timeout=0.2)
             release.set()
 
-        pipe._reporter.generate = AsyncMock(return_value=report)
+        pipe._reporter.generate = AsyncMock(
+            return_value=(report, {"report_sections_ms": 100.0, "report_summary_ms": 20.0})
+        )
         pipe._reporter._generate_section = AsyncMock(side_effect=_blocking_generate_section)
         pipe._conflict_resolver.detect = AsyncMock(return_value=[])
         pipe._url_validator.validate = AsyncMock(
@@ -694,3 +737,122 @@ class TestPipelineRuntime:
 
         assert len(sources) == 1
         assert sources[0].title == "Good"
+
+    async def test_run_skips_pre_quality(self) -> None:
+        pipe = _pipeline(IntermediateReportGenerator(MockLLM(responses=[_IR_JSON])))
+        report = _report()
+        pipe._reporter.generate = AsyncMock(
+            return_value=(
+                report,
+                {
+                    "report_sections_ms": 100.0,
+                    "report_summary_ms": 20.0,
+                    "section_input_metrics": [
+                        {
+                            "section_id": "sec_1",
+                            "title": "Overview",
+                            "relevant_source_count": 40,
+                            "selected_source_count": 5,
+                            "intermediate_context_chars": 1600,
+                        }
+                    ],
+                },
+            )
+        )
+        pipe._reporter._generate_section = AsyncMock(
+            return_value=ReportSection(title="Overview", content="Repaired")
+        )
+        pipe._conflict_resolver.detect = AsyncMock(return_value=[])
+        pipe._url_validator.validate = AsyncMock(
+            return_value=MagicMock(results=[], total=0, reachable=0, unreachable=0, error_rate=0.0)
+        )
+        pipe._validator.validate = AsyncMock(
+            return_value=ValidationReport(
+                sections=[
+                    SectionValidation(
+                        title="Overview", quality_score=20, needs_rewrite=True, suggested_queries=[]
+                    )
+                ],
+                overall_score=20.0,
+                sections_needing_rewrite=1,
+            )
+        )
+        pipe._evaluator.evaluate_with_breakdown = AsyncMock(
+            return_value=(
+                QualityScore(overall=88.0),
+                {
+                    "quality_race_ms": 21.0,
+                    "quality_fact_ms": 22.0,
+                    "quality_combine_ms": 0.0,
+                    "quality_eval_total_ms": 43.0,
+                },
+            )
+        )
+
+        result = await pipe.run(
+            _plan(),
+            AggregatedSources(sources=report.references),
+            [_result()],
+            intermediate_reports=None,
+            settings=ResearchSettings(depth="standard"),
+        )
+
+        assert pipe._evaluator.evaluate_with_breakdown.await_count == 1
+        assert result.phase_timings_ms["quality_pre_skipped"] == 1.0
+        assert result.phase_timings_ms["validation_target_sections"] == 1.0
+
+    async def test_disables_inline_quality(self) -> None:
+        pipe = _pipeline(IntermediateReportGenerator(MockLLM(responses=[_IR_JSON])))
+        report = _report()
+        pipe._reporter.generate = AsyncMock(
+            return_value=(
+                report,
+                {
+                    "report_sections_ms": 80.0,
+                    "report_summary_ms": 10.0,
+                    "section_input_metrics": [
+                        {
+                            "section_id": "sec_1",
+                            "title": "Overview",
+                            "relevant_source_count": 8,
+                            "selected_source_count": 8,
+                            "intermediate_context_chars": 400,
+                        }
+                    ],
+                },
+            )
+        )
+        pipe._reporter._generate_section = AsyncMock(
+            return_value=ReportSection(title="Overview", content="Repaired")
+        )
+        pipe._conflict_resolver.detect = AsyncMock(return_value=[])
+        pipe._url_validator.validate = AsyncMock(
+            return_value=MagicMock(results=[], total=0, reachable=0, unreachable=0, error_rate=0.0)
+        )
+        pipe._validator.validate = AsyncMock(
+            return_value=ValidationReport(
+                sections=[
+                    SectionValidation(
+                        title="Overview", quality_score=20, needs_rewrite=True, suggested_queries=[]
+                    )
+                ],
+                overall_score=20.0,
+                sections_needing_rewrite=1,
+            )
+        )
+        pipe._evaluator.evaluate_with_breakdown = AsyncMock(
+            return_value=(QualityScore(overall=88.0), {"quality_eval_total_ms": 1.0})
+        )
+
+        result = await pipe.run(
+            _plan(),
+            AggregatedSources(sources=report.references),
+            [_result()],
+            intermediate_reports=None,
+            settings=ResearchSettings(depth="standard", enable_quality_evaluation=False),
+        )
+
+        assert pipe._evaluator.evaluate_with_breakdown.await_count == 0
+        assert result.quality is None
+        assert result.phase_timings_ms["quality_pre_disabled"] == 1.0
+        assert result.phase_timings_ms["quality_disabled"] == 1.0

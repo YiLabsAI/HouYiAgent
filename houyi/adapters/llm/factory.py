@@ -145,15 +145,15 @@ def _create_deepseek_adapter() -> LLMAdapter:
     from houyi.infrastructure.config.env_config import (
         ENV_DEEPSEEK_API_KEY,
         ENV_DEEPSEEK_BASE_URL,
-        ENV_DEEPSEEK_MODEL,
         ENV_OPENAI_API_KEY,
         ENV_OPENAI_BASE_URL,
         ENV_TOOLCALL_MODEL,
+        EnvConfig,
     )
 
     api_key = os.getenv(ENV_DEEPSEEK_API_KEY) or os.getenv(ENV_OPENAI_API_KEY)
     base_url = os.getenv(ENV_DEEPSEEK_BASE_URL) or os.getenv(ENV_OPENAI_BASE_URL)
-    model = os.getenv(ENV_DEEPSEEK_MODEL) or os.getenv(ENV_TOOLCALL_MODEL) or DEFAULT_MODEL
+    model = os.getenv(ENV_TOOLCALL_MODEL) or EnvConfig.get().siliconflow_model or DEFAULT_MODEL
     return OpenAICompatibleAdapter(api_key=api_key, base_url=base_url, model=model)
 
 

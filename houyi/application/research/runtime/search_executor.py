@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from collections.abc import Awaitable, Callable
 from typing import Any
+from urllib.parse import urlparse
 
 from houyi.adapters.llm.base import LLMAdapter
 from houyi.application.research.runtime.search_budget import BudgetPolicy
@@ -90,6 +92,7 @@ class SearchExecutor:
         rounds: list[SearchRound] = []
         all_sources: dict[str, SourceReference] = {}
         seen_urls: set[str] = set(context.excluded_urls)
+        seen_queries: set[str] = set()
         prior = list(context.prior_findings)
         max_results_per_query = self._budget_policy.resolve_max_results_per_query(
             context,
@@ -101,226 +104,151 @@ class SearchExecutor:
             context,
             self._max_rounds,
         )
+        completed_rounds: list[SearchRound] = []
+        completed_sources: dict[str, SourceReference] = {}
+        completed_summary = ""
 
-        for round_idx in range(self._max_rounds):
-            self._run_cancel_check()
-            round_number = round_idx + 1
-            remaining_sub_question_ms = self._remaining_budget_ms(
-                search_started,
-                sub_question_budget_ms,
-            )
-            if remaining_sub_question_ms <= 0:
-                decision = SufficiencyDecision(
-                    sufficient=False,
-                    rationale="Sub-question budget exhausted before next round",
-                    decision_by="guardrail",
-                    reason_code="sub_question_budget_exhausted",
+        try:
+            for round_idx in range(self._max_rounds):
+                self._run_cancel_check()
+                round_number = round_idx + 1
+                remaining_sub_question_ms = self._remaining_budget_ms(
+                    search_started,
+                    sub_question_budget_ms,
                 )
-                rounds.append(
-                    SearchRound(
-                        round_index=round_idx,
-                        queries=[],
-                        hits=[],
-                        sufficient=False,
-                        rationale=decision.rationale,
-                        elapsed_ms=0.0,
-                        decision_by=decision.decision_by,
-                        reason_code=decision.reason_code,
-                        stop_layer="sub_question",
-                        missing_dimensions=decision.missing_dimensions,
-                        features=decision.features,
+                if remaining_sub_question_ms <= 0:
+                    await self._record_budget_exhausted_round(
+                        rounds=rounds,
+                        sub_question=sub_question,
+                        round_idx=round_idx,
+                        round_number=round_number,
+                        all_sources=all_sources,
+                        sub_question_budget_ms=sub_question_budget_ms,
                     )
-                )
-                await self._telemetry.budget_consumed(
-                    question_id=sub_question.question_id,
-                    round_index=round_number,
-                    layer="sub_question",
-                    reason_code=decision.reason_code,
-                    budget_ms=sub_question_budget_ms,
-                    remaining_ms=0,
-                )
-                await self._telemetry.round_timing(
-                    question_id=sub_question.question_id,
-                    round_number=round_number,
-                    elapsed_ms=0.0,
-                    query_count=0,
-                    skipped_queries=0,
-                    cancelled_queries=0,
-                    hit_count=0,
-                    source_count=len(all_sources),
-                    decision=decision,
-                    stop_layer="sub_question",
-                )
-                break
-            collaboration = await self._query_planner.read_collaboration_snapshot(round_number)
-            stop_reason = _collaboration_stop_reason(collaboration)
-            if stop_reason:
-                decision = SufficiencyDecision(
-                    sufficient=True,
-                    rationale=stop_reason,
-                    decision_by="collaboration",
-                    reason_code="collaboration_stop",
-                )
-                rounds.append(
-                    SearchRound(
-                        round_index=round_idx,
-                        queries=[],
-                        hits=[],
-                        sufficient=decision.sufficient,
-                        rationale=decision.rationale,
-                        elapsed_ms=0.0,
-                        decision_by=decision.decision_by,
-                        reason_code=decision.reason_code,
-                        stop_layer="collaboration",
-                        missing_dimensions=decision.missing_dimensions,
-                        features=decision.features,
+                    break
+                collaboration = await self._query_planner.read_collaboration_snapshot(round_number)
+                stop_reason = _collaboration_stop_reason(collaboration)
+                if stop_reason:
+                    await self._record_collaboration_stop_round(
+                        rounds=rounds,
+                        sub_question=sub_question,
+                        round_idx=round_idx,
+                        round_number=round_number,
+                        all_sources=all_sources,
+                        stop_reason=stop_reason,
                     )
-                )
-                await self._telemetry.round_timing(
-                    question_id=sub_question.question_id,
+                    break
+                round_state = await self._execute_round(
+                    sub_question=sub_question,
+                    context=context,
+                    round_idx=round_idx,
                     round_number=round_number,
-                    elapsed_ms=0.0,
-                    query_count=0,
-                    skipped_queries=0,
-                    cancelled_queries=0,
-                    hit_count=0,
-                    source_count=len(all_sources),
-                    decision=decision,
-                    stop_layer="collaboration",
-                )
-                break
-            raw_queries = await self._generate_queries(
-                sub_question.question,
-                context.user_query,
-                prior,
-                round_idx,
-                collaboration,
-            )
-            queries, skipped_queries = await self._query_planner.claim_queries(raw_queries, set())
-
-            await self._notify(
-                "search.queries_generated",
-                {
-                    "question_id": sub_question.question_id,
-                    "round": round_number,
-                    "queries": queries,
-                },
-            )
-
-            round_started = time.perf_counter()
-            round_budget_ms = self._budget_policy.resolve_round_budget_ms(
-                context,
-                remaining_sub_question_ms,
-                self._max_rounds - round_idx,
-            )
-            round_result = await self._round_runner.run(
-                RoundRequest(
-                    question_id=sub_question.question_id,
-                    round_index=round_number,
-                    queries=queries,
-                    seen_urls=seen_urls,
-                    all_sources=all_sources,
-                    max_results_per_query=max_results_per_query,
-                    query_parallelism=self._budget_policy.resolve_query_parallelism(
-                        context,
-                        len(queries),
-                        self._max_query_parallelism,
-                    ),
-                    target_total_sources=total_source_target,
-                    query_budget_ms=self._budget_policy.resolve_query_budget_ms(
-                        context,
-                        round_budget_ms,
-                        len(queries),
-                    ),
-                    round_budget_ms=round_budget_ms,
-                )
-            )
-            hits = round_result.hits
-
-            summary = "; ".join(h.title for h in hits[:5])
-            features = self._sufficiency_evaluator.build_features(
-                list(all_sources.values()),
-                sub_question.question,
-                context.user_query,
-            )
-            await self._telemetry.sufficiency_features(
-                question_id=sub_question.question_id,
-                round_index=round_number,
-                features=features,
-            )
-            if round_result.stop_layer:
-                decision = SufficiencyDecision(
-                    sufficient=False,
-                    rationale=round_result.stop_reason,
-                    decision_by="guardrail",
-                    reason_code=round_result.reason_code,
-                    missing_dimensions=list(features.missing_dimensions),
-                    features=features,
-                )
-            else:
-                decision = await self._evaluate_sufficiency(
-                    question=sub_question.question,
-                    user_query=context.user_query,
-                    summary=summary,
-                    sources=list(all_sources.values()),
                     collaboration=collaboration,
-                    features=features,
-                    expected_sources=sub_question.expected_sources,
+                    previous_round=rounds[-1] if rounds else None,
+                    prior=prior,
+                    all_sources=all_sources,
+                    seen_queries=seen_queries,
+                    seen_urls=seen_urls,
+                    max_results_per_query=max_results_per_query,
+                    total_source_target=total_source_target,
+                    remaining_sub_question_ms=remaining_sub_question_ms,
                 )
-            round_elapsed_ms = (time.perf_counter() - round_started) * 1000.0
-            await self._telemetry.sufficiency_decision(
+                rounds.append(round_state["round"])
+                if round_state["hits"]:
+                    prior.append(round_state["summary"])
+                completed_rounds = list(rounds)
+                completed_sources = dict(all_sources)
+                completed_summary = prior[-1] if prior else ""
+
+                if self._should_stop_for_marginal_yield(rounds):
+                    rounds[-1].stop_layer = "marginal_yield"
+                    await self._notify(
+                        "search.marginal_yield_stop",
+                        {
+                            "question_id": sub_question.question_id,
+                            "round": round_number,
+                            "new_unique_urls": len(rounds[-1].hits),
+                            "new_domains": self._count_domains(rounds[-1].hits),
+                            "missing_dimensions_count": len(rounds[-1].missing_dimensions),
+                        },
+                    )
+                    break
+
+                if (
+                    round_state["decision"].sufficient
+                    or not round_state["queries"]
+                    or round_state["stop_layer"]
+                ):
+                    break
+        except asyncio.CancelledError:
+            if not context.salvage_on_cancel:
+                raise
+            await self._telemetry.partial_result_returned(
                 question_id=sub_question.question_id,
-                round_index=round_number,
-                decision=decision,
+                reason="timeout",
+                completed_rounds=len(completed_rounds),
+                source_count=len(completed_sources),
             )
-
-            rounds.append(
-                SearchRound(
-                    round_index=round_idx,
-                    queries=queries,
-                    hits=hits,
-                    sufficient=decision.sufficient,
-                    rationale=decision.rationale,
-                    elapsed_ms=round(round_elapsed_ms, 1),
-                    skipped_queries=skipped_queries + round_result.skipped_queries,
-                    cancelled_queries=round_result.cancelled_queries,
-                    decision_by=decision.decision_by,
-                    reason_code=decision.reason_code,
-                    stop_layer=round_result.stop_layer,
-                    missing_dimensions=decision.missing_dimensions,
-                    features=decision.features,
-                )
+            return self._build_search_result(
+                sub_question=sub_question,
+                rounds=completed_rounds,
+                sources=list(completed_sources.values()),
+                summary=completed_summary or "Search timed out",
+                error="search_timeout_partial",
             )
-
-            await self._telemetry.round_timing(
-                question_id=sub_question.question_id,
-                round_number=round_number,
-                elapsed_ms=round(round_elapsed_ms, 1),
-                query_count=len(queries),
-                skipped_queries=skipped_queries + round_result.skipped_queries,
-                cancelled_queries=round_result.cancelled_queries,
-                hit_count=len(hits),
-                source_count=len(all_sources),
-                decision=decision,
-                stop_layer=round_result.stop_layer,
-            )
-
-            if hits:
-                prior.append(summary)
-
-            if decision.sufficient or not queries or round_result.stop_layer:
-                break
 
         sources = list(all_sources.values())
         coverage = min(1.0, len(sources) / max(sub_question.expected_sources, 1))
+        exhausted = (
+            bool(rounds)
+            and not any(round_.sufficient for round_ in rounds)
+            and (
+                len(rounds) >= self._max_rounds
+                or not rounds[-1].queries
+                or bool(rounds[-1].stop_layer)
+            )
+        )
 
-        return SearchResult(
-            question_id=sub_question.question_id,
+        return self._build_search_result(
+            sub_question=sub_question,
             rounds=rounds,
             sources=sources,
             summary=prior[-1] if prior else "",
             coverage_score=coverage,
-            exhausted=len(rounds) >= self._max_rounds and not rounds[-1].sufficient,
+            exhausted=exhausted,
+        )
+
+    def _build_search_result(
+        self,
+        *,
+        sub_question: SubQuestion,
+        rounds: list[SearchRound],
+        sources: list[SourceReference],
+        summary: str,
+        error: str | None = None,
+        coverage_score: float | None = None,
+        exhausted: bool | None = None,
+    ) -> SearchResult:
+        if coverage_score is None:
+            coverage_score = min(1.0, len(sources) / max(sub_question.expected_sources, 1))
+        if exhausted is None:
+            exhausted = (
+                bool(rounds)
+                and not any(round_.sufficient for round_ in rounds)
+                and (
+                    len(rounds) >= self._max_rounds
+                    or not rounds[-1].queries
+                    or bool(rounds[-1].stop_layer)
+                )
+            )
+        return SearchResult(
+            question_id=sub_question.question_id,
+            rounds=rounds,
+            sources=sources,
+            summary=summary,
+            coverage_score=coverage_score,
+            exhausted=exhausted,
+            error=error,
         )
 
     async def _notify(self, event_type: str, data: dict[str, Any]) -> None:
@@ -329,6 +257,395 @@ class SearchExecutor:
                 await self._on_event(event_type, data)
             except Exception:
                 logger.debug("Search event callback failed for %s", event_type, exc_info=True)
+
+    async def _record_budget_exhausted_round(
+        self,
+        *,
+        rounds: list[SearchRound],
+        sub_question: SubQuestion,
+        round_idx: int,
+        round_number: int,
+        all_sources: dict[str, SourceReference],
+        sub_question_budget_ms: int,
+    ) -> None:
+        decision = SufficiencyDecision(
+            sufficient=False,
+            rationale="Sub-question budget exhausted before next round",
+            decision_by="guardrail",
+            reason_code="sub_question_budget_exhausted",
+        )
+        rounds.append(
+            self._build_round_record(
+                round_idx=round_idx,
+                queries=[],
+                hits=[],
+                decision=decision,
+                elapsed_ms=0.0,
+                skipped_queries=0,
+                cancelled_queries=0,
+                stop_layer="sub_question",
+                new_unique_urls=0,
+                new_domains=0,
+                zero_hit_query_count=0,
+                duplicate_url_rate=0.0,
+                missing_dimensions_count=len(decision.missing_dimensions),
+            )
+        )
+        await self._telemetry.budget_consumed(
+            question_id=sub_question.question_id,
+            round_index=round_number,
+            layer="sub_question",
+            reason_code=decision.reason_code,
+            budget_ms=sub_question_budget_ms,
+            remaining_ms=0,
+        )
+        await self._emit_round_timing(
+            sub_question=sub_question,
+            round_number=round_number,
+            all_sources=all_sources,
+            decision=decision,
+            queries=[],
+            hits=[],
+            elapsed_ms=0.0,
+            skipped_queries=0,
+            cancelled_queries=0,
+            stop_layer="sub_question",
+            new_unique_urls=0,
+            new_domains=0,
+            zero_hit_query_count=0,
+            duplicate_url_rate=0.0,
+            missing_dimensions_count=len(decision.missing_dimensions),
+        )
+
+    async def _record_collaboration_stop_round(
+        self,
+        *,
+        rounds: list[SearchRound],
+        sub_question: SubQuestion,
+        round_idx: int,
+        round_number: int,
+        all_sources: dict[str, SourceReference],
+        stop_reason: str,
+    ) -> None:
+        decision = SufficiencyDecision(
+            sufficient=True,
+            rationale=stop_reason,
+            decision_by="collaboration",
+            reason_code="collaboration_stop",
+        )
+        rounds.append(
+            self._build_round_record(
+                round_idx=round_idx,
+                queries=[],
+                hits=[],
+                decision=decision,
+                elapsed_ms=0.0,
+                skipped_queries=0,
+                cancelled_queries=0,
+                stop_layer="collaboration",
+                new_unique_urls=0,
+                new_domains=0,
+                zero_hit_query_count=0,
+                duplicate_url_rate=0.0,
+                missing_dimensions_count=len(decision.missing_dimensions),
+            )
+        )
+        await self._emit_round_timing(
+            sub_question=sub_question,
+            round_number=round_number,
+            all_sources=all_sources,
+            decision=decision,
+            queries=[],
+            hits=[],
+            elapsed_ms=0.0,
+            skipped_queries=0,
+            cancelled_queries=0,
+            stop_layer="collaboration",
+            new_unique_urls=0,
+            new_domains=0,
+            zero_hit_query_count=0,
+            duplicate_url_rate=0.0,
+            missing_dimensions_count=len(decision.missing_dimensions),
+        )
+
+    async def _execute_round(
+        self,
+        *,
+        sub_question: SubQuestion,
+        context: SearchContext,
+        round_idx: int,
+        round_number: int,
+        collaboration: dict[str, Any],
+        previous_round: SearchRound | None,
+        prior: list[str],
+        all_sources: dict[str, SourceReference],
+        seen_queries: set[str],
+        seen_urls: set[str],
+        max_results_per_query: int,
+        total_source_target: int,
+        remaining_sub_question_ms: int,
+    ) -> dict[str, Any]:
+        queries, skipped_queries = await self._prepare_round_queries(
+            sub_question=sub_question,
+            context=context,
+            round_idx=round_idx,
+            round_number=round_number,
+            prior=prior,
+            collaboration=collaboration,
+            all_sources=all_sources,
+            seen_queries=seen_queries,
+            previous_round=previous_round,
+        )
+        round_started = time.perf_counter()
+        round_budget_ms = self._budget_policy.resolve_round_budget_ms(
+            context,
+            remaining_sub_question_ms,
+            self._max_rounds - round_idx,
+        )
+        round_result = await self._round_runner.run(
+            RoundRequest(
+                question_id=sub_question.question_id,
+                round_index=round_number,
+                queries=queries,
+                seen_urls=seen_urls,
+                all_sources=all_sources,
+                max_results_per_query=max_results_per_query,
+                query_parallelism=self._budget_policy.resolve_query_parallelism(
+                    context,
+                    len(queries),
+                    self._max_query_parallelism,
+                ),
+                target_total_sources=total_source_target,
+                query_budget_ms=self._budget_policy.resolve_query_budget_ms(
+                    context,
+                    round_budget_ms,
+                    len(queries),
+                ),
+                round_budget_ms=round_budget_ms,
+            )
+        )
+        hits = round_result.hits
+        summary = "; ".join(hit.title for hit in hits[:5])
+        decision = await self._decide_round_sufficiency(
+            sub_question=sub_question,
+            context=context,
+            round_number=round_number,
+            summary=summary,
+            all_sources=all_sources,
+            collaboration=collaboration,
+            round_result=round_result,
+        )
+        round_elapsed_ms = (time.perf_counter() - round_started) * 1000.0
+        skipped_total = skipped_queries + round_result.skipped_queries
+        raw_hit_count = sum(len(execution.hits) for execution in round_result.executions)
+        zero_hit_query_count = sum(1 for execution in round_result.executions if not execution.hits)
+        duplicate_url_rate = 0.0
+        if raw_hit_count > 0:
+            duplicate_url_rate = max(0.0, (raw_hit_count - len(hits)) / raw_hit_count)
+        await self._telemetry.sufficiency_decision(
+            question_id=sub_question.question_id,
+            round_index=round_number,
+            decision=decision,
+        )
+        round_record = self._build_round_record(
+            round_idx=round_idx,
+            queries=queries,
+            hits=hits,
+            decision=decision,
+            elapsed_ms=round(round_elapsed_ms, 1),
+            skipped_queries=skipped_total,
+            cancelled_queries=round_result.cancelled_queries,
+            stop_layer=round_result.stop_layer,
+            new_unique_urls=len(hits),
+            new_domains=self._count_domains(hits),
+            zero_hit_query_count=zero_hit_query_count,
+            duplicate_url_rate=round(duplicate_url_rate, 3),
+            missing_dimensions_count=len(decision.missing_dimensions),
+        )
+        await self._emit_round_timing(
+            sub_question=sub_question,
+            round_number=round_number,
+            all_sources=all_sources,
+            decision=decision,
+            queries=queries,
+            hits=hits,
+            elapsed_ms=round(round_elapsed_ms, 1),
+            skipped_queries=skipped_total,
+            cancelled_queries=round_result.cancelled_queries,
+            stop_layer=round_result.stop_layer,
+            new_unique_urls=len(hits),
+            new_domains=self._count_domains(hits),
+            zero_hit_query_count=zero_hit_query_count,
+            duplicate_url_rate=round(duplicate_url_rate, 3),
+            missing_dimensions_count=len(decision.missing_dimensions),
+        )
+        return {
+            "round": round_record,
+            "decision": decision,
+            "queries": queries,
+            "summary": summary,
+            "hits": hits,
+            "stop_layer": round_result.stop_layer,
+        }
+
+    async def _prepare_round_queries(
+        self,
+        *,
+        sub_question: SubQuestion,
+        context: SearchContext,
+        round_idx: int,
+        round_number: int,
+        prior: list[str],
+        collaboration: dict[str, Any],
+        all_sources: dict[str, SourceReference],
+        seen_queries: set[str],
+        previous_round: SearchRound | None,
+    ) -> tuple[list[str], int]:
+        raw_queries, query_metadata = await self._generate_queries(
+            sub_question.question,
+            context.user_query,
+            prior,
+            round_idx,
+            collaboration,
+        )
+        queries, skipped_queries = await self._query_planner.claim_queries(
+            self._trim_queries_for_round(
+                raw_queries,
+                round_idx=round_idx,
+                accumulated_source_count=len(all_sources),
+                prior_count=len(prior),
+                collaboration=collaboration,
+                previous_round=previous_round,
+            ),
+            seen_queries,
+        )
+        await self._notify(
+            "search.queries_generated",
+            {
+                "question_id": sub_question.question_id,
+                "round": round_number,
+                "queries": queries,
+                **query_metadata,
+            },
+        )
+        return queries, skipped_queries
+
+    async def _decide_round_sufficiency(
+        self,
+        *,
+        sub_question: SubQuestion,
+        context: SearchContext,
+        round_number: int,
+        summary: str,
+        all_sources: dict[str, SourceReference],
+        collaboration: dict[str, Any],
+        round_result: Any,
+    ) -> SufficiencyDecision:
+        features = self._sufficiency_evaluator.build_features(
+            list(all_sources.values()),
+            sub_question.question,
+            context.user_query,
+        )
+        await self._telemetry.sufficiency_features(
+            question_id=sub_question.question_id,
+            round_index=round_number,
+            features=features,
+        )
+        if round_result.stop_layer:
+            return SufficiencyDecision(
+                sufficient=False,
+                rationale=round_result.stop_reason,
+                decision_by="guardrail",
+                reason_code=round_result.reason_code,
+                missing_dimensions=list(features.missing_dimensions),
+                features=features,
+            )
+        return await self._evaluate_sufficiency(
+            question=sub_question.question,
+            user_query=context.user_query,
+            summary=summary,
+            sources=list(all_sources.values()),
+            collaboration=collaboration,
+            features=features,
+            expected_sources=sub_question.expected_sources,
+        )
+
+    def _build_round_record(
+        self,
+        *,
+        round_idx: int,
+        queries: list[str],
+        hits: list[Any],
+        decision: SufficiencyDecision,
+        elapsed_ms: float,
+        skipped_queries: int,
+        cancelled_queries: int,
+        stop_layer: str | None,
+        new_unique_urls: int,
+        new_domains: int,
+        zero_hit_query_count: int,
+        duplicate_url_rate: float,
+        missing_dimensions_count: int,
+    ) -> SearchRound:
+        normalized_stop_layer = stop_layer or ""
+        return SearchRound(
+            round_index=round_idx,
+            queries=queries,
+            hits=hits,
+            sufficient=decision.sufficient,
+            rationale=decision.rationale,
+            elapsed_ms=elapsed_ms,
+            skipped_queries=skipped_queries,
+            cancelled_queries=cancelled_queries,
+            decision_by=decision.decision_by,
+            reason_code=decision.reason_code,
+            stop_layer=normalized_stop_layer,
+            missing_dimensions=decision.missing_dimensions,
+            features=decision.features,
+            new_unique_urls=new_unique_urls,
+            new_domains=new_domains,
+            zero_hit_query_count=zero_hit_query_count,
+            duplicate_url_rate=duplicate_url_rate,
+            missing_dimensions_count=missing_dimensions_count,
+        )
+
+    async def _emit_round_timing(
+        self,
+        *,
+        sub_question: SubQuestion,
+        round_number: int,
+        all_sources: dict[str, SourceReference],
+        decision: SufficiencyDecision,
+        queries: list[str],
+        hits: list[Any],
+        elapsed_ms: float,
+        skipped_queries: int,
+        cancelled_queries: int,
+        stop_layer: str | None,
+        new_unique_urls: int,
+        new_domains: int,
+        zero_hit_query_count: int,
+        duplicate_url_rate: float,
+        missing_dimensions_count: int,
+    ) -> None:
+        normalized_stop_layer = stop_layer or ""
+        await self._telemetry.round_timing(
+            question_id=sub_question.question_id,
+            round_number=round_number,
+            elapsed_ms=elapsed_ms,
+            query_count=len(queries),
+            skipped_queries=skipped_queries,
+            cancelled_queries=cancelled_queries,
+            hit_count=len(hits),
+            source_count=len(all_sources),
+            decision=decision,
+            stop_layer=normalized_stop_layer,
+            new_unique_urls=new_unique_urls,
+            new_domains=new_domains,
+            zero_hit_query_count=zero_hit_query_count,
+            duplicate_url_rate=duplicate_url_rate,
+            missing_dimensions_count=missing_dimensions_count,
+        )
 
     # ------------------------------------------------------------------
     # LLM helpers
@@ -341,7 +658,7 @@ class SearchExecutor:
         prior: list[str],
         round_idx: int,
         collaboration: dict[str, Any],
-    ) -> list[str]:
+    ) -> tuple[list[str], dict[str, Any]]:
         return await self._query_planner.generate_queries(
             question,
             user_query,
@@ -380,3 +697,61 @@ class SearchExecutor:
             return 0
         elapsed_ms = int((time.perf_counter() - started) * 1000.0)
         return max(0, budget_ms - elapsed_ms)
+
+    def _trim_queries_for_round(
+        self,
+        queries: list[str],
+        *,
+        round_idx: int,
+        accumulated_source_count: int,
+        prior_count: int,
+        collaboration: dict[str, Any],
+        previous_round: SearchRound | None,
+    ) -> list[str]:
+        if round_idx <= 0:
+            return queries[:3]
+        gap_count = self._gap_count(previous_round)
+        if gap_count == 0:
+            return []
+        if gap_count == 1:
+            return queries[:1]
+        shared_source_count = collaboration.get("shared_source_count", 0)
+        if round_idx == 1:
+            cap = 1 if accumulated_source_count >= 4 or shared_source_count >= 2 else 2
+            return queries[:cap]
+        cap = (
+            1 if (accumulated_source_count > 0 or prior_count > 0 or shared_source_count > 0) else 2
+        )
+        return queries[:cap]
+
+    def _gap_count(self, round_: SearchRound | None) -> int | None:
+        if round_ is None:
+            return None
+        return len(round_.missing_dimensions)
+
+    def _count_domains(self, hits: list[Any]) -> int:
+        domains = {
+            (getattr(hit, "domain", None) or urlparse(getattr(hit, "url", "")).netloc).lower()
+            for hit in hits
+            if getattr(hit, "url", None)
+        }
+        return len({domain for domain in domains if domain})
+
+    def _should_stop_for_marginal_yield(self, rounds: list[SearchRound]) -> bool:
+        if len(rounds) < 2:
+            return False
+        previous_round = rounds[-2]
+        current_round = rounds[-1]
+        if current_round.sufficient:
+            return False
+        previous_gap_count = self._gap_count(previous_round)
+        current_gap_count = self._gap_count(current_round)
+        if previous_gap_count is None or current_gap_count is None:
+            return False
+        previous_low_yield = (
+            0 < len(previous_round.hits) <= 1 and self._count_domains(previous_round.hits) <= 1
+        )
+        current_low_yield = (
+            0 < len(current_round.hits) <= 1 and self._count_domains(current_round.hits) <= 1
+        )
+        return previous_low_yield and current_low_yield and current_gap_count >= previous_gap_count

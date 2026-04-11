@@ -4,7 +4,7 @@ import asyncio
 import logging
 import time
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from houyi.application.research.runtime.search_budget import _MIN_BUDGET_MS
 from houyi.application.research.runtime.search_telemetry import TelemetryEmitter
@@ -32,6 +32,7 @@ class RoundResult:
     reason_code: str = ""
     stop_layer: str = ""
     stop_reason: str = ""
+    executions: list[QueryExecution] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -64,6 +65,7 @@ class RoundRunner:
 
     async def _run_serial(self, request: RoundRequest) -> RoundResult:
         hits: list[SearchHit] = []
+        executions: list[QueryExecution] = []
         cancelled_queries = 0
         round_started = time.perf_counter()
         for index, query in enumerate(request.queries):
@@ -92,12 +94,14 @@ class RoundRunner:
                     reason_code="round_budget_exhausted",
                     stop_layer="round",
                     stop_reason="Round budget exhausted before finishing pending queries",
+                    executions=executions,
                 )
             execution = await self._search_query(
                 query,
                 request.max_results_per_query,
                 request.query_budget_ms,
             )
+            executions.append(execution)
             hits.extend(await self._merge_query_hits(request, execution))
             await self.telemetry.query_timing(
                 question_id=request.question_id,
@@ -119,7 +123,12 @@ class RoundRunner:
                 reason="source_target_reached",
             )
             break
-        return RoundResult(hits=hits, skipped_queries=0, cancelled_queries=cancelled_queries)
+        return RoundResult(
+            hits=hits,
+            skipped_queries=0,
+            cancelled_queries=cancelled_queries,
+            executions=executions,
+        )
 
     async def _run_parallel(self, request: RoundRequest) -> RoundResult:
         semaphore = asyncio.Semaphore(request.query_parallelism)
@@ -135,6 +144,7 @@ class RoundRunner:
 
         tasks = {asyncio.create_task(_run_one(query)): query for query in request.queries}
         hits: list[SearchHit] = []
+        executions: list[QueryExecution] = []
         cancelled_queries = 0
         pending: set[asyncio.Task[QueryExecution]] = set(tasks)
 
@@ -164,6 +174,7 @@ class RoundRunner:
                     reason_code="round_budget_exhausted",
                     stop_layer="round",
                     stop_reason="Round budget exhausted before finishing pending queries",
+                    executions=executions,
                 )
             done, pending = await asyncio.wait(
                 pending,
@@ -174,6 +185,7 @@ class RoundRunner:
                 continue
             for task in done:
                 execution = await task
+                executions.append(execution)
                 hits.extend(await self._merge_query_hits(request, execution))
                 await self.telemetry.query_timing(
                     question_id=request.question_id,
@@ -197,7 +209,12 @@ class RoundRunner:
 
         if cancelled_queries:
             await asyncio.gather(*tasks, return_exceptions=True)
-        return RoundResult(hits=hits, skipped_queries=0, cancelled_queries=cancelled_queries)
+        return RoundResult(
+            hits=hits,
+            skipped_queries=0,
+            cancelled_queries=cancelled_queries,
+            executions=executions,
+        )
 
     def _run_cancel_check(self) -> None:
         if self.check_cancelled is not None:

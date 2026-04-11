@@ -43,11 +43,37 @@ class TestGeneratePlan:
         plan = await planner.generate_plan("test", memory_context="User prefers Python")
         assert plan is not None
 
-    async def test_malformed_json_fallback(self):
-        llm = MockLLM(responses=["not valid json at all"])
+    async def test_plan_draft_returns_clarification(self):
+        llm = MockLLM(
+            responses=[
+                '{"sub_questions":[{"question":"Q1","priority":5,"search_strategy":"web","expected_sources":3}],"outline":[{"title":"Overview","objective":"Explain the topic","related_question_ids":[0]}],"estimated_duration_min":5,"clarification":{"needs_clarification":true,"confidence":0.4,"issues":["Missing time horizon"],"suggested_questions":["What year range matters?"],"refined_query":"AI agent frameworks in 2026"}}'
+            ]
+        )
+        planner = ResearchPlanner(llm)
+        draft = await planner.generate_plan_draft("AI agent frameworks")
+        assert draft.plan.query == "AI agent frameworks"
+        assert draft.clarification is not None
+        assert draft.clarification.needs_clarification is True
+        assert draft.clarification.refined_query == "AI agent frameworks in 2026"
+
+    async def test_malformed_json_retries(self):
+        llm = MockLLM(
+            responses=[
+                "not valid json at all",
+                '{"sub_questions":[{"question":"Retry question","priority":5,"search_strategy":"web","expected_sources":3}],"outline":[{"title":"Retry section","objective":"Retry objective","related_question_ids":[0]}],"estimated_duration_min":5}',
+            ]
+        )
         planner = ResearchPlanner(llm)
         plan = await planner.generate_plan("test")
-        assert plan.sub_questions == []
+        assert len(plan.sub_questions) == 1
+        assert len(plan.outline) == 1
+        assert llm._call_count == 2
+
+    async def test_malformed_json_raises(self):
+        llm = MockLLM(responses=["not valid json at all", "still not valid"])
+        planner = ResearchPlanner(llm)
+        with pytest.raises(ValueError, match="invalid JSON"):
+            await planner.generate_plan("test")
 
 
 class TestRefinePlan:
@@ -128,9 +154,9 @@ class TestParseJson:
         data = _parse_json_response('```json\n{"key": "val"}\n```')
         assert data["key"] == "val"
 
-    def test_invalid_returns_empty(self):
+    def test_invalid_returns_none(self):
         data = _parse_json_response("garbage")
-        assert data["sub_questions"] == []
+        assert data is None
 
 
 class TestBoundaryAndInteraction:
@@ -140,21 +166,24 @@ class TestBoundaryAndInteraction:
         assert plan.query == ""
         assert plan.status == PlanStatus.DRAFT
 
-    async def test_garbage_json_yields_empty_plan(self):
-        llm = MockLLM(responses=["<html>not json at all</html>"])
+    async def test_garbage_json_raises(self):
+        llm = MockLLM(responses=["<html>not json at all</html>", "still bad"])
         planner = ResearchPlanner(llm)
-        plan = await planner.generate_plan("test")
-        assert plan.sub_questions == []
-        assert plan.outline == []
+        with pytest.raises(ValueError, match="invalid JSON"):
+            await planner.generate_plan("test")
 
-    async def test_llm_called_with_query_in_msg(self):
-        llm = MockLLM(responses=['{"sub_questions":[],"outline":[]}'])
+    async def test_llm_called_with_query(self):
+        llm = MockLLM(
+            responses=[
+                '{"sub_questions":[{"question":"Q1","priority":5,"search_strategy":"web","expected_sources":3}],"outline":[{"title":"Overview","objective":"Explain the topic","related_question_ids":[0]}]}'
+            ]
+        )
         planner = ResearchPlanner(llm)
         await planner.generate_plan("quantum computing")
         assert llm._call_count == 1
 
     async def test_invalid_strategy_fallback(self):
-        raw = '{"sub_questions":[{"question":"Q1","search_strategy":"quantum"}],"outline":[]}'
+        raw = '{"sub_questions":[{"question":"Q1","search_strategy":"quantum"}],"outline":[{"title":"Overview","objective":"Explain the topic","related_question_ids":[0]}]}'
         llm = MockLLM(responses=[raw])
         planner = ResearchPlanner(llm)
         plan = await planner.generate_plan("test")

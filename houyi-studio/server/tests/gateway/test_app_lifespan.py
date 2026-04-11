@@ -18,10 +18,12 @@ from houyi.infrastructure.config.env_config import (
     ENV_GOOGLE_APPLICATION_CREDENTIALS,
     ENV_GOOGLE_CLOUD_PROJECT,
     ENV_OPENAI_API_KEY,
+    EnvConfig,
 )
 
 
 def _stub_startup_dependencies(app_module, monkeypatch, tmp_path) -> None:
+    EnvConfig._reset()
     monkeypatch.setattr(app_module, "get_execution_engine", lambda: object())
     monkeypatch.setattr(app_module, "register_console_skills", lambda: None)
 

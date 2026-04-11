@@ -73,6 +73,9 @@ class ResearchEventBridge:
                 question_id=data.get("question_id", ""),
                 round=data.get("round", 0),
                 queries=data.get("queries", []),
+                bilingual_expected=data.get("bilingual_expected", False),
+                bilingual_fallback_applied=data.get("bilingual_fallback_applied", False),
+                language_mix=data.get("language_mix", []),
             )
             return
         if event_type == "search.source_discovered":

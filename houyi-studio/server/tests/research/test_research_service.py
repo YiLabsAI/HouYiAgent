@@ -78,6 +78,12 @@ _QUERY_GEN = json.dumps(["test search query", "alternate query"])
 _SUFFICIENCY = json.dumps({"sufficient": True, "rationale": "Enough"})
 
 
+def _plan_with_clarification(plan_json: str, clarification: dict[str, Any]) -> str:
+    plan_data = json.loads(plan_json)
+    plan_data["clarification"] = clarification
+    return json.dumps(plan_data)
+
+
 def _all_responses() -> list[str]:
     return [_PLAN_JSON, _QUERY_GEN, _SUFFICIENCY, _SECTION, "Summary.", _RACE, _FACT]
 
@@ -121,6 +127,30 @@ class TestCreateRun:
         svc = ResearchService(_MockLLM(), _mock_ws(), data_dir=tmp_path)
         runtime, plan = await svc.create_run("AI frameworks", settings=_QUICK)
         assert plan is not None
+        assert runtime.status == ResearchStatus.PLAN_READY
+
+    async def test_replans_with_refined_query(self, tmp_path):
+        responses = [
+            _plan_with_clarification(
+                _PLAN_JSON,
+                {
+                    "needs_clarification": True,
+                    "confidence": 0.4,
+                    "issues": ["Missing time period"],
+                    "suggested_questions": ["Which year range matters?"],
+                    "refined_query": "AI frameworks in 2026",
+                },
+            ),
+            _PLAN_JSON,
+        ]
+        svc = ResearchService(_MockLLM(responses), _mock_ws(), data_dir=tmp_path)
+        runtime, plan = await svc.create_run(
+            "AI frameworks",
+            settings=ResearchSettings(depth="standard"),
+        )
+        assert runtime._clarification is not None
+        assert runtime._clarification.refined_query == "AI frameworks in 2026"
+        assert plan.query == "AI frameworks in 2026"
         assert runtime.status == ResearchStatus.PLAN_READY
 
     async def test_idempotency_key(self, tmp_path):
@@ -247,6 +277,17 @@ class TestGetters:
     async def test_emitter_missing_none(self, tmp_path):
         svc = ResearchService(_MockLLM(), _mock_ws(), data_dir=tmp_path)
         assert svc.get_emitter("nonexistent") is None
+
+    async def test_execution_clears_buffer(self, tmp_path):
+        svc = ResearchService(_MockLLM(), _mock_ws(), data_dir=tmp_path)
+        runtime, _ = await svc.create_run("test", settings=_QUICK)
+        buffer = svc.get_event_buffer(runtime.run_id)
+        buffer.extend(["stale-1", "stale-2"])
+
+        prepared = svc.prepare_for_execution(runtime.run_id)
+
+        assert prepared.run_id == runtime.run_id
+        assert buffer == []
 
 
 class TestPersistence:

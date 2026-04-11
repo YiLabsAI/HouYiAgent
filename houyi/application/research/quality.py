@@ -111,6 +111,10 @@ class QualityEvaluator:
         report: ResearchReport,
         sources: AggregatedSources,
         reference_answer: str | None = None,
+        *,
+        report_char_limit: int | None = None,
+        fact_section_char_limit: int | None = None,
+        fact_source_char_limit: int | None = None,
     ) -> tuple[QualityScore, dict[str, float]]:
         """Run quality evaluation and return score + per-subphase timings."""
         import asyncio
@@ -119,12 +123,19 @@ class QualityEvaluator:
 
         async def _timed_race() -> tuple[RACEScore, float]:
             t = time.perf_counter()
-            score = await self._safe_race(report, reference_answer)
+            score = await self._safe_race(
+                report, reference_answer, report_char_limit=report_char_limit
+            )
             return score, (time.perf_counter() - t) * 1000.0
 
         async def _timed_fact() -> tuple[FACTScore, float]:
             t = time.perf_counter()
-            score = await self._safe_fact(report, sources)
+            score = await self._safe_fact(
+                report,
+                sources,
+                section_char_limit=fact_section_char_limit,
+                source_char_limit=fact_source_char_limit,
+            )
             return score, (time.perf_counter() - t) * 1000.0
 
         (race, race_ms), (fact, fact_ms) = await asyncio.gather(_timed_race(), _timed_fact())
@@ -150,9 +161,15 @@ class QualityEvaluator:
         self,
         report: ResearchReport,
         reference_answer: str | None,
+        *,
+        report_char_limit: int | None = None,
     ) -> RACEScore:
         try:
-            return await self.evaluate_race(report, reference_answer)
+            return await self.evaluate_race(
+                report,
+                reference_answer,
+                report_char_limit=report_char_limit,
+            )
         except Exception:
             logger.warning(
                 "RACE evaluation failed — returning zero-score placeholder", exc_info=True
@@ -163,9 +180,17 @@ class QualityEvaluator:
         self,
         report: ResearchReport,
         sources: AggregatedSources,
+        *,
+        section_char_limit: int | None = None,
+        source_char_limit: int | None = None,
     ) -> FACTScore:
         try:
-            return await self.evaluate_fact(report, sources)
+            return await self.evaluate_fact(
+                report,
+                sources,
+                section_char_limit=section_char_limit,
+                source_char_limit=source_char_limit,
+            )
         except Exception:
             logger.warning(
                 "FACT evaluation failed — returning zero-score placeholder", exc_info=True
@@ -176,6 +201,8 @@ class QualityEvaluator:
         self,
         report: ResearchReport,
         reference_answer: str | None = None,
+        *,
+        report_char_limit: int | None = None,
     ) -> RACEScore:
         """RACE framework evaluation with adaptive weighting."""
         report_text = _report_to_text(report)
@@ -185,7 +212,7 @@ class QualityEvaluator:
 
         prompt = _RACE_PROMPT.format(
             query=report.title,
-            report_text=report_text[:8000],
+            report_text=report_text[: report_char_limit or 8000],
             reference_section=ref_section,
         )
         resp = await self._llm.chat(
@@ -200,6 +227,9 @@ class QualityEvaluator:
         self,
         report: ResearchReport,
         sources: AggregatedSources,
+        *,
+        section_char_limit: int | None = None,
+        source_char_limit: int | None = None,
     ) -> FACTScore:
         """FACT framework evaluation for citation trustworthiness."""
         sections_text = _sections_with_citations(report)
@@ -212,8 +242,8 @@ class QualityEvaluator:
         sources_text = _sources_lookup_text(sources, preferred_ids=cited_ref_ids)
 
         prompt = _FACT_PROMPT.format(
-            sections_text=sections_text[:_FACT_MAX_SECTION_CHARS],
-            sources_text=sources_text[:_FACT_MAX_SOURCE_CHARS],
+            sections_text=sections_text[: section_char_limit or _FACT_MAX_SECTION_CHARS],
+            sources_text=sources_text[: source_char_limit or _FACT_MAX_SOURCE_CHARS],
         )
         resp = await self._llm.chat(
             messages=[{"role": "user", "content": prompt}],

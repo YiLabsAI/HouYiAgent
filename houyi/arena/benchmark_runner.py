@@ -52,6 +52,7 @@ class BenchmarkResult:
     duration_seconds: float = 0.0
     search_elapsed_ms: float = 0.0
     phase_timings_ms: dict[str, float] = field(default_factory=dict)
+    section_input_metrics: list[dict[str, Any]] = field(default_factory=list)
     error: str | None = None
 
 
@@ -160,6 +161,7 @@ class BenchmarkRunner:
         The benchmark runner adds a 60s buffer on top for plan generation + overhead.
         """
         start = time.monotonic()
+        runtime: ResearchRuntime | None = None
         try:
             runtime = ResearchRuntime(
                 llm_adapter=self._llm,
@@ -185,6 +187,14 @@ class BenchmarkRunner:
             duration = time.monotonic() - start
             score = runtime.quality_score
             overall = score.overall if hasattr(score, "overall") else float(score or 0)
+            # Merge search-phase decomposition timings into phase_timings_ms
+            phase_timings = dict(runtime.phase_timings_ms)
+            phase_timings["aggregate_ms"] = runtime.aggregate_ms
+            phase_timings["intermediate_ms"] = runtime.intermediate_ms
+            section_input_metrics = []
+            if article:
+                report = await runtime.get_report()
+                section_input_metrics = list(report.metadata.section_input_metrics or [])
             return BenchmarkResult(
                 id=query.id,
                 prompt=query.prompt,
@@ -192,19 +202,26 @@ class BenchmarkRunner:
                 quality_score=overall,
                 duration_seconds=round(duration, 2),
                 search_elapsed_ms=runtime.search_elapsed_ms,
-                phase_timings_ms=runtime.phase_timings_ms,
+                phase_timings_ms=phase_timings,
+                section_input_metrics=section_input_metrics,
                 error="internal timeout (report incomplete)" if not article else None,
             )
         except Exception as exc:
             duration = time.monotonic() - start
             logger.error("Query %s failed: %s", query.id, exc, exc_info=True)
+            phase_timings = {}
+            # Keep partial timings for failed runs so benchmark attribution survives exceptions.
+            if runtime is not None:
+                phase_timings = dict(runtime.phase_timings_ms)
+                phase_timings["aggregate_ms"] = runtime.aggregate_ms
+                phase_timings["intermediate_ms"] = runtime.intermediate_ms
             return BenchmarkResult(
                 id=query.id,
                 prompt=query.prompt,
                 article="",
                 duration_seconds=round(duration, 2),
-                search_elapsed_ms=0.0,
-                phase_timings_ms={},
+                search_elapsed_ms=runtime.search_elapsed_ms if runtime is not None else 0.0,
+                phase_timings_ms=phase_timings,
                 error=str(exc),
             )
 
@@ -225,19 +242,19 @@ def _report_to_article(report: Any) -> str:
     if report.summary:
         parts.append(f"{report.summary}\n")
 
-    ref_lookup: dict[str, str] = {}
+    ref_lookup: dict[str, tuple[str, str]] = {}
     for ref in report.references:
-        ref_lookup[ref.reference_id] = ref.url
+        ref_lookup[ref.reference_id] = (ref.title or ref.reference_id, ref.url)
 
     for section in report.sections:
         parts.append(f"## {section.title}\n")
         content = section.content
         for cit in section.citations:
-            url = ref_lookup.get(cit.reference_id, "")
+            label, url = ref_lookup.get(cit.reference_id, (cit.reference_id, ""))
             if url:
                 content = content.replace(
                     f"[{cit.reference_id}]",
-                    f"[{cit.reference_id}]({url})",
+                    f"[{label}]({url})",
                 )
         parts.append(content)
         parts.append("")
@@ -246,7 +263,6 @@ def _report_to_article(report: Any) -> str:
         parts.append("## References\n")
         for ref in report.references:
             parts.append(f"- [{ref.title}]({ref.url})")
-        parts.append("")
 
     return "\n".join(parts)
 
@@ -315,6 +331,7 @@ def _append_metrics(path: Path, result: BenchmarkResult) -> None:
         "quality_score": result.quality_score,
         "error": result.error,
         "phase_timings_ms": result.phase_timings_ms,
+        "section_input_metrics": result.section_input_metrics,
     }
     with path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(entry, ensure_ascii=False) + "\n")

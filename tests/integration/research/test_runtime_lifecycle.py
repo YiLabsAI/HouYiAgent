@@ -128,15 +128,20 @@ _VALIDATION_JSON = json.dumps(
 )
 
 
+def _plan_with_clarification(plan_json: str, clarification_json: str) -> str:
+    plan_data = json.loads(plan_json)
+    plan_data["clarification"] = json.loads(clarification_json)
+    return json.dumps(plan_data)
+
+
 def _build_responses() -> list[str]:
     """LLM response sequence for a 3-question standard-depth session.
 
-    Standard depth: clarification → plan → 3×(query_gen+sufficiency)
+    Standard depth: planner draft (+ clarification metadata) → 3×(query_gen+sufficiency)
     → 3×intermediate → 3×section → summary → 3×validation → RACE → FACT.
     """
     return [
-        _CLARIFICATION_PASS,
-        _PLAN_JSON,
+        _plan_with_clarification(_PLAN_JSON, _CLARIFICATION_PASS),
         _QUERY_GEN,
         _SUFFICIENCY,
         _QUERY_GEN,
@@ -175,10 +180,8 @@ class _MockLLM(LLMAdapter):
 
     def _route_content(self, prompt: str) -> str:
         text = prompt.strip()
-        if "needs_clarification" in text:
-            return _CLARIFICATION_PASS
         if '"sub_questions"' in text and '"outline"' in text:
-            return _PLAN_JSON
+            return _plan_with_clarification(_PLAN_JSON, _CLARIFICATION_PASS)
         if "Respond ONLY with a JSON array of query strings" in text:
             self._query_idx += 1
             return _QUERY_GEN

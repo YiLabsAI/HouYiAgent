@@ -35,6 +35,24 @@ class TelemetryEmitter:
             },
         )
 
+    async def partial_result_returned(
+        self,
+        *,
+        question_id: str,
+        reason: str,
+        completed_rounds: int,
+        source_count: int,
+    ) -> None:
+        await self.notify(
+            "search.partial_result_returned",
+            {
+                "question_id": question_id,
+                "reason": reason,
+                "completed_rounds": completed_rounds,
+                "source_count": source_count,
+            },
+        )
+
     async def sufficiency_features(
         self,
         *,
@@ -94,6 +112,11 @@ class TelemetryEmitter:
         source_count: int,
         decision: SufficiencyDecision,
         stop_layer: str,
+        new_unique_urls: int = 0,
+        new_domains: int = 0,
+        zero_hit_query_count: int = 0,
+        duplicate_url_rate: float = 0.0,
+        missing_dimensions_count: int = 0,
     ) -> None:
         await self.notify(
             "search.round_timing",
@@ -111,6 +134,11 @@ class TelemetryEmitter:
                 "decision_by": decision.decision_by,
                 "reason_code": decision.reason_code,
                 "stop_layer": stop_layer,
+                "new_unique_urls": new_unique_urls,
+                "new_domains": new_domains,
+                "zero_hit_query_count": zero_hit_query_count,
+                "duplicate_url_rate": duplicate_url_rate,
+                "missing_dimensions_count": missing_dimensions_count,
                 "missing_dimensions": list(decision.missing_dimensions),
             },
         )

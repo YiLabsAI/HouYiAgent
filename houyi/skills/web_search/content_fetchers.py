@@ -28,8 +28,14 @@ def _encode_url_for_http(url: str) -> str:
 
 
 class JinaContentFetcher:
-    def __init__(self, *, endpoint: str = "https://r.jina.ai/http/") -> None:
-        self._endpoint = endpoint
+    def __init__(self, *, api_key: str | None = None) -> None:
+        from houyi.infrastructure.config.env_config import EnvConfig
+
+        self._api_key = api_key or EnvConfig.get().jina_api_key or ""
+        if self._api_key:
+            self._endpoint = "https://r.jina.ai/"
+        else:
+            self._endpoint = "https://r.jina.ai/http/"
 
     async def fetch(self, urls: list[str]) -> dict[str, str]:
         def _fetch_one(url: str) -> tuple[str, str]:
@@ -38,9 +44,17 @@ class JinaContentFetcher:
                 return (url, "")
             if not re.match(r"^https?://", target):
                 target = f"https://{target}"
-            jina_url = _encode_url_for_http(f"{self._endpoint}{target}")
+            if self._api_key:
+                jina_url = _encode_url_for_http(f"{self._endpoint}{target}")
+                req = request.Request(
+                    jina_url,
+                    headers={"Authorization": f"Bearer {self._api_key}"},
+                )
+            else:
+                jina_url = _encode_url_for_http(f"{self._endpoint}{target}")
+                req = request.Request(jina_url)
             try:
-                with request.urlopen(jina_url, timeout=30) as response:
+                with request.urlopen(req, timeout=30) as response:
                     payload = response.read().decode("utf-8", errors="ignore")
             except (URLError, TimeoutError, OSError) as exc:
                 raise ContentFetchError(f"Jina fetch failed: {exc}") from exc

@@ -27,6 +27,8 @@ from houyi.infrastructure.config.env_config import (
     ENV_DEFAULT_LLM_PROVIDER,
     ENV_OPENAI_API_KEY,
     ENV_OPENAI_BASE_URL,
+    ENV_QWEN_MODEL,
+    ENV_SILICONFLOW_MODEL,
     ENV_TOOLCALL_MODEL,
     EnvConfig,
 )
@@ -194,17 +196,37 @@ def test_deepseek_prefers_env(monkeypatch):
                 ENV_OPENAI_API_KEY: "openai-key",
                 ENV_DEEPSEEK_BASE_URL: "https://deepseek.example",
                 ENV_OPENAI_BASE_URL: "https://openai.example",
+                ENV_SILICONFLOW_MODEL: "deepseek-ai/DeepSeek-V3.2",
                 ENV_DEEPSEEK_MODEL: "deepseek-chat",
-                ENV_TOOLCALL_MODEL: "toolcall-model",
             },
-            clear=False,
+            clear=True,
         ),
     ):
         adapter = _create_deepseek_adapter()
 
     assert adapter.api_key == "deepseek-key"
     assert adapter.base_url == "https://deepseek.example"
-    assert adapter.model == "deepseek-chat"
+    assert adapter.model == "deepseek-ai/DeepSeek-V3.2"
+
+
+def test_deepseek_accepts_qwen_alias(monkeypatch):
+    fake_openai = ModuleType("openai")
+    fake_openai.AsyncOpenAI = MagicMock()
+    with (
+        patch.dict(sys.modules, {"openai": fake_openai}),
+        patch.dict(
+            os.environ,
+            {
+                ENV_DEEPSEEK_API_KEY: "deepseek-key",
+                ENV_DEEPSEEK_BASE_URL: "https://deepseek.example",
+                ENV_QWEN_MODEL: "Qwen/Qwen3-32B",
+            },
+            clear=True,
+        ),
+    ):
+        adapter = _create_deepseek_adapter()
+
+    assert adapter.model == "Qwen/Qwen3-32B"
 
 
 def test_deepseek_uses_openai(monkeypatch):

@@ -1,5 +1,3 @@
-"""Unit tests for ReportGenerator."""
-
 from __future__ import annotations
 
 import json
@@ -50,22 +48,24 @@ class TestGenerate:
     async def test_produces_report(self):
         llm = MockLLM(responses=[_SECTION_JSON, _SECTION_JSON, "Summary text."])
         gen = ReportGenerator(llm)
-        report = await gen.generate(_plan_with_outline(), _sources())
+        report, timings = await gen.generate(_plan_with_outline(), _sources())
         assert len(report.sections) == 2
         assert report.summary == "Summary text."
+        assert "report_sections_ms" in timings
+        assert "report_summary_ms" in timings
         assert report.metadata.section_count == 2
 
     async def test_citations_parsed(self):
         llm = MockLLM(responses=[_SECTION_JSON, _SECTION_JSON, "Summary."])
         gen = ReportGenerator(llm)
-        report = await gen.generate(_plan_with_outline(), _sources())
+        report, _ = await gen.generate(_plan_with_outline(), _sources())
         assert len(report.sections[0].citations) == 1
         assert report.sections[0].citations[0].reference_id == "ref_001"
 
     async def test_malformed_section_fallback(self):
         llm = MockLLM(responses=["Just plain text.", "Also plain.", "Summary."])
         gen = ReportGenerator(llm)
-        report = await gen.generate(_plan_with_outline(), _sources())
+        report, _ = await gen.generate(_plan_with_outline(), _sources())
         assert report.sections[0].content == "Just plain text."
         assert report.sections[0].citations == []
 
@@ -100,14 +100,14 @@ class TestBoundaryAndInteraction:
         gen = ReportGenerator(llm)
         plan = _plan_with_outline()
         empty_src = AggregatedSources(sources=[], grouped_by_question={})
-        report = await gen.generate(plan, empty_src)
+        report, _ = await gen.generate(plan, empty_src)
         assert len(report.sections) == 2
         assert report.metadata.source_count == 0
 
     async def test_all_sections_invalid_json(self):
         llm = MockLLM(responses=["<<<bad>>>", "<<<bad>>>", "Summary."])
         gen = ReportGenerator(llm)
-        report = await gen.generate(_plan_with_outline(), _sources())
+        report, _ = await gen.generate(_plan_with_outline(), _sources())
         for sec in report.sections:
             assert sec.citations == []
             assert sec.content != ""
@@ -116,9 +116,51 @@ class TestBoundaryAndInteraction:
         llm = MockLLM(responses=[_SECTION_JSON, _SECTION_JSON, "Summary."])
         gen = ReportGenerator(llm)
         plan = _plan_with_outline()
-        report = await gen.generate(plan, _sources())
+        report, _ = await gen.generate(plan, _sources())
         assert len(report.sections) == len(plan.outline)
         assert report.metadata.section_count == len(plan.outline)
+
+    async def test_section_source_selection(self):
+        from houyi.application.research.report import _MAX_SECTION_SOURCES
+
+        llm = MockLLM(responses=[])
+        gen = ReportGenerator(llm)
+        many_sources = AggregatedSources(
+            sources=[
+                SourceReference(
+                    reference_id="ref_best",
+                    url="https://stats.gov/official-annual-report-2026",
+                    title="Official Annual Report 2026",
+                    snippet="official growth statistics and middle class income data",
+                    reliability_score=0.95,
+                ),
+                *[
+                    SourceReference(
+                        reference_id=f"ref_{idx}",
+                        url=f"https://example.com/{idx}",
+                        title=f"Generic commentary {idx}",
+                        snippet="misc text",
+                        reliability_score=0.2 + (idx * 0.01),
+                    )
+                    for idx in range(10)
+                ],
+            ],
+            grouped_by_question={
+                "q1": ["ref_best", *[f"ref_{idx}" for idx in range(10)]],
+            },
+        )
+
+        selected, total = gen.select_section_sources(
+            ["q1"],
+            many_sources,
+            section_title="Income Growth Analysis",
+            objective="Use official annual statistics to compare growth and income",
+        )
+
+        assert total == 11
+        assert len(selected) == _MAX_SECTION_SOURCES
+        assert selected[0].reference_id == "ref_best"
+        assert "ref_0" not in {src.reference_id for src in selected}
 
 
 class TestIntermediateContext:
@@ -148,7 +190,7 @@ class TestIntermediateContext:
             ),
         ]
 
-        report = await gen.generate(plan, _sources(), intermediate_reports=intermediates)
+        report, _ = await gen.generate(plan, _sources(), intermediate_reports=intermediates)
         assert len(report.sections) == 2
         assert report.summary == "Summary."
 
@@ -167,6 +209,26 @@ class TestIntermediateContext:
         assert "Deep analysis text" in result
         assert "90%" in result
 
+    async def test_intermediate_context_is_capped(self):
+        from houyi.application.research.report import (
+            _INTERMEDIATE_CONTEXT_MAX_CHARS,
+            _intermediate_context,
+        )
+        from houyi.application.research.runtime.intermediate import IntermediateReport
+
+        reports = {
+            f"q{idx}": IntermediateReport(
+                question_id=f"q{idx}",
+                question=f"Question {idx}",
+                analysis="A" * 1200,
+                confidence=0.8,
+            )
+            for idx in range(5)
+        }
+
+        result = _intermediate_context(list(reports), reports)
+        assert len(result) <= _INTERMEDIATE_CONTEXT_MAX_CHARS
+
 
 class TestParallelGeneration:
     async def test_sections_generated_concurrently(self):
@@ -181,7 +243,7 @@ class TestParallelGeneration:
         # 5 sections + 1 summary = 6 LLM calls
         llm = MockLLM(responses=[_SECTION_JSON] * 5 + ["Summary."])
         gen = ReportGenerator(llm)
-        report = await gen.generate(plan, _sources())
+        report, _ = await gen.generate(plan, _sources())
         assert len(report.sections) == 5
         assert report.summary == "Summary."
         titles = [s.title for s in report.sections]
@@ -199,7 +261,7 @@ class TestParseSectionEdgeCases:
         assert len(section.citations) == 1
         assert section.citations[0].reference_id == "ref_001"
 
-    async def test_extracts_json_from_prefix_text(self):
+    async def test_extracts_from_prefix_text(self):
         """LLM sometimes prepends prose before the JSON object."""
         from houyi.application.research.report import _parse_section
 
@@ -208,7 +270,7 @@ class TestParseSectionEdgeCases:
         assert "AI frameworks" in section.content
         assert len(section.citations) == 1
 
-    async def test_raw_json_not_shown_as_content(self):
+    async def test_raw_json_not_shown(self):
         """Ensure {\"content\":...} is parsed, not displayed as-is."""
         from houyi.application.research.report import _parse_section
 

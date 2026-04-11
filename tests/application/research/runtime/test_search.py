@@ -5,7 +5,7 @@ import json
 from unittest.mock import AsyncMock
 
 from houyi.application.research.runtime.search_executor import SearchExecutor
-from houyi.application.research.types import SearchContext, SubQuestion
+from houyi.application.research.types import SearchContext, SubQuestion, SufficiencyDecision
 from houyi.skills.web_search.types import WebSearchMetadata, WebSearchResponse, WebSearchResult
 
 from ..conftest import MockLLM, make_mock_web_search
@@ -40,7 +40,8 @@ class TestSearch:
         coord = SearchExecutor(llm, ws, max_search_rounds=3)
         result = await coord.search(SubQuestion(question="Deep dive?"), _context())
         assert result.exhausted is True
-        assert len(result.rounds) == 3
+        assert len(result.rounds) == 2
+        assert result.rounds[-1].queries == []
 
     async def test_coverage_score(self):
         llm = MockLLM(
@@ -113,6 +114,117 @@ class TestSearch:
         assert ws.search.await_count == 2
         assert result.rounds[0].skipped_queries == 1
 
+    async def test_dedupe_across_rounds(self):
+        llm = MockLLM(
+            responses=[
+                '["q1"]',
+                json.dumps({"sufficient": False, "rationale": "need more"}),
+                '["q1", "q2"]',
+                json.dumps({"sufficient": True, "rationale": "ok"}),
+            ]
+        )
+        ws = make_mock_web_search()
+        executor = SearchExecutor(llm, ws, max_search_rounds=2)
+        result = await executor.search(SubQuestion(question="Q?"), _context())
+        assert ws.search.await_count == 2
+        assert result.rounds[1].skipped_queries == 1
+
+    async def test_query_budget_shrinks_tail(self):
+        llm = MockLLM(
+            responses=[
+                '["q1", "q2", "q3"]',
+                json.dumps({"sufficient": False, "rationale": "need more"}),
+                '["q4", "q5", "q6"]',
+                json.dumps({"sufficient": True, "rationale": "ok"}),
+            ]
+        )
+        ws = make_mock_web_search()
+        executor = SearchExecutor(llm, ws, max_search_rounds=2)
+        await executor.search(SubQuestion(question="Q?"), _context())
+        assert ws.search.await_count == 5
+
+    async def test_gap_driven_tail_shrinks_to_one_query(self):
+        llm = MockLLM(
+            responses=[
+                '["q1", "q2"]',
+                '["q3", "q4"]',
+            ]
+        )
+        ws = make_mock_web_search()
+        executor = SearchExecutor(llm, ws, max_search_rounds=2)
+        executor._evaluate_sufficiency = AsyncMock(
+            side_effect=[
+                SufficiencyDecision(
+                    sufficient=False,
+                    rationale="need one more gap",
+                    missing_dimensions=["authority"],
+                ),
+                SufficiencyDecision(sufficient=True, rationale="ok"),
+            ]
+        )
+
+        await executor.search(SubQuestion(question="Q?"), _context())
+
+        assert ws.search.await_count == 3
+
+    async def test_marginal_yield_stops_before_next_round(self):
+        llm = MockLLM(
+            responses=[
+                '["q1"]',
+                '["q2"]',
+                '["q3"]',
+            ]
+        )
+        ws = make_mock_web_search()
+        events: list[tuple[str, dict]] = []
+
+        async def _search(query: str, *, max_results: int, include_content: bool):
+            return WebSearchResponse(
+                query=query,
+                provider="mock",
+                results=[
+                    WebSearchResult(
+                        title=f"{query} source",
+                        url=f"https://example.com/{query}",
+                        snippet=f"{query} source",
+                        content=f"{query} source",
+                    )
+                ],
+                metadata=WebSearchMetadata(
+                    cached=False,
+                    cache_hit=False,
+                    latency_ms=10,
+                    provider="mock",
+                ),
+            )
+
+        async def _on_event(event_type: str, data: dict) -> None:
+            events.append((event_type, data))
+
+        ws.search = AsyncMock(side_effect=_search)
+        executor = SearchExecutor(llm, ws, max_search_rounds=3, on_event=_on_event)
+        executor._evaluate_sufficiency = AsyncMock(
+            side_effect=[
+                SufficiencyDecision(
+                    sufficient=False,
+                    rationale="still missing authority",
+                    missing_dimensions=["authority"],
+                ),
+                SufficiencyDecision(
+                    sufficient=False,
+                    rationale="still missing authority",
+                    missing_dimensions=["authority"],
+                ),
+            ]
+        )
+
+        result = await executor.search(SubQuestion(question="Q?"), _context())
+
+        assert len(result.rounds) == 2
+        assert result.rounds[-1].stop_layer == "marginal_yield"
+        assert ws.search.await_count == 2
+        assert any(name == "search.marginal_yield_stop" for name, _ in events)
+
     async def test_query_cancel(self):
         llm = MockLLM(
             responses=[
@@ -174,6 +286,64 @@ class TestSearch:
         assert "search.round_timing" in event_names
         assert "search.sufficiency_features" in event_names
         assert "search.sufficiency_decision" in event_names
+
+    async def test_timeout_returns_last_complete_round_when_enabled(self):
+        llm = MockLLM(
+            responses=[
+                '["q1"]',
+                json.dumps({"sufficient": False, "rationale": "need more"}),
+                '["q2"]',
+            ]
+        )
+        ws = make_mock_web_search()
+        events: list[tuple[str, dict]] = []
+
+        async def _search(query: str, *, max_results: int, include_content: bool):
+            if query == "q1":
+                return WebSearchResponse(
+                    query=query,
+                    provider="mock",
+                    results=[
+                        WebSearchResult(
+                            title="Round 1 Source",
+                            url="https://example.com/round1",
+                            snippet="round 1 snippet",
+                            content="round 1 content",
+                        )
+                    ],
+                    metadata=WebSearchMetadata(
+                        cached=False,
+                        cache_hit=False,
+                        latency_ms=10,
+                        provider="mock",
+                    ),
+                )
+            await asyncio.Event().wait()
+            raise AssertionError("unreachable")
+
+        async def _on_event(event_type: str, data: dict) -> None:
+            events.append((event_type, data))
+
+        ws.search = AsyncMock(side_effect=_search)
+        executor = SearchExecutor(llm, ws, max_search_rounds=3, on_event=_on_event)
+        context = SearchContext(
+            run_id="r1",
+            plan_id="p1",
+            user_query="AI frameworks",
+            salvage_on_cancel=True,
+        )
+
+        result = await asyncio.wait_for(
+            executor.search(SubQuestion(question="Q?", expected_sources=2), context),
+            timeout=0.05,
+        )
+
+        assert result.error == "search_timeout_partial"
+        assert len(result.rounds) == 1
+        assert result.rounds[0].queries == ["q1"]
+        assert len(result.sources) == 1
+        assert result.sources[0].url == "https://example.com/round1"
+        assert any(name == "search.partial_result_returned" for name, _ in events)
 
     async def test_guardrail_sufficient(self):
         llm = MockLLM(responses=['["q1"]'])

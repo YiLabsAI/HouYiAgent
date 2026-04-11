@@ -44,6 +44,22 @@ class TestTelemetryEmitter:
         assert captured[0][0] == "search.budget_consumed"
         assert captured[0][1]["layer"] == "round"
 
+    async def test_partial_result_event(self):
+        captured: list[tuple[str, dict]] = []
+
+        async def _notify(event_type: str, data: dict) -> None:
+            captured.append((event_type, data))
+
+        emitter = TelemetryEmitter(notify=_notify)
+        await emitter.partial_result_returned(
+            question_id="q1",
+            reason="timeout",
+            completed_rounds=1,
+            source_count=3,
+        )
+        assert captured[0][0] == "search.partial_result_returned"
+        assert captured[0][1]["completed_rounds"] == 1
+
     async def test_round_timing_event(self):
         captured: list[tuple[str, dict]] = []
 

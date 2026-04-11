@@ -486,7 +486,7 @@ class SiliconFlowAdapter(OpenAICompatAdapterBase):
 
         self.api_key = api_key or _env.siliconflow_api_key
         self.base_url = base_url or _env.siliconflow_base_url
-        self.default_model = default_model or _env.deepseek_model
+        self.default_model = default_model or _env.siliconflow_model
         self.strict_message_string_contract = strict_message_string_contract
         self.model = self.default_model  # uniform interface for callers
         self.last_usage: dict[str, Any] | None = None

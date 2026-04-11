@@ -3,6 +3,24 @@
 # Run this manually after `make check` when you need to validate env-backed
 # integrations under tests/integration/.
 
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+    cat <<'EOF'
+Usage: ./scripts/check_integration.sh
+
+Run the local integration gate for env-backed integration coverage.
+
+Options:
+  -h, --help    Show this help message and exit
+EOF
+    exit 0
+fi
+
+if [[ "$#" -gt 0 ]]; then
+    echo "Unknown option: $1" >&2
+    echo "Run ./scripts/check_integration.sh -h for usage." >&2
+    exit 2
+fi
+
 set -euo pipefail
 
 # Prevent uv from rewriting uv.lock with local mirror URLs.

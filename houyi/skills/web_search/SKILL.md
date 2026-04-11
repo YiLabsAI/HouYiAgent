@@ -103,10 +103,10 @@ If no explicit or system proxy exists, `auto` resolves to direct network access.
 When an AI Agent needs to execute this skill, use the following workspace-agnostic command. Replace the placeholders with actual values (use `None` for missing values, strings must be quoted). Note that this is an async function, so we use `asyncio.run()`.
 
 ```bash
-uv run python -c "import asyncio; from houyi.web_search.skill import _web_search_executor; print(asyncio.run(_web_search_executor(query={QUERY}, max_results={MAX_RESULTS}, provider={PROVIDER}, mode={MODE}, use_cache={USE_CACHE})))"
+uv run python -c "import asyncio; from houyi.skills.web_search.skill import _web_search_executor; print(asyncio.run(_web_search_executor(query={QUERY}, max_results={MAX_RESULTS}, provider={PROVIDER}, mode={MODE}, use_cache={USE_CACHE})))"
 ```
 
 **Example:**
 ```bash
-uv run python -c "import asyncio; from houyi.web_search.skill import _web_search_executor; print(asyncio.run(_web_search_executor(query='Windsurf AI IDE', max_results=3, provider=None, mode='browse', use_cache=True)))"
+uv run python -c "import asyncio; from houyi.skills.web_search.skill import _web_search_executor; print(asyncio.run(_web_search_executor(query='Windsurf AI IDE', max_results=3, provider=None, mode='browse', use_cache=True)))"
 ```

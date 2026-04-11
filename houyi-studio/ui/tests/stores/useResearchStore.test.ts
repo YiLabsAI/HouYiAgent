@@ -60,11 +60,55 @@ describe('useResearchStore', () => {
       expect(s.plan?.query).toBe('test');
     });
 
+    it('enters planning before create run resolves', async () => {
+      let resolveFetch: ((value: Response) => void) | undefined;
+      globalThis.fetch = vi.fn(
+        () =>
+          new Promise<Response>((resolve) => {
+            resolveFetch = resolve;
+          }),
+      ) as unknown as typeof fetch;
+      const { useResearchStore } = await loadStoreFresh();
+      const pending = useResearchStore.getState().createSession('test query');
+      expect(useResearchStore.getState().phase).toBe('planning');
+      expect(useResearchStore.getState().loading).toBe(true);
+      if (!resolveFetch) throw new Error('fetch resolver missing');
+      resolveFetch({
+        ok: true,
+        status: 201,
+        statusText: 'Created',
+        json: async () => ({
+          run_id: 's1',
+          plan: { query: 'test', sub_questions: [], outline: [], version: 1, status: 'draft' },
+          status: 'planning',
+        }),
+        text: async () => '',
+        headers: new Headers(),
+        body: null,
+      } as unknown as Response);
+      await pending;
+    });
+
     it('sets error on failure', async () => {
       mockFetch([{ status: 500, body: 'server error' }]);
       const { useResearchStore } = await loadStoreFresh();
       await useResearchStore.getState().createSession('fail');
       expect(useResearchStore.getState().error).toBeTruthy();
+      expect(useResearchStore.getState().phase).toBe('input');
+    });
+
+    it('normalizes upstream disconnect message on failure', async () => {
+      mockFetch([
+        {
+          status: 502,
+          body: { detail: 'LLM/planning error: Server disconnected without sending a response.' },
+        },
+      ]);
+      const { useResearchStore } = await loadStoreFresh();
+      await useResearchStore.getState().createSession('fail');
+      expect(useResearchStore.getState().error).toContain(
+        'The connection to the model was interrupted. Please retry in a moment.',
+      );
       expect(useResearchStore.getState().phase).toBe('input');
     });
 
@@ -147,6 +191,35 @@ describe('useResearchStore', () => {
       expect(s.phase).toBe('input');
       expect(s.sessionId).toBeNull();
       expect(s.plan).toBeNull();
+    });
+  });
+
+  describe('confirmAndExecute', () => {
+    it('resets sse cursors on retry', async () => {
+      mockFetch([
+        { status: 201, body: { run_id: 's1', plan: { query: 'q', sub_questions: [], outline: [], version: 1, status: 'draft' }, status: 'planning' } },
+        { status: 202, body: { run_id: 's1', status: 'executing' } },
+      ]);
+      const { useResearchStore } = await loadStoreFresh();
+      useResearchStore.setState({
+        sessionId: 's1',
+        plan: { query: 'q', sub_questions: [], outline: [], version: 1, status: 'draft' },
+        lastEventId: 'evt_old',
+        lastSequence: 42,
+        error: 'old failure',
+        events: [{ event_id: 'evt_old', event_type: 'research.failed', sequence: 42, payload: { error: 'old failure' } }],
+      });
+      const connectSSE = vi.fn();
+      useResearchStore.setState({ connectSSE });
+
+      await useResearchStore.getState().confirmAndExecute();
+
+      const s = useResearchStore.getState();
+      expect(s.lastEventId).toBeNull();
+      expect(s.lastSequence).toBe(0);
+      expect(s.events).toEqual([]);
+      expect(s.error).toBeNull();
+      expect(connectSSE).toHaveBeenCalledWith('s1');
     });
   });
 
@@ -292,6 +365,40 @@ describe('useResearchStore', () => {
       const { useResearchStore } = await loadStoreFresh();
       useResearchStore.setState({ lastSequence: 5 });
       expect(useResearchStore.getState().lastSequence).toBe(5);
+    });
+
+    it('completed event transitions to report before fetching report', async () => {
+      const { useResearchStore } = await loadStoreFresh();
+      const disconnectSSE = vi.fn();
+      const fetchReport = vi.fn();
+      useResearchStore.setState({
+        phase: 'executing',
+        sessionId: 's1',
+        disconnectSSE,
+        fetchReport,
+      });
+
+      const evt = {
+        event_id: 'e1',
+        event_type: 'research.completed',
+        sequence: 1,
+        payload: {},
+      };
+
+      disconnectSSE();
+      useResearchStore.setState({
+        phase: 'report',
+        events: [evt],
+        lastEventId: 'e1',
+        lastSequence: 1,
+        error: null,
+      });
+      fetchReport();
+
+      expect(disconnectSSE).toHaveBeenCalled();
+      expect(fetchReport).toHaveBeenCalled();
+      expect(useResearchStore.getState().phase).toBe('report');
+      expect(useResearchStore.getState().error).toBeNull();
     });
   });
 });

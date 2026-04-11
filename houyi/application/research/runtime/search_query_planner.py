@@ -61,7 +61,7 @@ class QueryPlanner:
         prior: list[str],
         round_idx: int,
         collaboration: dict[str, Any],
-    ) -> list[str]:
+    ) -> tuple[list[str], dict[str, Any]]:
         prompt = _QUERY_GEN_PROMPT.format(
             question=question,
             user_query=user_query,
@@ -82,7 +82,9 @@ class QueryPlanner:
             max_tokens=512,
             **self.llm_kwargs,
         )
-        return _parse_query_list(resp.content)
+        parsed = _parse_query_list(resp.content)
+        finalized, metadata = _ensure_bilingual_queries(parsed, question, user_query)
+        return finalized, metadata
 
     async def claim_queries(
         self,
@@ -123,3 +125,64 @@ def _collaboration_stop_reason(collaboration: dict[str, Any]) -> str | None:
         return None
     text = str(stop_reason).strip()
     return text or None
+
+
+def _ensure_bilingual_queries(
+    queries: list[str],
+    question: str,
+    user_query: str,
+) -> tuple[list[str], dict[str, Any]]:
+    original = [query.strip() for query in queries if query.strip()]
+    if not original:
+        return [], {
+            "bilingual_expected": False,
+            "language_mix": [],
+            "bilingual_fallback_applied": False,
+        }
+    expects_bilingual = _contains_cjk(question) or _contains_cjk(user_query)
+    if not expects_bilingual:
+        return original, {
+            "bilingual_expected": False,
+            "language_mix": [_query_language(query) for query in original],
+            "bilingual_fallback_applied": False,
+        }
+    has_english = any(_query_language(query) == "en" for query in original)
+    has_original = any(_query_language(query) == "non_en" for query in original)
+    finalized = list(original)
+    fallback_applied = False
+    if not has_original:
+        finalized.insert(0, question.strip() or user_query.strip())
+        fallback_applied = True
+    if not has_english:
+        english_seed = _extract_ascii_terms(question) or _extract_ascii_terms(user_query)
+        if english_seed:
+            finalized.append(english_seed)
+            fallback_applied = True
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for query in finalized:
+        normalized = _canonical_query(query)
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        deduped.append(query)
+    return deduped, {
+        "bilingual_expected": True,
+        "language_mix": [_query_language(query) for query in deduped],
+        "bilingual_fallback_applied": fallback_applied,
+    }
+
+
+def _contains_cjk(text: str) -> bool:
+    return any("\u4e00" <= ch <= "\u9fff" for ch in text)
+
+
+def _query_language(query: str) -> str:
+    return "non_en" if _contains_cjk(query) else "en"
+
+
+def _extract_ascii_terms(text: str) -> str:
+    tokens = [
+        token for token in text.split() if token.isascii() and any(ch.isalpha() for ch in token)
+    ]
+    return " ".join(tokens[:8]).strip()

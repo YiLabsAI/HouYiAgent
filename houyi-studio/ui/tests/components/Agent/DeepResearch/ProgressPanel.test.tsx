@@ -101,10 +101,24 @@ describe('ProgressPanel', () => {
 
   it('hides cancel when terminated (error)', () => {
     render(
-      <ProgressPanel progress={baseProgress()} events={[]} onCancel={vi.fn()} error="Something failed" />,
+      <ProgressPanel
+        progress={baseProgress()}
+        events={[{ event_id: 'e1', event_type: 'research.failed', sequence: 1, payload: { error: 'Something failed' } }]}
+        onCancel={vi.fn()}
+        error="Something failed"
+      />,
     );
     expect(screen.queryByRole('button', { name: /Cancel Research/i })).not.toBeInTheDocument();
     expect(screen.getByText('Stopped')).toBeInTheDocument();
+  });
+
+  it('keeps retry panel active when only stale store error exists', () => {
+    render(
+      <ProgressPanel progress={baseProgress()} events={[]} onCancel={vi.fn()} error="Old failure" />,
+    );
+    expect(screen.getByRole('button', { name: /Cancel Research/i })).toBeInTheDocument();
+    expect(screen.queryByText('Stopped')).not.toBeInTheDocument();
+    expect(screen.queryByText('Old failure')).not.toBeInTheDocument();
   });
 
   it('caps percentage at 100% even when completed exceeds total', () => {
@@ -116,13 +130,13 @@ describe('ProgressPanel', () => {
         error="Research timed out"
       />,
     );
-    expect(screen.getByText('100%')).toBeInTheDocument();
+    expect(screen.getByText('Search complete')).toBeInTheDocument();
     expect(screen.getByText('5 / 5 sub-questions searched')).toBeInTheDocument();
   });
 
   it('hides progress spinner when terminated', () => {
     const events: SSEEvent[] = [
-      { event_id: 'e1', event_type: 'research.step_completed', sequence: 1, payload: { step_id: 'sq1' } },
+      { event_id: 'e1', event_type: 'research.failed', sequence: 1, payload: { error: 'Timed out' } },
     ];
     const { container } = render(
       <ProgressPanel progress={baseProgress()} events={events} onCancel={vi.fn()} error="Timed out" />,

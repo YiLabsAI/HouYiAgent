@@ -10,10 +10,12 @@ from __future__ import annotations
 import json
 import logging
 import time
+from dataclasses import dataclass
 from typing import Any
 
 from houyi.adapters.llm.base import LLMAdapter
 from houyi.application.research.types import (
+    ClarificationResult,
     OutlineSection,
     PlanEdit,
     PlanEditOperation,
@@ -48,7 +50,14 @@ Output STRICT JSON with:
       "related_question_ids": []
     }
   ],
-  "estimated_duration_min": <int>
+  "estimated_duration_min": <int>,
+  "clarification": {
+    "needs_clarification": true/false,
+    "confidence": 0.0 to 1.0,
+    "issues": ["issue 1", "issue 2"],
+    "suggested_questions": ["question 1"],
+    "refined_query": "optional improved query"
+  }
 }
 
 Rules:
@@ -70,6 +79,9 @@ contributing sub-questions via related_question_ids (0-indexed).
 - Set expected_sources realistically: 3-5 for focused factual queries, 5-10 for \
 broad analytical questions.
 - estimated_duration_min: rough estimate based on depth and question count.
+- Set clarification.needs_clarification=true only when missing constraints or competing interpretations would materially change the research plan.
+- Keep clarification.issues and clarification.suggested_questions short and concrete.
+- If the query is already clear enough to plan, set clarification.needs_clarification=false and clarification.refined_query=null.
 """
 
 _PLAN_WITH_MEMORY_ADDENDUM = """
@@ -78,6 +90,28 @@ The following memories from past interactions may be relevant:
 
 Incorporate known facts to avoid redundant research.
 """
+
+_PLAN_RETRY_PROMPT = """
+Your previous response could not be used as a research plan.
+
+Requirements:
+- Respond with exactly one valid JSON object.
+- Include at least one sub-question.
+- Include at least one outline section with a non-empty title and objective.
+- Preserve the user's research query, depth, and max sub-question limit.
+
+Original request:
+{user_msg}
+
+Previous response:
+{previous_response}
+"""
+
+
+@dataclass(slots=True)
+class PlannerDraft:
+    plan: ResearchPlan
+    clarification: ClarificationResult | None = None
 
 
 class ResearchPlanner:
@@ -106,6 +140,17 @@ class ResearchPlanner:
         Returns:
             A ``ResearchPlan`` in DRAFT status.
         """
+        return (
+            await self.generate_plan_draft(query, settings=settings, memory_context=memory_context)
+        ).plan
+
+    async def generate_plan_draft(
+        self,
+        query: str,
+        settings: ResearchSettings | None = None,
+        memory_context: str | None = None,
+    ) -> PlannerDraft:
+        """Generate a research plan plus internal clarification metadata."""
         settings = settings or ResearchSettings()
         system = _PLAN_SYSTEM_PROMPT
         if memory_context:
@@ -120,18 +165,39 @@ class ResearchPlanner:
         )
 
         plan_max_tokens = {"quick": 1500, "standard": 2000, "deep": 3000}.get(settings.depth, 2000)
-        resp = await self._llm.chat(
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": user_msg},
-            ],
-            temperature=0.3,
-            max_tokens=plan_max_tokens,
-            **self._llm_kwargs,
-        )
+        prompt = user_msg
+        last_error = "Planner returned an invalid research plan"
+        for _attempt in range(2):
+            resp = await self._llm.chat(
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.3,
+                max_tokens=plan_max_tokens,
+                **self._llm_kwargs,
+            )
 
-        plan_data = _parse_json_response(resp.content)
-        return _build_plan(query, plan_data, settings)
+            plan_data = _parse_json_response(resp.content)
+            if plan_data is not None:
+                plan = _build_plan(query, plan_data, settings)
+                validation_error = validate_research_plan(plan)
+                if validation_error is None:
+                    return PlannerDraft(
+                        plan=plan,
+                        clarification=_extract_clarification(plan_data),
+                    )
+                last_error = validation_error
+            else:
+                last_error = "Planner returned invalid JSON"
+
+            logger.warning("Planner response unusable: %s", last_error)
+            prompt = _PLAN_RETRY_PROMPT.format(
+                user_msg=user_msg,
+                previous_response=resp.content[:4000],
+            )
+
+        raise ValueError(last_error)
 
     async def refine_plan(
         self,
@@ -172,7 +238,7 @@ class ResearchPlanner:
 # ---------------------------------------------------------------------------
 
 
-def _parse_json_response(content: str) -> dict:
+def _parse_json_response(content: str) -> dict | None:
     """Extract JSON from LLM response, stripping markdown fences if present."""
     text = content.strip()
     if text.startswith("```"):
@@ -182,8 +248,18 @@ def _parse_json_response(content: str) -> dict:
     try:
         return json.loads(text)
     except json.JSONDecodeError:
-        logger.warning("Failed to parse plan JSON, returning empty structure")
-        return {"sub_questions": [], "outline": [], "estimated_duration_min": 5}
+        pass
+
+    first = text.find("{")
+    last = text.rfind("}")
+    if first != -1 and last > first:
+        try:
+            return json.loads(text[first : last + 1])
+        except json.JSONDecodeError:
+            pass
+
+    logger.warning("Failed to parse plan JSON")
+    return None
 
 
 def _build_plan(
@@ -230,6 +306,43 @@ def _build_plan(
         created_at=time.time(),
         status=PlanStatus.DRAFT,
     )
+
+
+def _extract_clarification(data: dict[str, Any]) -> ClarificationResult | None:
+    raw = data.get("clarification")
+    if not isinstance(raw, dict):
+        return None
+    confidence_raw = raw.get("confidence", 0.8)
+    try:
+        confidence = max(0.0, min(1.0, float(confidence_raw)))
+    except (TypeError, ValueError):
+        confidence = 0.8
+    issues = [str(item).strip() for item in raw.get("issues", []) if str(item).strip()]
+    questions = [
+        str(item).strip() for item in raw.get("suggested_questions", []) if str(item).strip()
+    ]
+    refined_query = raw.get("refined_query")
+    if not isinstance(refined_query, str) or not refined_query.strip():
+        refined_query = None
+    return ClarificationResult(
+        needs_clarification=bool(raw.get("needs_clarification", False)),
+        confidence=confidence,
+        issues=issues[:3],
+        suggested_questions=questions[:3],
+        refined_query=refined_query,
+    )
+
+
+def validate_research_plan(plan: ResearchPlan) -> str | None:
+    if not plan.sub_questions:
+        return "Planner returned no sub-questions"
+    if not plan.outline:
+        return "Planner returned no outline sections"
+    if any(not sq.question.strip() for sq in plan.sub_questions):
+        return "Planner returned a blank sub-question"
+    if any(not section.title.strip() or not section.objective.strip() for section in plan.outline):
+        return "Planner returned an incomplete outline section"
+    return None
 
 
 def _apply_edit(plan: ResearchPlan, edit: PlanEdit) -> None:

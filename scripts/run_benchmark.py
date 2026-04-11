@@ -33,9 +33,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from houyi.application.research.types import ResearchSettings
-from houyi.arena.benchmark_runner import BenchmarkRunner
-
 
 def _load_env():
     """Load .env file from project root if it exists."""
@@ -80,6 +77,9 @@ def _trim_queries(query_path: Path, limit: int | None) -> Path:
 
 
 async def main(args: argparse.Namespace) -> None:
+    from houyi.application.research.types import ResearchSettings
+    from houyi.arena.benchmark_runner import BenchmarkRunner
+
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",

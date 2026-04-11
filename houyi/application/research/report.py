@@ -33,6 +33,17 @@ from houyi.application.research.types import (
 
 logger = logging.getLogger(__name__)
 
+_SECTION_INPUT_METRICS_KEY = "section_input_metrics"
+
+# Hard-won runtime lesson from delegate benchmarks: prompt inflation in a
+# single oversized section can dominate both report generation latency and
+# downstream repair/quality cost. We therefore rank section evidence and
+# pass only the strongest top-K sources instead of dumping every "relevant"
+# source into the prompt.
+_MAX_SECTION_SOURCES = 8
+_INTERMEDIATE_CONTEXT_MAX_CHARS = 2400
+_INTERMEDIATE_PER_QUESTION_MAX_CHARS = 800
+
 if TYPE_CHECKING:
     from houyi.application.research.runtime.intermediate import IntermediateReport
 
@@ -96,7 +107,7 @@ class ReportGenerator:
         sources: AggregatedSources,
         style: ReportStyle = ReportStyle.DETAILED,
         intermediate_reports: list[IntermediateReport] | None = None,
-    ) -> ResearchReport:
+    ) -> tuple[ResearchReport, dict[str, Any]]:
         """Generate a complete report (non-streaming).
 
         Iterates over plan outline sections, calling the LLM once per section
@@ -104,7 +115,14 @@ class ReportGenerator:
         are provided (standard/deep depth), the pre-analysed findings are
         injected as additional context to improve citation fidelity and reduce
         hallucinations.
+
+        Returns:
+            Tuple of (ResearchReport, metrics_dict) where metrics_dict contains
+            timing fields and section input observability.
         """
+        if not plan.outline:
+            raise ValueError("Cannot generate report without outline sections")
+
         ir_by_qid: dict[str, IntermediateReport] = {}
         if intermediate_reports:
             for ir in intermediate_reports:
@@ -115,24 +133,44 @@ class ReportGenerator:
 
         sem = asyncio.Semaphore(4)
 
-        async def _gen(outline_sec: OutlineSection) -> ReportSection:
+        async def _gen(outline_sec: OutlineSection) -> tuple[ReportSection, dict[str, Any]]:
             async with sem:
-                relevant = _relevant_sources(outline_sec.related_question_ids, sources)
+                relevant, relevant_total = self.select_section_sources(
+                    outline_sec.related_question_ids,
+                    sources,
+                    section_title=outline_sec.title,
+                    objective=outline_sec.objective,
+                )
                 ir_context = _intermediate_context(outline_sec.related_question_ids, ir_by_qid)
-                return await self._generate_section(
+                section = await self._generate_section(
                     plan.query,
                     outline_sec.title,
                     outline_sec.objective,
                     relevant,
                     intermediate_context=ir_context,
                 )
+                section.section_id = outline_sec.section_id
+                return section, {
+                    "section_id": outline_sec.section_id,
+                    "title": outline_sec.title,
+                    "relevant_source_count": relevant_total,
+                    "selected_source_count": len(relevant),
+                    "intermediate_context_chars": len(ir_context),
+                }
 
-        sections = list(await asyncio.gather(*[_gen(o) for o in plan.outline]))
+        t_sections = time.monotonic()
+        section_results = list(await asyncio.gather(*[_gen(o) for o in plan.outline]))
+        sections = [section for section, _ in section_results]
+        section_input_metrics = [metrics for _, metrics in section_results]
+        sections_ms = (time.monotonic() - t_sections) * 1000.0
 
+        t_summary = time.monotonic()
         summary = await self._generate_summary(plan.query, sections)
+        summary_ms = (time.monotonic() - t_summary) * 1000.0
+
         duration = time.monotonic() - start
 
-        return ResearchReport(
+        report = ResearchReport(
             report_id=report_id,
             title=plan.query,
             summary=summary,
@@ -144,8 +182,15 @@ class ReportGenerator:
                 section_count=len(sections),
                 generated_by_mode=plan.settings.orchestration_mode,
                 duration_seconds=round(duration, 2),
+                section_input_metrics=section_input_metrics,
             ),
         )
+        timings = {
+            "report_sections_ms": round(sections_ms, 1),
+            "report_summary_ms": round(summary_ms, 1),
+            _SECTION_INPUT_METRICS_KEY: section_input_metrics,
+        }
+        return report, timings
 
     async def generate_stream(
         self,
@@ -167,7 +212,12 @@ class ReportGenerator:
                 section_title=outline_sec.title,
             )
 
-            relevant = _relevant_sources(outline_sec.related_question_ids, sources)
+            relevant, _ = self.select_section_sources(
+                outline_sec.related_question_ids,
+                sources,
+                section_title=outline_sec.title,
+                objective=outline_sec.objective,
+            )
             section = await self._generate_section(
                 plan.query,
                 outline_sec.title,
@@ -196,6 +246,22 @@ class ReportGenerator:
     # ------------------------------------------------------------------
     # Internal
     # ------------------------------------------------------------------
+
+    def select_section_sources(
+        self,
+        question_ids: list[str],
+        sources: AggregatedSources,
+        *,
+        section_title: str,
+        objective: str,
+    ) -> tuple[list[SourceReference], int]:
+        ranked = _relevant_sources(
+            question_ids,
+            sources,
+            section_title=section_title,
+            objective=objective,
+        )
+        return ranked[: _section_source_cap(question_ids, len(ranked))], len(ranked)
 
     async def _generate_section(
         self,
@@ -232,7 +298,10 @@ class ReportGenerator:
         query: str,
         sections: list[ReportSection],
     ) -> str:
-        sections_text = "\n\n".join(f"## {s.title}\n{s.content[:500]}" for s in sections)
+        non_empty_sections = [s for s in sections if s.content.strip()]
+        if not non_empty_sections:
+            raise ValueError("Cannot generate report summary without section content")
+        sections_text = "\n\n".join(f"## {s.title}\n{s.content[:500]}" for s in non_empty_sections)
         prompt = _SUMMARY_PROMPT.format(sections_text=sections_text)
         resp = await self._llm.chat(
             messages=[{"role": "user", "content": prompt}],
@@ -254,29 +323,120 @@ def _intermediate_context(
 ) -> str:
     """Build a text block from intermediate reports for the given questions."""
     parts: list[str] = []
+    total_chars = 0
+    per_question_cap, total_cap = _intermediate_context_budget(question_ids)
     for qid in question_ids:
         ir = ir_by_qid.get(qid)
         if ir and ir.analysis:
-            parts.append(
+            chunk = (
                 f"[Sub-question: {ir.question}]\n"
                 f"Confidence: {ir.confidence:.0%}\n"
-                f"{ir.analysis[:800]}"
+                f"{ir.analysis[:per_question_cap]}"
             )
-    return "\n\n---\n\n".join(parts)
+            projected = total_chars + len(chunk)
+            if projected > total_cap:
+                break
+            parts.append(chunk)
+            total_chars = projected
+    return "\n\n---\n\n".join(parts)[:total_cap]
+
+
+def _section_source_cap(question_ids: list[str], candidate_count: int) -> int:
+    return _MAX_SECTION_SOURCES
+
+
+def _intermediate_context_budget(question_ids: list[str]) -> tuple[int, int]:
+    return _INTERMEDIATE_PER_QUESTION_MAX_CHARS, _INTERMEDIATE_CONTEXT_MAX_CHARS
 
 
 def _relevant_sources(
     question_ids: list[str],
     agg: AggregatedSources,
+    *,
+    section_title: str,
+    objective: str,
 ) -> list[SourceReference]:
-    """Pick sources relevant to the given question IDs."""
+    """Pick and rank sources relevant to a report section.
+
+    The ranking intentionally blends reliability, topical similarity, question
+    coverage, authority, and freshness so that each section prompt sees a small
+    but strong evidence set instead of an unbounded bag of sources.
+    """
     ref_ids: set[str] = set()
     for qid in question_ids:
         ref_ids.update(agg.grouped_by_question.get(qid, []))
-    if not ref_ids:
-        return agg.sources[:10]
     lookup = {s.reference_id: s for s in agg.sources}
-    return [lookup[rid] for rid in ref_ids if rid in lookup]
+    if not ref_ids:
+        candidates = list(agg.sources)
+    else:
+        candidates = [lookup[rid] for rid in ref_ids if rid in lookup]
+
+    source_question_counts: dict[str, int] = {}
+    for grouped_ids in agg.grouped_by_question.values():
+        for reference_id in grouped_ids:
+            source_question_counts[reference_id] = source_question_counts.get(reference_id, 0) + 1
+
+    ranked = sorted(
+        candidates,
+        key=lambda src: (
+            _score_source_for_section(
+                src,
+                section_title=section_title,
+                objective=objective,
+                question_ids=question_ids,
+                source_question_counts=source_question_counts,
+            ),
+            src.reliability_score,
+            src.title,
+        ),
+        reverse=True,
+    )
+    return ranked
+
+
+def _score_source_for_section(
+    src: SourceReference,
+    *,
+    section_title: str,
+    objective: str,
+    question_ids: list[str],
+    source_question_counts: dict[str, int],
+) -> float:
+    keywords = _extract_section_keywords(f"{section_title} {objective}")
+    searchable = f"{src.title} {src.snippet} {src.url or ''}"
+    overlap = _keyword_overlap_score(searchable, keywords)
+    authority = 1.5 if _looks_authoritative_source(src) else 0.0
+    freshness = 0.6 if _looks_fresh_source(src) else 0.0
+    cross_question_coverage = min(
+        1.5,
+        0.5 * min(source_question_counts.get(src.reference_id, 0), max(len(question_ids), 1)),
+    )
+    return (src.reliability_score * 4.0) + overlap + authority + freshness + cross_question_coverage
+
+
+def _extract_section_keywords(text: str) -> set[str]:
+    return {token for token in re.findall(r"[\w\-]{3,}", text.lower()) if not token.isdigit()}
+
+
+def _keyword_overlap_score(text: str, keywords: set[str]) -> float:
+    if not keywords:
+        return 0.0
+    lowered = text.lower()
+    overlap = sum(1 for keyword in keywords if keyword in lowered)
+    return min(2.0, overlap * 0.35)
+
+
+def _looks_authoritative_source(src: SourceReference) -> bool:
+    url = (src.url or "").lower()
+    title = src.title.lower()
+    return any(
+        marker in url for marker in (".gov", ".edu", "arxiv.org", "ssrn.com", "who.int")
+    ) or any(marker in title for marker in ("report", "official", "white paper", "annual report"))
+
+
+def _looks_fresh_source(src: SourceReference) -> bool:
+    text = f"{src.title} {src.snippet} {src.url or ''}".lower()
+    return any(marker in text for marker in ("2024", "2025", "2026", "current", "latest", "recent"))
 
 
 def _parse_section(title: str, content: str) -> ReportSection:

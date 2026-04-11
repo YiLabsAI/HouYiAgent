@@ -172,4 +172,49 @@ describe('ThinkingTrajectory', () => {
     render(<ThinkingTrajectory events={events} />);
     expect(screen.getByText('Writing report sections...')).toBeInTheDocument();
   });
+
+  it('keeps search telemetry under the question instead of pipeline', () => {
+    const events: SSEEvent[] = [
+      evt('e1', 'research.step_started', 1, { step_id: 'sq_1', step: 'Q1' }),
+      evt('e2', 'research.search_query_cancelled', 2, {
+        question_id: 'sq_1',
+        round: 1,
+        query: 'alt query',
+        reason: 'source_target_reached',
+      }),
+    ];
+    render(<ThinkingTrajectory events={events} />);
+    fireEvent.click(screen.getByText('Q1'));
+    expect(screen.getByText('query skipped: source_target_reached')).toBeInTheDocument();
+    expect(screen.queryByText('Pipeline')).not.toBeInTheDocument();
+  });
+
+  it('uses question_id on agent lifecycle events for grouping', () => {
+    const events: SSEEvent[] = [
+      evt('e1', 'research.agent_spawned', 1, {
+        question_id: 'sq_1',
+        agent_id: 'run_sq_1',
+        agent_name: 'Q1',
+      }),
+      evt('e2', 'research.agent_completed', 2, {
+        question_id: 'sq_1',
+        agent_id: 'run_sq_1',
+        status: 'completed',
+      }),
+    ];
+    render(<ThinkingTrajectory events={events} subQuestions={[sq('sq_1', 'Question one')]} />);
+    expect(screen.getByText('Question one')).toBeInTheDocument();
+    expect(screen.queryByText('Pipeline')).not.toBeInTheDocument();
+  });
+
+  it('aggregates conflict events into one pipeline summary', () => {
+    const events: SSEEvent[] = [
+      evt('e1', 'research.conflict_detected', 1, { agent_a: 'sq_1', agent_b: 'sq_2' }),
+      evt('e2', 'research.conflict_detected', 2, { agent_a: 'sq_1', agent_b: 'sq_3' }),
+      evt('e3', 'research.conflict_detected', 3, { agent_a: 'sq_2', agent_b: 'sq_3' }),
+    ];
+    render(<ThinkingTrajectory events={events} />);
+    expect(screen.getByText('Detected 3 potential conflicts')).toBeInTheDocument();
+    expect(screen.queryByText(/sq_1.*sq_2/)).not.toBeInTheDocument();
+  });
 });

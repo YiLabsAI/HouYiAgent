@@ -10,7 +10,7 @@ rather than hardcoded here. The constants below serve as:
 Usage:
     from houyi.adapters.llm.models import DEFAULT_MODEL, MODEL_CONTEXT_WINDOWS
 
-    model = os.getenv(ENV_DEEPSEEK_MODEL, DEFAULT_MODEL)
+    model = os.getenv(ENV_SILICONFLOW_MODEL, DEFAULT_MODEL)
 """
 
 from __future__ import annotations
@@ -44,6 +44,10 @@ GEMINI_31_PRO_PREVIEW = "gemini-3.1-pro-preview"
 
 # Moonshot (Pro/ prefix required on SiliconFlow for private-tier access)
 KIMI_K2_5 = "Pro/moonshotai/Kimi-K2.5"
+
+# Qwen
+QWEN3_32B = "Qwen/Qwen3-32B"
+QWQ_32B = "Qwen/QwQ-32B"
 
 # MiniMax
 MINIMAX_M25 = "MiniMax-M2.5"
@@ -89,7 +93,7 @@ PROVIDER_DISPLAY_NAMES: dict[str, str] = {
 # ---------------------------------------------------------------------------
 # Default model used across the SDK when no model is specified
 # ---------------------------------------------------------------------------
-DEFAULT_MODEL: str = KIMI_K2_5
+DEFAULT_MODEL: str = DEEPSEEK_V3_2
 
 # ---------------------------------------------------------------------------
 # Context window sizes (max input tokens).
@@ -110,6 +114,8 @@ MODEL_CONTEXT_WINDOWS: dict[str, int] = {
     GEMINI_3_FLASH_PREVIEW: 1_048_576,
     GEMINI_31_PRO_PREVIEW: 1_048_576,
     KIMI_K2_5: 131_072,
+    QWEN3_32B: 131_072,
+    QWQ_32B: 131_072,
     MINIMAX_M25: 1_000_000,
     GLM_47: 128_000,
     GLM_5: 128_000,
@@ -117,6 +123,10 @@ MODEL_CONTEXT_WINDOWS: dict[str, int] = {
 
 MODEL_ID_ALIASES: dict[str, str] = {
     "moonshotai/kimi-k2.5".lower(): KIMI_K2_5,
+    "qwen3-32b".lower(): QWEN3_32B,
+    "qwen/qwen3-32b".lower(): QWEN3_32B,
+    "qwq-32b".lower(): QWQ_32B,
+    "qwen/qwq-32b".lower(): QWQ_32B,
     "zai-org/glm-4.7".lower(): GLM_47,
     "zai-org/glm-5".lower(): GLM_5,
 }
@@ -136,6 +146,8 @@ MODEL_CONTEXT_WINDOW_PATTERNS: tuple[tuple[str, int], ...] = (
     (GEMINI_3_FLASH_PREVIEW.lower(), MODEL_CONTEXT_WINDOWS[GEMINI_3_FLASH_PREVIEW]),
     (GEMINI_25_PRO.lower(), MODEL_CONTEXT_WINDOWS[GEMINI_25_PRO]),
     (KIMI_K2_5.lower(), MODEL_CONTEXT_WINDOWS[KIMI_K2_5]),
+    (QWEN3_32B.lower(), MODEL_CONTEXT_WINDOWS[QWEN3_32B]),
+    (QWQ_32B.lower(), MODEL_CONTEXT_WINDOWS[QWQ_32B]),
     (MINIMAX_M25.lower(), MODEL_CONTEXT_WINDOWS[MINIMAX_M25]),
     (GLM_47.lower(), MODEL_CONTEXT_WINDOWS[GLM_47]),
     (GLM_5.lower(), MODEL_CONTEXT_WINDOWS[GLM_5]),
@@ -180,6 +192,8 @@ def _resolve_family_context_window(model_lower: str) -> int | None:
     ):
         return 128_000
     if "kimi-k2.5" in model_lower or ("kimi" in model_lower and "2.5" in model_lower):
+        return 131_072
+    if "qwen3-32b" in model_lower or "qwq-32b" in model_lower:
         return 131_072
     return None
 

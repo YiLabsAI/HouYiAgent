@@ -30,6 +30,8 @@ logger = logging.getLogger(__name__)
 # SiliconFlow / DeepSeek
 ENV_SILICONFLOW_API_KEY = "SILICONFLOW_API_KEY"
 ENV_SILICONFLOW_BASE_URL = "SILICONFLOW_BASE_URL"
+ENV_SILICONFLOW_MODEL = "SILICONFLOW_MODEL"
+ENV_QWEN_MODEL = "QWEN_MODEL"
 ENV_DEEPSEEK_MODEL = "DEEPSEEK_MODEL"
 ENV_DEEPSEEK_API_KEY = "DEEPSEEK_API_KEY"
 ENV_DEEPSEEK_BASE_URL = "DEEPSEEK_BASE_URL"
@@ -99,6 +101,7 @@ ENV_SERPER_API_KEY = "SERPER_API_KEY"
 ENV_TAVILY_API_KEY = "TAVILY_API_KEY"
 ENV_SEARXNG_BASE_URL = "SEARXNG_BASE_URL"
 ENV_BOCHA_API_KEY = "BOCHA_API_KEY"
+ENV_JINA_API_KEY = "JINA_API_KEY"
 
 # Execution
 ENV_EXECUTION_BACKEND = "HOUYI_EXECUTION_BACKEND"
@@ -124,6 +127,7 @@ ENV_POLICY_ALLOW_UNKNOWN = "HOUYI_POLICY_ALLOW_UNKNOWN"
 # Deep research
 ENV_RESEARCH_ORCHESTRATION_MODE = "HOUYI_RESEARCH_ORCHESTRATION_MODE"
 ENV_RESEARCH_MAX_AGENTS = "HOUYI_RESEARCH_MAX_AGENTS"
+ENV_RESEARCH_PLAN_TIMEOUT_SECONDS = "HOUYI_RESEARCH_PLAN_TIMEOUT_SECONDS"
 
 # Knowledge / Embedding
 ENV_RAG_KNOWLEDGE_DIR = "RAG_KNOWLEDGE_DIR"
@@ -138,6 +142,14 @@ _DEFAULT_GOOGLE_LOCATION = "us-central1"
 _DEFAULT_EMBEDDING_PROVIDER = "local"
 _DEFAULT_EMBEDDING_MODEL = "BAAI/bge-small-en-v1.5"
 _DEFAULT_RAG_KNOWLEDGE_DIR = "knowledge/"
+
+
+def _resolve_siliconflow_model(default_model: str) -> str:
+    for env_name in (ENV_SILICONFLOW_MODEL, ENV_QWEN_MODEL, ENV_DEEPSEEK_MODEL):
+        value = os.getenv(env_name, "").strip()
+        if value:
+            return value
+    return default_model
 
 
 class EnvConfig:
@@ -168,7 +180,7 @@ class EnvConfig:
     def __init__(self) -> None:
         self._siliconflow_api_key: str | None = None
         self._siliconflow_base_url: str = _DEFAULT_SILICONFLOW_BASE_URL
-        self._deepseek_model: str = ""
+        self._siliconflow_model: str = ""
         self._default_llm_provider: str = ""
 
         self._google_api_key: str | None = None
@@ -177,6 +189,7 @@ class EnvConfig:
         self._google_location: str = _DEFAULT_GOOGLE_LOCATION
         self._gemini_model: str = ""
 
+        self._jina_api_key: str | None = None
         self._rag_knowledge_dir: str = _DEFAULT_RAG_KNOWLEDGE_DIR
         self._embedding_provider: str = _DEFAULT_EMBEDDING_PROVIDER
         self._embedding_model: str = _DEFAULT_EMBEDDING_MODEL
@@ -292,7 +305,7 @@ class EnvConfig:
         self._siliconflow_base_url = os.getenv(
             ENV_SILICONFLOW_BASE_URL, _DEFAULT_SILICONFLOW_BASE_URL
         )
-        self._deepseek_model = os.getenv(ENV_DEEPSEEK_MODEL, DEFAULT_MODEL)
+        self._siliconflow_model = _resolve_siliconflow_model(DEFAULT_MODEL)
         self._default_llm_provider = os.getenv(ENV_DEFAULT_LLM_PROVIDER, PROVIDER_SILICONFLOW)
 
         # --- Google (aligned with google-genai SDK) ---
@@ -302,6 +315,9 @@ class EnvConfig:
         self._google_location = os.getenv(ENV_GOOGLE_CLOUD_LOCATION, _DEFAULT_GOOGLE_LOCATION)
         self._gemini_model = os.getenv(ENV_GEMINI_MODEL) or GEMINI_25_PRO
         self._auto_detect_google_project_from_credentials()
+
+        # --- Jina Reader ---
+        self._jina_api_key = os.getenv(ENV_JINA_API_KEY) or None
 
         # --- Knowledge / Embedding ---
         self._rag_knowledge_dir = os.getenv(ENV_RAG_KNOWLEDGE_DIR, _DEFAULT_RAG_KNOWLEDGE_DIR)
@@ -343,9 +359,14 @@ class EnvConfig:
         return self._siliconflow_base_url
 
     @property
+    def siliconflow_model(self) -> str:
+        """Resolved SiliconFlow model from the generic or legacy model env vars."""
+        return self._siliconflow_model
+
+    @property
     def deepseek_model(self) -> str:
-        """DEEPSEEK_MODEL or default from models.DEFAULT_MODEL."""
-        return self._deepseek_model
+        """Backward-compatible alias for the resolved SiliconFlow model."""
+        return self._siliconflow_model
 
     @property
     def default_llm_provider(self) -> str:
@@ -407,6 +428,11 @@ class EnvConfig:
         return self._embedding_model
 
     @property
+    def jina_api_key(self) -> str | None:
+        """JINA_API_KEY or None."""
+        return self._jina_api_key
+
+    @property
     def startup_skills_dir(self) -> str | None:
         """HOUYI_STARTUP_SKILLS_DIR or ``None`` when unset."""
         return self._startup_skills_dir
@@ -428,7 +454,7 @@ class EnvConfig:
         return {
             "siliconflow_api_key": _mask(self._siliconflow_api_key),
             "siliconflow_base_url": self._siliconflow_base_url,
-            "deepseek_model": self._deepseek_model,
+            "siliconflow_model": self._siliconflow_model,
             "default_llm_provider": self._default_llm_provider,
             "google_api_key": _mask(self._google_api_key),
             "google_credentials_path": self._google_credentials_path or "(not set)",
@@ -438,6 +464,7 @@ class EnvConfig:
             "rag_knowledge_dir": self._rag_knowledge_dir,
             "embedding_provider": self._embedding_provider,
             "embedding_model": self._embedding_model,
+            "jina_api_key": _mask(self._jina_api_key),
             "startup_skills_dir": self._startup_skills_dir or "(not set)",
         }
 

@@ -96,6 +96,13 @@ class TestCreateEndpoint:
         assert r.status_code == 201
         assert r.json()["run_id"]
 
+    def test_create_timeout(self, client):
+        svc = client.app.state.research_service
+        svc.create_run = AsyncMock(side_effect=TimeoutError("Planning timed out after 120s"))
+        r = client.post("/api/research/runs", json={"query": "timeout"})
+        assert r.status_code == 504
+        assert r.json()["detail"] == "Planning timed out after 120s"
+
 
 class TestListEndpoint:
     def test_list_empty(self, client):

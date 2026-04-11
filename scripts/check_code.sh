@@ -3,6 +3,24 @@
 # Run this before committing code.
 # Stops at the FIRST failure so the error output stays visible.
 
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+    cat <<'EOF'
+Usage: ./scripts/check_code.sh
+
+Run the main local code-quality gate.
+
+Options:
+  -h, --help    Show this help message and exit
+EOF
+    exit 0
+fi
+
+if [[ "$#" -gt 0 ]]; then
+    echo "Unknown option: $1" >&2
+    echo "Run ./scripts/check_code.sh -h for usage." >&2
+    exit 2
+fi
+
 set -euo pipefail
 
 # Prevent uv from rewriting uv.lock with local mirror URLs.

@@ -67,6 +67,12 @@ function groupByQuestion(
       (evt.event_type.startsWith('research.step_') ||
         evt.event_type === 'research.source_found' ||
         evt.event_type === 'research.search_queries' ||
+        evt.event_type === 'research.search_query_timing' ||
+        evt.event_type === 'research.search_query_cancelled' ||
+        evt.event_type === 'research.search_sufficiency' ||
+        evt.event_type === 'research.search_stop_reason' ||
+        evt.event_type === 'research.search_round_timing' ||
+        evt.event_type === 'research.search_budget' ||
         evt.event_type === 'research.agent_spawned' ||
         evt.event_type === 'research.agent_completed');
 
@@ -165,7 +171,7 @@ const pipelineIcon = (type: string) => {
   if (type.includes('report_section')) return <FileText size={12} className="text-purple-400" />;
   if (type.includes('completed')) return <CheckCircle2 size={12} className="text-green-400" />;
   if (type.includes('failed') || type.includes('cancelled')) return <AlertCircle size={12} className="text-red-400" />;
-  return <Loader2 size={12} className="text-gray-400 animate-spin" />;
+  return <div className="w-2.5 h-2.5 rounded-full bg-gray-500/70 mt-0.5" />;
 };
 
 const PIPELINE_PHASE_LABELS: Record<string, string> = {
@@ -184,7 +190,7 @@ const pipelineLabel = (evt: SSEEvent): string => {
   if (evt.event_type === 'research.intermediate_report')
     return `Intermediate report: ${(evt.payload.question_id as string) || ''}`;
   if (evt.event_type === 'research.conflict_detected')
-    return `Conflict: ${(evt.payload.agent_a as string) || ''} vs ${(evt.payload.agent_b as string) || ''}`;
+    return `Detected ${String((evt.payload.count as number) || 1)} potential conflicts`;
   if (evt.event_type === 'research.validation_issues')
     return `Validation: ${(evt.payload.sections_flagged as number) || 0} sections flagged`;
   if (evt.event_type === 'research.quality_evaluated') return 'Quality evaluation complete';
@@ -192,11 +198,30 @@ const pipelineLabel = (evt: SSEEvent): string => {
     return `Writing: ${((evt.payload.chunk as Record<string, unknown>)?.title as string) || 'section'}`;
   if (evt.event_type === 'research.completed') return 'Research completed';
   if (evt.event_type === 'research.failed') return (evt.payload.error as string) || 'Research failed';
+  if (evt.event_type === 'research.cancelled') return (evt.payload.reason as string) || 'Research cancelled';
   if (evt.event_type === 'research.query_refined')
     return `Query refined: ${(evt.payload.refined as string) || ''}`;
   if (evt.event_type === 'memory.candidate_extracted')
     return `Extracted ${(evt.payload.count as number) || 0} memory candidates`;
   return evt.event_type.replace('research.', '');
+};
+
+const summarizePipelineEvents = (events: SSEEvent[]): SSEEvent[] => {
+  const conflicts = events.filter((evt) => evt.event_type === 'research.conflict_detected');
+  const rest = events.filter((evt) => evt.event_type !== 'research.conflict_detected');
+  if (conflicts.length === 0) return rest;
+  const anchor = conflicts[conflicts.length - 1];
+  return [
+    ...rest,
+    {
+      ...anchor,
+      event_id: `${anchor.event_id}:summary`,
+      payload: {
+        ...anchor.payload,
+        count: conflicts.length,
+      },
+    },
+  ].sort((a, b) => a.sequence - b.sequence);
 };
 
 const QuestionGroupItem: React.FC<{ group: QuestionGroup }> = ({ group }) => {
@@ -290,7 +315,9 @@ const QuestionGroupItem: React.FC<{ group: QuestionGroup }> = ({ group }) => {
                     #{evt.sequence}
                   </span>
                   <span className="text-gray-400">
-                    {evt.event_type.replace('research.', '')}
+                    {evt.event_type === 'research.search_query_cancelled'
+                      ? `query skipped: ${String(evt.payload.reason || 'cancelled')}`
+                      : evt.event_type.replace('research.', '')}
                   </span>
                 </div>
               ))}
@@ -338,7 +365,7 @@ export const ThinkingTrajectory: React.FC<Props> = ({ events, subQuestions }) =>
 
         {/* Pipeline events (intermediate reports, conflicts, validation, etc.) */}
         {pipelineEvents.length > 0 && (() => {
-          const visible = pipelineEvents.filter(
+          const visible = summarizePipelineEvents(pipelineEvents).filter(
             (e) =>
               !(e.event_type.startsWith('research.step_') &&
                 (e.payload.step_id as string) === 'report_generation'),

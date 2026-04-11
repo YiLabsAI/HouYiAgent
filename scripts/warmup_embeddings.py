@@ -8,6 +8,7 @@ and prints cache hit/miss hints.
 
 from __future__ import annotations
 
+import argparse
 import logging
 import os
 import sys
@@ -69,6 +70,10 @@ def _log_cache_snapshot(label: str, paths: list[Path]) -> tuple[int, int]:
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="Warm up local embedding model and print cache diagnostics"
+    )
+    parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
 
     try:
