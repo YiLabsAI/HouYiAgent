@@ -127,7 +127,7 @@ class ResearchSettings(BaseModel):
     """User-configurable settings for a research session."""
 
     depth: ResearchDepth = ResearchDepth.STANDARD
-    orchestration_mode: OrchestrationMode = OrchestrationMode.DIRECT
+    orchestration_mode: OrchestrationMode = OrchestrationMode.DELEGATE
     max_agents: int = 5
     model_profile: str = "auto"
     report_formats: list[ExportFormat] = Field(

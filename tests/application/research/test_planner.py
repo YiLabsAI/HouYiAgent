@@ -6,6 +6,7 @@ import pytest
 
 from houyi.application.research.planner import ResearchPlanner, _parse_json_response
 from houyi.application.research.types import (
+    OrchestrationMode,
     PlanEdit,
     PlanEditOperation,
     PlanStatus,
@@ -43,7 +44,7 @@ class TestGeneratePlan:
         plan = await planner.generate_plan("test", memory_context="User prefers Python")
         assert plan is not None
 
-    async def test_plan_draft_returns_clarification(self):
+    async def test_returns_clarification(self):
         llm = MockLLM(
             responses=[
                 '{"sub_questions":[{"question":"Q1","priority":5,"search_strategy":"web","expected_sources":3}],"outline":[{"title":"Overview","objective":"Explain the topic","related_question_ids":[0]}],"estimated_duration_min":5,"clarification":{"needs_clarification":true,"confidence":0.4,"issues":["Missing time horizon"],"suggested_questions":["What year range matters?"],"refined_query":"AI agent frameworks in 2026"}}'
@@ -214,3 +215,10 @@ class TestBoundaryAndInteraction:
         )
         updated = await planner.refine_plan(plan, [edit])
         assert updated.sub_questions[-1].question == "Second"
+
+
+def test_research_settings_defaults() -> None:
+    settings = ResearchSettings()
+    assert settings.orchestration_mode == OrchestrationMode.DELEGATE
+    assert settings.depth.value == "standard"
+    assert settings.max_agents == 5
