@@ -33,6 +33,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from houyi.arena.bench2_compat import api as bench2_compat_api
+from houyi.arena.bench2_compat import extract as bench2_compat_extract
 from houyi.arena.bench2_compat import stat as bench2_compat_stat
 
 
@@ -474,6 +475,7 @@ class Bench2SidecarRunner:
         if stale_results_dir.exists():
             shutil.rmtree(stale_results_dir)
         self._copy_compat_module(bench2_compat_api, compat_root / "utils" / "api.py")
+        self._copy_compat_module(bench2_compat_extract, compat_root / "utils" / "extract.py")
         self._copy_compat_module(bench2_compat_stat, compat_root / "utils" / "stat.py")
         return compat_root
 

@@ -73,7 +73,7 @@ def test_extracts_inline_refs(monkeypatch) -> None:
     assert "Market share remains concentrated" in parsed[0]["fact"]
 
 
-def test_extracts_title_links_without_polluting_fact(monkeypatch) -> None:
+def test_extracts_without_polluting_fact(monkeypatch) -> None:
     monkeypatch.setattr(
         compat_api,
         "_run_chat",
@@ -165,3 +165,46 @@ def test_falls_back_on_error(monkeypatch) -> None:
     result = compat_api.call_model("Please output json列表 directly")
 
     assert result == "[]"
+
+
+class TestIsInaccessible:
+    def test_short_content_flagged(self) -> None:
+        assert compat_api._is_inaccessible("too short") is True
+
+    def test_scrape_failed_signal(self) -> None:
+        content = "scrape failed: HTTP Error 403: Forbidden" + " x" * 200
+        assert compat_api._is_inaccessible(content) is True
+
+    def test_captcha_signal(self) -> None:
+        content = "Our systems have presented this CAPTCHA challenge" + " x" * 200
+        assert compat_api._is_inaccessible(content) is True
+
+    def test_login_wall_signal(self) -> None:
+        content = "Log in or register to access precise data." + " x" * 200
+        assert compat_api._is_inaccessible(content) is True
+
+    def test_google_scholar_only(self) -> None:
+        content = (
+            "Glassman, Ronald M. (1997), The New Middle Class\n"
+            "[Google Scholar](https://scholar.google.com/scholar_lookup?title=foo)\n"
+        ) * 10
+        assert compat_api._is_inaccessible(content) is True
+
+    def test_youtube_nav_only(self) -> None:
+        content = (
+            "[About](https://www.youtube.com/about/)"
+            "[Press](https://www.youtube.com/about/press/)"
+            "[Copyright](https://www.youtube.com/about/copyright/)"
+            "[Contact us](/t/contact_us/)[Creators](https://www.youtube.com/creators/)"
+            "[Advertise](https://www.youtube.com/ads/)[Terms](/t/terms)"
+        ) * 5
+        assert compat_api._is_inaccessible(content) is True
+
+    def test_valid_content_not_flagged(self) -> None:
+        content = (
+            "China's middle class has grown significantly over the past two decades. "
+            "According to the National Bureau of Statistics, per capita disposable income "
+            "reached 43,377 yuan in 2025, a nominal increase of 5.3 percent year-on-year. "
+            "The urban-rural income ratio narrowed to 2.21, down from 2.25 the previous year."
+        ) * 5
+        assert compat_api._is_inaccessible(content) is False

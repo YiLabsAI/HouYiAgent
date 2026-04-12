@@ -200,6 +200,10 @@ max-statements = 50
     "T20",
 ]
 "houyi/skills/**/*.py" = ["E402"]  # conditional late imports in skill modules
+"houyi/arena/bench2_compat/**/*.py" = [
+    "T201", # print is the upstream bench2 stdout logging mechanism (subprocess context)
+    "B007", # enumerate index inherited from upstream bench2 code style
+]
 
 [tool.mypy]
 python_version = "3.11"

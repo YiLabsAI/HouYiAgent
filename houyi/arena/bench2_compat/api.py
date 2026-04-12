@@ -24,6 +24,26 @@ _DEFAULT_FACT_TIMEOUT_SECONDS = 90
 _EXTRACT_PROMPT_FEATURE_A = '"ref_idx"'
 _EXTRACT_PROMPT_FEATURE_B = '"url"'
 _DEDUP_PROMPT_FEATURE = "List(int)"
+_INACCESSIBLE_SIGNALS = (
+    "scrape failed:",
+    "captcha",
+    "log in or register",
+    "please log in",
+    "sign in to",
+    "please solve",
+    "we apologize for the inconvenience",
+    "access denied",
+    "403 forbidden",
+    "404 not found",
+    "page not found",
+    "robot",
+    "subscribe to read",
+    "subscription required",
+    "create an account",
+    "register to access",
+    "google scholar](https://scholar.google.com/scholar_lookup",
+)
+_MIN_ACCESSIBLE_CONTENT_LEN = 300
 _LINK_PATTERN = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
 _SENTENCE_BREAKS = ".!?\n"
 _NUMBERED_STMT_RE = re.compile(r"^\s*(\d+)\.\s+(.+\S)\s*$")
@@ -396,11 +416,32 @@ async def _fetch_content(url: str) -> tuple[str, str | None]:
     return "", jina_error or readability_error or "empty content"
 
 
+def _is_nav_only(content: str) -> bool:
+    link_chars = sum(len(m.group(0)) for m in _LINK_PATTERN.finditer(content[:2000]))
+    stripped = content[:2000].strip()
+    return len(stripped) > 0 and link_chars / len(stripped) > 0.6
+
+
+def _is_inaccessible(content: str) -> bool:
+    if len(content) < _MIN_ACCESSIBLE_CONTENT_LEN:
+        return True
+    sample = content[:2000].lower()
+    if any(sig in sample for sig in _INACCESSIBLE_SIGNALS):
+        return True
+    return _is_nav_only(content)
+
+
 def scrape_url(url: str) -> dict[str, Any]:
     async def _call() -> dict[str, Any]:
         content, error = await _fetch_content(url)
         if error and not content:
             return {"url": url, "content": "", "error": error}
+        if _is_inaccessible(content):
+            return {
+                "url": url,
+                "content": "",
+                "error": "inaccessible: content quality check failed",
+            }
         return {"url": url, "title": "", "description": "", "content": content}
 
     return asyncio.run(_call())
