@@ -303,6 +303,53 @@ describe('ReportViewer', () => {
     expect(md.textContent).not.toContain('"content"');
   });
 
+  it('strips unclosed trailing JSON code fence with content key', () => {
+    const content = 'Valid prose about AI.\n\n```json\n{\n  "content": "Hermes Agent is a framework.",\n  "citations": []';
+    render(
+      <ReportViewer
+        report={makeReport({
+          sections: [{ title: 'S', content, citations: [] }],
+          references: [],
+        })}
+      />,
+    );
+    const md = screen.getByTestId('md-renderer');
+    expect(md.textContent).toContain('Valid prose about AI.');
+    expect(md.textContent).not.toContain('"content"');
+    expect(md.textContent).not.toContain('Hermes Agent is a framework');
+  });
+
+  it('strips inline JSON citation tail leaking after prose', () => {
+    const content = 'Important analysis about the system [ref_abc].",\n  "citations": [\n    {\n      "reference_id": "ref_abc",\n      "text_span": "analysis"\n    }\n  ]';
+    render(
+      <ReportViewer
+        report={makeReport({
+          sections: [{ title: 'S', content, citations: [] }],
+          references: [],
+        })}
+      />,
+    );
+    const md = screen.getByTestId('md-renderer');
+    expect(md.textContent).toContain('Important analysis about the system');
+    expect(md.textContent).not.toContain('"citations"');
+    expect(md.textContent).not.toContain('"reference_id"');
+  });
+
+  it('strips trailing raw JSON block with content key after prose', () => {
+    const content = 'Conclusion paragraph.\n\n{\n  "content": "Duplicated content.",\n  "citations": []\n}';
+    render(
+      <ReportViewer
+        report={makeReport({
+          sections: [{ title: 'S', content, citations: [] }],
+          references: [],
+        })}
+      />,
+    );
+    const md = screen.getByTestId('md-renderer');
+    expect(md.textContent).toContain('Conclusion paragraph.');
+    expect(md.textContent).not.toContain('"content"');
+  });
+
   it('filters out localhost and bare-id references', () => {
     render(
       <ReportViewer

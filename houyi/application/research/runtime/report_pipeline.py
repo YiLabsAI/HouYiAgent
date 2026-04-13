@@ -215,7 +215,11 @@ class ReportPipeline:
                 settings,
                 timings,
             )
-            validation = await self._run_validation_phase(
+            # Summary and validation read disjoint parts of the report:
+            # summary needs sections (done), validation needs sections (done),
+            # neither reads the other's output.  Run them concurrently.
+            summary_coro = self._reporter.complete_summary(report)
+            validation_coro = self._run_validation_phase(
                 aggregated,
                 report,
                 plan,
@@ -223,6 +227,8 @@ class ReportPipeline:
                 timing_budget,
                 timings,
             )
+            summary_ms, validation = await asyncio.gather(summary_coro, validation_coro)
+            timings["report_summary_ms"] = summary_ms
             repaired = await self._run_repair_phase(
                 validation,
                 report,
@@ -288,6 +294,7 @@ class ReportPipeline:
             plan,
             aggregated,
             intermediate_reports=intermediate_reports or None,
+            defer_summary=True,
         )
         timings["report_generate_ms"] = (time.perf_counter() - t) * 1000.0
         timings["report_sections_ms"] = gen_timings.get("report_sections_ms", 0.0)
@@ -435,8 +442,8 @@ class ReportPipeline:
             report.metadata.quality_overall = quality.overall
         return quality
 
+    @staticmethod
     def _build_pipeline_result(
-        self,
         report: ResearchReport,
         quality: QualityScore | None,
         validation: ValidationReport | None,
@@ -445,19 +452,8 @@ class ReportPipeline:
         timings: dict[str, float],
         t_run0: float,
     ) -> ReportPipelineResult:
-        timings["total_ms"] = (time.perf_counter() - t_run0) * 1000.0
-        logger.info(
-            "research.report_pipeline phase=done depth=%s timings_ms=%s",
-            depth_val,
-            {k: round(v, 1) for k, v in timings.items()},
-        )
-        rounded_timings = {k: round(v, 1) for k, v in timings.items()}
-        return ReportPipelineResult(
-            report=report,
-            quality=quality,
-            validation=validation,
-            conflicts=conflicts,
-            phase_timings_ms=rounded_timings,
+        return _build_pipeline_result(
+            report, quality, validation, conflicts, depth_val, timings, t_run0
         )
 
     async def _execute_url_validation(
@@ -852,6 +848,31 @@ class ReportPipeline:
 
         extra_groups = await asyncio.gather(*[_search_one(query) for query in bounded_queries])
         return [source for group in extra_groups for source in group]
+
+
+def _build_pipeline_result(
+    report: ResearchReport,
+    quality: QualityScore | None,
+    validation: ValidationReport | None,
+    conflicts: list[ConflictRecord],
+    depth_val: str,
+    timings: dict[str, float],
+    t_run0: float,
+) -> ReportPipelineResult:
+    timings["total_ms"] = (time.perf_counter() - t_run0) * 1000.0
+    logger.info(
+        "research.report_pipeline phase=done depth=%s timings_ms=%s",
+        depth_val,
+        {k: round(v, 1) for k, v in timings.items()},
+    )
+    rounded_timings = {k: round(v, 1) for k, v in timings.items()}
+    return ReportPipelineResult(
+        report=report,
+        quality=quality,
+        validation=validation,
+        conflicts=conflicts,
+        phase_timings_ms=rounded_timings,
+    )
 
 
 def _select_intermediate_targets(

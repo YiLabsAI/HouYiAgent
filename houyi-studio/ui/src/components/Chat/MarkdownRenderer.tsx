@@ -14,6 +14,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
+import rehypeRaw from 'rehype-raw';
 import katex from 'katex';
 import type { Components } from 'react-markdown';
 import { CodeBlock } from './CodeBlock';
@@ -130,7 +131,7 @@ const components: Components = {
   table({ children }) {
     return (
       <div className="my-2 max-w-full overflow-x-auto rounded-md border border-gray-700/50">
-        <table className="min-w-full text-[12px]">{children}</table>
+        <table className="min-w-full table-auto text-[12px]">{children}</table>
       </div>
     );
   },
@@ -139,14 +140,14 @@ const components: Components = {
   },
   th({ children }) {
     return (
-      <th className="px-3 py-1.5 text-left text-[11px] font-semibold text-gray-300 border-b border-gray-700/50">
+      <th className="px-3 py-1.5 text-left text-[11px] font-semibold text-gray-300 border-b border-gray-700/50 min-w-[120px]">
         {children}
       </th>
     );
   },
   td({ children }) {
     return (
-      <td className="px-3 py-1.5 text-gray-300 border-b border-gray-800/50">
+      <td className="px-3 py-1.5 text-gray-300 border-b border-gray-800/50 min-w-[120px]">
         {children}
       </td>
     );
@@ -223,7 +224,7 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = React.memo(({ c
     <div className="min-w-0 max-w-full overflow-x-hidden">
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkMath]}
-        rehypePlugins={[rehypeKatex]}
+        rehypePlugins={[rehypeRaw, rehypeKatex]}
         components={components}
       >
         {content}

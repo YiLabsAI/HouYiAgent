@@ -35,14 +35,28 @@ logger = logging.getLogger(__name__)
 
 _SECTION_INPUT_METRICS_KEY = "section_input_metrics"
 
-# Hard-won runtime lesson from delegate benchmarks: prompt inflation in a
-# single oversized section can dominate both report generation latency and
-# downstream repair/quality cost. We therefore rank section evidence and
-# pass only the strongest top-K sources instead of dumping every "relevant"
-# source into the prompt.
-_MAX_SECTION_SOURCES = 8
-_INTERMEDIATE_CONTEXT_MAX_CHARS = 2400
-_INTERMEDIATE_PER_QUESTION_MAX_CHARS = 800
+# ---------------------------------------------------------------------------
+# Default limits for section source injection and intermediate context.
+# Kept as module-level constants so existing callers without explicit
+# config get the same behaviour.  ReportGenerator accepts overrides via
+# constructor parameters.
+# ---------------------------------------------------------------------------
+
+# Maximum sources injected into a single section's LLM prompt.  Ranked by
+# relevance; only the top-K are included to control prompt size and cost.
+_DEFAULT_MAX_SECTION_SOURCES = 8
+
+# Hard cap on sources formatted into the prompt text (defence-in-depth
+# against unexpectedly large ranked lists).
+_DEFAULT_MAX_SOURCE_DISPLAY = 20
+
+# Maximum characters kept per source snippet in the section prompt.
+_DEFAULT_SNIPPET_MAX_CHARS = 200
+
+# Total / per-question character caps for intermediate-report context
+# injected alongside sources.  Keeps prompt inflation predictable.
+_DEFAULT_INTERMEDIATE_CONTEXT_MAX_CHARS = 2400
+_DEFAULT_INTERMEDIATE_PER_QUESTION_MAX_CHARS = 800
 
 if TYPE_CHECKING:
     from houyi.application.research.runtime.intermediate import IntermediateReport
@@ -97,9 +111,31 @@ class ReportGenerator:
     Phase 1-3: Markdown only. Phase 4 adds PDF/PPTX/DOCX export.
     """
 
-    def __init__(self, llm_adapter: LLMAdapter, **llm_kwargs: Any) -> None:
+    def __init__(
+        self,
+        llm_adapter: LLMAdapter,
+        *,
+        max_section_sources: int = _DEFAULT_MAX_SECTION_SOURCES,
+        max_source_display: int = _DEFAULT_MAX_SOURCE_DISPLAY,
+        snippet_max_chars: int = _DEFAULT_SNIPPET_MAX_CHARS,
+        intermediate_context_max_chars: int = _DEFAULT_INTERMEDIATE_CONTEXT_MAX_CHARS,
+        intermediate_per_question_max_chars: int = _DEFAULT_INTERMEDIATE_PER_QUESTION_MAX_CHARS,
+        section_max_tokens: int = 2000,
+        # Max concurrent section generation tasks.  Typical reports have
+        # 5-7 sections; default 8 fires them all in one batch.  Lower this
+        # if the LLM API has concurrency limits.
+        section_concurrency: int = 8,
+        **llm_kwargs: Any,
+    ) -> None:
         self._llm = llm_adapter
         self._llm_kwargs = llm_kwargs
+        self._max_section_sources = max_section_sources
+        self._max_source_display = max_source_display
+        self._snippet_max_chars = snippet_max_chars
+        self._intermediate_context_max_chars = intermediate_context_max_chars
+        self._intermediate_per_question_max_chars = intermediate_per_question_max_chars
+        self._section_max_tokens = section_max_tokens
+        self._section_concurrency = section_concurrency
 
     async def generate(
         self,
@@ -107,6 +143,7 @@ class ReportGenerator:
         sources: AggregatedSources,
         style: ReportStyle = ReportStyle.DETAILED,
         intermediate_reports: list[IntermediateReport] | None = None,
+        defer_summary: bool = False,
     ) -> tuple[ResearchReport, dict[str, Any]]:
         """Generate a complete report (non-streaming).
 
@@ -115,6 +152,12 @@ class ReportGenerator:
         are provided (standard/deep depth), the pre-analysed findings are
         injected as additional context to improve citation fidelity and reduce
         hallucinations.
+
+        When *defer_summary* is True, the report is returned with an empty
+        summary.  Call :meth:`complete_summary` later to fill it in.  This
+        allows the caller to overlap summary generation with other work
+        (e.g. validation) since neither validation nor repair reads the
+        summary field.
 
         Returns:
             Tuple of (ResearchReport, metrics_dict) where metrics_dict contains
@@ -131,7 +174,7 @@ class ReportGenerator:
         start = time.monotonic()
         report_id = f"rpt_{uuid.uuid4().hex[:8]}"
 
-        sem = asyncio.Semaphore(4)
+        sem = asyncio.Semaphore(self._section_concurrency)
 
         async def _gen(outline_sec: OutlineSection) -> tuple[ReportSection, dict[str, Any]]:
             async with sem:
@@ -141,7 +184,12 @@ class ReportGenerator:
                     section_title=outline_sec.title,
                     objective=outline_sec.objective,
                 )
-                ir_context = _intermediate_context(outline_sec.related_question_ids, ir_by_qid)
+                ir_context = _intermediate_context(
+                    outline_sec.related_question_ids,
+                    ir_by_qid,
+                    per_question_cap=self._intermediate_per_question_max_chars,
+                    total_cap=self._intermediate_context_max_chars,
+                )
                 section = await self._generate_section(
                     plan.query,
                     outline_sec.title,
@@ -164,9 +212,12 @@ class ReportGenerator:
         section_input_metrics = [metrics for _, metrics in section_results]
         sections_ms = (time.monotonic() - t_sections) * 1000.0
 
-        t_summary = time.monotonic()
-        summary = await self._generate_summary(plan.query, sections)
-        summary_ms = (time.monotonic() - t_summary) * 1000.0
+        summary = ""
+        summary_ms = 0.0
+        if not defer_summary:
+            t_summary = time.monotonic()
+            summary = await self._generate_summary(plan.query, sections)
+            summary_ms = (time.monotonic() - t_summary) * 1000.0
 
         duration = time.monotonic() - start
 
@@ -191,6 +242,15 @@ class ReportGenerator:
             _SECTION_INPUT_METRICS_KEY: section_input_metrics,
         }
         return report, timings
+
+    async def complete_summary(self, report: ResearchReport) -> float:
+        """Generate and attach the summary for a report with deferred summary.
+
+        Returns the wall-clock milliseconds spent generating the summary.
+        """
+        t = time.monotonic()
+        report.summary = await self._generate_summary(report.title, report.sections)
+        return round((time.monotonic() - t) * 1000.0, 1)
 
     async def generate_stream(
         self,
@@ -261,7 +321,7 @@ class ReportGenerator:
             section_title=section_title,
             objective=objective,
         )
-        return ranked[: _section_source_cap(question_ids, len(ranked))], len(ranked)
+        return ranked[: self._max_section_sources], len(ranked)
 
     async def _generate_section(
         self,
@@ -271,8 +331,10 @@ class ReportGenerator:
         sources: list[SourceReference],
         intermediate_context: str = "",
     ) -> ReportSection:
+        snip = self._snippet_max_chars
         sources_text = "\n".join(
-            f"  {s.reference_id} | {s.title} | {s.snippet[:200]}" for s in sources[:20]
+            f"  {s.reference_id} | {s.title} | {s.snippet[:snip]}"
+            for s in sources[: self._max_source_display]
         )
         prompt = _SECTION_PROMPT.format(
             query=query,
@@ -288,7 +350,7 @@ class ReportGenerator:
         resp = await self._llm.chat(
             messages=[{"role": "user", "content": prompt}],
             temperature=0.3,
-            max_tokens=3000,
+            max_tokens=self._section_max_tokens,
             **self._llm_kwargs,
         )
         return _parse_section(title, resp.content)
@@ -320,11 +382,13 @@ class ReportGenerator:
 def _intermediate_context(
     question_ids: list[str],
     ir_by_qid: dict[str, IntermediateReport],
+    *,
+    per_question_cap: int = _DEFAULT_INTERMEDIATE_PER_QUESTION_MAX_CHARS,
+    total_cap: int = _DEFAULT_INTERMEDIATE_CONTEXT_MAX_CHARS,
 ) -> str:
     """Build a text block from intermediate reports for the given questions."""
     parts: list[str] = []
     total_chars = 0
-    per_question_cap, total_cap = _intermediate_context_budget(question_ids)
     for qid in question_ids:
         ir = ir_by_qid.get(qid)
         if ir and ir.analysis:
@@ -339,14 +403,6 @@ def _intermediate_context(
             parts.append(chunk)
             total_chars = projected
     return "\n\n---\n\n".join(parts)[:total_cap]
-
-
-def _section_source_cap(question_ids: list[str], candidate_count: int) -> int:
-    return _MAX_SECTION_SOURCES
-
-
-def _intermediate_context_budget(question_ids: list[str]) -> tuple[int, int]:
-    return _INTERMEDIATE_PER_QUESTION_MAX_CHARS, _INTERMEDIATE_CONTEXT_MAX_CHARS
 
 
 def _relevant_sources(

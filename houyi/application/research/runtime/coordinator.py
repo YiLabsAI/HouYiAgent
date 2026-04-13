@@ -240,12 +240,22 @@ class ResearchCoordinator:
         questions = process_sub_question_execution_order(plan.sub_questions)
         mode = self._deps.settings.orchestration_mode
 
-        if mode == OrchestrationMode.DELEGATE:
-            await self._search_delegate(questions)
-        elif mode == OrchestrationMode.AUTONOMOUS:
-            await self._search_autonomous(questions)
+        search_coro = self._dispatch_search(mode, questions)
+        global_cap = self._deps.settings.max_search_phase_seconds
+        if global_cap > 0:
+            try:
+                await asyncio.wait_for(search_coro, timeout=global_cap)
+            except TimeoutError:
+                # Salvage: self._search_results already contains results
+                # for sub-questions that finished before the deadline.
+                logger.warning(
+                    "Global search phase cap (%ds) exceeded; salvaging %d/%d results",
+                    global_cap,
+                    len(self._search_results),
+                    len(questions),
+                )
         else:
-            await self._search_direct(questions)
+            await search_coro
 
         t_aggregate = time.perf_counter()
         aggregated = await self._deps.aggregator.aggregate(self._search_results)
@@ -270,12 +280,21 @@ class ResearchCoordinator:
             intermediate_ms = (time.perf_counter() - t_intermediate) * 1000.0
 
         search_elapsed_ms = (time.perf_counter() - t_search) * 1000.0
+        per_q_ms = [sr.elapsed_ms for sr in self._search_results if sr.elapsed_ms > 0]
+        per_q_summary = ""
+        if per_q_ms:
+            per_q_summary = (
+                f" per_question_ms: avg={sum(per_q_ms) / len(per_q_ms):.0f}"
+                f" min={min(per_q_ms):.0f} max={max(per_q_ms):.0f}"
+                f" p50={sorted(per_q_ms)[len(per_q_ms) // 2]:.0f}"
+            )
         logger.info(
-            "Research search completed in %.2fs (aggregate=%.2fms, intermediate=%.2fms) for %d questions",
+            "Research search completed in %.2fs (aggregate=%.2fms, intermediate=%.2fms) for %d questions.%s",
             search_elapsed_ms / 1000.0,
             aggregate_ms,
             intermediate_ms,
             len(plan.sub_questions),
+            per_q_summary,
         )
         return SearchPhaseResult(
             search_results=list(self._search_results),
@@ -285,6 +304,15 @@ class ResearchCoordinator:
             aggregate_ms=round(aggregate_ms, 1),
             intermediate_ms=round(intermediate_ms, 1),
         )
+
+    async def _dispatch_search(self, mode: OrchestrationMode, questions: list[Any]) -> None:
+        """Route to the mode-specific sub-question execution strategy."""
+        if mode == OrchestrationMode.DELEGATE:
+            await self._search_delegate(questions)
+        elif mode == OrchestrationMode.AUTONOMOUS:
+            await self._search_autonomous(questions)
+        else:
+            await self._search_direct(questions)
 
     async def _search_direct(self, questions: list[Any]) -> None:
         total = len(questions)
@@ -635,6 +663,7 @@ class ResearchCoordinator:
         self._deps.check_cancelled()
         assert self._plan is not None
         sub_question_timeout_s = self._sub_question_timeout_seconds(sub_question)
+        t0 = time.perf_counter()
         try:
             context = SearchContext(
                 run_id=self._deps.run_id,
@@ -652,10 +681,12 @@ class ResearchCoordinator:
                 max_sub_question_budget_ms=int(sub_question_timeout_s * 1000),
                 salvage_on_cancel=True,
             )
-            return await asyncio.wait_for(
+            result = await asyncio.wait_for(
                 self._deps.search_executor.search(sub_question, context),
                 timeout=sub_question_timeout_s,
             )
+            result.elapsed_ms = round((time.perf_counter() - t0) * 1000.0, 1)
+            return result
         except TimeoutError:
             logger.warning(
                 "SearchExecutor timed out after %ds for %s",
@@ -668,6 +699,7 @@ class ResearchCoordinator:
                 sources=[],
                 summary="Search timed out",
                 coverage_score=0.0,
+                elapsed_ms=round((time.perf_counter() - t0) * 1000.0, 1),
             )
         except Exception:
             logger.warning(
@@ -675,7 +707,9 @@ class ResearchCoordinator:
                 sub_question.question_id,
                 exc_info=True,
             )
-            return await self._search_question_fallback(sub_question)
+            result = await self._search_question_fallback(sub_question)
+            result.elapsed_ms = round((time.perf_counter() - t0) * 1000.0, 1)
+            return result
 
     async def _search_question_fallback(self, sub_question: Any) -> SearchResult:
         agent = Agent(
@@ -709,6 +743,7 @@ class ResearchCoordinator:
         self._deps.check_cancelled()
         assert self._plan is not None
         sub_question_timeout_s = self._sub_question_timeout_seconds(sub_question)
+        t0 = time.perf_counter()
         search_executor = SearchExecutor(
             self._deps.llm_adapter,
             self._deps.web_search,
@@ -730,10 +765,12 @@ class ResearchCoordinator:
             salvage_on_cancel=True,
         )
         try:
-            return await asyncio.wait_for(
+            result = await asyncio.wait_for(
                 search_executor.search(sub_question, context),
                 timeout=sub_question_timeout_s,
             )
+            result.elapsed_ms = round((time.perf_counter() - t0) * 1000.0, 1)
+            return result
         except TimeoutError:
             logger.warning(
                 "Isolated SC timed out after %ds for %s",
@@ -746,6 +783,7 @@ class ResearchCoordinator:
                 sources=[],
                 summary="Search timed out",
                 coverage_score=0.0,
+                elapsed_ms=round((time.perf_counter() - t0) * 1000.0, 1),
             )
         except Exception:
             logger.warning(
@@ -753,7 +791,9 @@ class ResearchCoordinator:
                 sub_question.question_id,
                 exc_info=True,
             )
-            return await self._search_question_fallback(sub_question)
+            result = await self._search_question_fallback(sub_question)
+            result.elapsed_ms = round((time.perf_counter() - t0) * 1000.0, 1)
+            return result
 
     def _build_search_task(self, sub_question: Any) -> str:
         assert self._plan is not None

@@ -53,6 +53,7 @@ class BenchmarkResult:
     search_elapsed_ms: float = 0.0
     phase_timings_ms: dict[str, float] = field(default_factory=dict)
     section_input_metrics: list[dict[str, Any]] = field(default_factory=list)
+    per_question_elapsed_ms: list[dict[str, Any]] = field(default_factory=list)
     error: str | None = None
 
 
@@ -204,6 +205,7 @@ class BenchmarkRunner:
                 search_elapsed_ms=runtime.search_elapsed_ms,
                 phase_timings_ms=phase_timings,
                 section_input_metrics=section_input_metrics,
+                per_question_elapsed_ms=runtime.per_question_elapsed_ms,
                 error="internal timeout (report incomplete)" if not article else None,
             )
         except Exception as exc:
@@ -332,6 +334,7 @@ def _append_metrics(path: Path, result: BenchmarkResult) -> None:
         "error": result.error,
         "phase_timings_ms": result.phase_timings_ms,
         "section_input_metrics": result.section_input_metrics,
+        "per_question_elapsed_ms": result.per_question_elapsed_ms,
     }
     with path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(entry, ensure_ascii=False) + "\n")

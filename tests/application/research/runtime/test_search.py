@@ -143,7 +143,7 @@ class TestSearch:
         await executor.search(SubQuestion(question="Q?"), _context())
         assert ws.search.await_count == 5
 
-    async def test_gap_driven_tail_shrinks_to_one_query(self):
+    async def test_shrinks_to_one_query(self):
         llm = MockLLM(
             responses=[
                 '["q1", "q2"]',
@@ -167,7 +167,13 @@ class TestSearch:
 
         assert ws.search.await_count == 3
 
-    async def test_marginal_yield_stops_before_next_round(self):
+    async def test_early_termination_stops(self):
+        """Early termination fires when yield decays >= 50% and gaps stall.
+
+        Round 1: returns 4 unique URLs (high yield).
+        Round 2: returns 1 unique URL (75% drop), same missing dimensions
+        → _can_terminate_early returns True, round 3 is skipped.
+        """
         llm = MockLLM(
             responses=[
                 '["q1"]',
@@ -177,19 +183,34 @@ class TestSearch:
         )
         ws = make_mock_web_search()
         events: list[tuple[str, dict]] = []
+        call_count = 0
 
         async def _search(query: str, *, max_results: int, include_content: bool):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                results = [
+                    WebSearchResult(
+                        title=f"source {i}",
+                        url=f"https://example{i}.com/{query}",
+                        snippet=f"source {i}",
+                        content=f"source {i}",
+                    )
+                    for i in range(4)
+                ]
+            else:
+                results = [
+                    WebSearchResult(
+                        title=f"{query} tail",
+                        url=f"https://tail.example.com/{query}",
+                        snippet=f"{query} tail",
+                        content=f"{query} tail",
+                    )
+                ]
             return WebSearchResponse(
                 query=query,
                 provider="mock",
-                results=[
-                    WebSearchResult(
-                        title=f"{query} source",
-                        url=f"https://example.com/{query}",
-                        snippet=f"{query} source",
-                        content=f"{query} source",
-                    )
-                ],
+                results=results,
                 metadata=WebSearchMetadata(
                     cached=False,
                     cache_hit=False,
@@ -221,9 +242,9 @@ class TestSearch:
         result = await executor.search(SubQuestion(question="Q?"), _context())
 
         assert len(result.rounds) == 2
-        assert result.rounds[-1].stop_layer == "marginal_yield"
+        assert result.rounds[-1].stop_layer == "early_termination"
         assert ws.search.await_count == 2
-        assert any(name == "search.marginal_yield_stop" for name, _ in events)
+        assert any(name == "search.early_termination" for name, _ in events)
 
     async def test_query_cancel(self):
         llm = MockLLM(
@@ -287,7 +308,7 @@ class TestSearch:
         assert "search.sufficiency_features" in event_names
         assert "search.sufficiency_decision" in event_names
 
-    async def test_timeout_returns_last_complete_round_when_enabled(self):
+    async def test_timeout_returns(self):
         llm = MockLLM(
             responses=[
                 '["q1"]',
@@ -634,8 +655,10 @@ class TestBoundaryAndInteraction:
         coord = SearchExecutor(llm, ws)
         result = await coord.search(SubQuestion(question="Q?"), _context())
         assert result.sources == []
-        assert len(result.rounds) == 3
-        assert result.exhausted is True
+        # Consecutive zero-hit rounds trigger early termination at round 2
+        # rather than exhausting all 3 rounds.
+        assert len(result.rounds) == 2
+        assert result.rounds[-1].stop_layer == "early_termination"
         assert result.rounds[0].reason_code == "no_sources"
 
     async def test_search_call_count_matches(self):

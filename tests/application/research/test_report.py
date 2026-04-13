@@ -121,7 +121,9 @@ class TestBoundaryAndInteraction:
         assert report.metadata.section_count == len(plan.outline)
 
     async def test_section_source_selection(self):
-        from houyi.application.research.report import _MAX_SECTION_SOURCES
+        from houyi.application.research.report import (
+            _DEFAULT_MAX_SECTION_SOURCES as _MAX_SECTION_SOURCES,
+        )
 
         llm = MockLLM(responses=[])
         gen = ReportGenerator(llm)
@@ -211,7 +213,9 @@ class TestIntermediateContext:
 
     async def test_intermediate_context_is_capped(self):
         from houyi.application.research.report import (
-            _INTERMEDIATE_CONTEXT_MAX_CHARS,
+            _DEFAULT_INTERMEDIATE_CONTEXT_MAX_CHARS as _INTERMEDIATE_CONTEXT_MAX_CHARS,
+        )
+        from houyi.application.research.report import (
             _intermediate_context,
         )
         from houyi.application.research.runtime.intermediate import IntermediateReport

@@ -120,20 +120,55 @@ class OutlineSection(BaseModel):
     required_depth: str = "standard"
 
 
+# Maximum search rounds per sub-question, keyed by ResearchDepth.value.
+# Each round incurs one QueryPlanner LLM call + one SufficiencyEvaluator LLM
+# call, so higher values linearly increase search-phase latency.
 _DEPTH_SEARCH_ROUNDS: dict[str, int] = {"quick": 2, "standard": 3, "deep": 5}
 
 
 class ResearchSettings(BaseModel):
     """User-configurable settings for a research session."""
 
+    # Research thoroughness level. Affects sub-question count and
+    # max_search_rounds (auto-resolved via _DEPTH_SEARCH_ROUNDS).
     depth: ResearchDepth = ResearchDepth.STANDARD
+
+    # Multi-agent strategy: DIRECT (serial), DELEGATE (parallel sub-question
+    # dispatch, default), or AUTONOMOUS (collaborative with shared state).
     orchestration_mode: OrchestrationMode = OrchestrationMode.DELEGATE
+
+    # Upper bound on concurrent sub-question search tasks.  Applies as
+    # asyncio.Semaphore(max_agents) in both DELEGATE and DIRECT modes.
+    # standard depth typically produces 5 sub-questions; deep produces 8,
+    # so values > 5 only help deep mode.  Higher values increase LLM /
+    # search-API concurrency pressure.
     max_agents: int = 5
+
+    # LLM model selection hint; "auto" lets the engine pick per stage.
     model_profile: str = "auto"
+
     report_formats: list[ExportFormat] = Field(
         default_factory=lambda: [ExportFormat.MARKDOWN],
     )
+
+    # Per sub-question search round cap.  0 means auto-resolve from depth
+    # via _DEPTH_SEARCH_ROUNDS (quick=2, standard=3, deep=5).  Each round
+    # involves: QueryPlanner LLM → parallel web searches → SufficiencyEvaluator
+    # LLM, so the total search-phase LLM calls per sub-question is
+    # roughly 2 × max_search_rounds.
     max_search_rounds: int = 0
+
+    # Global wall-clock cap (seconds) for the entire search phase
+    # (all sub-questions combined).  When exceeded, the coordinator
+    # salvages whatever sub-question results are already complete and
+    # proceeds to aggregation + report.  Set to 0 to disable.
+    # Disabled by default: per-sub-question timeout (max 180s) combined
+    # with _can_terminate_early yield-decay detection is the preferred
+    # mechanism.  A global hard-cap risks killing normal complex queries.
+    max_search_phase_seconds: int = 0
+
+    # Whether to run the post-report quality evaluation pass.  Disabling
+    # this saves one LLM call but skips automated quality scoring.
     enable_quality_evaluation: bool = True
 
     def model_post_init(self, __context: Any) -> None:
@@ -301,6 +336,10 @@ class SearchResult(BaseModel):
     coverage_score: float = 0.0
     exhausted: bool = False
     error: str | None = None
+    # Wall-clock milliseconds spent searching this sub-question (set by
+    # coordinator; sum of all rounds including QueryPlanner + web search +
+    # SufficiencyEvaluator LLM calls).  0 means not measured.
+    elapsed_ms: float = 0.0
 
 
 # ---------------------------------------------------------------------------

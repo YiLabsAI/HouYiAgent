@@ -521,6 +521,20 @@ class ResearchRuntime:
         return self._search_elapsed_ms
 
     @property
+    def per_question_elapsed_ms(self) -> list[dict[str, Any]]:
+        """Per-sub-question wall-clock timing for observability."""
+        return [
+            {
+                "question_id": sr.question_id,
+                "elapsed_ms": sr.elapsed_ms,
+                "rounds": len(sr.rounds),
+                "sources": len(sr.sources),
+                "exhausted": sr.exhausted,
+            }
+            for sr in self._search_results
+        ]
+
+    @property
     def aggregate_ms(self) -> float:
         return self._aggregate_ms
 

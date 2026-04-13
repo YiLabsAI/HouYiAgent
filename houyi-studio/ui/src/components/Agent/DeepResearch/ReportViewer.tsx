@@ -119,13 +119,26 @@ function extractContentField(text: string): string | null {
 function stripTrailingCitationArtifacts(text: string): string | null {
   const trimmed = text.trim();
 
+  // Match the LAST fenced code block (handles files with multiple fences like mermaid + json).
   const fenced = trimmed.match(/\n```(?:json)?\s*\n([\s\S]*?)\n\s*```\s*$/);
   if (fenced && fenced.index !== undefined) {
     const inner = fenced[1];
     const isCitationPayload = /"citations"\s*:/.test(inner)
       && (/"reference_id"\s*:/.test(inner) || /"text_span"\s*:/.test(inner));
-    if (isCitationPayload) {
+    const isContentPayload = /"content"\s*:/.test(inner) && inner.trimStart().startsWith('{');
+    if (isCitationPayload || isContentPayload) {
       const before = trimmed.slice(0, fenced.index).trim();
+      if (before) return before;
+    }
+  }
+
+  // Unclosed trailing code fence: ```json\n{"content":...  (no closing ```)
+  const unclosed = trimmed.match(/\n```(?:json)?\s*\n(\s*\{[\s\S]*)$/);
+  if (unclosed && unclosed.index !== undefined) {
+    const inner = unclosed[1];
+    const isJson = /"content"\s*:/.test(inner) || /"citations"\s*:/.test(inner);
+    if (isJson) {
+      const before = trimmed.slice(0, unclosed.index).trim();
       if (before) return before;
     }
   }
@@ -133,6 +146,19 @@ function stripTrailingCitationArtifacts(text: string): string | null {
   const rawStart = trimmed.match(/\n\s*\{\s*"citations"\s*:/);
   if (rawStart && rawStart.index !== undefined) {
     const before = trimmed.slice(0, rawStart.index).trim();
+    if (before) return before;
+  }
+
+  const rawContentStart = trimmed.match(/\n\s*\{\s*"content"\s*:/);
+  if (rawContentStart && rawContentStart.index !== undefined) {
+    const before = trimmed.slice(0, rawContentStart.index).trim();
+    if (before) return before;
+  }
+
+  // LLM returned a JSON value whose tail leaks: ...prose.",\n  "citations": [...]
+  const inlineJsonTail = trimmed.match(/",\s*\n\s*"citations"\s*:\s*\[/);
+  if (inlineJsonTail && inlineJsonTail.index !== undefined) {
+    const before = trimmed.slice(0, inlineJsonTail.index).trim();
     if (before) return before;
   }
 
@@ -164,6 +190,7 @@ function sanitizeSectionContent(raw: string): string {
       if (result !== null) return result;
     }
 
+    // Closed trailing fence: prose then ```json\n{...}\n```
     const fenceRe = /\n```(?:json)?\s*\n(\s*\{[\s\S]*?"content"\s*:[\s\S]*)\n\s*```\s*$/;
     const fenceMatch = trimmed.match(fenceRe);
     if (fenceMatch) {
@@ -175,7 +202,16 @@ function sanitizeSectionContent(raw: string): string {
       }
     }
 
+    // Unclosed trailing fence: prose then ```json\n{...  (no closing ```)
+    const unclosedFenceRe = /\n```(?:json)?\s*\n(\s*\{[\s\S]*?"content"\s*:[\s\S]*)$/;
+    const unclosedMatch = trimmed.match(unclosedFenceRe);
+    if (unclosedMatch && unclosedMatch.index !== undefined) {
+      const before = trimmed.slice(0, unclosedMatch.index).trim();
+      if (before) return before;
+    }
+
     // Prose then raw JSON on following lines (no fence) — common LLM failure mode.
+    // Guard: only match if the { is NOT preceded by a ``` fence marker.
     const proseJsonSplit = /\n\s*\{\s*"content"\s*:/;
     const splitIdx = trimmed.search(proseJsonSplit);
     if (splitIdx >= 0) {

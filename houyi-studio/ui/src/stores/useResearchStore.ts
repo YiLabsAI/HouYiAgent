@@ -224,7 +224,14 @@ export const useResearchStore = create<ResearchState>((set, get) => ({
   ...initialState,
 
   createSession: async (query, settings) => {
+    const prevSessionId = get().sessionId;
+    const prevStatus = prevSessionId
+      ? get().sessions.find((s) => s.run_id === prevSessionId)?.status
+      : undefined;
     set({ loading: true, error: null, phase: 'planning', plan: null, sessionId: null });
+    if (prevSessionId && (prevStatus === 'failed' || prevStatus === 'cancelled')) {
+      void get().deleteSession(prevSessionId);
+    }
     const controller = new AbortController();
     const timeout = window.setTimeout(() => controller.abort(), CREATE_RUN_TIMEOUT_MS);
     try {

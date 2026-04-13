@@ -188,8 +188,10 @@ class TestIntermediateReport:
 
 
 def _pipeline(ir_gen: IntermediateReportGenerator) -> ReportPipeline:
+    reporter = MagicMock()
+    reporter.complete_summary = AsyncMock(return_value=0.0)
     return ReportPipeline(
-        reporter=MagicMock(),
+        reporter=reporter,
         validator=MagicMock(),
         evaluator=MagicMock(),
         url_validator=MagicMock(),

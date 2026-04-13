@@ -137,6 +137,39 @@ describe('useResearchStore', () => {
         }),
       );
     });
+
+    it('deletes previous failed session when creating a new one', async () => {
+      let callIdx = 0;
+      const calls: Array<{ url: string; method?: string }> = [];
+      globalThis.fetch = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+        const urlStr = typeof url === 'string' ? url : url.toString();
+        calls.push({ url: urlStr, method: init?.method });
+        callIdx++;
+        if (urlStr.endsWith('/runs') && init?.method === 'POST') {
+          return {
+            ok: true, status: 201, statusText: 'Created',
+            json: async () => ({ run_id: 's2', plan: { query: 'q', sub_questions: [], outline: [], version: 1, status: 'draft' }, status: 'planning' }),
+            text: async () => '', headers: new Headers(), body: null,
+          } as unknown as Response;
+        }
+        if (urlStr.includes('/runs/s-failed') && init?.method === 'DELETE') {
+          return { ok: true, status: 204, statusText: 'No Content', json: async () => ({}), text: async () => '', headers: new Headers(), body: null } as unknown as Response;
+        }
+        return { ok: true, status: 200, json: async () => ({}), text: async () => '', headers: new Headers(), body: null, statusText: 'OK' } as unknown as Response;
+      }) as unknown as typeof fetch;
+
+      const { useResearchStore } = await loadStoreFresh();
+      useResearchStore.setState({
+        sessionId: 's-failed',
+        sessions: [{ run_id: 's-failed', status: 'failed', query: 'old query' }],
+        phase: 'input',
+      });
+      await useResearchStore.getState().createSession('retry query');
+      expect(useResearchStore.getState().sessionId).toBe('s2');
+      const deleteCall = calls.find((c) => c.url.includes('/runs/s-failed') && c.method === 'DELETE');
+      expect(deleteCall).toBeTruthy();
+      expect(useResearchStore.getState().sessions.find((s) => s.run_id === 's-failed')).toBeUndefined();
+    });
   });
 
   describe('editPlan', () => {

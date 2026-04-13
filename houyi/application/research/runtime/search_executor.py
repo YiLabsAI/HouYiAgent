@@ -160,10 +160,10 @@ class SearchExecutor:
                 completed_sources = dict(all_sources)
                 completed_summary = prior[-1] if prior else ""
 
-                if self._should_stop_for_marginal_yield(rounds):
-                    rounds[-1].stop_layer = "marginal_yield"
+                if self._can_terminate_early(rounds):
+                    rounds[-1].stop_layer = "early_termination"
                     await self._notify(
-                        "search.marginal_yield_stop",
+                        "search.early_termination",
                         {
                             "question_id": sub_question.question_id,
                             "round": round_number,
@@ -560,6 +560,11 @@ class SearchExecutor:
                 missing_dimensions=list(features.missing_dimensions),
                 features=features,
             )
+        # Note: _guardrail_sufficiency_decision inside
+        # SufficiencyEvaluator.evaluate() already short-circuits the LLM
+        # call when source_count >= expected_sources AND quality criteria
+        # (relevance, diversity, authority, recency) are met.  We rely on
+        # that structured guardrail rather than a raw count check here.
         return await self._evaluate_sufficiency(
             question=sub_question.question,
             user_query=context.user_query,
@@ -737,7 +742,21 @@ class SearchExecutor:
         }
         return len({domain for domain in domains if domain})
 
-    def _should_stop_for_marginal_yield(self, rounds: list[SearchRound]) -> bool:
+    def _can_terminate_early(self, rounds: list[SearchRound]) -> bool:
+        """Determine whether additional search rounds can be skipped.
+
+        Returns ``True`` when the search shows diminishing returns:
+
+        - **Yield decay**: the current round produced ≤ 50% of the new
+          unique URLs that the previous round found (or zero hits), AND
+        - **Gap stall**: the number of missing coverage dimensions did not
+          decrease between rounds.
+
+        This replaces the previous ultra-strict threshold (hits ≤ 1) which
+        almost never triggered in practice.  The new logic cuts 1–2 wasted
+        rounds per sub-question, saving ~1 QueryPlanner + 1 Sufficiency
+        LLM call each time.
+        """
         if len(rounds) < 2:
             return False
         previous_round = rounds[-2]
@@ -748,10 +767,14 @@ class SearchExecutor:
         current_gap_count = self._gap_count(current_round)
         if previous_gap_count is None or current_gap_count is None:
             return False
-        previous_low_yield = (
-            0 < len(previous_round.hits) <= 1 and self._count_domains(previous_round.hits) <= 1
-        )
-        current_low_yield = (
-            0 < len(current_round.hits) <= 1 and self._count_domains(current_round.hits) <= 1
-        )
-        return previous_low_yield and current_low_yield and current_gap_count >= previous_gap_count
+
+        prev_yield = previous_round.new_unique_urls
+        curr_yield = current_round.new_unique_urls
+
+        # Yield decayed by >= 50% (or current round produced nothing)
+        yield_decayed = curr_yield == 0 or (prev_yield > 0 and curr_yield <= prev_yield * 0.5)
+
+        # Coverage gap is not shrinking
+        gap_stalled = current_gap_count >= previous_gap_count
+
+        return yield_decayed and gap_stalled
