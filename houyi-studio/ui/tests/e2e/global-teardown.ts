@@ -6,6 +6,7 @@ import path from 'path';
 
 const PID_FILE = path.join(os.tmpdir(), 'houyi-console-e2e.pid');
 const UV_PID_FILE = path.join(os.tmpdir(), 'houyi-console-e2e-uv.pid');
+const UI_PID_FILE = path.join(os.tmpdir(), 'houyi-console-e2e-ui.pid');
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -30,6 +31,21 @@ const waitForExit = async (pid: number, retries = 20, delayMs = 250): Promise<vo
 export default async function globalTeardown(): Promise<void> {
   let backendPid: number | null = null;
   let uvPid: number | null = null;
+  let uiPid: number | null = null;
+
+  if (fs.existsSync(UI_PID_FILE)) {
+    const uiPidRaw = fs.readFileSync(UI_PID_FILE, 'utf-8');
+    const parsedUiPid = Number(uiPidRaw);
+    if (Number.isFinite(parsedUiPid)) {
+      uiPid = parsedUiPid;
+      try {
+        process.kill(parsedUiPid, 'SIGTERM');
+      } catch (error) {
+        console.warn('[E2E] Failed to stop UI server:', error);
+      }
+    }
+    fs.unlinkSync(UI_PID_FILE);
+  }
 
   if (fs.existsSync(PID_FILE)) {
     const pidRaw = fs.readFileSync(PID_FILE, 'utf-8');
@@ -64,5 +80,8 @@ export default async function globalTeardown(): Promise<void> {
   }
   if (uvPid !== null) {
     await waitForExit(uvPid);
+  }
+  if (uiPid !== null) {
+    await waitForExit(uiPid);
   }
 }

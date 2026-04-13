@@ -55,6 +55,12 @@ _NUMBERED_STMT_RE = re.compile(r"^\s*(\d+)\.\s+(.+\S)\s*$")
 _MAX_VALIDATE_REF_CHARS = 15_000
 _VALIDATE_REF_OPEN = "<reference>"
 _VALIDATE_REF_CLOSE = "</reference>"
+_VALIDATE_STMTS_OPEN = "<statements>"
+_VALIDATE_STMTS_CLOSE = "</statements>"
+_VALIDATE_SEGMENT_CHARS = 1_200
+_VALIDATE_SEGMENT_SEPARATOR = "\n\n[... omitted ...]\n\n"
+_MAX_VALIDATE_SALVAGE_STATEMENTS = 2
+_VALIDATE_SALVAGE_TIMEOUT_SECONDS = 30
 
 
 def _resolve_provider() -> str:
@@ -135,8 +141,205 @@ def _truncate_validate_reference(prompt: str) -> str:
     ref_content = prompt[ref_start:close_idx]
     if len(ref_content) <= _MAX_VALIDATE_REF_CHARS:
         return prompt
-    truncated = ref_content[:_MAX_VALIDATE_REF_CHARS] + "\n[... truncated ...]"
-    return prompt[:ref_start] + truncated + prompt[close_idx:]
+    facts = _extract_validate_statements(prompt, start=close_idx + len(_VALIDATE_REF_CLOSE))
+    trimmed = _select_validate_reference(ref_content, facts)
+    return prompt[:ref_start] + trimmed + prompt[close_idx:]
+
+
+def _extract_validate_statements(prompt: str, *, start: int = 0) -> list[str]:
+    open_idx = prompt.find(_VALIDATE_STMTS_OPEN, start)
+    close_idx = prompt.find(_VALIDATE_STMTS_CLOSE, open_idx + len(_VALIDATE_STMTS_OPEN))
+    if open_idx < 0 or close_idx < 0 or close_idx <= open_idx:
+        return []
+    body = prompt[open_idx + len(_VALIDATE_STMTS_OPEN) : close_idx]
+    statements: list[str] = []
+    for line in body.splitlines():
+        match = _NUMBERED_STMT_RE.match(line)
+        if match is None:
+            continue
+        statements.append(match.group(2).strip())
+    return statements
+
+
+def _select_validate_reference(ref: str, facts: list[str]) -> str:
+    if len(ref) <= _MAX_VALIDATE_REF_CHARS:
+        return ref
+    segments = _segment_validate_reference(ref)
+    terms = _extract_validate_terms(facts)
+    selected = _select_relevant_segments(segments, terms)
+    if not selected:
+        return _head_tail_truncate(ref)
+    candidate = _join_validate_segments(selected)
+    if len(candidate) <= _MAX_VALIDATE_REF_CHARS:
+        return candidate
+    return _head_tail_truncate(candidate)
+
+
+def _segment_validate_reference(ref: str) -> list[str]:
+    blocks = [block.strip() for block in re.split(r"\n\s*\n+", ref) if block.strip()]
+    if not blocks:
+        return _chunk_validate_text(ref)
+    segments: list[str] = []
+    for block in blocks:
+        if len(block) <= _VALIDATE_SEGMENT_CHARS:
+            segments.append(block)
+            continue
+        segments.extend(_chunk_validate_text(block))
+    return segments
+
+
+def _chunk_validate_text(text: str) -> list[str]:
+    chunks: list[str] = []
+    cursor = 0
+    limit = len(text)
+    while cursor < limit:
+        end = min(limit, cursor + _VALIDATE_SEGMENT_CHARS)
+        if end < limit:
+            split = max(
+                text.rfind("\n", cursor, end),
+                text.rfind("。", cursor, end),
+                text.rfind(".", cursor, end),
+                text.rfind("!", cursor, end),
+                text.rfind("?", cursor, end),
+            )
+            if split > cursor + 200:
+                end = split + 1
+        chunk = text[cursor:end].strip()
+        if chunk:
+            chunks.append(chunk)
+        cursor = end
+    return chunks
+
+
+def _extract_validate_terms(facts: list[str]) -> list[str]:
+    terms: list[str] = []
+    seen: set[str] = set()
+    for fact in facts:
+        for token in re.findall(
+            r"\d+(?:\.\d+)?%?|[A-Za-z][A-Za-z0-9-]{3,}|[\u4e00-\u9fff]{3,}", fact
+        ):
+            for term in _expand_validate_term(token):
+                key = term.lower()
+                if key in seen:
+                    continue
+                seen.add(key)
+                terms.append(term)
+    return terms
+
+
+def _expand_validate_term(token: str) -> list[str]:
+    normalized = token.strip()
+    if not normalized:
+        return []
+    if any(ch.isdigit() for ch in normalized):
+        return [normalized.lower()]
+    if normalized.isascii():
+        compact = normalized.lower()
+        return [compact] if len(compact) >= 4 else []
+    if len(normalized) <= 8:
+        return [normalized]
+    window = 6
+    step = max(3, len(normalized) // 4)
+    parts = {normalized[:8], normalized[-8:]}
+    for idx in range(0, max(1, len(normalized) - window + 1), step):
+        parts.add(normalized[idx : idx + window])
+    return [part for part in parts if len(part) >= 3]
+
+
+def _select_relevant_segments(segments: list[str], terms: list[str]) -> list[str]:
+    if not segments or not terms:
+        return []
+    scored: list[tuple[int, int]] = []
+    for index, segment in enumerate(segments):
+        score = _score_validate_segment(segment, terms)
+        if score > 0:
+            scored.append((score, index))
+    if not scored:
+        return []
+    scored.sort(key=lambda item: (-item[0], item[1]))
+    selected_indices: list[int] = []
+    budget = 0
+    separator_len = len(_VALIDATE_SEGMENT_SEPARATOR)
+    for _, index in scored:
+        segment_len = len(segments[index])
+        extra = segment_len if not selected_indices else segment_len + separator_len
+        if budget + extra > _MAX_VALIDATE_REF_CHARS and selected_indices:
+            continue
+        selected_indices.append(index)
+        budget += extra
+        if budget >= _MAX_VALIDATE_REF_CHARS or len(selected_indices) >= 8:
+            break
+    selected_indices.sort()
+    return [segments[index] for index in selected_indices]
+
+
+def _score_validate_segment(segment: str, terms: list[str]) -> int:
+    lowered = segment.lower()
+    score = 0
+    for term in terms:
+        needle = term.lower()
+        if needle not in lowered:
+            continue
+        if any(ch.isdigit() for ch in needle):
+            score += 6
+        elif needle.isascii():
+            score += 3
+        else:
+            score += min(6, max(2, len(term) // 2))
+    return score
+
+
+def _join_validate_segments(segments: list[str]) -> str:
+    return _VALIDATE_SEGMENT_SEPARATOR.join(segment for segment in segments if segment)
+
+
+def _head_tail_truncate(text: str) -> str:
+    if len(text) <= _MAX_VALIDATE_REF_CHARS:
+        return text
+    marker = "\n[... truncated ...]\n"
+    budget = _MAX_VALIDATE_REF_CHARS - len(marker)
+    if budget <= 0:
+        return text[:_MAX_VALIDATE_REF_CHARS]
+    head = int(budget * 0.6)
+    tail = budget - head
+    return text[:head] + marker + text[-tail:]
+
+
+def _is_validate_prompt(user_prompt: str) -> bool:
+    return _VALIDATE_REF_OPEN in user_prompt and _VALIDATE_STMTS_OPEN in user_prompt
+
+
+def _should_salvage_validate_unknown(user_prompt: str, prompt: str, response: str) -> bool:
+    if not _is_validate_prompt(user_prompt):
+        return False
+    if prompt != user_prompt:
+        return False
+    statements = _extract_validate_statements(user_prompt)
+    if not statements or len(statements) > _MAX_VALIDATE_SALVAGE_STATEMENTS:
+        return False
+    normalized = _normalize_json_output(response)
+    if normalized is None:
+        return False
+    try:
+        payload = json.loads(normalized)
+    except Exception:
+        return False
+    if not isinstance(payload, list) or len(payload) != len(statements):
+        return False
+    return all(isinstance(item, dict) and item.get("result") == "unknown" for item in payload)
+
+
+def _run_validate_salvage(prompt: str, *, model: str | None, max_tokens: int) -> str | None:
+    try:
+        raw = _run_chat(
+            prompt,
+            model=model,
+            max_tokens=max_tokens,
+            timeout_seconds=_VALIDATE_SALVAGE_TIMEOUT_SECONDS,
+        )
+    except Exception:
+        return None
+    return _normalize_json_output(raw)
 
 
 def call_model(user_prompt: str) -> str:
@@ -167,6 +370,10 @@ def call_model(user_prompt: str) -> str:
             continue
         normalized = _normalize_json_output(raw)
         if normalized is not None:
+            if _should_salvage_validate_unknown(user_prompt, prompt, normalized):
+                salvaged = _run_validate_salvage(prompt, model=model, max_tokens=max_tokens)
+                if salvaged is not None:
+                    return salvaged
             return normalized
     return _fallback_json_for_prompt(user_prompt)
 

@@ -73,6 +73,62 @@ Use `-h` or `--help` on the script itself for detailed flags and examples.
 | `run_benchmark.py` | Benchmark | Legacy HouYi benchmark runner for internal/raw benchmark generation |
 | `run_benchmark_v2.py` | Benchmark | Bench II-aligned runner: generate HouYi articles, then invoke the official-style sidecar scoring flow |
 
+## Bench II Probe Quick Guide
+
+Use `scripts/run_benchmark_v2.py` when you want a reproducible DeepResearch Bench II probe without wiring the official shell scripts by hand.
+
+This section is written for **user-facing reproducibility** rather than internal smoke checks.
+
+### Recommended Commands
+
+```bash
+# 1) Reproducible adapted_env run with fresh generation
+uv run python scripts/run_benchmark_v2.py \
+  --limit 100 \
+  --depth deep \
+  --mode delegate \
+  --target-model houyi \
+  --bench-runtime adapted_env
+
+# 2) Re-score an existing adapted_env raw_data export
+uv run python scripts/run_benchmark_v2.py \
+  --skip-generate \
+  --limit 100 \
+  --target-model houyi \
+  --bench-runtime adapted_env \
+  --raw-data-path benchmark/output/<run>/raw_data/houyi.jsonl
+
+# 3) Official-runtime re-score (only when upstream keys are available)
+uv run python scripts/run_benchmark_v2.py \
+  --skip-generate \
+  --limit 100 \
+  --target-model houyi \
+  --bench-runtime official \
+  --raw-data-path benchmark/output/<run>/raw_data/houyi.jsonl
+```
+
+### Runtime Expectations
+
+- `--limit 100` is a realistic reproducibility setting for users who want a meaningful Bench II readout without committing to a full run.
+- FACT stages can take a long time, especially `fact_scrape` and `fact_validate`; plan for a materially longer wall-clock time than unit or integration checks.
+- If you need the strongest confidence, run the full set instead of a capped sample.
+
+### What To Read After A Probe
+
+| Artifact | Why it matters |
+|---|---|
+| `<output-root>/houyi.summary.json` | Machine-readable run summary: arguments, steps, RACE/FACT aggregate scores, artifact paths |
+| `<output-root>/houyi.bench2.log` | End-to-end stage log with timing and failure context |
+| `<output-root>/fact/houyi/fact_result.txt` | Final FACT aggregate numbers |
+| `<output-root>/race/houyi/race_result.txt` | Final RACE aggregate numbers |
+
+### Interpretation Notes
+
+- `adapted_env` keeps the official stage topology but uses HouYi's local compatibility layer; it is useful for fast local regression and probe comparison.
+- `official` is closer to the public benchmark dependency path, but requires the upstream evaluator keys and should be treated as the stronger leaderboard-facing check.
+- Use `--limit 100` when you want a practical user-facing reproduction command that still controls cost.
+- Use the full set when you need the strongest comparison signal and can afford the additional runtime.
+
 ## README Maintenance Rule
 
 - Add or update this README whenever a script becomes a recommended developer entrypoint, a quality gate wrapper, or a common troubleshooting command.

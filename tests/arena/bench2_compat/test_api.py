@@ -192,6 +192,82 @@ class TestTruncateValidateReference:
         prompt = "No reference tags here"
         assert compat_api._truncate_validate_reference(prompt) == prompt
 
+    def test_extracts_validate_statements(self) -> None:
+        prompt = (
+            "<reference>ref</reference>\n<statements>\n1. First fact\n2. Second fact\n</statements>"
+        )
+        assert compat_api._extract_validate_statements(prompt) == ["First fact", "Second fact"]
+
+    def test_keeps_relevant_segments(self) -> None:
+        noisy = "catalog entry\n" * 900
+        target = "Household consumption dropped by 72% in 2020 according to PPLR analysis.\n" * 20
+        tail = "bibliography\n" * 900
+        ref = noisy + "\n\n" + target + "\n\n" + tail
+        trimmed = compat_api._select_validate_reference(
+            ref, ["Household consumption dropped by 72% in 2020"]
+        )
+        assert len(trimmed) <= compat_api._MAX_VALIDATE_REF_CHARS
+        assert "72%" in trimmed
+        assert "PPLR" in trimmed
+
+    def test_falls_back_head_tail(self) -> None:
+        ref = ("lead\n" * 2500) + ("tail signal\n" * 2500)
+        trimmed = compat_api._select_validate_reference(ref, ["unmatched keyword"])
+        assert len(trimmed) <= compat_api._MAX_VALIDATE_REF_CHARS
+        assert "[... truncated ...]" in trimmed
+        assert trimmed.startswith("lead")
+        assert "tail signal" in trimmed
+
+    def test_salvages_short_unknown(self, monkeypatch) -> None:
+        prompt = (
+            "<reference>Evidence with 72% value and household consumption trend.</reference>\n"
+            "<statements>\n1. Household consumption dropped by 72%.\n</statements>"
+        )
+        responses = iter(
+            [
+                '[{"idx":1,"result":"unknown"}]',
+                '[{"idx":1,"result":"supported"}]',
+            ]
+        )
+        monkeypatch.setattr(compat_api, "_run_chat", lambda *args, **kwargs: next(responses))
+
+        result = compat_api.call_model(prompt)
+
+        assert json.loads(result) == [{"idx": 1, "result": "supported"}]
+
+    def test_skips_salvage_for_truncated(self, monkeypatch) -> None:
+        ref = "x" * 20_000
+        prompt = f"<reference>{ref}</reference>\n<statements>\n1. Fact one\n</statements>"
+        calls = {"count": 0}
+
+        def _run(*args, **kwargs):
+            calls["count"] += 1
+            return '[{"idx":1,"result":"unknown"}]'
+
+        monkeypatch.setattr(compat_api, "_run_chat", _run)
+
+        compat_api.call_model(prompt)
+
+        assert calls["count"] == 1
+
+    def test_skips_salvage_for_supported(self, monkeypatch) -> None:
+        prompt = (
+            "<reference>Evidence with 72% value and household consumption trend.</reference>\n"
+            "<statements>\n1. Household consumption dropped by 72%.\n</statements>"
+        )
+        calls = {"count": 0}
+
+        def _run(*args, **kwargs):
+            calls["count"] += 1
+            return '[{"idx":1,"result":"supported"}]'
+
+        monkeypatch.setattr(compat_api, "_run_chat", _run)
+
+        result = compat_api.call_model(prompt)
+
+        assert json.loads(result) == [{"idx": 1, "result": "supported"}]
+        assert calls["count"] == 1
+
 
 class TestIsInaccessible:
     def test_short_content_flagged(self) -> None:

@@ -1,6 +1,6 @@
 /// <reference types="node" />
 
-import { spawn } from 'child_process';
+import { spawn, spawnSync } from 'child_process';
 import fs from 'fs';
 import http from 'http';
 import os from 'os';
@@ -8,10 +8,14 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 
 const E2E_BACKEND_PORT = Number(process.env.HOUYI_E2E_BACKEND_PORT || '19000');
+const E2E_UI_PORT = Number(process.env.HOUYI_E2E_UI_PORT || '13100');
 const SERVER_URL = `http://127.0.0.1:${E2E_BACKEND_PORT}/`;
+const UI_URL = `http://127.0.0.1:${E2E_UI_PORT}/`;
 const SERVER_PORT = E2E_BACKEND_PORT;
+const UI_PORT = E2E_UI_PORT;
 const PID_FILE = path.join(os.tmpdir(), 'houyi-console-e2e.pid');
 const UV_PID_FILE = path.join(os.tmpdir(), 'houyi-console-e2e-uv.pid');
+const UI_PID_FILE = path.join(os.tmpdir(), 'houyi-console-e2e-ui.pid');
 const SKIP_KILL_PORT = process.env.SKIP_KILL_E2E_PORT === '1';
 const CONFIG_PATH = process.env.HOUYI_E2E_CONFIG;
 
@@ -46,9 +50,9 @@ const loadE2EConfig = (): E2EConfig => {
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-const isServerUp = async (): Promise<boolean> => {
+const isUrlUp = async (url: string): Promise<boolean> => {
   return new Promise((resolve) => {
-    const request = http.get(SERVER_URL, (response: http.IncomingMessage) => {
+    const request = http.get(url, (response: http.IncomingMessage) => {
       response.resume();
       resolve(Boolean(response.statusCode && response.statusCode < 500));
     });
@@ -61,15 +65,22 @@ const isServerUp = async (): Promise<boolean> => {
   });
 };
 
-const waitForServerDown = async (retries = 10, delayMs = 300): Promise<boolean> => {
+const isServerUp = async (): Promise<boolean> => isUrlUp(SERVER_URL);
+
+const isUiUp = async (): Promise<boolean> => isUrlUp(UI_URL);
+
+const waitForUrlDown = async (url: string, retries = 10, delayMs = 300): Promise<boolean> => {
   for (let attempt = 0; attempt < retries; attempt += 1) {
-    if (!(await isServerUp())) {
+    if (!(await isUrlUp(url))) {
       return true;
     }
     await sleep(delayMs);
   }
-  return !(await isServerUp());
+  return !(await isUrlUp(url));
 };
+
+const waitForServerDown = async (retries = 10, delayMs = 300): Promise<boolean> =>
+  waitForUrlDown(SERVER_URL, retries, delayMs);
 
 const tryKillPid = (pid: number, signal: NodeJS.Signals): boolean => {
   try {
@@ -81,42 +92,43 @@ const tryKillPid = (pid: number, signal: NodeJS.Signals): boolean => {
   }
 };
 
+const readListeningPid = (port: number): number | null => {
+  if (process.platform === 'win32') {
+    return null;
+  }
+  const result = spawnSync('lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t'], { encoding: 'utf-8' });
+  if (result.status !== 0 && (result.stdout || '').trim() === '') {
+    return null;
+  }
+  const pid = Number((result.stdout || '').split(/\s+/).map((value) => value.trim()).find(Boolean));
+  return Number.isFinite(pid) ? pid : null;
+};
+
+const readProcessCwd = (pid: number): string | null => {
+  if (process.platform === 'win32') {
+    return null;
+  }
+  const result = spawnSync('lsof', ['-a', '-p', String(pid), '-d', 'cwd', '-Fn'], { encoding: 'utf-8' });
+  if (result.status !== 0) {
+    return null;
+  }
+  const line = (result.stdout || '').split('\n').find((value) => value.startsWith('n'));
+  return line ? line.slice(1).trim() : null;
+};
+
+const readProcessCommand = (pid: number): string => {
+  const result = spawnSync('ps', ['-p', String(pid), '-o', 'command='], { encoding: 'utf-8' });
+  if (result.status !== 0) {
+    return '';
+  }
+  return (result.stdout || '').trim();
+};
+
 export default async function globalSetup(): Promise<void> {
-  if (await isServerUp()) {
-    if (SKIP_KILL_PORT) {
-      console.log(`[E2E] Reusing existing server on 127.0.0.1:${SERVER_PORT} (SKIP_KILL_E2E_PORT=1)`);
-      return;
-    }
-
-    if (fs.existsSync(PID_FILE)) {
-      const pidRaw = fs.readFileSync(PID_FILE, 'utf-8');
-      const pid = Number(pidRaw);
-      if (Number.isFinite(pid)) {
-        tryKillPid(pid, 'SIGTERM');
-      }
-      fs.unlinkSync(PID_FILE);
-      await waitForServerDown();
-    }
-
-    if (await isServerUp()) {
-      throw new Error(
-        `E2E backend port 127.0.0.1:${SERVER_PORT} is already in use by a non-e2e process. `
-        + 'For safety, Playwright setup will not kill arbitrary listeners. '
-        + `Stop that process, choose another HOUYI_E2E_BACKEND_PORT, or set SKIP_KILL_E2E_PORT=1 to reuse it intentionally.`,
-      );
-    }
-  }
-
-  if (fs.existsSync(PID_FILE)) {
-    fs.unlinkSync(PID_FILE);
-  }
-  if (fs.existsSync(UV_PID_FILE)) {
-    fs.unlinkSync(UV_PID_FILE);
-  }
-
   const __filename = fileURLToPath(import.meta.url);
   const __dirname = path.dirname(__filename);
   const repoRoot = path.resolve(__dirname, '../../../../');
+  const uiRoot = path.join(repoRoot, 'houyi-studio', 'ui');
   const config = loadE2EConfig();
   const quietLogs = config.quiet ?? false;
   const logLevel = (config.logLevel ?? (quietLogs ? 'WARNING' : 'INFO')).toUpperCase();
@@ -136,68 +148,179 @@ export default async function globalSetup(): Promise<void> {
   const pythonPath = process.env.PYTHONPATH
     ? `${serverRoot}${path.delimiter}${repoRoot}${path.delimiter}${process.env.PYTHONPATH}`
     : `${serverRoot}${path.delimiter}${repoRoot}`;
+  let reuseBackend = false;
 
-  // CRITICAL: Use isolated data directory for e2e tests to prevent
-  // deleting user data. See acceptance doc §14 for incident report.
-  const e2eDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'houyi-e2e-chat-'));
-  const e2eSettingsPath = path.join(e2eDataDir, 'settings.json');
-  console.log(`[E2E] Using isolated chat data dir: ${e2eDataDir}`);
-  console.log(`[E2E] Starting isolated backend on 127.0.0.1:${SERVER_PORT}`);
-
-  const child = spawn('uv', ['run', 'python', 'tests/integration/fixtures/console_tools.py'], {
-    cwd: repoRoot,
-    stdio: quietLogs ? 'ignore' : 'inherit',
-    env: {
-      ...process.env,
-      PYTHONUNBUFFERED: '1',
-      PYTHONPATH: pythonPath,
-      HOUYI_CHAT_DATA_DIR: e2eDataDir,
-      HOUYI_CHAT_SETTINGS_PATH: e2eSettingsPath,
-      HOUYI_E2E_QUIET: quietLogs ? '1' : '0',
-      HOUYI_E2E_BACKEND_PORT: String(SERVER_PORT),
-      HOUYI_LOG_LEVEL: logLevel,
-      HOUYI_PORT: String(SERVER_PORT),
-      HOUYI_TOOLCALL_MAX_RETRIES: String(toolcallRetries),
-      HOUYI_TOOLCALL_TIMEOUT: String(toolcallTimeout),
-      HOUYI_TOOLCALL_TIMING: toolcallTiming ? '1' : '0',
-      HOUYI_DISABLE_LIVE_WEATHER: disableLiveWeather ? '1' : '0',
-      HOUYI_DISABLE_PLAN_PERSISTENCE: disablePlanPersistence ? '1' : '0',
-      HOUYI_TOOLCALL_ADAPTER: toolcallAdapter,
-      HOUYI_WORKFLOWS_DIR: workflowsDir,
-      ...(toolcallModel ? { HOUYI_TOOLCALL_MODEL: toolcallModel } : {}),
-      ...(toolcallMaxTokens != null ? { HOUYI_TOOLCALL_MAX_TOKENS: String(toolcallMaxTokens) } : {}),
-      ...(parallelToolCalls !== null
-        ? { HOUYI_PARALLEL_TOOL_CALLS: String(parallelToolCalls) }
-        : {}),
-      ...(toolcallToolLatencyMs != null
-        ? { HOUYI_TOOLCALL_TOOL_LATENCY_MS: String(toolcallToolLatencyMs) }
-        : {}),
-      HOUYI_TOOLCALL_FAST_PATH: toolcallFastPath ? '1' : '0',
-    },
-  });
-
-  child.unref();
-
-  if (child.pid) {
-    fs.writeFileSync(UV_PID_FILE, String(child.pid));
-  }
-
-  if (!child.pid) {
-    throw new Error('Failed to start console server process for E2E tests.');
-  }
-
-  for (let attempt = 0; attempt < 40; attempt += 1) {
-    if (await isServerUp()) {
-      return;
+  if (await isServerUp()) {
+    if (SKIP_KILL_PORT) {
+      console.log(`[E2E] Reusing existing server on 127.0.0.1:${SERVER_PORT} (SKIP_KILL_E2E_PORT=1)`);
+      reuseBackend = true;
     }
 
-    if (child.exitCode !== null) {
-      throw new Error('Console server exited before becoming ready.');
+    if (!reuseBackend && fs.existsSync(PID_FILE)) {
+      const pidRaw = fs.readFileSync(PID_FILE, 'utf-8');
+      const pid = Number(pidRaw);
+      if (Number.isFinite(pid)) {
+        tryKillPid(pid, 'SIGTERM');
+      }
+      fs.unlinkSync(PID_FILE);
+      await waitForServerDown();
     }
 
-    await sleep(500);
+    if (!reuseBackend && await isServerUp()) {
+      throw new Error(
+        `E2E backend port 127.0.0.1:${SERVER_PORT} is already in use by a non-e2e process. `
+        + 'For safety, Playwright setup will not kill arbitrary listeners. '
+        + `Stop that process, choose another HOUYI_E2E_BACKEND_PORT, or set SKIP_KILL_E2E_PORT=1 to reuse it intentionally.`,
+      );
+    }
   }
 
-  child.kill('SIGTERM');
-  throw new Error('Console server did not become ready within timeout.');
+  if (!reuseBackend) {
+    if (fs.existsSync(PID_FILE)) {
+      fs.unlinkSync(PID_FILE);
+    }
+    if (fs.existsSync(UV_PID_FILE)) {
+      fs.unlinkSync(UV_PID_FILE);
+    }
+
+    const e2eDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'houyi-e2e-chat-'));
+    const e2eSettingsPath = path.join(e2eDataDir, 'settings.json');
+    console.log(`[E2E] Using isolated chat data dir: ${e2eDataDir}`);
+    console.log(`[E2E] Starting isolated backend on 127.0.0.1:${SERVER_PORT}`);
+
+    const child = spawn('uv', ['run', 'python', 'tests/integration/fixtures/console_tools.py'], {
+      cwd: repoRoot,
+      stdio: quietLogs ? 'ignore' : 'inherit',
+      env: {
+        ...process.env,
+        PYTHONUNBUFFERED: '1',
+        PYTHONPATH: pythonPath,
+        HOUYI_CHAT_DATA_DIR: e2eDataDir,
+        HOUYI_CHAT_SETTINGS_PATH: e2eSettingsPath,
+        HOUYI_E2E_QUIET: quietLogs ? '1' : '0',
+        HOUYI_E2E_BACKEND_PORT: String(SERVER_PORT),
+        HOUYI_LOG_LEVEL: logLevel,
+        HOUYI_PORT: String(SERVER_PORT),
+        HOUYI_TOOLCALL_MAX_RETRIES: String(toolcallRetries),
+        HOUYI_TOOLCALL_TIMEOUT: String(toolcallTimeout),
+        HOUYI_TOOLCALL_TIMING: toolcallTiming ? '1' : '0',
+        HOUYI_DISABLE_LIVE_WEATHER: disableLiveWeather ? '1' : '0',
+        HOUYI_DISABLE_PLAN_PERSISTENCE: disablePlanPersistence ? '1' : '0',
+        HOUYI_TOOLCALL_ADAPTER: toolcallAdapter,
+        HOUYI_WORKFLOWS_DIR: workflowsDir,
+        ...(toolcallModel ? { HOUYI_TOOLCALL_MODEL: toolcallModel } : {}),
+        ...(toolcallMaxTokens != null ? { HOUYI_TOOLCALL_MAX_TOKENS: String(toolcallMaxTokens) } : {}),
+        ...(parallelToolCalls !== null
+          ? { HOUYI_PARALLEL_TOOL_CALLS: String(parallelToolCalls) }
+          : {}),
+        ...(toolcallToolLatencyMs != null
+          ? { HOUYI_TOOLCALL_TOOL_LATENCY_MS: String(toolcallToolLatencyMs) }
+          : {}),
+        HOUYI_TOOLCALL_FAST_PATH: toolcallFastPath ? '1' : '0',
+      },
+    });
+
+    child.unref();
+
+    if (child.pid) {
+      fs.writeFileSync(UV_PID_FILE, String(child.pid));
+    }
+
+    if (!child.pid) {
+      throw new Error('Failed to start console server process for E2E tests.');
+    }
+
+    let backendReady = false;
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      if (await isServerUp()) {
+        backendReady = true;
+        break;
+      }
+
+      if (child.exitCode !== null) {
+        throw new Error('Console server exited before becoming ready.');
+      }
+
+      await sleep(500);
+    }
+
+    if (!backendReady) {
+      child.kill('SIGTERM');
+      throw new Error('Console server did not become ready within timeout.');
+    }
+  }
+
+  let reuseUi = false;
+  if (await isUiUp()) {
+    if (fs.existsSync(UI_PID_FILE)) {
+      console.log(`[E2E] Reusing managed UI server on 127.0.0.1:${UI_PORT}`);
+      reuseUi = true;
+    } else {
+      const listenerPid = readListeningPid(UI_PORT);
+      const listenerCwd = listenerPid === null ? null : readProcessCwd(listenerPid);
+      const listenerCommand = listenerPid === null ? '' : readProcessCommand(listenerPid);
+      if (
+        listenerPid !== null
+        && listenerCwd === uiRoot
+        && listenerCommand.includes('vite')
+        && listenerCommand.includes(`--port ${UI_PORT}`)
+      ) {
+        fs.writeFileSync(UI_PID_FILE, String(listenerPid));
+        console.log(`[E2E] Adopted existing UI server on 127.0.0.1:${UI_PORT} from ${uiRoot}`);
+        reuseUi = true;
+      }
+    }
+
+    if (!reuseUi) {
+      throw new Error(
+        `E2E UI port 127.0.0.1:${UI_PORT} is already in use by a non-e2e process. `
+        + 'For safety, Playwright setup will not kill arbitrary listeners. '
+        + 'Stop that process or choose another HOUYI_E2E_UI_PORT.',
+      );
+    }
+  }
+
+  if (!reuseUi) {
+    if (fs.existsSync(UI_PID_FILE)) {
+      fs.unlinkSync(UI_PID_FILE);
+    }
+
+    const uiChild = spawn('pnpm', ['exec', 'vite', '--host', '127.0.0.1', '--port', String(UI_PORT), '--strictPort'], {
+      cwd: uiRoot,
+      stdio: quietLogs ? 'ignore' : 'inherit',
+      env: {
+        ...process.env,
+        HOUYI_PORT: String(SERVER_PORT),
+        HOUYI_UI_PORT: String(UI_PORT),
+        HOUYI_E2E_BACKEND_PORT: String(SERVER_PORT),
+        HOUYI_E2E_UI_PORT: String(UI_PORT),
+        VITE_WS_HOST: `127.0.0.1:${SERVER_PORT}`,
+      },
+    });
+
+    uiChild.unref();
+
+    if (uiChild.pid) {
+      fs.writeFileSync(UI_PID_FILE, String(uiChild.pid));
+    }
+
+    if (!uiChild.pid) {
+      throw new Error('Failed to start UI server for E2E tests.');
+    }
+
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      if (await isUiUp()) {
+        return;
+      }
+
+      if (uiChild.exitCode !== null) {
+        throw new Error('UI server exited before becoming ready.');
+      }
+
+      await sleep(500);
+    }
+
+    uiChild.kill('SIGTERM');
+    throw new Error('UI server did not become ready within timeout.');
+  }
 }
