@@ -153,7 +153,31 @@ class TestReportToArticle:
         assert "[Source 1](https://example.com)" in article
         assert "## References" in article
 
-    def test_falls_back_to_reference_id_when_title_missing(self):
+    def test_strips_orphan_refs(self):
+        report = MagicMock()
+        report.title = "Test"
+        report.summary = ""
+
+        ref = MagicMock()
+        ref.reference_id = "ref_aaa"
+        ref.url = "https://a.example"
+        ref.title = "A"
+        report.references = [ref]
+
+        section = MagicMock()
+        section.title = "S1"
+        section.content = "Known [ref_aaa] and orphan [ref_bbb123] token."
+        cit = MagicMock()
+        cit.reference_id = "ref_aaa"
+        section.citations = [cit]
+        report.sections = [section]
+
+        article = _report_to_article(report)
+        assert "[A](https://a.example)" in article
+        assert "[ref_bbb123]" not in article
+        assert "orphan  token." in article
+
+    def test_uses_id_without_title(self):
         report = MagicMock()
         report.title = "Test Report"
         report.summary = ""

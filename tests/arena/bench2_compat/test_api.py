@@ -167,6 +167,32 @@ def test_falls_back_on_error(monkeypatch) -> None:
     assert result == "[]"
 
 
+class TestTruncateValidateReference:
+    def test_truncates_large_reference(self) -> None:
+        big_ref = "x" * 20_000
+        prompt = f"<reference>{big_ref}</reference>\n<statements>1. fact</statements>"
+        result = compat_api._truncate_validate_reference(prompt)
+        assert len(result) < len(prompt)
+        assert "<reference>" in result
+        assert "</reference>" in result
+        assert "[... truncated ...]" in result
+        # Verify the content between tags is <= limit + truncation marker
+        import re
+
+        match = re.search(r"<reference>(.*?)</reference>", result, re.DOTALL)
+        assert match is not None
+        assert len(match.group(1)) <= compat_api._MAX_VALIDATE_REF_CHARS + 50
+
+    def test_preserves_short_reference(self) -> None:
+        short_ref = "Short content"
+        prompt = f"<reference>{short_ref}</reference>\n<statements>1. fact</statements>"
+        assert compat_api._truncate_validate_reference(prompt) == prompt
+
+    def test_no_reference_tags(self) -> None:
+        prompt = "No reference tags here"
+        assert compat_api._truncate_validate_reference(prompt) == prompt
+
+
 class TestIsInaccessible:
     def test_short_content_flagged(self) -> None:
         assert compat_api._is_inaccessible("too short") is True

@@ -35,6 +35,7 @@ from typing import Any, Protocol
 from houyi.arena.bench2_compat import api as bench2_compat_api
 from houyi.arena.bench2_compat import extract as bench2_compat_extract
 from houyi.arena.bench2_compat import stat as bench2_compat_stat
+from houyi.arena.bench2_compat import validate as bench2_compat_validate
 
 
 class SubprocessRunner(Protocol):
@@ -476,6 +477,7 @@ class Bench2SidecarRunner:
             shutil.rmtree(stale_results_dir)
         self._copy_compat_module(bench2_compat_api, compat_root / "utils" / "api.py")
         self._copy_compat_module(bench2_compat_extract, compat_root / "utils" / "extract.py")
+        self._copy_compat_module(bench2_compat_validate, compat_root / "utils" / "validate.py")
         self._copy_compat_module(bench2_compat_stat, compat_root / "utils" / "stat.py")
         return compat_root
 

@@ -98,6 +98,7 @@ class TestBench2SidecarRunner:
 
         assert workspace.repo_root == output_root / "_bench2_compat"
         assert (workspace.repo_root / "utils" / "api.py").exists()
+        assert (workspace.repo_root / "utils" / "validate.py").exists()
         assert (workspace.repo_root / "utils" / "stat.py").exists()
 
     def test_clears_stale_results(self, tmp_path: Path) -> None:

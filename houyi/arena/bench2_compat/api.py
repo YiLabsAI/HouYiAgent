@@ -47,6 +47,14 @@ _MIN_ACCESSIBLE_CONTENT_LEN = 300
 _LINK_PATTERN = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
 _SENTENCE_BREAKS = ".!?\n"
 _NUMBERED_STMT_RE = re.compile(r"^\s*(\d+)\.\s+(.+\S)\s*$")
+# Validate prompts include full scraped page content as <reference>.  Huge pages
+# (50-100K chars) blow past the model context window and cause repeated timeout /
+# parse-error retries that stall the entire FACT pipeline.  Truncate the reference
+# portion to a size that fits comfortably in a 32K-token context (≈15K Chinese
+# chars ≈ 5K tokens of headroom for prompt + facts + output).
+_MAX_VALIDATE_REF_CHARS = 15_000
+_VALIDATE_REF_OPEN = "<reference>"
+_VALIDATE_REF_CLOSE = "</reference>"
 
 
 def _resolve_provider() -> str:
@@ -117,6 +125,20 @@ class AIClient:
         return _run_chat(user_prompt, system_prompt=system_prompt, model=model or self.model)
 
 
+def _truncate_validate_reference(prompt: str) -> str:
+    """Truncate the <reference> block in a validate prompt to prevent context overflow."""
+    open_idx = prompt.find(_VALIDATE_REF_OPEN)
+    close_idx = prompt.find(_VALIDATE_REF_CLOSE)
+    if open_idx < 0 or close_idx < 0 or close_idx <= open_idx:
+        return prompt
+    ref_start = open_idx + len(_VALIDATE_REF_OPEN)
+    ref_content = prompt[ref_start:close_idx]
+    if len(ref_content) <= _MAX_VALIDATE_REF_CHARS:
+        return prompt
+    truncated = ref_content[:_MAX_VALIDATE_REF_CHARS] + "\n[... truncated ...]"
+    return prompt[:ref_start] + truncated + prompt[close_idx:]
+
+
 def call_model(user_prompt: str) -> str:
     extracted = _extract_inline_citations(user_prompt)
     if extracted is not None:
@@ -126,6 +148,7 @@ def call_model(user_prompt: str) -> str:
     if deduped is not None:
         return deduped
 
+    prompt = _truncate_validate_reference(user_prompt)
     model = os.getenv(_FACT_MODEL_ENV)
     max_tokens = _env_int(_FACT_MAX_TOKENS_ENV, _DEFAULT_FACT_MAX_TOKENS)
     retries = _env_int(_FACT_MAX_RETRIES_ENV, _DEFAULT_FACT_CALL_RETRIES)
@@ -133,7 +156,7 @@ def call_model(user_prompt: str) -> str:
     for _ in range(retries):
         try:
             raw = _run_chat(
-                user_prompt,
+                prompt,
                 model=model,
                 max_tokens=max_tokens,
                 timeout_seconds=timeout_seconds,

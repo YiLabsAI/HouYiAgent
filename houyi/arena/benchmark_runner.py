@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -258,6 +259,7 @@ def _report_to_article(report: Any) -> str:
                     f"[{cit.reference_id}]",
                     f"[{label}]({url})",
                 )
+        content = re.sub(r"\[ref_[a-f0-9]+\](?!\()", "", content)
         parts.append(content)
         parts.append("")
 
