@@ -83,6 +83,7 @@ class ReportPipeline:
         self._intermediate_gen = intermediate_gen
         self._web_search = web_search
         self._emit = emit
+        self._repair_query_sem = asyncio.Semaphore(_REPAIR_QUERY_CONCURRENCY)
 
     async def _generate_pending_intermediates(
         self,
@@ -299,34 +300,9 @@ class ReportPipeline:
         timings["report_generate_ms"] = (time.perf_counter() - t) * 1000.0
         timings["report_sections_ms"] = gen_timings.get("report_sections_ms", 0.0)
         timings["report_summary_ms"] = gen_timings.get("report_summary_ms", 0.0)
-        timing_budget = self._record_budget_timings(gen_timings, settings, timings)
-        await self._emit_report_sections(report)
+        timing_budget = _record_budget_timings(gen_timings, settings, timings)
+        await _emit_report_sections(self._emit, report)
         return report, timing_budget
-
-    async def _emit_report_sections(self, report: ResearchReport) -> None:
-        for section in report.sections:
-            await self._emit(
-                "research.report_section",
-                chunk={
-                    "section_id": section.section_id,
-                    "title": section.title,
-                    "citations": len(section.citations),
-                },
-            )
-
-    def _record_budget_timings(
-        self,
-        gen_timings: dict[str, Any],
-        settings: ResearchSettings,
-        timings: dict[str, float],
-    ) -> dict[str, Any]:
-        section_input_metrics = gen_timings.get("section_input_metrics", [])
-        timing_budget = _timing_budget(section_input_metrics, settings)
-        validation_titles = timing_budget["validation_titles"] or set()
-        timings["validation_target_sections"] = float(len(validation_titles))
-        timings["repair_budget_sections"] = float(timing_budget["repair_limit"])
-        timings["quality_budget_mode"] = 1.0 if timing_budget["quality_compact"] else 0.0
-        return timing_budget
 
     async def _run_validation_phase(
         self,
@@ -380,7 +356,7 @@ class ReportPipeline:
             timings,
         )
         t = time.perf_counter()
-        await self._repair_weak_sections(
+        repair_metrics = await self._repair_weak_sections(
             validation,
             report,
             plan,
@@ -388,6 +364,9 @@ class ReportPipeline:
             limit=timing_budget["repair_limit"],
         )
         timings["repair_ms"] = (time.perf_counter() - t) * 1000.0
+        timings["repair_query_ms"] = repair_metrics["repair_query_ms"]
+        timings["repair_extra_source_count"] = float(repair_metrics["repair_extra_source_count"])
+        timings["repair_section_count"] = float(repair_metrics["repair_section_count"])
         return True
 
     async def _run_pre_repair_quality(
@@ -630,7 +609,7 @@ class ReportPipeline:
         aggregated: AggregatedSources,
         *,
         limit: int = _MAX_REPAIR_SECTIONS,
-    ) -> None:
+    ) -> dict[str, float | int]:
         """Rewrite low-quality sections concurrently using bounded parallelism.
 
         Strategy:
@@ -644,12 +623,13 @@ class ReportPipeline:
         """
         sections_to_repair = self._collect_sections_to_repair(validation, report, plan, limit=limit)
         if not sections_to_repair:
-            return
+            return {
+                "repair_query_ms": 0.0,
+                "repair_extra_source_count": 0,
+                "repair_section_count": 0,
+            }
 
         section_semaphore = asyncio.Semaphore(_REPAIR_SECTION_CONCURRENCY)
-        # Global query semaphore shared across all repair sections to enforce
-        # cross-section budget constraint.
-        query_semaphore = asyncio.Semaphore(_REPAIR_QUERY_CONCURRENCY)
         tasks = [
             self._rewrite_single_section(
                 index=index,
@@ -658,26 +638,35 @@ class ReportPipeline:
                 plan_query=plan.query,
                 aggregated=aggregated,
                 section_semaphore=section_semaphore,
-                query_semaphore=query_semaphore,
+                query_semaphore=self._repair_query_sem,
             )
             for index, section_validation, outline_section in sections_to_repair
         ]
         repaired_sections = await asyncio.gather(*tasks)
 
         repaired = 0
+        repair_query_ms = 0.0
+        repair_extra_source_count = 0
         for item in repaired_sections:
             if item is None:
                 continue
-            index, new_section = item
+            index, new_section, query_ms, extra_source_count = item
             if 0 <= index < len(report.sections):
                 report.sections[index] = new_section
                 repaired += 1
+            repair_query_ms += query_ms
+            repair_extra_source_count += extra_source_count
 
         if repaired:
             await self._emit(
                 "research.sections_repaired",
                 repaired_count=repaired,
             )
+        return {
+            "repair_query_ms": repair_query_ms,
+            "repair_extra_source_count": repair_extra_source_count,
+            "repair_section_count": len(sections_to_repair),
+        }
 
     def _collect_sections_to_repair(
         self,
@@ -728,7 +717,7 @@ class ReportPipeline:
         aggregated: AggregatedSources,
         section_semaphore: asyncio.Semaphore,
         query_semaphore: asyncio.Semaphore,
-    ) -> tuple[int, Any] | None:
+    ) -> tuple[int, Any, float, int] | None:
         """Rewrite one section under semaphore guard.
 
         Acquires the section_semaphore before calling the LLM to enforce the
@@ -738,7 +727,7 @@ class ReportPipeline:
         can apply results atomically without partial mutations.
         """
         try:
-            repair_sources = await self._gather_repair_sources(
+            repair_sources, query_ms, extra_source_count = await self._gather_repair_sources(
                 section_validation,
                 outline_section,
                 aggregated,
@@ -752,7 +741,7 @@ class ReportPipeline:
                     repair_sources,
                     intermediate_context="",
                 )
-            return index, new_section
+            return index, new_section, query_ms, extra_source_count
         except Exception:
             logger.warning("Repair failed for section %s", section_validation.title, exc_info=True)
             return None
@@ -763,7 +752,7 @@ class ReportPipeline:
         outline_section: Any,
         aggregated: AggregatedSources,
         query_semaphore: asyncio.Semaphore,
-    ) -> list[SourceReference]:
+    ) -> tuple[list[SourceReference], float, int]:
         """Assemble source material for a section rewrite.
 
         We intentionally reuse the same section-targeted ranking strategy as
@@ -773,19 +762,22 @@ class ReportPipeline:
         even regress. Targeted evidence is both faster and easier to repair well.
         """
         repair_sources = list(aggregated.sources)
+        repair_query_ms = 0.0
+        repair_extra_source_count = 0
         if (
             hasattr(section_validation, "suggested_queries")
             and section_validation.suggested_queries
         ):
-            extra = await self._search_extra_sources_for_repair(
+            extra, repair_query_ms = await self._search_extra_sources_for_repair(
                 section_validation.suggested_queries,
                 query_semaphore,
             )
             if extra:
                 repair_sources.extend(extra)
+                repair_extra_source_count = len(extra)
         selector = getattr(self._reporter, "select_section_sources", None)
         if selector is None:
-            return repair_sources[:20]
+            return repair_sources[:20], repair_query_ms, repair_extra_source_count
         selected = selector(
             outline_section.related_question_ids,
             AggregatedSources(
@@ -797,15 +789,19 @@ class ReportPipeline:
             section_title=outline_section.title,
             objective=outline_section.objective,
         )
-        if isinstance(selected, tuple) and len(selected) == 2:
-            return list(selected[0])
-        return list(selected) if selected else repair_sources[:20]
+        if isinstance(selected, tuple) and len(selected) >= 2:
+            return list(selected[0]), repair_query_ms, repair_extra_source_count
+        return (
+            list(selected) if selected else repair_sources[:20],
+            repair_query_ms,
+            repair_extra_source_count,
+        )
 
     async def _search_extra_sources_for_repair(
         self,
         queries: list[str],
         query_semaphore: asyncio.Semaphore | None = None,
-    ) -> list[SourceReference]:
+    ) -> tuple[list[SourceReference], float]:
         """Fetch additional sources for repair via web search.
 
         Bounded to 2 queries and 3 results per query to keep latency
@@ -815,14 +811,10 @@ class ReportPipeline:
         """
         bounded_queries = queries[:2]
         if not bounded_queries:
-            return []
+            return [], 0.0
 
-        # Use provided semaphore (global budget) or create local one
-        semaphore = (
-            query_semaphore
-            if query_semaphore is not None
-            else asyncio.Semaphore(_REPAIR_QUERY_CONCURRENCY)
-        )
+        semaphore = query_semaphore if query_semaphore is not None else self._repair_query_sem
+        t0 = time.perf_counter()
 
         async def _search_one(query: str) -> list[SourceReference]:
             try:
@@ -847,7 +839,9 @@ class ReportPipeline:
                 return []
 
         extra_groups = await asyncio.gather(*[_search_one(query) for query in bounded_queries])
-        return [source for group in extra_groups for source in group]
+        return [source for group in extra_groups for source in group], (
+            time.perf_counter() - t0
+        ) * 1000.0
 
 
 def _build_pipeline_result(
@@ -873,6 +867,32 @@ def _build_pipeline_result(
         conflicts=conflicts,
         phase_timings_ms=rounded_timings,
     )
+
+
+async def _emit_report_sections(emit: EmitFn, report: ResearchReport) -> None:
+    for section in report.sections:
+        await emit(
+            "research.report_section",
+            chunk={
+                "section_id": section.section_id,
+                "title": section.title,
+                "citations": len(section.citations),
+            },
+        )
+
+
+def _record_budget_timings(
+    gen_timings: dict[str, Any],
+    settings: ResearchSettings,
+    timings: dict[str, float],
+) -> dict[str, Any]:
+    section_input_metrics = gen_timings.get("section_input_metrics", [])
+    timing_budget = _timing_budget(section_input_metrics, settings)
+    validation_titles = timing_budget["validation_titles"] or set()
+    timings["validation_target_sections"] = float(len(validation_titles))
+    timings["repair_budget_sections"] = float(timing_budget["repair_limit"])
+    timings["quality_budget_mode"] = 1.0 if timing_budget["quality_compact"] else 0.0
+    return timing_budget
 
 
 def _select_intermediate_targets(

@@ -440,6 +440,10 @@ class TestPipelineRuntime:
         assert result.phase_timings_ms["quality_fact_ms"] == 22.0
         assert result.phase_timings_ms["quality_eval_total_ms"] == 43.0
         assert result.phase_timings_ms["quality_score"] == 88.0
+        assert result.phase_timings_ms["repair_ms"] >= 0
+        assert result.phase_timings_ms["repair_query_ms"] == 0.0
+        assert result.phase_timings_ms["repair_extra_source_count"] == 0.0
+        assert result.phase_timings_ms["repair_section_count"] == 1.0
 
     async def test_pre_post_repair(self) -> None:
         pipe = _pipeline(IntermediateReportGenerator(MockLLM(responses=[_IR_JSON])))
@@ -707,7 +711,7 @@ class TestPipelineRuntime:
         pipe._web_search.search = AsyncMock(side_effect=_blocking_search)
 
         gate = asyncio.create_task(_release_when_parallel_started())
-        sources = await asyncio.wait_for(
+        sources, elapsed_ms = await asyncio.wait_for(
             pipe._search_extra_sources_for_repair(["q1", "q2"]),
             timeout=0.5,
         )
@@ -715,6 +719,7 @@ class TestPipelineRuntime:
 
         assert both_started.is_set()
         assert len(sources) == 2
+        assert elapsed_ms >= 0.0
         assert {source.title for source in sources} == {"Title q1", "Title q2"}
 
     async def test_repair_search_skips_failed(self) -> None:
@@ -735,9 +740,10 @@ class TestPipelineRuntime:
 
         pipe._web_search.search = AsyncMock(side_effect=_search)
 
-        sources = await pipe._search_extra_sources_for_repair(["bad", "good"])
+        sources, elapsed_ms = await pipe._search_extra_sources_for_repair(["bad", "good"])
 
         assert len(sources) == 1
+        assert elapsed_ms >= 0.0
         assert sources[0].title == "Good"
 
     async def test_run_skips_pre_quality(self) -> None:

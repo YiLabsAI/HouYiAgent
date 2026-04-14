@@ -33,6 +33,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from houyi.arena.bench2_compat import api as bench2_compat_api
+from houyi.arena.bench2_compat import clean_article as bench2_compat_clean_article
 from houyi.arena.bench2_compat import extract as bench2_compat_extract
 from houyi.arena.bench2_compat import stat as bench2_compat_stat
 from houyi.arena.bench2_compat import validate as bench2_compat_validate
@@ -89,7 +90,7 @@ class Bench2Workspace:
         }
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass
 class Bench2Command:
     name: str
     argv: tuple[str, ...]
@@ -101,12 +102,19 @@ class Bench2RunSummary:
     executed_steps: list[str] = field(default_factory=list)
     race_scores: dict[str, float] = field(default_factory=dict)
     fact_scores: dict[str, float] = field(default_factory=dict)
+    leaderboard_scores: dict[str, float] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
+        leaderboard_scores = (
+            dict(self.leaderboard_scores)
+            if self.leaderboard_scores
+            else _to_leaderboard_scores(self.race_scores, self.fact_scores)
+        )
         return {
             "executed_steps": list(self.executed_steps),
             "race_scores": dict(self.race_scores),
             "fact_scores": dict(self.fact_scores),
+            "leaderboard_scores": leaderboard_scores,
             "artifacts": self.workspace.artifact_paths(),
         }
 
@@ -226,11 +234,14 @@ class Bench2SidecarRunner:
             self._run_command(command, workspace.repo_root, workspace.log_path)
             executed_steps.append(command.name)
 
+        race_scores = _parse_score_file(workspace.race_output_dir / "race_result.txt")
+        fact_scores = _parse_score_file(workspace.fact_output_dir / "fact_result.txt")
         return Bench2RunSummary(
             workspace=workspace,
             executed_steps=executed_steps,
-            race_scores=_parse_score_file(workspace.race_output_dir / "race_result.txt"),
-            fact_scores=_parse_score_file(workspace.fact_output_dir / "fact_result.txt"),
+            race_scores=race_scores,
+            fact_scores=fact_scores,
+            leaderboard_scores=_to_leaderboard_scores(race_scores, fact_scores),
         )
 
     def prepare_workspace(self, config: Bench2SidecarConfig) -> Bench2Workspace:
@@ -476,6 +487,9 @@ class Bench2SidecarRunner:
         if stale_results_dir.exists():
             shutil.rmtree(stale_results_dir)
         self._copy_compat_module(bench2_compat_api, compat_root / "utils" / "api.py")
+        self._copy_compat_module(
+            bench2_compat_clean_article, compat_root / "utils" / "clean_article.py"
+        )
         self._copy_compat_module(bench2_compat_extract, compat_root / "utils" / "extract.py")
         self._copy_compat_module(bench2_compat_validate, compat_root / "utils" / "validate.py")
         self._copy_compat_module(bench2_compat_stat, compat_root / "utils" / "stat.py")
@@ -532,3 +546,34 @@ def _parse_score_file(path: Path) -> dict[str, float]:
         except ValueError:
             continue
     return scores
+
+
+def _to_leaderboard_scores(
+    race_scores: dict[str, float],
+    fact_scores: dict[str, float],
+) -> dict[str, float]:
+    """Project raw Bench II sidecar scores into leaderboard-facing units."""
+
+    projected: dict[str, float] = {}
+    race_mapping = {
+        "overall": "Overall Score",
+        "comp": "Comprehensiveness",
+        "insight": "Insight",
+        "inst": "Instruction Following",
+        "read": "Readability",
+    }
+    for output_key, raw_key in race_mapping.items():
+        value = race_scores.get(raw_key)
+        if value is None:
+            continue
+        projected[output_key] = round(value * 100, 2)
+
+    citation_accuracy = fact_scores.get("valid_rate")
+    if citation_accuracy is not None:
+        projected["c_acc"] = round(citation_accuracy * 100, 2)
+
+    effective_citations = fact_scores.get("total_valid_citations")
+    if effective_citations is not None:
+        projected["eff_c"] = round(effective_citations, 4)
+
+    return projected

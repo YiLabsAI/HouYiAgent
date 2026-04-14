@@ -4,7 +4,9 @@ import argparse
 import contextlib
 import json
 import multiprocessing
+import os
 import platform
+import re
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -69,6 +71,8 @@ Begin the assessment now. Output only the JSON list, without any conversational 
 
 
 _ALLOWED_RESULTS = {"supported", "unsupported", "unknown"}
+_REFERENCE_MAX_CHARS = 6000
+_WORKER_ENV = "BENCH2_VALIDATE_TOTAL_PROCESS"
 
 
 def _load_jsonl(path: str | Path) -> list[dict[str, Any]]:
@@ -124,6 +128,23 @@ def _build_prompt(ref: str, facts: list[str], lang: str) -> str:
     raise ValueError(f"Unsupported language: {lang}")
 
 
+def _normalize_reference(ref: str) -> str:
+    compact = re.sub(r"\s+", " ", ref).strip()
+    return compact[:_REFERENCE_MAX_CHARS]
+
+
+def _resolve_worker_count(n_total_process: int) -> int:
+    if n_total_process > 0:
+        return n_total_process
+    env_value = os.getenv(_WORKER_ENV, "").strip()
+    if not env_value:
+        return 1
+    try:
+        return max(1, int(env_value))
+    except ValueError:
+        return 1
+
+
 def validate(
     data: tuple[str, dict[str, Any]], id_to_lang_map: dict[str, str | None]
 ) -> dict[str, Any]:
@@ -136,6 +157,8 @@ def validate(
 
     if not ref or not article_id:
         return {"url": url, "validate_res": fallback, "error": None}
+    if not facts:
+        return {"url": url, "validate_res": fallback, "error": None}
     if _is_inaccessible(ref):
         return {"url": url, "validate_res": fallback, "error": None}
 
@@ -144,7 +167,7 @@ def validate(
         return {"url": url, "validate_res": fallback, "error": None}
 
     try:
-        response = call_model(_build_prompt(ref, facts, lang))
+        response = call_model(_build_prompt(_normalize_reference(ref), facts, lang))
     except Exception:
         return {"url": url, "validate_res": fallback, "error": None}
 
@@ -165,6 +188,7 @@ def run_validation(
     if not id_to_lang_map:
         raise ValueError("No valid language information found in query data")
 
+    worker_count = _resolve_worker_count(n_total_process)
     if output.exists():
         processed = {d["id"] for d in _load_jsonl(output) if "id" in d}
         data_to_process = [d for d in raw_data if d.get("id") not in processed]
@@ -182,7 +206,7 @@ def run_validation(
         for citation in citations:
             citation[1]["article_id"] = article_id
 
-        if n_total_process == 1:
+        if worker_count == 1:
             results = []
             total = len(citations)
             for index, citation in enumerate(citations, start=1):
@@ -190,7 +214,7 @@ def run_validation(
                 results.append(validate(citation, id_to_lang_map))
         else:
             run_partial = partial(validate, id_to_lang_map=id_to_lang_map)
-            with multiprocessing.Pool(processes=n_total_process) as pool:
+            with multiprocessing.Pool(processes=worker_count) as pool:
                 results = pool.map(run_partial, citations)
 
         for res in results:

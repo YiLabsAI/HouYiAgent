@@ -76,6 +76,27 @@ def _resolve_summary_path(args: argparse.Namespace) -> Path:
     return output_root / f"{args.target_model}.summary.json"
 
 
+def _format_leaderboard_scores(scores: dict[str, float]) -> list[str]:
+    """Render leaderboard-aligned Bench II scores in a fixed, human-readable order."""
+
+    display_order = [
+        ("overall", "overall"),
+        ("comp", "comp"),
+        ("insight", "insight"),
+        ("inst", "inst"),
+        ("read", "read"),
+        ("c_acc", "c.acc"),
+        ("eff_c", "eff.c"),
+    ]
+    rendered: list[str] = []
+    for key, label in display_order:
+        if key not in scores:
+            continue
+        value = scores[key]
+        rendered.append(f"{label}={value:.2f}")
+    return rendered
+
+
 def _stale_output_artifacts(output_root: Path, target_model: str) -> list[Path]:
     candidates = [
         output_root / "raw_data" / f"{target_model}.jsonl",
@@ -227,6 +248,10 @@ async def main(args: argparse.Namespace) -> None:
         print("  FACT:")
         for key, value in sidecar_summary.fact_scores.items():
             print(f"    - {key}: {value:.4f}")
+    if sidecar_summary.leaderboard_scores:
+        print("  Leaderboard:")
+        for item in _format_leaderboard_scores(sidecar_summary.leaderboard_scores):
+            print(f"    - {item}")
     payload = build_bench2_summary_payload(
         context=Bench2ExecutionContext(
             target_model=args.target_model,

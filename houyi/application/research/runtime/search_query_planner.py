@@ -132,12 +132,13 @@ def _ensure_bilingual_queries(
     question: str,
     user_query: str,
 ) -> tuple[list[str], dict[str, Any]]:
-    original = [query.strip() for query in queries if query.strip()]
+    original = [_normalize_query_text(query) for query in queries if _normalize_query_text(query)]
     if not original:
         return [], {
             "bilingual_expected": False,
             "language_mix": [],
             "bilingual_fallback_applied": False,
+            "query_role_mix": [],
         }
     expects_bilingual = _contains_cjk(question) or _contains_cjk(user_query)
     if not expects_bilingual:
@@ -145,6 +146,7 @@ def _ensure_bilingual_queries(
             "bilingual_expected": False,
             "language_mix": [_query_language(query) for query in original],
             "bilingual_fallback_applied": False,
+            "query_role_mix": [_query_role(query) for query in original],
         }
     has_english = any(_query_language(query) == "en" for query in original)
     has_original = any(_query_language(query) == "non_en" for query in original)
@@ -156,8 +158,9 @@ def _ensure_bilingual_queries(
     if not has_english:
         english_seed = _extract_ascii_terms(question) or _extract_ascii_terms(user_query)
         if english_seed:
-            finalized.append(english_seed)
+            finalized.append(_strengthen_english_query(english_seed))
             fallback_applied = True
+    finalized = [_strengthen_query_roles(query) for query in finalized]
     deduped: list[str] = []
     seen: set[str] = set()
     for query in finalized:
@@ -170,6 +173,7 @@ def _ensure_bilingual_queries(
         "bilingual_expected": True,
         "language_mix": [_query_language(query) for query in deduped],
         "bilingual_fallback_applied": fallback_applied,
+        "query_role_mix": [_query_role(query) for query in deduped],
     }
 
 
@@ -179,6 +183,37 @@ def _contains_cjk(text: str) -> bool:
 
 def _query_language(query: str) -> str:
     return "non_en" if _contains_cjk(query) else "en"
+
+
+def _normalize_query_text(query: str) -> str:
+    return " ".join(query.strip().split())
+
+
+def _strengthen_query_roles(query: str) -> str:
+    if _query_language(query) != "en":
+        return query
+    return _strengthen_english_query(query)
+
+
+def _strengthen_english_query(query: str) -> str:
+    lowered = query.lower()
+    if any(
+        marker in lowered
+        for marker in ("benchmark", "official", "report", "paper", "dataset", "documentation")
+    ):
+        return query
+    return f"{query} official report"
+
+
+def _query_role(query: str) -> str:
+    if _query_language(query) != "en":
+        return "native_local"
+    lowered = query.lower()
+    if "benchmark" in lowered or "dataset" in lowered:
+        return "english_benchmark"
+    if any(marker in lowered for marker in ("official", "report", "paper", "documentation")):
+        return "english_official"
+    return "english_general"
 
 
 def _extract_ascii_terms(text: str) -> str:

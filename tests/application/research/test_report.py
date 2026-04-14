@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from houyi.application.research.report import ReportGenerator
+from houyi.application.research.report import ReportGenerator, SectionEvidencePolicy
 from houyi.application.research.types import (
     AggregatedSources,
     OutlineSection,
@@ -126,7 +126,14 @@ class TestBoundaryAndInteraction:
         )
 
         llm = MockLLM(responses=[])
-        gen = ReportGenerator(llm)
+        gen = ReportGenerator(
+            llm,
+            section_evidence_policy=SectionEvidencePolicy(
+                candidate_pool_size=10,
+                min_domain_diversity=3,
+                require_content_usable=True,
+            ),
+        )
         many_sources = AggregatedSources(
             sources=[
                 SourceReference(
@@ -135,6 +142,27 @@ class TestBoundaryAndInteraction:
                     title="Official Annual Report 2026",
                     snippet="official growth statistics and middle class income data",
                     reliability_score=0.95,
+                ),
+                SourceReference(
+                    reference_id="ref_peer",
+                    url="https://research.example.com/compare",
+                    title="Comparison Research 2026",
+                    snippet="detailed comparison analysis across providers and cost structures",
+                    reliability_score=0.72,
+                ),
+                SourceReference(
+                    reference_id="ref_news",
+                    url="https://news.example.org/latest",
+                    title="Latest Market Update",
+                    snippet="recent market update with industry context and trend details",
+                    reliability_score=0.68,
+                ),
+                SourceReference(
+                    reference_id="ref_thin",
+                    url="https://official.example.com/login",
+                    title="Official Login Required",
+                    snippet="tiny",
+                    reliability_score=0.91,
                 ),
                 *[
                     SourceReference(
@@ -148,21 +176,75 @@ class TestBoundaryAndInteraction:
                 ],
             ],
             grouped_by_question={
-                "q1": ["ref_best", *[f"ref_{idx}" for idx in range(10)]],
+                "q1": [
+                    "ref_best",
+                    "ref_peer",
+                    "ref_news",
+                    "ref_thin",
+                    *[f"ref_{idx}" for idx in range(10)],
+                ],
+                "q2": ["ref_best", "ref_peer"],
             },
         )
 
-        selected, total = gen.select_section_sources(
+        selected, total, metrics = gen.select_section_sources(
             ["q1"],
             many_sources,
             section_title="Income Growth Analysis",
             objective="Use official annual statistics to compare growth and income",
         )
 
-        assert total == 11
+        assert total == 14
         assert len(selected) == _MAX_SECTION_SOURCES
         assert selected[0].reference_id == "ref_best"
         assert "ref_0" not in {src.reference_id for src in selected}
+        assert "ref_thin" not in {src.reference_id for src in selected}
+        assert metrics["selected_domain_count"] >= 3
+        assert metrics["cross_question_source_count"] >= 1
+        assert metrics["content_usable_source_count"] == len(selected)
+
+    async def test_selection_metrics(self):
+        llm = MockLLM(responses=[])
+        gen = ReportGenerator(
+            llm,
+            max_section_sources=2,
+            section_evidence_policy=SectionEvidencePolicy(candidate_pool_size=4),
+        )
+        sources = AggregatedSources(
+            sources=[
+                SourceReference(
+                    reference_id="ref_a",
+                    url="https://alpha.example.com/a",
+                    title="Alpha Report",
+                    snippet="long enough alpha evidence snippet for section selection",
+                    reliability_score=0.9,
+                ),
+                SourceReference(
+                    reference_id="ref_b",
+                    url="https://beta.example.com/b",
+                    title="Beta Analysis",
+                    snippet="long enough beta evidence snippet for broader coverage",
+                    reliability_score=0.7,
+                ),
+            ],
+            grouped_by_question={"q1": ["ref_a", "ref_b"], "q2": ["ref_a"]},
+        )
+
+        selected, total, metrics = gen.select_section_sources(
+            ["q1"],
+            sources,
+            section_title="Section",
+            objective="Compare providers",
+        )
+
+        assert total == 2
+        assert len(selected) == 2
+        assert metrics == {
+            "selected_domain_count": 2,
+            "authority_source_count": 1,
+            "cross_question_source_count": 1,
+            "content_usable_source_count": 2,
+        }
 
 
 class TestIntermediateContext:

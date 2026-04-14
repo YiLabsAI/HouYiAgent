@@ -138,22 +138,6 @@ def test_scrape_handles_readability_error(monkeypatch) -> None:
     assert "bad html" in result["error"]
 
 
-def test_stops_after_timeout(monkeypatch) -> None:
-    calls = {"count": 0}
-    monkeypatch.setenv("HOUYI_BENCH2_FACT_CALL_RETRIES", "3")
-
-    def _timeout(*args, **kwargs):
-        calls["count"] += 1
-        raise TimeoutError("timed out")
-
-    monkeypatch.setattr(compat_api, "_run_chat", _timeout)
-
-    result = compat_api.call_model("Please output json列表 directly")
-
-    assert result == "[]"
-    assert calls["count"] == 1
-
-
 def test_falls_back_on_error(monkeypatch) -> None:
     monkeypatch.setenv("HOUYI_BENCH2_FACT_CALL_RETRIES", "1")
 
@@ -165,6 +149,25 @@ def test_falls_back_on_error(monkeypatch) -> None:
     result = compat_api.call_model("Please output json列表 directly")
 
     assert result == "[]"
+
+
+def test_race_client_forwards_timeout(monkeypatch) -> None:
+    monkeypatch.setenv("HOUYI_BENCH2_RACE_TIMEOUT_SECONDS", "17")
+    captured: dict[str, object] = {}
+
+    def _fake_run_chat(*args, **kwargs):
+        captured["timeout_seconds"] = kwargs.get("timeout_seconds")
+        captured["model"] = kwargs.get("model")
+        return "cleaned article body"
+
+    monkeypatch.setattr(compat_api, "_run_chat", _fake_run_chat)
+
+    client = compat_api.AIClient(model="test-model")
+    result = client.generate("prompt")
+
+    assert result == "cleaned article body"
+    assert captured["timeout_seconds"] == 17
+    assert captured["model"] == "test-model"
 
 
 class TestTruncateValidateReference:

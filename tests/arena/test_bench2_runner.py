@@ -13,6 +13,7 @@ from houyi.arena.bench2_runner import (
     Bench2RunSummary,
     Bench2SidecarConfig,
     Bench2SidecarRunner,
+    _to_leaderboard_scores,
     build_bench2_summary_payload,
 )
 
@@ -98,6 +99,7 @@ class TestBench2SidecarRunner:
 
         assert workspace.repo_root == output_root / "_bench2_compat"
         assert (workspace.repo_root / "utils" / "api.py").exists()
+        assert (workspace.repo_root / "utils" / "clean_article.py").exists()
         assert (workspace.repo_root / "utils" / "validate.py").exists()
         assert (workspace.repo_root / "utils" / "stat.py").exists()
 
@@ -350,7 +352,33 @@ class TestBench2SidecarRunner:
         assert payload["runtime_mode"] == "adapted_env"
         assert payload["generation"]["succeeded"] == 2
         assert payload["sidecar"]["race_scores"]["Overall Score"] == pytest.approx(0.51)
+        assert payload["sidecar"]["leaderboard_scores"]["overall"] == pytest.approx(51.0)
         assert (
             Path(payload["sidecar"]["artifacts"]["race_result_path"])
             == workspace.race_output_dir / "race_result.txt"
         )
+
+    def test_projects_scores(self) -> None:
+        leaderboard = _to_leaderboard_scores(
+            {
+                "Overall Score": 0.5123,
+                "Comprehensiveness": 0.6111,
+                "Insight": 0.4888,
+                "Instruction Following": 0.7333,
+                "Readability": 0.8,
+            },
+            {
+                "valid_rate": 0.95,
+                "total_valid_citations": 12.25,
+            },
+        )
+
+        assert leaderboard == {
+            "overall": pytest.approx(51.23),
+            "comp": pytest.approx(61.11),
+            "insight": pytest.approx(48.88),
+            "inst": pytest.approx(73.33),
+            "read": pytest.approx(80.0),
+            "c_acc": pytest.approx(95.0),
+            "eff_c": pytest.approx(12.25),
+        }

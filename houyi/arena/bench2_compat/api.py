@@ -14,6 +14,7 @@ from houyi.skills.web_search.content_fetchers import JinaContentFetcher, Readabi
 _DEFAULT_PROVIDER = "siliconflow"
 _BENCH2_PROVIDER_ENV = "HOUYI_BENCH2_PROVIDER"
 _RACE_MODEL_ENV = "HOUYI_BENCH2_RACE_MODEL"
+_RACE_TIMEOUT_ENV = "HOUYI_BENCH2_RACE_TIMEOUT_SECONDS"
 _FACT_MODEL_ENV = "HOUYI_BENCH2_FACT_MODEL"
 _FACT_MAX_TOKENS_ENV = "HOUYI_BENCH2_FACT_MAX_TOKENS"
 _FACT_MAX_RETRIES_ENV = "HOUYI_BENCH2_FACT_CALL_RETRIES"
@@ -21,6 +22,7 @@ _FACT_TIMEOUT_ENV = "HOUYI_BENCH2_FACT_TIMEOUT_SECONDS"
 _DEFAULT_FACT_MAX_TOKENS = 6000
 _DEFAULT_FACT_CALL_RETRIES = 3
 _DEFAULT_FACT_TIMEOUT_SECONDS = 90
+_DEFAULT_RACE_TIMEOUT_SECONDS = 180
 _EXTRACT_PROMPT_FEATURE_A = '"ref_idx"'
 _EXTRACT_PROMPT_FEATURE_B = '"url"'
 _DEDUP_PROMPT_FEATURE = "List(int)"
@@ -126,9 +128,15 @@ def _run_chat(
 class AIClient:
     def __init__(self, api_key: str | None = None, model: str | None = None):
         self.model = model or os.getenv(_RACE_MODEL_ENV)
+        self.timeout_seconds = _env_int(_RACE_TIMEOUT_ENV, _DEFAULT_RACE_TIMEOUT_SECONDS)
 
     def generate(self, user_prompt: str, system_prompt: str = "", model: str | None = None) -> str:
-        return _run_chat(user_prompt, system_prompt=system_prompt, model=model or self.model)
+        return _run_chat(
+            user_prompt,
+            system_prompt=system_prompt,
+            model=model or self.model,
+            timeout_seconds=self.timeout_seconds,
+        )
 
 
 def _truncate_validate_reference(prompt: str) -> str:

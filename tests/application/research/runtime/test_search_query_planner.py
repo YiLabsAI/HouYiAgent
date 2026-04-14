@@ -3,7 +3,10 @@ from __future__ import annotations
 import json
 from unittest.mock import AsyncMock
 
-from houyi.application.research.runtime.search_query_planner import QueryPlanner
+from houyi.application.research.runtime.search_query_planner import (
+    QueryPlanner,
+    _ensure_bilingual_queries,
+)
 
 from ..conftest import MockLLM
 
@@ -36,6 +39,21 @@ class TestQueryPlanner:
         assert any(any(ch.isascii() and ch.isalpha() for ch in query) for query in queries)
         assert any(any("\u4e00" <= ch <= "\u9fff" for ch in query) for query in queries)
         assert metadata["bilingual_expected"] is True
+        assert "query_role_mix" in metadata
+        assert any(role == "english_official" for role in metadata["query_role_mix"])
+
+    async def test_strengthens_english_seed(self):
+        non_english_query = _non_english_query()
+
+        queries, metadata = _ensure_bilingual_queries(
+            [non_english_query],
+            f"{non_english_query} HouYi LangChain",
+            f"{non_english_query} HouYi LangChain",
+        )
+
+        assert any("official report" in query.lower() for query in queries if query.isascii())
+        assert metadata["bilingual_fallback_applied"] is True
+        assert "english_official" in metadata["query_role_mix"]
 
     async def test_claim_dedupes_normalized(self):
         planner = _planner(claim_query=AsyncMock(side_effect=[True, False]))

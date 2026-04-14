@@ -90,3 +90,33 @@ def test_run_writes_output(monkeypatch, tmp_path: Path) -> None:
         {"idx": 0, "result": "unknown"},
         {"idx": 1, "result": "unknown"},
     ]
+
+
+def test_skips_empty_facts(monkeypatch) -> None:
+    payload = (
+        "https://a.example",
+        {
+            "url_content": "reference text",
+            "facts": [],
+            "article_id": "1",
+        },
+    )
+    monkeypatch.setattr(
+        compat_validate,
+        "call_model",
+        lambda prompt: (_ for _ in ()).throw(AssertionError("LLM should not be used")),
+    )
+
+    result = compat_validate.validate(payload, {"1": "en"})
+
+    assert result == {
+        "url": "https://a.example",
+        "validate_res": [],
+        "error": None,
+    }
+
+
+def test_resolves_worker_env(monkeypatch) -> None:
+    monkeypatch.setenv("BENCH2_VALIDATE_TOTAL_PROCESS", "3")
+
+    assert compat_validate._resolve_worker_count(0) == 3
