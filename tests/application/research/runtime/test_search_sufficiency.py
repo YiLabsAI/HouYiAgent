@@ -9,7 +9,12 @@ from houyi.application.research.runtime.search_sufficiency import (
     _looks_recent_source,
     _requires_recency,
 )
-from houyi.application.research.types import SourceReference, SufficiencyFeatures
+from houyi.application.research.types import (
+    AnswerCoverageContract,
+    CoverageFacet,
+    SourceReference,
+    SufficiencyFeatures,
+)
 
 from ..conftest import MockLLM
 
@@ -54,6 +59,12 @@ def _rich_features() -> SufficiencyFeatures:
     )
 
 
+def _contract() -> AnswerCoverageContract:
+    return AnswerCoverageContract(
+        must_cover_facets=[CoverageFacet(name="current role", intent="identify employer")]
+    )
+
+
 class TestSufficiencyEvaluator:
     async def test_guardrail_blocks_llm(self):
         llm = MockLLM(responses=[])
@@ -66,6 +77,7 @@ class TestSufficiencyEvaluator:
             collaboration={},
             features=_empty_features(),
             expected_sources=2,
+            coverage_contract=AnswerCoverageContract(),
         )
         assert decision.reason_code == "no_sources"
         assert llm._call_count == 0
@@ -85,6 +97,7 @@ class TestSufficiencyEvaluator:
             collaboration={},
             features=_rich_features(),
             expected_sources=3,
+            coverage_contract=AnswerCoverageContract(),
         )
         assert decision.decision_by == "llm"
         assert decision.sufficient is True
@@ -96,9 +109,46 @@ class TestSufficiencyEvaluator:
             _src("https://a.com/page", "AI agent framework", "AI frameworks overview"),
             _src("https://b.edu/paper", "Official AI paper", "official documentation 2025"),
         ]
-        features = evaluator.build_features(sources, "AI frameworks", "AI")
+        features = evaluator.build_features(
+            sources, "AI frameworks", "AI", AnswerCoverageContract()
+        )
         assert features.domain_count == 2
         assert features.authority_source_count >= 1
+
+    def test_build_features_tracks_facets(self):
+        evaluator = SufficiencyEvaluator(llm=MockLLM(), llm_kwargs={})
+        sources = [
+            _src(
+                "https://official.example.com/profile",
+                "Current role at Example Corp",
+                "official profile confirms current role and employer",
+            ),
+            _src(
+                "https://news.example.com/story",
+                "Biography overview",
+                "general biography story",
+            ),
+        ]
+        features = evaluator.build_features(sources, "Who is this person?", "person", _contract())
+        assert features.covered_facets == ["current role"]
+        assert features.missing_facets == []
+
+    async def test_guardrail_blocks_missing_facets(self):
+        evaluator = SufficiencyEvaluator(llm=MockLLM(responses=[]), llm_kwargs={})
+        features = _rich_features()
+        features.missing_facets = ["current role"]
+        features.missing_dimensions = ["facet_coverage"]
+        decision = await evaluator.evaluate(
+            question="Who is this person?",
+            user_query="Who is this person?",
+            summary="summary",
+            sources=[_src(title="Biography", snippet="general overview")],
+            collaboration={},
+            features=features,
+            expected_sources=2,
+            coverage_contract=_contract(),
+        )
+        assert decision.reason_code == "missing_facets"
 
 
 class TestHelpers:

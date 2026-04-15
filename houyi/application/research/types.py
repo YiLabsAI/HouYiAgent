@@ -108,6 +108,9 @@ class SubQuestion(BaseModel):
     search_strategy: SearchStrategy = SearchStrategy.WEB
     expected_sources: int = 5
     depends_on: list[str] = Field(default_factory=list)
+    coverage_contract: AnswerCoverageContract = Field(
+        default_factory=lambda: AnswerCoverageContract()
+    )
 
 
 class OutlineSection(BaseModel):
@@ -118,6 +121,9 @@ class OutlineSection(BaseModel):
     objective: str
     related_question_ids: list[str] = Field(default_factory=list)
     required_depth: str = "standard"
+    coverage_contract: AnswerCoverageContract = Field(
+        default_factory=lambda: AnswerCoverageContract()
+    )
 
 
 # Maximum search rounds per sub-question, keyed by ResearchDepth.value.
@@ -198,6 +204,26 @@ class ClarificationResult(BaseModel):
     refined_query: str | None = None
 
 
+class CoverageFacet(BaseModel):
+    """A must-cover answer facet attached to planning and retrieval decisions."""
+
+    name: str
+    intent: str = ""
+    evidence_hint: str = ""
+    bilingual_terms: list[str] = Field(default_factory=list)
+
+
+class AnswerCoverageContract(BaseModel):
+    """Structured answer obligations that downstream search and writing must satisfy."""
+
+    must_cover_facets: list[CoverageFacet] = Field(default_factory=list)
+    comparison_axes: list[str] = Field(default_factory=list)
+    time_scope: str = ""
+    geo_scope: str = ""
+    required_caveats: list[str] = Field(default_factory=list)
+    evidence_expectations: list[str] = Field(default_factory=list)
+
+
 class ResearchPlan(BaseModel):
     """A research plan produced by the planner and optionally edited by the user."""
 
@@ -210,6 +236,7 @@ class ResearchPlan(BaseModel):
     estimated_duration_min: int = 5
     created_at: float = Field(default_factory=time.time)
     status: PlanStatus = PlanStatus.DRAFT
+    plan_contract: AnswerCoverageContract = Field(default_factory=lambda: AnswerCoverageContract())
 
 
 # ---------------------------------------------------------------------------
@@ -271,6 +298,12 @@ class SufficiencyFeatures(BaseModel):
     recency_score: float = 0.0
     # Fast boolean for "do we already have at least one primary / authoritative source".
     has_primary_source: bool = False
+    # Facet-aware coverage state tracks whether the current evidence answers the planned facets
+    # rather than just accumulating generic source counts.
+    covered_facets: list[str] = Field(default_factory=list)
+    missing_facets: list[str] = Field(default_factory=list)
+    noisy_only_facets: list[str] = Field(default_factory=list)
+    noisy_source_count: int = 0
     # Human-readable gaps still open after evaluating the current evidence set.
     missing_dimensions: list[str] = Field(default_factory=list)
 

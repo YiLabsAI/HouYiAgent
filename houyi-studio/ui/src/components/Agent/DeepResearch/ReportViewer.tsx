@@ -278,10 +278,11 @@ function buildNumberedMarkdown(
 const ReportBody: React.FC<{ markdown: string; animate?: boolean }> = ({ markdown, animate }) => {
   const displayed = useTypewriter(markdown, !!animate);
   const ref = useRef<HTMLDivElement>(null);
+  const shouldStyleCitations = displayed === markdown;
 
   useEffect(() => {
-    if (ref.current) styleCitations(ref.current);
-  }, [displayed]);
+    if (ref.current && shouldStyleCitations) styleCitations(ref.current);
+  }, [displayed, shouldStyleCitations]);
 
   return (
     <div ref={ref} className="report-body rounded-xl border border-gray-700/50 bg-gray-800/50 p-6 text-sm text-gray-300 leading-6">

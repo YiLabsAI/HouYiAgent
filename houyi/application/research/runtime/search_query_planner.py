@@ -6,6 +6,7 @@ from typing import Any
 
 from houyi.adapters.llm.base import LLMAdapter
 from houyi.application.research.runtime.search_parsing import _canonical_query, _parse_query_list
+from houyi.application.research.types import AnswerCoverageContract
 
 CollaborationSnapshotCallback = Callable[[int], Awaitable[dict[str, Any]]]
 
@@ -22,6 +23,11 @@ Peer queries already attempted: {peer_queries}
 Peer gaps still open: {peer_gaps}
 Preferred providers from collaboration: {preferred_providers}
 Shared source count so far: {shared_source_count}
+Coverage facets: {coverage_facets}
+Required caveats: {required_caveats}
+Evidence expectations: {evidence_expectations}
+Time scope: {time_scope}
+Geo scope: {geo_scope}
 
 Generate 2-3 DISTINCT search queries. Strategy:
 - Round 1: Start with precise, specific queries using domain terminology, \
@@ -61,7 +67,9 @@ class QueryPlanner:
         prior: list[str],
         round_idx: int,
         collaboration: dict[str, Any],
+        coverage_contract: AnswerCoverageContract | None = None,
     ) -> tuple[list[str], dict[str, Any]]:
+        coverage_contract = coverage_contract or AnswerCoverageContract()
         prompt = _QUERY_GEN_PROMPT.format(
             question=question,
             user_query=user_query,
@@ -75,6 +83,13 @@ class QueryPlanner:
                 collaboration.get("preferred_providers")
             ),
             shared_source_count=collaboration.get("shared_source_count", 0),
+            coverage_facets=_format_coverage_facets(coverage_contract),
+            required_caveats=_format_collaboration_items(coverage_contract.required_caveats),
+            evidence_expectations=_format_collaboration_items(
+                coverage_contract.evidence_expectations
+            ),
+            time_scope=coverage_contract.time_scope or "(none)",
+            geo_scope=coverage_contract.geo_scope or "(none)",
         )
         resp = await self.llm.chat(
             messages=[{"role": "user", "content": prompt}],
@@ -83,7 +98,13 @@ class QueryPlanner:
             **self.llm_kwargs,
         )
         parsed = _parse_query_list(resp.content)
-        finalized, metadata = _ensure_bilingual_queries(parsed, question, user_query)
+        finalized, metadata = _ensure_bilingual_queries(
+            parsed,
+            question,
+            user_query,
+            coverage_contract=coverage_contract,
+        )
+        metadata["coverage_facets"] = [facet.name for facet in coverage_contract.must_cover_facets]
         return finalized, metadata
 
     async def claim_queries(
@@ -127,12 +148,31 @@ def _collaboration_stop_reason(collaboration: dict[str, Any]) -> str | None:
     return text or None
 
 
+def _format_coverage_facets(contract: AnswerCoverageContract) -> str:
+    if not contract.must_cover_facets:
+        return "(none)"
+    rendered: list[str] = []
+    for facet in contract.must_cover_facets[:6]:
+        parts = [facet.name]
+        if facet.intent:
+            parts.append(f"intent={facet.intent}")
+        if facet.evidence_hint:
+            parts.append(f"evidence={facet.evidence_hint}")
+        if facet.bilingual_terms:
+            parts.append(f"terms={', '.join(facet.bilingual_terms[:4])}")
+        rendered.append(" | ".join(parts))
+    return "; ".join(rendered)
+
+
 def _ensure_bilingual_queries(
     queries: list[str],
     question: str,
     user_query: str,
+    coverage_contract: AnswerCoverageContract | None = None,
 ) -> tuple[list[str], dict[str, Any]]:
+    coverage_contract = coverage_contract or AnswerCoverageContract()
     original = [_normalize_query_text(query) for query in queries if _normalize_query_text(query)]
+    original = _prepend_facet_queries(original, coverage_contract)
     if not original:
         return [], {
             "bilingual_expected": False,
@@ -221,3 +261,24 @@ def _extract_ascii_terms(text: str) -> str:
         token for token in text.split() if token.isascii() and any(ch.isalpha() for ch in token)
     ]
     return " ".join(tokens[:8]).strip()
+
+
+def _prepend_facet_queries(
+    queries: list[str],
+    coverage_contract: AnswerCoverageContract,
+) -> list[str]:
+    if not coverage_contract.must_cover_facets:
+        return queries
+
+    facet_queries: list[str] = []
+    for facet in coverage_contract.must_cover_facets[:2]:
+        if facet.bilingual_terms:
+            facet_queries.extend(term for term in facet.bilingual_terms[:2] if term.strip())
+            continue
+        candidate = " ".join(
+            part for part in (facet.name, facet.intent, facet.evidence_hint) if part
+        )
+        normalized = _normalize_query_text(candidate)
+        if normalized:
+            facet_queries.append(normalized)
+    return facet_queries + queries

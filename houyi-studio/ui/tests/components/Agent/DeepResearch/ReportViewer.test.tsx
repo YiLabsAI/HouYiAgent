@@ -1,5 +1,5 @@
 import { render, screen, fireEvent, within, act } from '@testing-library/react';
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { ReportViewer } from '@/components/Agent/DeepResearch/ReportViewer';
 import type { ResearchReport } from '@/stores/useResearchStore';
 
@@ -32,6 +32,15 @@ const makeReport = (overrides: Partial<ResearchReport> = {}): ResearchReport => 
 });
 
 describe('ReportViewer', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.runOnlyPendingTimers();
+    vi.useRealTimers();
+  });
+
   it('renders report header', () => {
     render(<ReportViewer report={makeReport()} />);
     expect(screen.getByText('Research Report')).toBeInTheDocument();
@@ -153,6 +162,7 @@ describe('ReportViewer', () => {
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: /Copy/i }));
       await Promise.resolve();
+      vi.runOnlyPendingTimers();
     });
     expect(writeText).toHaveBeenCalledTimes(1);
     expect(writeText.mock.calls[0][0]).toContain('AI Research Report');
@@ -371,5 +381,33 @@ describe('ReportViewer', () => {
     const links = screen.getAllByRole('link');
     expect(links.some((el) => el.getAttribute('href') === 'https://example.com')).toBe(true);
     expect(links.some((el) => el.getAttribute('href')?.includes('localhost'))).toBe(false);
+  });
+
+  it('defers citation superscript styling until animation completes', async () => {
+    const { container } = render(
+      <ReportViewer
+        animate
+        report={makeReport({
+          sections: [{ title: 'Body', content: 'Claim [ref_abc] and more.', citations: [] }],
+          references: [
+            {
+              reference_id: 'ref_abc',
+              url: 'https://src.example',
+              title: 'Source A',
+              snippet: 'supporting',
+              reliability: 0.9,
+            },
+          ],
+        })}
+      />,
+    );
+
+    expect(container.querySelectorAll('sup').length).toBe(0);
+
+    await act(async () => {
+      vi.advanceTimersByTime(25_000);
+    });
+
+    expect(container.querySelectorAll('sup').length).toBeGreaterThan(0);
   });
 });

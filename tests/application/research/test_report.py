@@ -5,6 +5,7 @@ import json
 from houyi.application.research.report import ReportGenerator, SectionEvidencePolicy
 from houyi.application.research.types import (
     AggregatedSources,
+    CoverageFacet,
     OutlineSection,
     ReportChunkType,
     ResearchPlan,
@@ -202,6 +203,7 @@ class TestBoundaryAndInteraction:
         assert metrics["selected_domain_count"] >= 3
         assert metrics["cross_question_source_count"] >= 1
         assert metrics["content_usable_source_count"] == len(selected)
+        assert metrics["primary_evidence_count"] >= 1
 
     async def test_selection_metrics(self):
         llm = MockLLM(responses=[])
@@ -239,12 +241,107 @@ class TestBoundaryAndInteraction:
 
         assert total == 2
         assert len(selected) == 2
-        assert metrics == {
-            "selected_domain_count": 2,
-            "authority_source_count": 1,
-            "cross_question_source_count": 1,
-            "content_usable_source_count": 2,
-        }
+        assert metrics["selected_domain_count"] == 2
+        assert metrics["authority_source_count"] == 1
+        assert metrics["cross_question_source_count"] == 1
+        assert metrics["content_usable_source_count"] == 2
+        assert metrics["primary_evidence_count"] >= 1
+        assert metrics["unresolved_gap_count"] == 0
+
+    async def test_preserves_complementary_sources(self):
+        llm = MockLLM(responses=[])
+        gen = ReportGenerator(
+            llm,
+            max_section_sources=4,
+            section_evidence_policy=SectionEvidencePolicy(candidate_pool_size=6),
+        )
+        sources = AggregatedSources(
+            sources=[
+                SourceReference(
+                    reference_id="ref_cross_a",
+                    url="https://stats.gov/report-a",
+                    title="Official income report",
+                    snippet="income statistics and middle class distribution",
+                    reliability_score=0.95,
+                ),
+                SourceReference(
+                    reference_id="ref_cross_b",
+                    url="https://oecd.org/report-b",
+                    title="OECD middle class outlook",
+                    snippet="middle class pressure and household finance",
+                    reliability_score=0.88,
+                ),
+                SourceReference(
+                    reference_id="ref_local",
+                    url="https://analysis.example.com/local",
+                    title="Local analysis",
+                    snippet="household balance sheet detail and debt ratio",
+                    reliability_score=0.72,
+                ),
+                SourceReference(
+                    reference_id="ref_extra",
+                    url="https://news.example.com/extra",
+                    title="Extra commentary",
+                    snippet="recent commentary on middle income groups",
+                    reliability_score=0.65,
+                ),
+            ],
+            grouped_by_question={
+                "q1": ["ref_cross_a", "ref_local"],
+                "q2": ["ref_cross_a", "ref_cross_b"],
+                "q3": ["ref_cross_b", "ref_extra"],
+            },
+        )
+        selected, total, metrics = gen.select_section_sources(
+            ["q1", "q2"],
+            sources,
+            section_title="中产规模与财力",
+            objective="综合比较中产规模、收入和财务压力",
+        )
+        assert total == 3
+        assert len(selected) == 3
+        assert metrics["cross_question_source_count"] >= 2
+        assert metrics["authority_source_count"] >= 1
+        assert {src.reference_id for src in selected} >= {"ref_cross_a", "ref_cross_b"}
+
+    async def test_builds_evidence_bundle(self):
+        llm = MockLLM(responses=[])
+        gen = ReportGenerator(llm)
+        plan = _plan_with_outline()
+        plan.outline[0].coverage_contract.must_cover_facets = [
+            CoverageFacet(name="income growth", intent="compare official statistics")
+        ]
+        sources = AggregatedSources(
+            sources=[
+                SourceReference(
+                    reference_id="ref_official",
+                    url="https://stats.gov/report",
+                    title="Official income growth report",
+                    snippet="official income growth statistics by year",
+                    reliability_score=0.95,
+                ),
+                SourceReference(
+                    reference_id="ref_risk",
+                    url="https://analysis.example.com/risk",
+                    title="Risk and limitation analysis",
+                    snippet="however the dataset has limitations and risk of bias",
+                    reliability_score=0.7,
+                ),
+            ],
+            grouped_by_question={"q1": ["ref_official", "ref_risk"]},
+        )
+        bundle, total, metrics = gen.build_section_evidence_bundle(
+            ["q1"],
+            sources,
+            section_title="Overview",
+            objective="Compare income growth",
+            coverage_contract=plan.outline[0].coverage_contract,
+        )
+        assert total == 2
+        assert bundle.primary_evidence[0].reference_id == "ref_official"
+        assert bundle.counter_evidence[0].reference_id == "ref_risk"
+        assert bundle.coverage_facets == ["income growth"]
+        assert metrics["counter_evidence_count"] == 1
 
 
 class TestIntermediateContext:

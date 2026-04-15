@@ -190,6 +190,13 @@ class TestIntermediateReport:
 def _pipeline(ir_gen: IntermediateReportGenerator) -> ReportPipeline:
     reporter = MagicMock()
     reporter.complete_summary = AsyncMock(return_value=0.0)
+    reporter._generate_section = AsyncMock(
+        return_value=ReportSection(
+            title="Overview",
+            content="Repaired section with supported findings [ref_keep]. " * 4,
+            citations=[Citation(reference_id="ref_keep")],
+        )
+    )
     return ReportPipeline(
         reporter=reporter,
         validator=MagicMock(),
@@ -218,7 +225,7 @@ def _report() -> ResearchReport:
         sections=[
             ReportSection(
                 title="Overview",
-                content="Body",
+                content="Supported body text with cited analysis [ref_keep]. " * 4,
                 citations=[Citation(reference_id=source.reference_id)],
             )
         ],
@@ -369,7 +376,11 @@ class TestPipelineRuntime:
     async def test_run_repair_sections(self) -> None:
         pipe = _pipeline(IntermediateReportGenerator(MockLLM(responses=[_IR_JSON])))
         report = _report()
-        repaired = ReportSection(title="Overview", content="Repaired")
+        repaired = ReportSection(
+            title="Overview",
+            content="Repaired section with supported findings [ref_keep]. " * 4,
+            citations=[Citation(reference_id="ref_keep")],
+        )
         pipe._reporter.generate = AsyncMock(
             return_value=(report, {"report_sections_ms": 100.0, "report_summary_ms": 20.0})
         )
@@ -425,7 +436,9 @@ class TestPipelineRuntime:
             settings=ResearchSettings(depth="standard"),
         )
 
-        assert result.report.sections[0].content == "Repaired"
+        assert result.report.sections[0].content.startswith(
+            "Repaired section with supported findings"
+        )
         assert result.validation is not None
         assert result.quality is not None
         assert result.report.metadata.quality_overall == 88.0
@@ -452,7 +465,11 @@ class TestPipelineRuntime:
             return_value=(report, {"report_sections_ms": 100.0, "report_summary_ms": 20.0})
         )
         pipe._reporter._generate_section = AsyncMock(
-            return_value=ReportSection(title="Overview", content="Repaired")
+            return_value=ReportSection(
+                title="Overview",
+                content="Repaired section with supported findings [ref_keep]. " * 4,
+                citations=[Citation(reference_id="ref_keep")],
+            )
         )
         pipe._conflict_resolver.detect = AsyncMock(return_value=[])
         pipe._url_validator.validate = AsyncMock(

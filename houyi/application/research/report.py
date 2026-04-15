@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Any
 from houyi.adapters.llm.base import LLMAdapter
 from houyi.application.research.types import (
     AggregatedSources,
+    AnswerCoverageContract,
     Citation,
     OutlineSection,
     ReportChunk,
@@ -67,6 +68,8 @@ class SectionEvidencePolicy:
     candidate_pool_size: int = 12
     min_domain_diversity: int = 3
     require_content_usable: bool = True
+    min_cross_question_sources: int = 2
+    min_authority_sources: int = 1
 
 
 if TYPE_CHECKING:
@@ -78,8 +81,26 @@ You are writing a section of an academic-grade research report.
 Report title context: {query}
 Section: {title}
 Section objective: {objective}
+Must-cover obligations:
+{coverage_facets}
+Comparison axes to address when relevant:
+{comparison_axes}
+Evidence expectations:
+{evidence_expectations}
+Time scope:
+{time_scope}
+Geographic scope:
+{geo_scope}
 Available sources (reference_id | title | snippet):
 {sources_text}
+Primary evidence:
+{primary_evidence}
+Counter-evidence or tension points:
+{counter_evidence}
+Unresolved gaps that must be acknowledged:
+{unresolved_gaps}
+Caveats that must be made explicit:
+{caveat_obligations}
 
 Write the section in Markdown. Rules:
 - Do NOT include a heading for this section (the heading is added externally).
@@ -114,6 +135,26 @@ Report sections:
 
 Respond with plain text (no JSON).
 """
+
+
+@dataclass(frozen=True, slots=True)
+class SectionEvidenceBundle:
+    """Evidence packet passed to section generation.
+
+    The bundle keeps the writing stage grounded in answer obligations rather than
+    handing the model an undifferentiated list of sources.
+    """
+
+    selected_sources: list[SourceReference]
+    primary_evidence: list[SourceReference]
+    counter_evidence: list[SourceReference]
+    unresolved_gaps: list[str]
+    caveat_obligations: list[str]
+    coverage_facets: list[str]
+    comparison_axes: list[str]
+    evidence_expectations: list[str]
+    time_scope: str
+    geo_scope: str
 
 
 class ReportGenerator:
@@ -193,11 +234,12 @@ class ReportGenerator:
 
         async def _gen(outline_sec: OutlineSection) -> tuple[ReportSection, dict[str, Any]]:
             async with sem:
-                relevant, relevant_total, evidence_metrics = self.select_section_sources(
+                bundle, relevant_total, evidence_metrics = self.build_section_evidence_bundle(
                     outline_sec.related_question_ids,
                     sources,
                     section_title=outline_sec.title,
                     objective=outline_sec.objective,
+                    coverage_contract=outline_sec.coverage_contract,
                 )
                 ir_context = _intermediate_context(
                     outline_sec.related_question_ids,
@@ -209,15 +251,16 @@ class ReportGenerator:
                     plan.query,
                     outline_sec.title,
                     outline_sec.objective,
-                    relevant,
+                    bundle.selected_sources,
                     intermediate_context=ir_context,
+                    evidence_bundle=bundle,
                 )
                 section.section_id = outline_sec.section_id
                 return section, {
                     "section_id": outline_sec.section_id,
                     "title": outline_sec.title,
                     "relevant_source_count": relevant_total,
-                    "selected_source_count": len(relevant),
+                    "selected_source_count": len(bundle.selected_sources),
                     **evidence_metrics,
                     "intermediate_context_chars": len(ir_context),
                 }
@@ -293,6 +336,7 @@ class ReportGenerator:
                 sources,
                 section_title=outline_sec.title,
                 objective=outline_sec.objective,
+                coverage_contract=outline_sec.coverage_contract,
             )
             section = await self._generate_section(
                 plan.query,
@@ -330,14 +374,42 @@ class ReportGenerator:
         *,
         section_title: str,
         objective: str,
+        coverage_contract: AnswerCoverageContract | None = None,
     ) -> tuple[list[SourceReference], int, dict[str, int]]:
         """Select section sources via ranked recall, candidate-pool build, and final assembly."""
+
+        bundle, relevant_total, metrics = self.build_section_evidence_bundle(
+            question_ids,
+            sources,
+            section_title=section_title,
+            objective=objective,
+            coverage_contract=coverage_contract,
+        )
+        return bundle.selected_sources, relevant_total, metrics
+
+    def build_section_evidence_bundle(
+        self,
+        question_ids: list[str],
+        sources: AggregatedSources,
+        *,
+        section_title: str,
+        objective: str,
+        coverage_contract: AnswerCoverageContract | None = None,
+    ) -> tuple[SectionEvidenceBundle, int, dict[str, int]]:
+        """Build the evidence packet consumed by section writing.
+
+        This keeps retrieval/ranking compatible with the existing source selection
+        logic while making the writing contract explicit.
+        """
+
+        coverage_contract = coverage_contract or AnswerCoverageContract()
 
         ranked = _relevant_sources(
             question_ids,
             sources,
             section_title=section_title,
             objective=objective,
+            coverage_contract=coverage_contract,
         )
         source_question_counts = _build_source_question_counts(sources)
         candidate_pool = _build_section_candidate_pool(
@@ -347,25 +419,34 @@ class ReportGenerator:
         )
         selected = _assemble_section_sources(
             candidate_pool,
+            ranked,
             max_sources=self._max_section_sources,
             policy=self._section_evidence_policy,
+            source_question_counts=source_question_counts,
         )
+        bundle = _build_section_evidence_bundle(selected, coverage_contract)
         return (
-            selected,
+            bundle,
             len(ranked),
             {
                 "selected_domain_count": len(
-                    {_source_domain(src) for src in selected if _source_domain(src)}
+                    {_source_domain(src) for src in bundle.selected_sources if _source_domain(src)}
                 ),
                 "authority_source_count": sum(
-                    1 for src in selected if _looks_authoritative_source(src)
+                    1 for src in bundle.selected_sources if _looks_authoritative_source(src)
                 ),
                 "cross_question_source_count": sum(
-                    1 for src in selected if source_question_counts.get(src.reference_id, 0) > 1
+                    1
+                    for src in bundle.selected_sources
+                    if source_question_counts.get(src.reference_id, 0) > 1
                 ),
                 "content_usable_source_count": sum(
-                    1 for src in selected if _is_content_usable(src)
+                    1 for src in bundle.selected_sources if _is_content_usable(src)
                 ),
+                "primary_evidence_count": len(bundle.primary_evidence),
+                "counter_evidence_count": len(bundle.counter_evidence),
+                "unresolved_gap_count": len(bundle.unresolved_gaps),
+                "caveat_count": len(bundle.caveat_obligations),
             },
         )
 
@@ -376,8 +457,13 @@ class ReportGenerator:
         objective: str,
         sources: list[SourceReference],
         intermediate_context: str = "",
+        evidence_bundle: SectionEvidenceBundle | None = None,
     ) -> ReportSection:
         snip = self._snippet_max_chars
+        bundle = evidence_bundle or _build_section_evidence_bundle(
+            sources,
+            AnswerCoverageContract(),
+        )
         sources_text = "\n".join(
             f"  {s.reference_id} | {s.title} | {s.snippet[:snip]}"
             for s in sources[: self._max_source_display]
@@ -386,7 +472,16 @@ class ReportGenerator:
             query=query,
             title=title,
             objective=objective,
+            coverage_facets=_format_bundle_lines(bundle.coverage_facets),
+            comparison_axes=_format_bundle_lines(bundle.comparison_axes),
+            evidence_expectations=_format_bundle_lines(bundle.evidence_expectations),
+            time_scope=bundle.time_scope or "(none)",
+            geo_scope=bundle.geo_scope or "(none)",
             sources_text=sources_text or "(no sources)",
+            primary_evidence=_format_bundle_sources(bundle.primary_evidence, snip),
+            counter_evidence=_format_bundle_sources(bundle.counter_evidence, snip),
+            unresolved_gaps=_format_bundle_lines(bundle.unresolved_gaps),
+            caveat_obligations=_format_bundle_lines(bundle.caveat_obligations),
         )
         if intermediate_context:
             prompt += (
@@ -457,6 +552,7 @@ def _relevant_sources(
     *,
     section_title: str,
     objective: str,
+    coverage_contract: AnswerCoverageContract,
 ) -> list[SourceReference]:
     """Pick and rank sources relevant to a report section.
 
@@ -485,6 +581,7 @@ def _relevant_sources(
                 src,
                 section_title=section_title,
                 objective=objective,
+                coverage_contract=coverage_contract,
                 question_ids=question_ids,
                 source_question_counts=source_question_counts,
             ),
@@ -501,10 +598,15 @@ def _score_source_for_section(
     *,
     section_title: str,
     objective: str,
+    coverage_contract: AnswerCoverageContract,
     question_ids: list[str],
     source_question_counts: dict[str, int],
 ) -> float:
     keywords = _extract_section_keywords(f"{section_title} {objective}")
+    for facet in coverage_contract.must_cover_facets:
+        keywords |= _extract_section_keywords(
+            f"{facet.name} {facet.intent} {' '.join(facet.bilingual_terms)}"
+        )
     searchable = f"{src.title} {src.snippet} {src.url or ''}"
     overlap = _keyword_overlap_score(searchable, keywords)
     authority = 1.5 if _looks_authoritative_source(src) else 0.0
@@ -586,9 +688,11 @@ def _build_section_candidate_pool(
 
 def _assemble_section_sources(
     candidate_pool: list[SourceReference],
+    ranked: list[SourceReference],
     *,
     max_sources: int,
     policy: SectionEvidencePolicy,
+    source_question_counts: dict[str, int],
 ) -> list[SourceReference]:
     selected: list[SourceReference] = []
     seen_ids: set[str] = set()
@@ -627,7 +731,108 @@ def _assemble_section_sources(
         prefer_new_domain=False,
     )
 
+    _ensure_cross_question_sources(
+        ranked,
+        selected=selected,
+        seen_ids=seen_ids,
+        seen_domains=seen_domains,
+        max_sources=max_sources,
+        policy=policy,
+        source_question_counts=source_question_counts,
+    )
+    _ensure_authority_sources(
+        ranked,
+        selected=selected,
+        seen_ids=seen_ids,
+        seen_domains=seen_domains,
+        max_sources=max_sources,
+        policy=policy,
+    )
+
+    _fill_section_sources(
+        candidate_pool,
+        selected=selected,
+        seen_ids=seen_ids,
+        seen_domains=seen_domains,
+        max_sources=max_sources,
+        policy=policy,
+        prefer_new_domain=False,
+    )
+
     return selected[:max_sources]
+
+
+def _build_section_evidence_bundle(
+    selected_sources: list[SourceReference],
+    coverage_contract: AnswerCoverageContract,
+) -> SectionEvidenceBundle:
+    primary: list[SourceReference] = []
+    counter: list[SourceReference] = []
+    for src in selected_sources:
+        if _looks_authoritative_source(src) and len(primary) < 3:
+            primary.append(src)
+        elif _looks_counter_evidence(src) and len(counter) < 2:
+            counter.append(src)
+    if not primary:
+        primary = selected_sources[: min(3, len(selected_sources))]
+    unresolved_gaps = _missing_bundle_facets(selected_sources, coverage_contract)
+    return SectionEvidenceBundle(
+        selected_sources=selected_sources,
+        primary_evidence=primary,
+        counter_evidence=counter,
+        unresolved_gaps=unresolved_gaps,
+        caveat_obligations=list(coverage_contract.required_caveats),
+        coverage_facets=[facet.name for facet in coverage_contract.must_cover_facets],
+        comparison_axes=list(coverage_contract.comparison_axes),
+        evidence_expectations=list(coverage_contract.evidence_expectations),
+        time_scope=coverage_contract.time_scope,
+        geo_scope=coverage_contract.geo_scope,
+    )
+
+
+def _looks_counter_evidence(src: SourceReference) -> bool:
+    text = f"{src.title} {src.snippet}".lower()
+    return any(
+        marker in text
+        for marker in ("however", "contradict", "dispute", "critic", "limitation", "risk")
+    )
+
+
+def _missing_bundle_facets(
+    selected_sources: list[SourceReference],
+    coverage_contract: AnswerCoverageContract,
+) -> list[str]:
+    missing: list[str] = []
+    for facet in coverage_contract.must_cover_facets:
+        terms = _extract_section_keywords(
+            f"{facet.name} {facet.intent} {facet.evidence_hint} {' '.join(facet.bilingual_terms)}"
+        )
+        if not terms:
+            continue
+        matched = False
+        for src in selected_sources:
+            text = f"{src.title} {src.snippet} {src.url or ''}".lower()
+            if sum(1 for term in terms if term in text) >= 2:
+                matched = True
+                break
+        if not matched:
+            missing.append(facet.name)
+    return missing
+
+
+def _format_bundle_sources(sources: list[SourceReference], snippet_cap: int) -> str:
+    if not sources:
+        return "(none)"
+    return "\n".join(
+        f"- {src.reference_id} | {src.title} | {(src.snippet or '')[:snippet_cap]}"
+        for src in sources
+    )
+
+
+def _format_bundle_lines(items: list[str]) -> str:
+    if not items:
+        return "(none)"
+    return "\n".join(f"- {item}" for item in items)
 
 
 def _fill_section_sources(
@@ -653,6 +858,71 @@ def _fill_section_sources(
             policy=policy,
             prefer_new_domain=prefer_new_domain,
         )
+
+
+def _ensure_cross_question_sources(
+    ranked: list[SourceReference],
+    *,
+    selected: list[SourceReference],
+    seen_ids: set[str],
+    seen_domains: set[str],
+    max_sources: int,
+    policy: SectionEvidencePolicy,
+    source_question_counts: dict[str, int],
+) -> None:
+    current = sum(1 for src in selected if source_question_counts.get(src.reference_id, 0) > 1)
+    if current >= policy.min_cross_question_sources:
+        return
+    for src in ranked:
+        if source_question_counts.get(src.reference_id, 0) <= 1:
+            continue
+        before = len(selected)
+        _try_add_section_source(
+            src,
+            selected=selected,
+            seen_ids=seen_ids,
+            seen_domains=seen_domains,
+            max_sources=max_sources,
+            policy=policy,
+            prefer_new_domain=False,
+        )
+        if len(selected) == before:
+            continue
+        current += 1
+        if current >= policy.min_cross_question_sources:
+            break
+
+
+def _ensure_authority_sources(
+    ranked: list[SourceReference],
+    *,
+    selected: list[SourceReference],
+    seen_ids: set[str],
+    seen_domains: set[str],
+    max_sources: int,
+    policy: SectionEvidencePolicy,
+) -> None:
+    current = sum(1 for src in selected if _looks_authoritative_source(src))
+    if current >= policy.min_authority_sources:
+        return
+    for src in ranked:
+        if not _looks_authoritative_source(src):
+            continue
+        before = len(selected)
+        _try_add_section_source(
+            src,
+            selected=selected,
+            seen_ids=seen_ids,
+            seen_domains=seen_domains,
+            max_sources=max_sources,
+            policy=policy,
+            prefer_new_domain=False,
+        )
+        if len(selected) == before:
+            continue
+        current += 1
+        if current >= policy.min_authority_sources:
+            break
 
 
 def _try_add_section_source(

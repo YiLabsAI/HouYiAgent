@@ -9,6 +9,7 @@ from urllib.parse import urlparse
 from houyi.adapters.llm.base import LLMAdapter
 from houyi.application.research.runtime.search_parsing import _parse_sufficiency
 from houyi.application.research.types import (
+    AnswerCoverageContract,
     SourceReference,
     SufficiencyDecision,
     SufficiencyFeatures,
@@ -25,6 +26,9 @@ Collaboration summary: {collaboration_summary}
 Peer gaps still open: {peer_gaps}
 Structured evidence: {feature_summary}
 Missing dimensions: {missing_dimensions}
+Missing facets: {missing_facets}
+Noisy-only facets: {noisy_only_facets}
+Coverage facets: {coverage_facets}
 
 Evaluate sufficiency on three criteria:
 1. **Breadth**: Do sources cover multiple perspectives or data points?
@@ -115,6 +119,7 @@ class SufficiencyEvaluator:
         collaboration: dict[str, Any],
         features: SufficiencyFeatures,
         expected_sources: int,
+        coverage_contract: AnswerCoverageContract,
     ) -> SufficiencyDecision:
         guardrail = _guardrail_sufficiency_decision(
             question=question,
@@ -132,6 +137,9 @@ class SufficiencyEvaluator:
             peer_gaps=_format_collaboration_items(collaboration.get("peer_gaps")),
             feature_summary=_format_feature_summary(features),
             missing_dimensions=_format_collaboration_items(features.missing_dimensions),
+            missing_facets=_format_collaboration_items(features.missing_facets),
+            noisy_only_facets=_format_collaboration_items(features.noisy_only_facets),
+            coverage_facets=_format_contract_facets(coverage_contract),
         )
         resp = await self.llm.chat(
             messages=[{"role": "user", "content": prompt}],
@@ -154,6 +162,7 @@ class SufficiencyEvaluator:
         sources: list[SourceReference],
         question: str,
         user_query: str,
+        coverage_contract: AnswerCoverageContract,
     ) -> SufficiencyFeatures:
         source_count = len(sources)
         relevant = _filter_relevant(sources, question, user_query)
@@ -166,6 +175,11 @@ class SufficiencyEvaluator:
         diversity_score = min(1.0, (len(domains) + len(providers)) / max(source_count, 1))
         authority_score = authority_count / max(source_count, 1)
         recency_score = recent_count / max(source_count, 1)
+        covered_facets, noisy_only_facets, missing_facets = _classify_facet_coverage(
+            sources,
+            coverage_contract,
+        )
+        noisy_source_count = _count_noisy_sources(sources, question, user_query, coverage_contract)
         missing_dimensions: list[str] = []
         if source_count < 2 or relevance_score < 0.5:
             missing_dimensions.append("relevance")
@@ -175,6 +189,10 @@ class SufficiencyEvaluator:
             missing_dimensions.append("authority")
         if _requires_recency(question, user_query) and recent_count == 0:
             missing_dimensions.append("recency")
+        if missing_facets:
+            missing_dimensions.append("facet_coverage")
+        if noisy_only_facets or noisy_source_count > max(source_count // 2, 1):
+            missing_dimensions.append("task_fit")
         return SufficiencyFeatures(
             source_count=source_count,
             relevant_source_count=relevant_count,
@@ -187,6 +205,10 @@ class SufficiencyEvaluator:
             authority_score=authority_score,
             recency_score=recency_score,
             has_primary_source=authority_count > 0,
+            covered_facets=covered_facets,
+            missing_facets=missing_facets,
+            noisy_only_facets=noisy_only_facets,
+            noisy_source_count=noisy_source_count,
             missing_dimensions=missing_dimensions,
         )
 
@@ -226,12 +248,21 @@ def _format_feature_summary(features: SufficiencyFeatures) -> str:
         f"diversity={features.diversity_score:.2f}; "
         f"authority={features.authority_score:.2f}; "
         f"recency={features.recency_score:.2f}; "
+        f"covered_facets={len(features.covered_facets)}; "
+        f"missing_facets={len(features.missing_facets)}; "
+        f"noisy_sources={features.noisy_source_count}; "
         f"sources={features.source_count}; "
         f"relevant_sources={features.relevant_source_count}; "
         f"domains={features.domain_count}; "
         f"providers={features.provider_count}; "
         f"primary={features.has_primary_source}"
     )
+
+
+def _format_contract_facets(contract: AnswerCoverageContract) -> str:
+    if not contract.must_cover_facets:
+        return "(none)"
+    return "; ".join(facet.name for facet in contract.must_cover_facets[:6])
 
 
 def _extract_keywords(text: str) -> set[str]:
@@ -262,6 +293,75 @@ def _filter_relevant(
         if overlap >= min_overlap:
             kept.append(src)
     return kept if kept else sources
+
+
+def _classify_facet_coverage(
+    sources: list[SourceReference],
+    coverage_contract: AnswerCoverageContract,
+) -> tuple[list[str], list[str], list[str]]:
+    if not coverage_contract.must_cover_facets:
+        return [], [], []
+
+    covered: list[str] = []
+    noisy_only: list[str] = []
+    missing: list[str] = []
+    for facet in coverage_contract.must_cover_facets:
+        strong_hit = False
+        weak_hit = False
+        facet_terms = _facet_terms(
+            facet.name, facet.intent, facet.evidence_hint, facet.bilingual_terms
+        )
+        for src in sources:
+            text = f"{src.title} {src.snippet} {src.url or ''}".lower()
+            overlap = sum(1 for term in facet_terms if term in text)
+            if overlap >= 2:
+                strong_hit = True
+                break
+            if overlap == 1:
+                weak_hit = True
+        if strong_hit:
+            covered.append(facet.name)
+        elif weak_hit:
+            noisy_only.append(facet.name)
+        else:
+            missing.append(facet.name)
+    return covered, noisy_only, missing
+
+
+def _count_noisy_sources(
+    sources: list[SourceReference],
+    question: str,
+    user_query: str,
+    coverage_contract: AnswerCoverageContract,
+) -> int:
+    if not sources:
+        return 0
+    global_terms = _extract_keywords(question) | _extract_keywords(user_query)
+    for facet in coverage_contract.must_cover_facets:
+        global_terms |= _facet_terms(
+            facet.name,
+            facet.intent,
+            facet.evidence_hint,
+            facet.bilingual_terms,
+        )
+    noisy = 0
+    for src in sources:
+        text = f"{src.title} {src.snippet} {src.url or ''}".lower()
+        overlap = sum(1 for term in global_terms if term in text)
+        if overlap == 0:
+            noisy += 1
+    return noisy
+
+
+def _facet_terms(*parts: Any) -> set[str]:
+    terms: set[str] = set()
+    for part in parts:
+        if isinstance(part, list):
+            for item in part:
+                terms |= _extract_keywords(str(item))
+            continue
+        terms |= _extract_keywords(str(part))
+    return terms
 
 
 def _guardrail_sufficiency_decision(
@@ -300,6 +400,24 @@ def _guardrail_sufficiency_decision(
             rationale="Collected sources are not relevant enough yet",
             decision_by="guardrail",
             reason_code="low_relevance",
+            missing_dimensions=list(features.missing_dimensions),
+            features=features,
+        )
+    if features.missing_facets:
+        return SufficiencyDecision(
+            sufficient=False,
+            rationale="Collected evidence still leaves planned answer facets uncovered",
+            decision_by="guardrail",
+            reason_code="missing_facets",
+            missing_dimensions=list(features.missing_dimensions),
+            features=features,
+        )
+    if features.noisy_only_facets:
+        return SufficiencyDecision(
+            sufficient=False,
+            rationale="Some answer facets are backed only by noisy or weakly aligned sources",
+            decision_by="guardrail",
+            reason_code="noisy_facets",
             missing_dimensions=list(features.missing_dimensions),
             features=features,
         )

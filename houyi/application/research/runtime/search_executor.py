@@ -23,6 +23,7 @@ from houyi.application.research.runtime.search_telemetry import (
     TelemetryEmitter,
 )
 from houyi.application.research.types import (
+    AnswerCoverageContract,
     SearchContext,
     SearchResult,
     SearchRound,
@@ -507,6 +508,7 @@ class SearchExecutor:
             prior,
             round_idx,
             collaboration,
+            sub_question.coverage_contract,
         )
         queries, skipped_queries = await self._query_planner.claim_queries(
             self._trim_queries_for_round(
@@ -545,6 +547,7 @@ class SearchExecutor:
             list(all_sources.values()),
             sub_question.question,
             context.user_query,
+            sub_question.coverage_contract,
         )
         await self._telemetry.sufficiency_features(
             question_id=sub_question.question_id,
@@ -573,6 +576,7 @@ class SearchExecutor:
             collaboration=collaboration,
             features=features,
             expected_sources=sub_question.expected_sources,
+            coverage_contract=sub_question.coverage_contract,
         )
 
     def _build_round_record(
@@ -663,6 +667,7 @@ class SearchExecutor:
         prior: list[str],
         round_idx: int,
         collaboration: dict[str, Any],
+        coverage_contract: AnswerCoverageContract,
     ) -> tuple[list[str], dict[str, Any]]:
         return await self._query_planner.generate_queries(
             question,
@@ -670,6 +675,7 @@ class SearchExecutor:
             prior,
             round_idx,
             collaboration,
+            coverage_contract=coverage_contract,
         )
 
     async def _evaluate_sufficiency(
@@ -682,6 +688,7 @@ class SearchExecutor:
         collaboration: dict[str, Any],
         features: SufficiencyFeatures,
         expected_sources: int,
+        coverage_contract: Any,
     ) -> SufficiencyDecision:
         return await self._sufficiency_evaluator.evaluate(
             question=question,
@@ -691,6 +698,7 @@ class SearchExecutor:
             collaboration=collaboration,
             features=features,
             expected_sources=expected_sources,
+            coverage_contract=coverage_contract,
         )
 
     def _run_cancel_check(self) -> None:

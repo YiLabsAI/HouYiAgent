@@ -103,7 +103,7 @@ _QUERY_GEN_RESPONSE = json.dumps(["AI agent framework comparison", "best AI agen
 _SUFFICIENCY_TRUE = json.dumps({"sufficient": True, "rationale": "Enough sources found"})
 _SECTION_JSON = json.dumps(
     {
-        "content": "Section content with [ref_001] citation.",
+        "content": "Section content with supported analysis [ref_001]. This section compares evidence, explains tradeoffs, and keeps enough substance for downstream validation and quality evaluation [ref_001].",
         "citations": [{"reference_id": "ref_001", "text_span": "content", "context": "ctx"}],
     }
 )

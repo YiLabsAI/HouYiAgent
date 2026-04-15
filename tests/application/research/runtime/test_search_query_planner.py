@@ -7,6 +7,7 @@ from houyi.application.research.runtime.search_query_planner import (
     QueryPlanner,
     _ensure_bilingual_queries,
 )
+from houyi.application.research.types import AnswerCoverageContract, CoverageFacet
 
 from ..conftest import MockLLM
 
@@ -73,3 +74,43 @@ class TestQueryPlanner:
         planner = _planner()
         result = await planner.read_collaboration_snapshot(1)
         assert result == {}
+
+    async def test_prepends_facet_queries(self):
+        contract = AnswerCoverageContract(
+            must_cover_facets=[
+                CoverageFacet(
+                    name="current role",
+                    intent="identify employer",
+                    evidence_hint="official profile",
+                    bilingual_terms=["current role official profile"],
+                )
+            ]
+        )
+        queries, metadata = _ensure_bilingual_queries(
+            ["person biography"],
+            "person biography",
+            "person biography",
+            coverage_contract=contract,
+        )
+        assert queries[0] == "current role official profile"
+        assert metadata["bilingual_expected"] is False
+
+    async def test_emits_coverage_metadata(self):
+        planner = QueryPlanner(
+            llm=MockLLM(responses=[json.dumps(["person current role official profile"])]),
+            max_rounds=3,
+            llm_kwargs={},
+        )
+        contract = AnswerCoverageContract(
+            must_cover_facets=[CoverageFacet(name="current role", intent="identify employer")]
+        )
+        queries, metadata = await planner.generate_queries(
+            "Who is the person?",
+            "Who is the person?",
+            [],
+            0,
+            {},
+            coverage_contract=contract,
+        )
+        assert queries
+        assert metadata["coverage_facets"] == ["current role"]

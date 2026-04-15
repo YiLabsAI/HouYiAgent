@@ -76,6 +76,90 @@ class TestGeneratePlan:
         with pytest.raises(ValueError, match="invalid JSON"):
             await planner.generate_plan("test")
 
+    async def test_parses_coverage_contract(self):
+        llm = MockLLM(
+            responses=[
+                '{"sub_questions":[{"question":"Q1","priority":5,"search_strategy":"web","expected_sources":3,"coverage_contract":{"must_cover_facets":[{"name":"current role","intent":"identify employer","evidence_hint":"official profile","bilingual_terms":["current role","current employer"]}],"required_caveats":["distinguish current from historical roles"]}}],"outline":[{"title":"Overview","objective":"Explain the topic","related_question_ids":[0],"coverage_contract":{"required_caveats":["note uncertainty"]}}],"plan_contract":{"must_cover_facets":[{"name":"identity","intent":"establish who the subject is"}],"comparison_axes":["time"],"time_scope":"2024-2026"},"estimated_duration_min":5}'
+            ]
+        )
+        planner = ResearchPlanner(llm)
+        plan = await planner.generate_plan("test")
+        assert plan.plan_contract.time_scope == "2024-2026"
+        assert plan.plan_contract.must_cover_facets[0].name == "identity"
+        local_facet = next(
+            facet
+            for facet in plan.sub_questions[0].coverage_contract.must_cover_facets
+            if facet.name == "current role"
+        )
+        assert local_facet.bilingual_terms == [
+            "current role",
+            "current employer",
+        ]
+        assert (
+            "distinguish current from historical roles"
+            in plan.outline[0].coverage_contract.required_caveats
+        )
+
+    async def test_merges_shared_contract(self):
+        llm = MockLLM(
+            responses=[
+                '{"sub_questions":[{"question":"Q1","priority":5,"search_strategy":"web","expected_sources":3,"coverage_contract":{"must_cover_facets":[{"name":"local facet","intent":"local obligation"}]}}],"outline":[{"title":"Overview","objective":"Explain the topic","related_question_ids":[0]}],"plan_contract":{"must_cover_facets":[{"name":"shared facet","intent":"global obligation"}],"comparison_axes":["time"],"time_scope":"2024-2026","required_caveats":["note uncertainty"]},"estimated_duration_min":5}'
+            ]
+        )
+        planner = ResearchPlanner(llm)
+        plan = await planner.generate_plan("test")
+        facet_names = [
+            facet.name for facet in plan.sub_questions[0].coverage_contract.must_cover_facets
+        ]
+        assert facet_names == ["local facet", "shared facet"]
+        assert plan.sub_questions[0].coverage_contract.time_scope == "2024-2026"
+        assert plan.sub_questions[0].coverage_contract.required_caveats == ["note uncertainty"]
+
+    async def test_derives_outline_contract(self):
+        llm = MockLLM(
+            responses=[
+                '{"sub_questions":[{"question":"Q1","priority":5,"search_strategy":"web","expected_sources":3,"coverage_contract":{"must_cover_facets":[{"name":"facet a","intent":"local a"}],"required_caveats":["caveat a"]}},{"question":"Q2","priority":4,"search_strategy":"web","expected_sources":3,"coverage_contract":{"must_cover_facets":[{"name":"facet b","intent":"local b"}],"evidence_expectations":["expectation b"]}}],"outline":[{"title":"Overview","objective":"Explain the topic","related_question_ids":[0,1]}],"plan_contract":{"must_cover_facets":[{"name":"shared facet","intent":"global obligation"}],"comparison_axes":["time"],"required_caveats":["global caveat"]},"estimated_duration_min":5}'
+            ]
+        )
+        planner = ResearchPlanner(llm)
+        plan = await planner.generate_plan("test")
+        outline_contract = plan.outline[0].coverage_contract
+        assert [facet.name for facet in outline_contract.must_cover_facets] == [
+            "facet a",
+            "facet b",
+            "shared facet",
+        ]
+        assert outline_contract.comparison_axes == ["time"]
+        assert outline_contract.required_caveats == ["global caveat", "caveat a"]
+        assert outline_contract.evidence_expectations == ["expectation b"]
+
+    async def test_outline_shared_fallback(self):
+        llm = MockLLM(
+            responses=[
+                '{"sub_questions":[{"question":"Q1","priority":5,"search_strategy":"web","expected_sources":3}],"outline":[{"title":"Overview","objective":"Explain the topic","related_question_ids":[0]}],"plan_contract":{"must_cover_facets":[{"name":"shared facet","intent":"global obligation"}],"comparison_axes":["time"]},"estimated_duration_min":5}'
+            ]
+        )
+        planner = ResearchPlanner(llm)
+        plan = await planner.generate_plan("test")
+        outline_contract = plan.outline[0].coverage_contract
+        assert [facet.name for facet in outline_contract.must_cover_facets] == ["shared facet"]
+        assert outline_contract.comparison_axes == ["time"]
+
+    async def test_expand_deep_outline(self):
+        llm = MockLLM(
+            responses=[
+                '{"sub_questions":[{"question":"How is the nine-tier social structure defined?","priority":5,"search_strategy":"web","expected_sources":3,"coverage_contract":{"must_cover_facets":[{"name":"stratification model","intent":"Explain the classification standard"}]}},{"question":"How do income and household finances differ across tiers?","priority":4,"search_strategy":"web","expected_sources":3,"coverage_contract":{"must_cover_facets":[{"name":"income and finance","intent":"Summarize income, assets, and liabilities"}]}},{"question":"How is the middle class defined and characterized?","priority":3,"search_strategy":"web","expected_sources":3,"coverage_contract":{"must_cover_facets":[{"name":"middle class definition","intent":"Define the middle class and key traits"}]}},{"question":"How can middle-class size and financial strength be estimated?","priority":2,"search_strategy":"web","expected_sources":3,"coverage_contract":{"must_cover_facets":[{"name":"middle class scale","intent":"Estimate scale and financial capacity"}]}}],"outline":[{"title":"Overview","objective":"Summarize stratification and middle-class dynamics","related_question_ids":[0,1,2,3]}],"plan_contract":{"must_cover_facets":[{"name":"limits and disputes","intent":"Explain methodological limits and disagreements"}]},"estimated_duration_min":8}'
+            ]
+        )
+        planner = ResearchPlanner(llm)
+        plan = await planner.generate_plan(
+            "Summarize the nine-tier income structure and middle-class conditions",
+            settings=ResearchSettings(depth="deep"),
+        )
+        assert len(plan.outline) >= 5
+        related_sizes = [len(section.related_question_ids) for section in plan.outline]
+        assert any(size == 1 for size in related_sizes)
+
 
 class TestRefinePlan:
     async def test_add_question(self):
@@ -158,6 +242,18 @@ class TestParseJson:
     def test_invalid_returns_none(self):
         data = _parse_json_response("garbage")
         assert data is None
+
+    def test_embedded_json_text(self):
+        data = _parse_json_response('Plan draft follows: {"key": "val", "items": [1, 2]} End.')
+        assert data == {"key": "val", "items": [1, 2]}
+
+    def test_trailing_commas(self):
+        data = _parse_json_response('{"key": "val", "items": [1, 2,],}')
+        assert data == {"key": "val", "items": [1, 2]}
+
+    def test_smart_quotes(self):
+        data = _parse_json_response('“{"key": “val”}”')
+        assert data == {"key": "val"}
 
 
 class TestBoundaryAndInteraction:
