@@ -54,11 +54,29 @@ _PLAN_JSON = json.dumps(
                 "search_strategy": "web",
                 "expected_sources": 3,
             },
+            {
+                "question": "What practical tradeoffs matter in adoption?",
+                "priority": 2,
+                "search_strategy": "web",
+                "expected_sources": 3,
+            },
+            {
+                "question": "What limitations or risks are repeatedly reported?",
+                "priority": 1,
+                "search_strategy": "web",
+                "expected_sources": 3,
+            },
         ],
         "outline": [
             {"title": "Overview", "objective": "Landscape", "related_question_ids": [0]},
             {"title": "Comparison", "objective": "Feature comparison", "related_question_ids": [1]},
             {"title": "Future", "objective": "Trends", "related_question_ids": [2]},
+            {"title": "Tradeoffs", "objective": "Adoption tradeoffs", "related_question_ids": [3]},
+            {
+                "title": "Limitations",
+                "objective": "Constraints and risks",
+                "related_question_ids": [4],
+            },
         ],
         "estimated_duration_min": 8,
     }
@@ -135,10 +153,10 @@ def _plan_with_clarification(plan_json: str, clarification_json: str) -> str:
 
 
 def _build_responses() -> list[str]:
-    """LLM response sequence for a 3-question standard-depth session.
+    """LLM response sequence for a 5-question standard-depth session.
 
-    Standard depth: planner draft (+ clarification metadata) → 3×(query_gen+sufficiency)
-    → 3×intermediate → 3×section → summary → 3×validation → RACE → FACT.
+    Standard depth: planner draft (+ clarification metadata) → 5×(query_gen+sufficiency)
+    → 5×intermediate → 5×section → summary → 5×validation → RACE → FACT.
     """
     return [
         _plan_with_clarification(_PLAN_JSON, _CLARIFICATION_PASS),
@@ -148,13 +166,23 @@ def _build_responses() -> list[str]:
         _SUFFICIENCY,
         _QUERY_GEN,
         _SUFFICIENCY,
+        _QUERY_GEN,
+        _SUFFICIENCY,
+        _QUERY_GEN,
+        _SUFFICIENCY,
         _INTERMEDIATE_JSON,
         _INTERMEDIATE_JSON,
         _INTERMEDIATE_JSON,
+        _INTERMEDIATE_JSON,
+        _INTERMEDIATE_JSON,
+        _SECTION_JSON,
+        _SECTION_JSON,
         _SECTION_JSON,
         _SECTION_JSON,
         _SECTION_JSON,
         "Summary of the research findings on AI agent frameworks.",
+        _VALIDATION_JSON,
+        _VALIDATION_JSON,
         _VALIDATION_JSON,
         _VALIDATION_JSON,
         _VALIDATION_JSON,
@@ -266,9 +294,9 @@ class TestRuntimeLifecycle:
         assert session.status == ResearchStatus.COMPLETED
 
         report = await session.get_report()
-        assert len(report.sections) == 3
+        assert len(report.sections) == 5
         assert report.summary
-        assert report.metadata.section_count == 3
+        assert report.metadata.section_count == 5
         assert report.metadata.source_count > 0
         assert report.metadata.quality_overall is not None
 
@@ -304,7 +332,7 @@ class TestPlanEditing:
         edit = PlanEdit(op=PlanEditOperation.ADD, target_question="Extra question?")
         plan = await session.edit_plan([edit])
         assert plan.version == 2
-        assert len(plan.sub_questions) == 4
+        assert len(plan.sub_questions) == 6
 
         edit2 = PlanEdit(
             op=PlanEditOperation.DELETE,
@@ -312,7 +340,7 @@ class TestPlanEditing:
         )
         plan = await session.edit_plan([edit2])
         assert plan.version == 3
-        assert len(plan.sub_questions) == 3
+        assert len(plan.sub_questions) == 5
 
 
 class TestEventSequence:
@@ -396,7 +424,7 @@ class TestProgress:
         await session.start("test")
         prog = session.progress
         assert prog.status == ResearchStatus.PLAN_READY
-        assert prog.total_steps == 3
+        assert prog.total_steps == 5
         assert prog.completed_steps == 0
 
         await session.confirm_plan()
@@ -404,7 +432,7 @@ class TestProgress:
 
         prog = session.progress
         assert prog.status == ResearchStatus.COMPLETED
-        assert prog.completed_steps == 3
+        assert prog.completed_steps == 5
         assert prog.sources_found > 0
         assert prog.elapsed_seconds >= 0
         assert prog.last_event_sequence > 0

@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import logging
 import os
 import ssl
 from collections.abc import Callable
@@ -31,6 +32,8 @@ from typing import Any, Protocol
 from urllib import request
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
+
+logger = logging.getLogger(__name__)
 
 from houyi.skills.web_search.errors import (
     DependencyMissingError,
@@ -96,6 +99,36 @@ class WebSearchProviderRegistry:
 # ---------------------------------------------------------------------------
 
 
+# Errors that indicate a network-level failure where a direct-connection
+# retry is worth attempting when the original request went through a
+# system-detected proxy.
+_PROXY_RETRIABLE_ERRORS = (
+    RemoteDisconnected,
+    URLError,
+    TimeoutError,
+    ConnectionResetError,
+    ssl.SSLError,
+    OSError,
+)
+
+
+def _build_opener(*, proxy_url: str | None, proxy_policy: str) -> request.OpenerDirector:
+    """Build an opener respecting the proxy resolution hierarchy.
+
+    - *proxy_policy* ``"off"`` → explicit no-proxy (``ProxyHandler({})``)
+    - *proxy_url* set → explicit proxy via ``ProxyHandler``
+    - Otherwise → default opener (urllib detects system proxy as usual)
+    """
+    if proxy_policy == "off":
+        return request.build_opener(request.ProxyHandler({}))
+    if proxy_url:
+        handler = request.ProxyHandler({"http": proxy_url, "https": proxy_url})
+        return request.build_opener(handler)
+    # No explicit proxy — let urllib use its default behaviour
+    # (respects system proxy on macOS / Linux / Windows).
+    return request.build_opener()
+
+
 def _http_json_request(
     url: str,
     *,
@@ -105,6 +138,7 @@ def _http_json_request(
     timeout: float = DEFAULT_PROVIDER_TIMEOUT,
     proxy_url: str | None = None,
     proxy_policy: str = "auto",
+    proxy_source: str = "direct",
     label: str = "Provider",
 ) -> dict[str, Any]:
     """Execute HTTP request → parse JSON → map errors to ``ProviderError``.
@@ -112,6 +146,12 @@ def _http_json_request(
     All HTTP-based providers funnel requests through this function so that
     proxy wiring, timeout enforcement, and HTTP-to-ProviderError mapping are
     consistent across the board.
+
+    When *proxy_source* is ``"system"`` and the request fails with a
+    connection / timeout error, the function retries **once** with a direct
+    (no-proxy) connection before raising.  This prevents a non-functional
+    macOS system proxy from silently blocking every provider in the fallback
+    chain.
     """
     final_headers: dict[str, str] = {
         "User-Agent": _DEFAULT_USER_AGENT,
@@ -121,18 +161,10 @@ def _http_json_request(
         final_headers.update(headers)
 
     req = request.Request(url, data=data, headers=final_headers, method=method)
+    opener = _build_opener(proxy_url=proxy_url, proxy_policy=proxy_policy)
 
     try:
-        if proxy_policy == "off":
-            opener = request.build_opener(request.ProxyHandler({}))
-            resp_ctx = opener.open(req, timeout=timeout)
-        elif proxy_url:
-            proxy_handler = request.ProxyHandler({"http": proxy_url, "https": proxy_url})
-            opener = request.build_opener(proxy_handler)
-            resp_ctx = opener.open(req, timeout=timeout)
-        else:
-            resp_ctx = request.urlopen(req, timeout=timeout)
-        with resp_ctx as response:
+        with opener.open(req, timeout=timeout) as response:
             return json.loads(response.read().decode("utf-8"))
     except HTTPError as exc:
         body = ""
@@ -153,14 +185,24 @@ def _http_json_request(
                 else f"{label} request failed: HTTP {exc.code}"
             ) from exc
         raise ProviderTimeoutError(f"{label} request failed: HTTP {exc.code}") from exc
-    except (
-        RemoteDisconnected,
-        URLError,
-        TimeoutError,
-        ConnectionResetError,
-        ssl.SSLError,
-        OSError,
-    ) as exc:
+    except _PROXY_RETRIABLE_ERRORS as exc:
+        if proxy_source == "system" and proxy_url:
+            logger.warning(
+                "%s proxy timeout via system proxy %s — retrying direct: %s",
+                label,
+                proxy_url,
+                exc,
+            )
+            direct_opener = _build_opener(proxy_url=None, proxy_policy="off")
+            direct_req = request.Request(url, data=data, headers=final_headers, method=method)
+            try:
+                with direct_opener.open(direct_req, timeout=timeout) as response:
+                    return json.loads(response.read().decode("utf-8"))
+            except Exception as direct_exc:
+                raise ProviderTimeoutError(
+                    f"{label} request failed via proxy and direct: "
+                    f"proxy_err={exc}, direct_err={direct_exc}"
+                ) from direct_exc
         raise ProviderTimeoutError(f"{label} request failed: {exc}") from exc
 
 
@@ -198,6 +240,7 @@ class SerperWebSearchProvider:
     timeout: float = DEFAULT_PROVIDER_TIMEOUT
     proxy_url: str | None = None
     proxy_policy: str = "auto"
+    proxy_source: str = "direct"
     last_raw_payload: dict[str, Any] | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -220,6 +263,7 @@ class SerperWebSearchProvider:
             timeout=self.timeout,
             proxy_url=self.proxy_url,
             proxy_policy=self.proxy_policy,
+            proxy_source=self.proxy_source,
             label=self.name,
         )
         self.last_raw_payload = response if isinstance(response, dict) else None
@@ -334,6 +378,7 @@ class SearxNGWebSearchProvider:
     timeout: float = DEFAULT_PROVIDER_TIMEOUT
     proxy_url: str | None = None
     proxy_policy: str = "auto"
+    proxy_source: str = "direct"
     last_raw_payload: dict[str, Any] | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -351,6 +396,7 @@ class SearxNGWebSearchProvider:
             timeout=self.timeout,
             proxy_url=self.proxy_url,
             proxy_policy=self.proxy_policy,
+            proxy_source=self.proxy_source,
             label=self.name,
         )
         if isinstance(response, dict):
@@ -478,6 +524,7 @@ class BochaWebSearchProvider:
     timeout: float = DEFAULT_PROVIDER_TIMEOUT
     proxy_url: str | None = None
     proxy_policy: str = "auto"
+    proxy_source: str = "direct"
     last_raw_payload: dict[str, Any] | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -507,6 +554,7 @@ class BochaWebSearchProvider:
             timeout=self.timeout,
             proxy_url=self.proxy_url,
             proxy_policy=self.proxy_policy,
+            proxy_source=self.proxy_source,
             label=self.name,
         )
         self.last_raw_payload = response if isinstance(response, dict) else None

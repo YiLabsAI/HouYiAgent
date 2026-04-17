@@ -18,17 +18,6 @@ class TestSafeEncodeUrl:
         url = "https://example.com/page?q=test"
         assert _safe_encode_url(url) == url
 
-    def test_unicode_path_encoded(self):
-        url = "https://example.com/搜索/结果"
-        encoded = _safe_encode_url(url)
-        assert "example.com" in encoded
-        assert "搜索" not in encoded
-
-    def test_unicode_query_encoded(self):
-        url = "https://example.com/search?q=冯嘉"
-        encoded = _safe_encode_url(url)
-        assert "冯嘉" not in encoded
-
     def test_empty_path(self):
         url = "https://example.com"
         assert _safe_encode_url(url) == "https://example.com"

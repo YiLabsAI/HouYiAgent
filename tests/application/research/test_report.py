@@ -2,7 +2,14 @@ from __future__ import annotations
 
 import json
 
-from houyi.application.research.report import ReportGenerator, SectionEvidencePolicy
+from houyi.application.research.report import (
+    ReportGenerator,
+    SectionEvidenceBundle,
+    SectionEvidencePolicy,
+    _build_soft_checklist,
+    _compute_section_sidecar_metrics,
+    _detect_noisy_paragraphs,
+)
 from houyi.application.research.types import (
     AggregatedSources,
     CoverageFacet,
@@ -10,6 +17,7 @@ from houyi.application.research.types import (
     ReportChunkType,
     ResearchPlan,
     SourceReference,
+    SubQuestion,
 )
 
 from .conftest import MockLLM
@@ -69,6 +77,31 @@ class TestGenerate:
         report, _ = await gen.generate(_plan_with_outline(), _sources())
         assert report.sections[0].content == "Just plain text."
         assert report.sections[0].citations == []
+
+    async def test_prompt_includes_section_context(self):
+        class _CapturingLLM(MockLLM):
+            def __init__(self, responses: list[str]) -> None:
+                super().__init__(responses)
+                self.prompts: list[str] = []
+
+            async def chat(self, messages: list, **kwargs):
+                self.prompts.append(str(messages[0]["content"]))
+                return await super().chat(messages, **kwargs)
+
+        llm = _CapturingLLM(responses=[_SECTION_JSON, _SECTION_JSON, "Summary text."])
+        gen = ReportGenerator(llm)
+        plan = _plan_with_outline()
+        plan.outline[0].related_question_ids = ["q1"]
+        plan.outline[1].related_question_ids = ["q2"]
+        plan.sub_questions = [
+            SubQuestion(question_id="q1", question="What frameworks lead the market?"),
+            SubQuestion(question_id="q2", question="How do the leading frameworks differ?"),
+        ]
+        await gen.generate(plan, _sources())
+        assert "Section position in report: 1 of 2" in llm.prompts[0]
+        assert "Next section: Details" in llm.prompts[0]
+        assert "Related sub-question focus:" in llm.prompts[0]
+        assert "What frameworks lead the market?" in llm.prompts[0]
 
 
 class TestGenerateStream:
@@ -295,11 +328,12 @@ class TestBoundaryAndInteraction:
         selected, total, metrics = gen.select_section_sources(
             ["q1", "q2"],
             sources,
-            section_title="中产规模与财力",
-            objective="综合比较中产规模、收入和财务压力",
+            section_title="Middle Class Size",
+            objective="Compare middle class size, income, and financial pressure",
         )
-        assert total == 3
-        assert len(selected) == 3
+        # total includes global-pool supplement when question candidates < floor
+        assert total >= 3
+        assert len(selected) >= 3
         assert metrics["cross_question_source_count"] >= 2
         assert metrics["authority_source_count"] >= 1
         assert {src.reference_id for src in selected} >= {"ref_cross_a", "ref_cross_b"}
@@ -342,6 +376,138 @@ class TestBoundaryAndInteraction:
         assert bundle.counter_evidence[0].reference_id == "ref_risk"
         assert bundle.coverage_facets == ["income growth"]
         assert metrics["counter_evidence_count"] == 1
+
+    async def test_bundle_adds_reserve_evidence(self):
+        llm = MockLLM(responses=[])
+        gen = ReportGenerator(llm, max_section_sources=1)
+        contract = _plan_with_outline().outline[0].coverage_contract
+        contract.must_cover_facets = [
+            CoverageFacet(name="income growth", intent="compare official statistics"),
+            CoverageFacet(name="debt pressure", intent="capture household debt burden"),
+        ]
+        sources = AggregatedSources(
+            sources=[
+                SourceReference(
+                    reference_id="ref_income",
+                    url="https://stats.gov/income",
+                    title="Official income growth report",
+                    snippet="official income growth statistics by year",
+                    reliability_score=0.95,
+                ),
+                SourceReference(
+                    reference_id="ref_debt",
+                    url="https://oecd.org/debt",
+                    title="Household debt pressure outlook",
+                    snippet="household debt pressure and repayment burden",
+                    reliability_score=0.88,
+                ),
+            ],
+            grouped_by_question={"q1": ["ref_income", "ref_debt"]},
+        )
+        bundle, _, metrics = gen.build_section_evidence_bundle(
+            ["q1"],
+            sources,
+            section_title="Overview",
+            objective="Compare income growth and debt pressure",
+            coverage_contract=contract,
+        )
+        assert bundle.unresolved_gaps == ["debt pressure"]
+        assert [src.reference_id for src in bundle.reserve_evidence] == ["ref_debt"]
+        assert metrics["reserve_evidence_count"] == 1
+
+
+class TestSourceFallback:
+    """Verify _relevant_sources global-pool fallback for citation desert prevention."""
+
+    async def test_supplements_sparse_questions(self):
+        """Section with <FLOOR question sources should see global sources."""
+        from houyi.application.research.report import _SECTION_SOURCE_FLOOR
+
+        llm = MockLLM(responses=[])
+        gen = ReportGenerator(llm, max_section_sources=4)
+
+        # q1 gives only 2 sources — well below _SECTION_SOURCE_FLOOR.
+        # global_only is NOT linked to q1 but is highly relevant to the title.
+        sources = AggregatedSources(
+            sources=[
+                SourceReference(
+                    reference_id="ref_q1_a",
+                    url="https://a.example.com/a",
+                    title="General social overview",
+                    snippet="general sociology overview",
+                    reliability_score=0.6,
+                ),
+                SourceReference(
+                    reference_id="ref_q1_b",
+                    url="https://b.example.com/b",
+                    title="Social theory basics",
+                    snippet="introduction to theory",
+                    reliability_score=0.5,
+                ),
+                SourceReference(
+                    reference_id="ref_global",
+                    url="https://stats.gov/middle-class-definition",
+                    title="Official middle class definition and income thresholds",
+                    snippet="middle class definition income threshold statistics official",
+                    reliability_score=0.95,
+                ),
+            ],
+            grouped_by_question={"q1": ["ref_q1_a", "ref_q1_b"]},
+        )
+
+        assert _SECTION_SOURCE_FLOOR > 2  # precondition: q1 sources < floor
+
+        selected, total, _ = gen.select_section_sources(
+            ["q1"],
+            sources,
+            section_title="Middle Class Definition",
+            objective="Define middle class income thresholds",
+        )
+
+        # The global source should appear because fallback triggered.
+        selected_ids = {s.reference_id for s in selected}
+        assert "ref_global" in selected_ids
+        assert total == 3  # all three candidates were ranked
+
+    async def test_no_fallback(self):
+        """Section with >=FLOOR question sources should NOT pull global pool."""
+        from houyi.application.research.report import _SECTION_SOURCE_FLOOR
+
+        llm = MockLLM(responses=[])
+        gen = ReportGenerator(llm, max_section_sources=4)
+
+        # Create enough question-aligned sources to exceed the floor.
+        q_sources = [
+            SourceReference(
+                reference_id=f"ref_q_{i}",
+                url=f"https://q.example.com/{i}",
+                title=f"Question-aligned source {i}",
+                snippet="relevant question content for section",
+                reliability_score=0.7 + i * 0.01,
+            )
+            for i in range(_SECTION_SOURCE_FLOOR + 2)
+        ]
+        unlinked = SourceReference(
+            reference_id="ref_unlinked",
+            url="https://unlinked.example.com",
+            title="Unlinked global source",
+            snippet="unlinked global source content",
+            reliability_score=0.99,
+        )
+        sources = AggregatedSources(
+            sources=[*q_sources, unlinked],
+            grouped_by_question={"q1": [s.reference_id for s in q_sources]},
+        )
+
+        _, total, _ = gen.select_section_sources(
+            ["q1"],
+            sources,
+            section_title="Overview",
+            objective="General overview",
+        )
+
+        # Only question-aligned candidates should be in the ranked pool.
+        assert total == len(q_sources)
 
 
 class TestIntermediateContext:
@@ -394,9 +560,7 @@ class TestIntermediateContext:
         from houyi.application.research.report import (
             _DEFAULT_INTERMEDIATE_CONTEXT_MAX_CHARS as _INTERMEDIATE_CONTEXT_MAX_CHARS,
         )
-        from houyi.application.research.report import (
-            _intermediate_context,
-        )
+        from houyi.application.research.report import _intermediate_context
         from houyi.application.research.runtime.intermediate import IntermediateReport
 
         reports = {
@@ -415,7 +579,6 @@ class TestIntermediateContext:
 
 class TestParallelGeneration:
     async def test_sections_generated_concurrently(self):
-        """Verify all outline sections are produced by the parallelized generate()."""
         plan = ResearchPlan(
             query="AI",
             outline=[
@@ -423,7 +586,6 @@ class TestParallelGeneration:
                 for i in range(5)
             ],
         )
-        # 5 sections + 1 summary = 6 LLM calls
         llm = MockLLM(responses=[_SECTION_JSON] * 5 + ["Summary."])
         gen = ReportGenerator(llm)
         report, _ = await gen.generate(plan, _sources())
@@ -445,7 +607,6 @@ class TestParseSectionEdgeCases:
         assert section.citations[0].reference_id == "ref_001"
 
     async def test_extracts_from_prefix_text(self):
-        """LLM sometimes prepends prose before the JSON object."""
         from houyi.application.research.report import _parse_section
 
         raw = "Here is the section:\n" + _SECTION_JSON
@@ -454,7 +615,6 @@ class TestParseSectionEdgeCases:
         assert len(section.citations) == 1
 
     async def test_raw_json_not_shown(self):
-        """Ensure {\"content\":...} is parsed, not displayed as-is."""
         from houyi.application.research.report import _parse_section
 
         section = _parse_section("Title", _SECTION_JSON)
@@ -470,3 +630,230 @@ class TestStripLeadingHeadingEdgeCases:
         result = _strip_leading_heading("Overview", content)
         assert "Content here." in result
         assert "## Overview" not in result
+
+
+class TestNoiseDetection:
+    def test_flags_search_narration(self):
+        paragraphs = [
+            "We searched for relevant information online and found limited results across multiple databases and web sources during the research process.",
+            "The framework was introduced in 2020 and has been widely adopted across the industry for production use cases [ref_abc123].",
+        ]
+        noisy = _detect_noisy_paragraphs(paragraphs)
+        assert 0 in noisy
+        assert 1 not in noisy
+
+    def test_flags_uncited_claims(self):
+        noisy = _detect_noisy_paragraphs(
+            [
+                "This is a long enough paragraph that makes factual claims about the topic without any citation reference at all, which means it should be flagged.",
+            ]
+        )
+        assert 0 in noisy
+
+    def test_skips_headings(self):
+        assert _detect_noisy_paragraphs(["## Section Heading", "Short line."]) == []
+
+    def test_accepts_cited_paragraph(self):
+        noisy = _detect_noisy_paragraphs(
+            [
+                "The framework achieved 95% accuracy in benchmark testing, outperforming all competitors [ref_abc123]. It was later adopted widely [ref_def456].",
+            ]
+        )
+        assert noisy == []
+
+    def test_flags_same_name_dump(self):
+        noisy = _detect_noisy_paragraphs(
+            [
+                "Multiple people share the same name, making it difficult to determine which individual is being referenced in this research context.",
+            ]
+        )
+        assert 0 in noisy
+
+    def test_flags_retrieval_process(self):
+        noisy = _detect_noisy_paragraphs(
+            [
+                "The retrieval process yielded several relevant documents that helped establish the baseline for our analysis of the topic area.",
+            ]
+        )
+        assert 0 in noisy
+
+    def test_skips_empty_paragraphs(self):
+        assert _detect_noisy_paragraphs(["", "  ", "\n"]) == []
+
+
+class TestSidecarMetrics:
+    """Deterministic prompt-compliance metrics — zero LLM cost verification."""
+
+    def test_bullet_line_ratio_high(self):
+        content = "- item one\n- item two\n- item three\n- item four"
+        m = _compute_section_sidecar_metrics(content, "overview_and_synthesis")
+        assert m["sidecar_bullet_line_ratio"] == 1.0
+
+    def test_bullet_line_ratio_low(self):
+        content = (
+            "This is a dense analytical paragraph with substantial claims "
+            "supported by evidence [ref_001]. The analysis shows clear trends.\n\n"
+            "Another paragraph continues the analysis with further depth "
+            "and additional citations [ref_002]. Key patterns emerge."
+        )
+        m = _compute_section_sidecar_metrics(content, "overview_and_synthesis")
+        assert m["sidecar_bullet_line_ratio"] == 0.0
+
+    def test_citation_counts(self):
+        content = (
+            "Claim A is supported [ref_001]. Claim B also holds [ref_002]. "
+            "And A was confirmed [ref_001]."
+        )
+        m = _compute_section_sidecar_metrics(content, "overview_and_synthesis")
+        assert m["sidecar_citation_count"] == 3
+        assert m["sidecar_unique_citation_count"] == 2
+
+    def test_uncited_paragraph_detected(self):
+        content = (
+            "This paragraph has a citation supporting its claim [ref_001]. "
+            "It meets the minimum length requirement.\n\n"
+            "This paragraph makes claims without any citation at all and is long "
+            "enough to be flagged as a substantive uncited paragraph by the detector."
+        )
+        m = _compute_section_sidecar_metrics(content, "overview_and_synthesis")
+        assert m["sidecar_uncited_paragraph_count"] == 1
+
+    def test_bold_heading_count(self):
+        content = "### Sub-topic A\nContent.\n\n### Sub-topic B\nMore content."
+        m = _compute_section_sidecar_metrics(content, "overview_and_synthesis")
+        assert m["sidecar_bold_heading_count"] == 2
+
+    def test_archetype_compliance_comparison(self):
+        content = (
+            "When compared to alternative approaches, the trade-off "
+            "between cost and performance becomes clear [ref_001]."
+        )
+        m = _compute_section_sidecar_metrics(content, "comparison")
+        assert m["sidecar_archetype_compliant"] == 1
+        assert "compared" in m["sidecar_archetype_keywords_matched"]
+
+    def test_archetype_compliance_false_for_mismatch(self):
+        content = (
+            "This section provides a general overview of the landscape "
+            "and summarizes the main findings from the research [ref_001]."
+        )
+        m = _compute_section_sidecar_metrics(content, "comparison")
+        assert m["sidecar_archetype_compliant"] == 0
+
+    def test_archetype_risk_and_caveat(self):
+        content = (
+            "Despite promising results, the risk of bias remains. "
+            "However, the limitation of the dataset must be noted [ref_001]."
+        )
+        m = _compute_section_sidecar_metrics(content, "risk_and_caveat")
+        assert m["sidecar_archetype_compliant"] == 1
+
+    def test_archetype_trend_and_state(self):
+        content = (
+            "The trend over the past decade shows steady growth [ref_001]. "
+            "Since 2015, the trajectory has accelerated markedly."
+        )
+        m = _compute_section_sidecar_metrics(content, "trend_and_state")
+        assert m["sidecar_archetype_compliant"] == 1
+
+    def test_word_count(self):
+        content = "one two three four five"
+        m = _compute_section_sidecar_metrics(content, "overview_and_synthesis")
+        assert m["sidecar_word_count"] == 5
+
+    def test_empty_content(self):
+        m = _compute_section_sidecar_metrics("", "overview_and_synthesis")
+        assert m["sidecar_bullet_line_ratio"] == 0.0
+        assert m["sidecar_citation_count"] == 0
+        assert m["sidecar_word_count"] == 0
+
+    def test_overview_archetype_no_keywords(self):
+        content = "General overview text [ref_001]."
+        m = _compute_section_sidecar_metrics(content, "overview_and_synthesis")
+        assert m["sidecar_archetype_compliant"] == 0
+        assert m["sidecar_archetype_keywords_matched"] == ""
+
+
+class TestArchetypeSoftChecklist:
+    """Verify archetype hints are injected into the soft checklist."""
+
+    def _make_bundle(self, archetype: str = "overview_and_synthesis") -> SectionEvidenceBundle:
+        return SectionEvidenceBundle(
+            selected_sources=[],
+            primary_evidence=[],
+            counter_evidence=[],
+            reserve_evidence=[],
+            unresolved_gaps=[],
+            caveat_obligations=[],
+            coverage_facets=["topic_a"],
+            comparison_axes=[],
+            evidence_expectations=[],
+            time_scope="",
+            geo_scope="",
+            section_archetype=archetype,
+        )
+
+    def test_comparison_hint_injected(self):
+        bundle = self._make_bundle("comparison")
+        checklist = _build_soft_checklist(bundle)
+        assert "ARCHETYPE GUIDANCE (comparison)" in checklist
+        assert "comparison dimensions" in checklist
+
+    def test_risk_hint_injected(self):
+        bundle = self._make_bundle("risk_and_caveat")
+        checklist = _build_soft_checklist(bundle)
+        assert "ARCHETYPE GUIDANCE (risk_and_caveat)" in checklist
+        assert "tensions or contradictions" in checklist
+
+    def test_trend_hint_injected(self):
+        bundle = self._make_bundle("trend_and_state")
+        checklist = _build_soft_checklist(bundle)
+        assert "ARCHETYPE GUIDANCE (trend_and_state)" in checklist
+        assert "temporal axis" in checklist
+
+    def test_overview_no_extra_hint(self):
+        bundle = self._make_bundle("overview_and_synthesis")
+        checklist = _build_soft_checklist(bundle)
+        assert "ARCHETYPE GUIDANCE" not in checklist
+
+    def test_empty_bundle_returns_empty(self):
+        bundle = SectionEvidenceBundle(
+            selected_sources=[],
+            primary_evidence=[],
+            counter_evidence=[],
+            reserve_evidence=[],
+            unresolved_gaps=[],
+            caveat_obligations=[],
+            coverage_facets=[],
+            comparison_axes=[],
+            evidence_expectations=[],
+            time_scope="",
+            geo_scope="",
+            section_archetype="overview_and_synthesis",
+        )
+        assert _build_soft_checklist(bundle) == ""
+
+    def test_archetype_hint_uncapped(self):
+        bundle = SectionEvidenceBundle(
+            selected_sources=[],
+            primary_evidence=[],
+            counter_evidence=[],
+            reserve_evidence=[],
+            unresolved_gaps=["gap_a", "gap_b"],
+            caveat_obligations=["caveat_a"],
+            coverage_facets=["facet_a", "facet_b"],
+            comparison_axes=["axis_a"],
+            evidence_expectations=[],
+            time_scope="",
+            geo_scope="",
+            section_archetype="comparison",
+        )
+        checklist = _build_soft_checklist(bundle)
+        assert "ARCHETYPE GUIDANCE" in checklist
+        assert "Topics to address" in checklist
+
+
+class TestSectionMetadata:
+    def test_outline_archetype_defaults(self):
+        section = OutlineSection(title="Overview", objective="Survey")
+        assert section.section_archetype == "overview_and_synthesis"

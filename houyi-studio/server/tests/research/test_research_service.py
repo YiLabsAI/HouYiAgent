@@ -47,9 +47,19 @@ _QUICK = ResearchSettings(depth="quick")
 _PLAN_JSON = json.dumps(
     {
         "sub_questions": [
-            {"question": "Q1", "priority": 5, "search_strategy": "web", "expected_sources": 3}
+            {"question": "Q1", "priority": 5, "search_strategy": "web", "expected_sources": 3},
+            {"question": "Q2", "priority": 4, "search_strategy": "web", "expected_sources": 3},
+            {"question": "Q3", "priority": 3, "search_strategy": "web", "expected_sources": 3},
+            {"question": "Q4", "priority": 2, "search_strategy": "web", "expected_sources": 3},
+            {"question": "Q5", "priority": 1, "search_strategy": "web", "expected_sources": 3},
         ],
-        "outline": [{"title": "Section 1", "objective": "Cover Q1", "related_question_ids": [0]}],
+        "outline": [
+            {"title": "Section 1", "objective": "Cover Q1", "related_question_ids": [0]},
+            {"title": "Section 2", "objective": "Cover Q2", "related_question_ids": [1]},
+            {"title": "Section 3", "objective": "Cover Q3", "related_question_ids": [2]},
+            {"title": "Section 4", "objective": "Cover Q4", "related_question_ids": [3]},
+            {"title": "Section 5", "objective": "Cover Q5", "related_question_ids": [4]},
+        ],
         "estimated_duration_min": 5,
     }
 )
@@ -266,7 +276,7 @@ class TestGetters:
         runtime, _ = await svc.create_run("test", settings=_QUICK)
         progress = svc.get_progress(runtime.run_id)
         assert progress.status == ResearchStatus.PLAN_READY
-        assert progress.total_steps == 1
+        assert progress.total_steps == 5
 
     async def test_emitter_after_create(self, tmp_path):
         svc = ResearchService(_MockLLM(), _mock_ws(), data_dir=tmp_path)

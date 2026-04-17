@@ -177,6 +177,35 @@ class TestReportToArticle:
         assert "[ref_bbb123]" not in article
         assert "orphan  token." in article
 
+    def test_drops_uncited_references(self):
+        report = MagicMock()
+        report.title = "Test"
+        report.summary = ""
+
+        cited = MagicMock()
+        cited.reference_id = "ref_cited"
+        cited.url = "https://cited.example"
+        cited.title = "Cited"
+
+        uncited = MagicMock()
+        uncited.reference_id = "ref_uncited"
+        uncited.url = "https://unrelated.example"
+        uncited.title = "Unrelated"
+
+        report.references = [cited, uncited]
+
+        section = MagicMock()
+        section.title = "S1"
+        section.content = "Claim A [ref_cited]."
+        cit = MagicMock()
+        cit.reference_id = "ref_cited"
+        section.citations = [cit]
+        report.sections = [section]
+
+        article = _report_to_article(report)
+        assert "[Cited](https://cited.example)" in article
+        assert "https://unrelated.example" not in article
+
     def test_uses_id_without_title(self):
         report = MagicMock()
         report.title = "Test Report"
@@ -198,6 +227,37 @@ class TestReportToArticle:
 
         article = _report_to_article(report)
         assert "[ref_1](https://example.com)" in article
+
+    def test_resolves_refs(self):
+        """Refs written in content but omitted from the structured citations
+        array should still resolve via the second-pass ref_lookup."""
+        report = MagicMock()
+        report.title = "Test"
+        report.summary = ""
+
+        ref_a = MagicMock()
+        ref_a.reference_id = "ref_aaa"
+        ref_a.url = "https://a.example"
+        ref_a.title = "Source A"
+        ref_b = MagicMock()
+        ref_b.reference_id = "ref_bbb"
+        ref_b.url = "https://b.example"
+        ref_b.title = "Source B"
+        report.references = [ref_a, ref_b]
+
+        section = MagicMock()
+        section.title = "S1"
+        # ref_bbb is in the content but NOT in section.citations
+        section.content = "Fact A [ref_aaa]. Fact B [ref_bbb]."
+        cit = MagicMock()
+        cit.reference_id = "ref_aaa"
+        section.citations = [cit]  # only ref_aaa
+        report.sections = [section]
+
+        article = _report_to_article(report)
+        assert "[Source A](https://a.example)" in article
+        assert "[Source B](https://b.example)" in article
+        assert "[ref_bbb]" not in article  # should be resolved, not stripped
 
 
 class TestRunnerInit:

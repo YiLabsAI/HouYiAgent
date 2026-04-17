@@ -1,15 +1,17 @@
-"""SourceAggregator — deduplicate, rank, and merge sources from all sub-questions.
+"""SourceAggregator — deduplicate, rank, filter, and merge sources from all sub-questions.
 
 Applies three-stage deduplication:
   1. URL exact match (same URL → merge, keep higher reliability)
   2. Content similarity > threshold → merge
-  3. Rank by: relevance × reliability × recency
+  3. Noise filtering: drop sources with zero relevance to user query
+  4. Rank by: relevance × reliability × recency
 """
 
 from __future__ import annotations
 
 import hashlib
 import logging
+import re
 from collections import defaultdict
 
 from houyi.application.research.types import (
@@ -35,6 +37,8 @@ class SourceAggregator:
     async def aggregate(
         self,
         results: list[SearchResult],
+        *,
+        user_query: str = "",
     ) -> AggregatedSources:
         """Aggregate sources from all sub-question search results.
 
@@ -47,6 +51,19 @@ class SourceAggregator:
                 raw.append((result.question_id, src))
 
         deduped, dup_count, question_groups = self._deduplicate(raw)
+
+        # Noise filtering: remove sources with zero relevance to any
+        # sub-question or the user query.  This prevents clearly
+        # irrelevant results (e.g. same-name persons in unrelated
+        # domains) from reaching the report generator.
+        question_texts = [result.summary or "" for result in results]
+        deduped, noise_count = _filter_noise_sources(
+            deduped,
+            user_query=user_query,
+            question_texts=question_texts,
+            question_groups=question_groups,
+        )
+        dup_count += noise_count
 
         deduped.sort(key=lambda s: s.reliability_score, reverse=True)
 
@@ -121,3 +138,130 @@ def _content_fingerprint(src: SourceReference) -> str:
     """
     text = f"{src.title.lower().strip()}|{src.snippet.lower().strip()}"
     return hashlib.md5(text.encode()).hexdigest()
+
+
+# Minimum combined (title + snippet) length for a source to be considered
+# usable evidence.  Below this threshold the source adds noise without
+# content that the report generator can cite.
+_MIN_USABLE_CONTENT_CHARS = 16
+
+# Stop-words excluded from keyword extraction for noise filtering.
+_NOISE_FILTER_STOP_WORDS = frozenset(
+    {
+        "a",
+        "an",
+        "the",
+        "and",
+        "or",
+        "but",
+        "for",
+        "nor",
+        "so",
+        "yet",
+        "at",
+        "by",
+        "in",
+        "of",
+        "on",
+        "to",
+        "up",
+        "is",
+        "it",
+        "are",
+        "was",
+        "were",
+        "be",
+        "been",
+        "am",
+        "do",
+        "does",
+        "did",
+        "has",
+        "have",
+        "had",
+        "will",
+        "shall",
+        "can",
+        "could",
+        "may",
+        "might",
+        "would",
+        "should",
+        "what",
+        "which",
+        "who",
+        "whom",
+        "whose",
+        "where",
+        "when",
+        "how",
+        "that",
+        "this",
+        "these",
+        "those",
+        "with",
+        "from",
+        "into",
+        "about",
+    }
+)
+
+
+def _extract_noise_filter_keywords(text: str) -> set[str]:
+    """Extract meaningful keywords from text for noise filtering."""
+    if not text:
+        return set()
+    tokens = re.findall(r"[\w\u4e00-\u9fff]{2,}", text.lower())
+    return {t for t in tokens if t not in _NOISE_FILTER_STOP_WORDS}
+
+
+def _filter_noise_sources(
+    sources: list[SourceReference],
+    *,
+    user_query: str,
+    question_texts: list[str],
+    question_groups: dict[str, set[str]],
+) -> tuple[list[SourceReference], int]:
+    """Remove sources with zero relevance to the research topic.
+
+    Uses a conservative keyword overlap check: a source is kept if ANY
+    keyword from the user query or question texts appears in its title,
+    snippet, or URL.  Only completely unrelated sources are dropped.
+
+    Returns (filtered_sources, noise_count).
+    """
+    if not sources or len(sources) <= 3:
+        return sources, 0
+
+    # Build keyword pool from user query and all question texts.
+    keywords = _extract_noise_filter_keywords(user_query)
+    for text in question_texts:
+        keywords |= _extract_noise_filter_keywords(text)
+
+    if not keywords:
+        return sources, 0
+
+    kept: list[SourceReference] = []
+    noise_count = 0
+    for src in sources:
+        combined = f"{src.title} {src.snippet}".strip()
+        # Filter sources with no usable content.
+        if len(combined) < _MIN_USABLE_CONTENT_CHARS:
+            noise_count += 1
+            if src.reference_id in question_groups:
+                del question_groups[src.reference_id]
+            continue
+        searchable = f"{combined} {src.url or ''}".lower()
+        overlap = sum(1 for kw in keywords if kw in searchable)
+        if overlap == 0:
+            noise_count += 1
+            logger.debug(
+                "Noise source filtered: ref_id=%s title=%r",
+                src.reference_id,
+                src.title[:60],
+            )
+            if src.reference_id in question_groups:
+                del question_groups[src.reference_id]
+            continue
+        kept.append(src)
+    return kept, noise_count

@@ -7,6 +7,15 @@ from houyi.application.research.types import SearchContext, SubQuestion
 _DEFAULT_QUERY_BUDGET_MS = 45_000
 _DEFAULT_ROUND_BUDGET_MS = 90_000
 _MIN_BUDGET_MS = 250
+_DEFAULT_TOTAL_SOURCE_CAP = 100
+# Small expected-source tasks only need a little over-collection headroom,
+# while broader tasks benefit from one extra slot to avoid brittle under-fetch.
+_SMALL_SOURCE_TARGET_THRESHOLD = 4
+_SMALL_SOURCE_TARGET_HEADROOM = 2
+_LARGE_SOURCE_TARGET_HEADROOM = 3
+# Do not keep expanding the per-sub-question source target indefinitely; beyond
+# this point latency rises faster than evidence quality in current benchmarks.
+_MAX_TOTAL_SOURCE_TARGET = 12
 
 
 @dataclass(slots=True, frozen=True)
@@ -36,9 +45,19 @@ class BudgetPolicy:
         return max(1, min(configured, default_parallelism, query_count))
 
     def resolve_total_source_target(self, sub_question: SubQuestion, context: SearchContext) -> int:
-        configured_cap = context.max_total_sources if context.max_total_sources > 0 else 100
+        configured_cap = (
+            context.max_total_sources
+            if context.max_total_sources > 0
+            else _DEFAULT_TOTAL_SOURCE_CAP
+        )
         expected = max(sub_question.expected_sources, 1)
-        return max(1, min(configured_cap, expected))
+        headroom = (
+            _SMALL_SOURCE_TARGET_HEADROOM
+            if expected <= _SMALL_SOURCE_TARGET_THRESHOLD
+            else _LARGE_SOURCE_TARGET_HEADROOM
+        )
+        target = max(expected, min(expected + headroom, _MAX_TOTAL_SOURCE_TARGET))
+        return max(1, min(configured_cap, target))
 
     def resolve_query_budget_ms(
         self,

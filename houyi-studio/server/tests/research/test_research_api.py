@@ -27,9 +27,19 @@ from houyi.skills.web_search.types import (
 _PLAN_JSON = json.dumps(
     {
         "sub_questions": [
-            {"question": "Q1", "priority": 5, "search_strategy": "web", "expected_sources": 3}
+            {"question": "Q1", "priority": 5, "search_strategy": "web", "expected_sources": 3},
+            {"question": "Q2", "priority": 4, "search_strategy": "web", "expected_sources": 3},
+            {"question": "Q3", "priority": 3, "search_strategy": "web", "expected_sources": 3},
+            {"question": "Q4", "priority": 2, "search_strategy": "web", "expected_sources": 3},
+            {"question": "Q5", "priority": 1, "search_strategy": "web", "expected_sources": 3},
         ],
-        "outline": [{"title": "S1", "objective": "O1", "related_question_ids": [0]}],
+        "outline": [
+            {"title": "S1", "objective": "O1", "related_question_ids": [0]},
+            {"title": "S2", "objective": "O2", "related_question_ids": [1]},
+            {"title": "S3", "objective": "O3", "related_question_ids": [2]},
+            {"title": "S4", "objective": "O4", "related_question_ids": [3]},
+            {"title": "S5", "objective": "O5", "related_question_ids": [4]},
+        ],
         "estimated_duration_min": 5,
     }
 )

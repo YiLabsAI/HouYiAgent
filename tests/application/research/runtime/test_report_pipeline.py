@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from houyi.application.research.report import SectionEvidenceBundle
 from houyi.application.research.runtime.report_pipeline import (
     ReportPipeline,
+    _collect_sections_to_repair,
     _merge_validation_reports,
     _passes_retention_guard,
     _run_completeness_guard,
@@ -127,6 +128,7 @@ class _StubReporter:
             selected_sources=list(aggregated.sources),
             primary_evidence=list(aggregated.sources[:1]),
             counter_evidence=[],
+            reserve_evidence=[],
             unresolved_gaps=[],
             caveat_obligations=list(
                 coverage_contract.required_caveats if coverage_contract else []
@@ -210,3 +212,39 @@ class TestRepairUsesCoverageBundle:
         assert reporter.seen_bundle is not None
         assert reporter.seen_bundle.coverage_facets == ["income distribution"]
         assert reporter.seen_bundle.caveat_obligations == ["note sampling limits"]
+
+
+class TestRepairPriority:
+    def test_collect_prioritizes_severity(self):
+        report = _report(
+            _section(title="Overview"),
+            _section(title="Risks"),
+        )
+        plan = SimpleNamespace(
+            outline=[
+                SimpleNamespace(title="Overview"),
+                SimpleNamespace(title="Risks"),
+            ]
+        )
+        validation = ValidationReport(
+            sections=[
+                SectionValidation(
+                    title="Overview",
+                    quality_score=20,
+                    has_citations=True,
+                    issues=["thin analysis"],
+                    needs_rewrite=True,
+                    suggested_queries=[],
+                ),
+                SectionValidation(
+                    title="Risks",
+                    quality_score=20,
+                    has_citations=False,
+                    issues=["missing citations", "missing caveats"],
+                    needs_rewrite=True,
+                    suggested_queries=["risk evidence"],
+                ),
+            ]
+        )
+        repairs = _collect_sections_to_repair(validation, report, plan, limit=2)
+        assert [item[1].title for item in repairs] == ["Risks", "Overview"]

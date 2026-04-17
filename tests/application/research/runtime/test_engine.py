@@ -79,10 +79,35 @@ _PLAN_JSON = json.dumps(
                 "search_strategy": "web",
                 "expected_sources": 3,
             },
+            {
+                "question": "What evidence supports real-world adoption?",
+                "priority": 3,
+                "search_strategy": "web",
+                "expected_sources": 3,
+            },
+            {
+                "question": "What limitations are reported?",
+                "priority": 2,
+                "search_strategy": "web",
+                "expected_sources": 3,
+            },
+            {
+                "question": "What near-term trends matter?",
+                "priority": 1,
+                "search_strategy": "web",
+                "expected_sources": 3,
+            },
         ],
         "outline": [
             {"title": "Overview", "objective": "Landscape", "related_question_ids": [0]},
             {"title": "Comparison", "objective": "Feature comparison", "related_question_ids": [1]},
+            {"title": "Adoption", "objective": "Usage evidence", "related_question_ids": [2]},
+            {
+                "title": "Limitations",
+                "objective": "Constraints and risks",
+                "related_question_ids": [3],
+            },
+            {"title": "Outlook", "objective": "Near-term outlook", "related_question_ids": [4]},
         ],
         "estimated_duration_min": 5,
     }
@@ -226,7 +251,7 @@ class TestStart:
         session = ResearchRuntime(llm_adapter=llm, web_search=ws, settings=_QUICK)
         await session.start("test")
         prog = session.progress
-        assert prog.total_steps == 2
+        assert prog.total_steps == 5
         assert prog.completed_steps == 0
 
 
@@ -236,9 +261,10 @@ class TestEditPlan:
         ws = make_mock_web_search()
         session = ResearchRuntime(llm_adapter=llm, web_search=ws, settings=_QUICK)
         await session.start("test")
+        initial_count = len(session._plan.sub_questions)
         edit = PlanEdit(op=PlanEditOperation.ADD, target_question="New Q?")
         plan = await session.edit_plan([edit])
-        assert len(plan.sub_questions) == 3
+        assert len(plan.sub_questions) == initial_count + 1
 
     async def test_edit_before_start_fails(self):
         llm = MockLLM()
@@ -841,7 +867,7 @@ class TestBoundaryAndInteraction:
     async def test_clarification_refines_query(self):
         """Standard depth replans only when the planner returns low-confidence refinement metadata."""
         first_plan = _plan_with_clarification(
-            _PLAN_ONE_Q,
+            _PLAN_JSON,
             json.dumps(
                 {
                     "needs_clarification": True,
@@ -853,7 +879,7 @@ class TestBoundaryAndInteraction:
             ),
         )
         std_settings = ResearchSettings(depth="standard")
-        responses = [first_plan, _PLAN_ONE_Q]
+        responses = [first_plan, _PLAN_JSON]
         llm = MockLLM(responses=responses)
         ws = make_mock_web_search()
         session = ResearchRuntime(llm_adapter=llm, web_search=ws, settings=std_settings)
@@ -865,7 +891,7 @@ class TestBoundaryAndInteraction:
 
     async def test_clear_standard_query_skips_replan(self):
         first_plan = _plan_with_clarification(
-            _PLAN_ONE_Q,
+            _PLAN_JSON,
             json.dumps(
                 {
                     "needs_clarification": False,
@@ -1073,18 +1099,29 @@ class TestBoundaryAndInteraction:
 def _standard_runtime_responses(
     clarification_json: str = _CLARIFICATION_PASS_JSON,
 ) -> list[str]:
-    """Standard depth: planner draft (+ optional replan) + 2×(query_gen+sufficiency) + 2 intermediates
-    + 2 sections + summary + 2 validations + RACE + FACT."""
+    """Standard depth: planner draft (+ optional replan) + 5×(query_gen+sufficiency)
+    + 3 intermediates + 2 sections + summary + 2 validations + RACE + FACT.
+
+    All 5 sub-questions run concurrently, so we must provide enough LLM
+    responses for every search task regardless of scheduling order.
+    """
     clarification = json.loads(clarification_json)
     plan_responses = [_plan_with_clarification(_PLAN_JSON, clarification_json)]
     if clarification.get("needs_clarification") and clarification.get("refined_query"):
         plan_responses.append(_PLAN_JSON)
+    # Sufficiency guardrails may short-circuit the LLM call (returning
+    # "keep searching" based on source quality features), so some rounds
+    # consume only 1 LLM call (query_gen) instead of 2 (query_gen +
+    # sufficiency).  Provide generous query_gen+sufficiency pairs to
+    # cover multi-round searches.  Excess responses are harmless.
+    search_pairs: list[str] = []
+    for _ in range(10):
+        search_pairs += [_QUERY_GEN_RESPONSE, _SUFFICIENCY_TRUE]
     return [
         *plan_responses,
-        _QUERY_GEN_RESPONSE,
-        _SUFFICIENCY_TRUE,
-        _QUERY_GEN_RESPONSE,
-        _SUFFICIENCY_TRUE,
+        *search_pairs,
+        # standard depth selects top-3 for intermediate reports
+        _INTERMEDIATE_JSON,
         _INTERMEDIATE_JSON,
         _INTERMEDIATE_JSON,
         _SECTION_JSON,
@@ -1125,13 +1162,21 @@ class TestStandardDepthPaths:
         assert session.status == ResearchStatus.PLAN_READY
 
     async def test_intermediate_report_generation(self):
+        # DIRECT mode avoids delegate-mode cross-sub-question query/URL dedup
+        # that starves later sub-questions of sources with a shared MockLLM.
+        # max_agents=1 ensures deterministic response consumption order.
+        settings = ResearchSettings(
+            depth="standard",
+            orchestration_mode="direct",
+            max_agents=1,
+        )
         llm = MockLLM(responses=_standard_runtime_responses())
         ws = make_mock_web_search()
-        session = ResearchRuntime(llm_adapter=llm, web_search=ws, settings=_STANDARD)
+        session = ResearchRuntime(llm_adapter=llm, web_search=ws, settings=settings)
         await session.start("AI frameworks")
         await session.confirm_plan()
         await session._run_search()
-        assert len(session._intermediate_reports) == 2
+        assert len(session._intermediate_reports) == 3
         for ir in session._intermediate_reports:
             assert ir.confidence > 0
 

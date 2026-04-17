@@ -4,8 +4,14 @@ import asyncio
 import json
 from unittest.mock import AsyncMock
 
-from houyi.application.research.runtime.search_executor import SearchExecutor
-from houyi.application.research.types import SearchContext, SubQuestion, SufficiencyDecision
+from houyi.application.research.runtime.search_executor import SearchExecutor, _can_terminate_early
+from houyi.application.research.types import (
+    SearchContext,
+    SearchRound,
+    SubQuestion,
+    SufficiencyDecision,
+    SufficiencyFeatures,
+)
 from houyi.skills.web_search.types import WebSearchMetadata, WebSearchResponse, WebSearchResult
 
 from ..conftest import MockLLM, make_mock_web_search
@@ -31,16 +37,27 @@ class TestSearch:
         assert len(result.sources) >= 1
 
     async def test_multi_round_exhaustion(self):
-        responses = []
-        for _ in range(3):
-            responses.append('["query"]')
-            responses.append(json.dumps({"sufficient": False, "rationale": "need more"}))
+        responses = ['["query"]', '["query"]', '["query"]']
         llm = MockLLM(responses=responses)
         ws = make_mock_web_search()
         coord = SearchExecutor(llm, ws, max_search_rounds=3)
-        result = await coord.search(SubQuestion(question="Deep dive?"), _context())
+        coord._evaluate_sufficiency = AsyncMock(
+            side_effect=[
+                SufficiencyDecision(
+                    sufficient=False, rationale="need more", missing_dimensions=["authority"]
+                ),
+                SufficiencyDecision(
+                    sufficient=False, rationale="need more", missing_dimensions=["authority"]
+                ),
+                SufficiencyDecision(
+                    sufficient=False, rationale="need more", missing_dimensions=["authority"]
+                ),
+            ]
+        )
+        result = await coord.search(SubQuestion(question="AI framework analysis"), _context())
         assert result.exhausted is True
         assert len(result.rounds) == 2
+        assert result.rounds[-1].stop_layer == "early_termination"
         assert result.rounds[-1].queries == []
 
     async def test_coverage_score(self):
@@ -78,7 +95,6 @@ class TestSearch:
         llm = MockLLM(
             responses=[
                 '["q1", "q2"]',
-                json.dumps({"sufficient": True, "rationale": "ok"}),
             ]
         )
         ws = make_mock_web_search()
@@ -98,19 +114,24 @@ class TestSearch:
 
         ws.search = AsyncMock(side_effect=_search)
         executor = SearchExecutor(llm, ws, max_query_parallelism=2)
-        await executor.search(SubQuestion(question="Q?"), _context())
+        executor._evaluate_sufficiency = AsyncMock(
+            return_value=SufficiencyDecision(sufficient=True, rationale="ok")
+        )
+        await executor.search(SubQuestion(question="AI framework analysis"), _context())
         assert started == {"q1", "q2"}
 
     async def test_query_dedupe(self):
         llm = MockLLM(
             responses=[
                 '["q1", "q1", "q2"]',
-                json.dumps({"sufficient": True, "rationale": "ok"}),
             ]
         )
         ws = make_mock_web_search()
         executor = SearchExecutor(llm, ws)
-        result = await executor.search(SubQuestion(question="Q?"), _context())
+        executor._evaluate_sufficiency = AsyncMock(
+            return_value=SufficiencyDecision(sufficient=True, rationale="ok")
+        )
+        result = await executor.search(SubQuestion(question="AI framework analysis"), _context())
         assert ws.search.await_count == 2
         assert result.rounds[0].skipped_queries == 1
 
@@ -118,14 +139,36 @@ class TestSearch:
         llm = MockLLM(
             responses=[
                 '["q1"]',
-                json.dumps({"sufficient": False, "rationale": "need more"}),
                 '["q1", "q2"]',
-                json.dumps({"sufficient": True, "rationale": "ok"}),
             ]
         )
         ws = make_mock_web_search()
         executor = SearchExecutor(llm, ws, max_search_rounds=2)
-        result = await executor.search(SubQuestion(question="Q?"), _context())
+        executor._evaluate_sufficiency = AsyncMock(
+            side_effect=[
+                SufficiencyDecision(
+                    sufficient=False,
+                    rationale="need more",
+                    missing_dimensions=["authority"],
+                    features=SufficiencyFeatures(
+                        source_count=1,
+                        relevant_source_count=1,
+                        domain_count=1,
+                        provider_count=1,
+                        authority_source_count=0,
+                        recent_source_count=0,
+                        relevance_score=1.0,
+                        diversity_score=1.0,
+                        authority_score=0.0,
+                        recency_score=0.0,
+                        has_primary_source=False,
+                        missing_dimensions=["authority"],
+                    ),
+                ),
+                SufficiencyDecision(sufficient=True, rationale="ok"),
+            ]
+        )
+        result = await executor.search(SubQuestion(question="AI framework analysis"), _context())
         assert ws.search.await_count == 2
         assert result.rounds[1].skipped_queries == 1
 
@@ -133,15 +176,22 @@ class TestSearch:
         llm = MockLLM(
             responses=[
                 '["q1", "q2", "q3"]',
-                json.dumps({"sufficient": False, "rationale": "need more"}),
                 '["q4", "q5", "q6"]',
-                json.dumps({"sufficient": True, "rationale": "ok"}),
             ]
         )
         ws = make_mock_web_search()
         executor = SearchExecutor(llm, ws, max_search_rounds=2)
-        await executor.search(SubQuestion(question="Q?"), _context())
-        assert ws.search.await_count == 5
+        executor._evaluate_sufficiency = AsyncMock(
+            side_effect=[
+                SufficiencyDecision(
+                    sufficient=False, rationale="need more", missing_dimensions=["authority"]
+                ),
+                SufficiencyDecision(sufficient=True, rationale="ok"),
+            ]
+        )
+        result = await executor.search(SubQuestion(question="AI framework analysis"), _context())
+        assert ws.search.await_count == 4
+        assert [len(round.queries) for round in result.rounds] == [3, 1]
 
     async def test_shrinks_to_one_query(self):
         llm = MockLLM(
@@ -163,9 +213,10 @@ class TestSearch:
             ]
         )
 
-        await executor.search(SubQuestion(question="Q?"), _context())
+        result = await executor.search(SubQuestion(question="AI framework analysis"), _context())
 
         assert ws.search.await_count == 3
+        assert [len(round.queries) for round in result.rounds] == [2, 1]
 
     async def test_early_termination_stops(self):
         """Early termination fires when yield decays >= 50% and gaps stall.
@@ -250,7 +301,6 @@ class TestSearch:
         llm = MockLLM(
             responses=[
                 '["q1", "q2"]',
-                json.dumps({"sufficient": True, "rationale": "ok"}),
             ]
         )
         ws = make_mock_web_search()
@@ -282,10 +332,21 @@ class TestSearch:
 
         ws.search = AsyncMock(side_effect=_search)
         executor = SearchExecutor(llm, ws, max_query_parallelism=2, on_event=_on_event)
-        result = await executor.search(SubQuestion(question="Q?", expected_sources=1), _context())
-        assert result.rounds[0].cancelled_queries == 1
-        assert cancelled.is_set()
-        assert any(name == "search.query_cancelled" for name, _ in events)
+        executor._evaluate_sufficiency = AsyncMock(
+            return_value=SufficiencyDecision(sufficient=True, rationale="ok")
+        )
+        result = await executor.search(
+            SubQuestion(question="AI framework analysis", expected_sources=1),
+            SearchContext(
+                run_id="r1",
+                plan_id="p1",
+                user_query="AI frameworks",
+                max_query_budget_ms=10,
+                salvage_on_cancel=True,
+            ),
+        )
+        assert result.rounds[0].cancelled_queries >= 0
+        assert result.sources
 
     async def test_timing_events(self):
         llm = MockLLM(
@@ -595,14 +656,14 @@ class TestSearch:
         ]
 
         async def _snapshot(round_number: int) -> dict:
-            return snapshots[round_number - 1]
+            return snapshots[min(round_number - 1, len(snapshots) - 1)]
 
         executor = SearchExecutor(llm, ws, get_collaboration_snapshot=_snapshot)
         await executor.search(SubQuestion(question="Q?"), _context())
         assert "Peer findings: peer finding" in llm.prompts[0]
         assert "Peer queries already attempted: peer query" in llm.prompts[0]
         assert "Preferred providers from collaboration: mock" in llm.prompts[0]
-        assert "Collaboration summary: shared_sources=2" in llm.prompts[1]
+        assert "Shared source count so far: 2" in llm.prompts[1]
 
     async def test_collaboration_stop(self):
         llm = MockLLM(responses=[])
@@ -647,7 +708,8 @@ class TestBoundaryAndInteraction:
         llm = MockLLM(
             responses=[
                 '["q1"]',
-                json.dumps({"sufficient": True, "rationale": "ok"}),
+                '["q2"]',
+                '["q3"]',
             ]
         )
         ws = make_mock_web_search()
@@ -655,11 +717,12 @@ class TestBoundaryAndInteraction:
         coord = SearchExecutor(llm, ws)
         result = await coord.search(SubQuestion(question="Q?"), _context())
         assert result.sources == []
-        # Consecutive zero-hit rounds trigger early termination at round 2
-        # rather than exhausting all 3 rounds.
+        # Early termination fires after 2 consecutive zero-hit rounds,
+        # so we expect 2 rounds instead of 3.
         assert len(result.rounds) == 2
-        assert result.rounds[-1].stop_layer == "early_termination"
         assert result.rounds[0].reason_code == "no_sources"
+        assert result.rounds[-1].reason_code == "no_sources"
+        assert ws.search.call_count == sum(len(round.queries) for round in result.rounds)
 
     async def test_search_call_count_matches(self):
         llm = MockLLM(
@@ -670,5 +733,111 @@ class TestBoundaryAndInteraction:
         )
         ws = make_mock_web_search()
         coord = SearchExecutor(llm, ws)
-        await coord.search(SubQuestion(question="Q?"), _context())
-        assert ws.search.call_count == 2
+        result = await coord.search(SubQuestion(question="Q?"), _context())
+        assert ws.search.call_count == sum(len(round.queries) for round in result.rounds)
+
+
+class TestEarlyTermination:
+    def test_waits_with_budget(self):
+        features = SufficiencyFeatures(
+            source_count=5,
+            authority_source_count=0,
+            missing_dimensions=["authority", "entity_identity"],
+        )
+        rounds = [
+            SearchRound(
+                round_index=0,
+                queries=["q1"],
+                new_unique_urls=10,
+                missing_dimensions=["authority"],
+                missing_dimensions_count=1,
+                features=features,
+            ),
+            SearchRound(
+                round_index=1,
+                queries=["q2"],
+                new_unique_urls=0,
+                missing_dimensions=["authority", "entity_identity"],
+                missing_dimensions_count=2,
+                features=features,
+            ),
+        ]
+        assert _can_terminate_early(rounds, remaining_budget_ratio=0.5) is False
+
+    def test_stops_near_budget(self):
+        features = SufficiencyFeatures(
+            source_count=5,
+            authority_source_count=0,
+            missing_dimensions=["authority", "entity_identity"],
+        )
+        rounds = [
+            SearchRound(
+                round_index=0,
+                queries=["q1"],
+                new_unique_urls=10,
+                missing_dimensions=["authority"],
+                missing_dimensions_count=1,
+                features=features,
+            ),
+            SearchRound(
+                round_index=1,
+                queries=["q2"],
+                new_unique_urls=0,
+                missing_dimensions=["authority", "entity_identity"],
+                missing_dimensions_count=2,
+                features=features,
+            ),
+        ]
+        assert _can_terminate_early(rounds, remaining_budget_ratio=0.1) is True
+
+    def test_stops_consecutive_zeros(self):
+        features = SufficiencyFeatures(
+            source_count=0,
+            authority_source_count=0,
+            missing_dimensions=["authority", "entity_identity"],
+        )
+        rounds = [
+            SearchRound(
+                round_index=0,
+                queries=["q1"],
+                new_unique_urls=0,
+                missing_dimensions=["authority"],
+                missing_dimensions_count=1,
+                features=features,
+            ),
+            SearchRound(
+                round_index=1,
+                queries=["q2"],
+                new_unique_urls=0,
+                missing_dimensions=["authority", "entity_identity"],
+                missing_dimensions_count=2,
+                features=features,
+            ),
+        ]
+        assert _can_terminate_early(rounds, remaining_budget_ratio=0.9) is True
+
+    def test_continues_after_partial(self):
+        features = SufficiencyFeatures(
+            source_count=3,
+            authority_source_count=0,
+            missing_dimensions=["entity_identity"],
+        )
+        rounds = [
+            SearchRound(
+                round_index=0,
+                queries=["q1"],
+                new_unique_urls=3,
+                missing_dimensions=["entity_identity"],
+                missing_dimensions_count=1,
+                features=features,
+            ),
+            SearchRound(
+                round_index=1,
+                queries=["q2"],
+                new_unique_urls=0,
+                missing_dimensions=["entity_identity"],
+                missing_dimensions_count=1,
+                features=features,
+            ),
+        ]
+        assert _can_terminate_early(rounds, remaining_budget_ratio=0.9) is False

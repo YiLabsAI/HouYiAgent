@@ -1,5 +1,3 @@
-"""Unit tests for SourceAggregator."""
-
 from __future__ import annotations
 
 from houyi.application.research.aggregator import SourceAggregator
@@ -131,6 +129,63 @@ class TestInvalidData:
         src = SourceReference(url=None, title="No URL", snippet="snip", reliability_score=0.5)
         results = [SearchResult(question_id="q1", sources=[src])]
         out = await agg.aggregate(results)
+        assert len(out.sources) == 1
+
+
+class TestNoiseFiltering:
+    async def test_irrelevant_source_removed(self):
+        agg = SourceAggregator()
+        results = [
+            _result(
+                "q1",
+                [
+                    _src("https://a.com", "Apache RocketMQ", "Open-source messaging platform"),
+                    _src("https://b.com", "Martial Arts Novel", "Wuxia fiction story"),
+                    _src("https://c.com", "RocketMQ Architecture", "Distributed messaging"),
+                    _src("https://d.com", "RocketMQ Docs", "Apache documentation"),
+                ],
+            ),
+        ]
+        out = await agg.aggregate(results, user_query="Apache RocketMQ architecture")
+        assert len(out.sources) == 3
+        assert all("Martial" not in s.title for s in out.sources)
+
+    async def test_relevant_source_kept(self):
+        agg = SourceAggregator()
+        results = [
+            _result(
+                "q1",
+                [
+                    _src("https://a.com", "RocketMQ Guide", "Architecture overview"),
+                    _src("https://b.com", "Messaging Systems", "RocketMQ comparison"),
+                ],
+            ),
+        ]
+        out = await agg.aggregate(results, user_query="RocketMQ architecture")
+        assert len(out.sources) == 2
+
+    async def test_short_content_filtered(self):
+        agg = SourceAggregator()
+        results = [
+            _result(
+                "q1",
+                [
+                    _src("https://a.com", "Good", "Sufficient content here for evidence"),
+                    _src("https://b.com", "X", ""),
+                    _src("https://c.com", "Good Details", "More good content here"),
+                    _src("https://d.com", "Good Analysis", "Analytical good content"),
+                ],
+            ),
+        ]
+        out = await agg.aggregate(results, user_query="Good content")
+        assert len(out.sources) == 3
+
+    async def test_no_filter_without_query(self):
+        agg = SourceAggregator()
+        results = [
+            _result("q1", [_src("https://a.com", "Anything", "Random content")]),
+        ]
+        out = await agg.aggregate(results, user_query="")
         assert len(out.sources) == 1
 
 

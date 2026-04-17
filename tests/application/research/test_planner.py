@@ -1,12 +1,20 @@
-"""Unit tests for ResearchPlanner."""
-
 from __future__ import annotations
 
 import pytest
 
-from houyi.application.research.planner import ResearchPlanner, _parse_json_response
+from houyi.application.research.planner import (
+    _VALID_QUERY_TYPES,
+    _VALID_SECTION_ARCHETYPES,
+    ResearchPlanner,
+    _build_plan,
+    _force_identity_contract,
+    _parse_json_response,
+)
 from houyi.application.research.types import (
+    AnswerCoverageContract,
+    CoverageFacet,
     OrchestrationMode,
+    OutlineSection,
     PlanEdit,
     PlanEditOperation,
     PlanStatus,
@@ -17,6 +25,160 @@ from houyi.application.research.types import (
 )
 
 from .conftest import MockLLM
+
+
+def test_research_settings_defaults() -> None:
+    settings = ResearchSettings()
+    assert settings.orchestration_mode == OrchestrationMode.DELEGATE
+    assert settings.depth.value == "standard"
+    assert settings.max_agents == 5
+
+
+class TestPlannerMetadata:
+    def test_subquestion_defaults(self):
+        question = SubQuestion(question="What is X?")
+        assert question.query_type == "factual"
+        assert question.disambiguation_needed is False
+
+    def test_outline_defaults(self):
+        section = OutlineSection(title="Overview", objective="Survey")
+        assert section.section_archetype == "overview_and_synthesis"
+
+    def test_build_plan_reads_query_type(self):
+        plan = _build_plan(
+            "test query",
+            {
+                "sub_questions": [
+                    {
+                        "question": "Who is person X?",
+                        "priority": 5,
+                        "query_type": "entity",
+                        "disambiguation_needed": True,
+                    }
+                ],
+                "outline": [
+                    {
+                        "title": "Identity",
+                        "objective": "Confirm identity",
+                        "related_question_ids": [0],
+                        "section_archetype": "overview_and_synthesis",
+                    }
+                ],
+            },
+            ResearchSettings(),
+        )
+        assert plan.sub_questions[0].query_type == "entity"
+        assert plan.sub_questions[0].disambiguation_needed is True
+
+    def test_build_plan_reads_archetype(self):
+        plan = _build_plan(
+            "test",
+            {
+                "sub_questions": [{"question": "Compare A vs B?", "priority": 5}],
+                "outline": [
+                    {
+                        "title": "Comparison",
+                        "objective": "A vs B",
+                        "related_question_ids": [0],
+                        "section_archetype": "comparison",
+                    }
+                ],
+            },
+            ResearchSettings(),
+        )
+        assert plan.outline[0].section_archetype == "comparison"
+
+    def test_build_plan_fallsback(self):
+        plan = _build_plan(
+            "q",
+            {
+                "sub_questions": [{"question": "Q?", "priority": 3, "query_type": "unknown"}],
+                "outline": [],
+            },
+            ResearchSettings(),
+        )
+        assert plan.sub_questions[0].query_type == "factual"
+
+    def test_build_plan_fallback_archetype(self):
+        plan = _build_plan(
+            "q",
+            {
+                "sub_questions": [{"question": "Q?", "priority": 3}],
+                "outline": [
+                    {
+                        "title": "S",
+                        "objective": "O",
+                        "related_question_ids": [0],
+                        "section_archetype": "bogus",
+                    }
+                ],
+            },
+            ResearchSettings(),
+        )
+        assert plan.outline[0].section_archetype == "overview_and_synthesis"
+
+    def test_query_type_values(self):
+        assert {"entity", "analytic", "factual"} == _VALID_QUERY_TYPES
+
+    def test_archetype_values(self):
+        assert "comparison" in _VALID_SECTION_ARCHETYPES
+        assert "risk_and_caveat" in _VALID_SECTION_ARCHETYPES
+        assert "trend_and_state" in _VALID_SECTION_ARCHETYPES
+
+    def test_identity_contract_adds_facet(self):
+        contract = _force_identity_contract(AnswerCoverageContract())
+        assert "identity" in [facet.name for facet in contract.must_cover_facets]
+
+    def test_identity_contract_stays_unique(self):
+        contract = _force_identity_contract(
+            AnswerCoverageContract(
+                must_cover_facets=[CoverageFacet(name="identity", intent="test")]
+            )
+        )
+        identity_count = sum(1 for facet in contract.must_cover_facets if facet.name == "identity")
+        assert identity_count == 1
+
+    def test_disambiguation_adds_identity(self):
+        plan = _build_plan(
+            "weather",
+            {
+                "sub_questions": [
+                    {
+                        "question": "What is the weather today?",
+                        "priority": 5,
+                        "query_type": "entity",
+                        "disambiguation_needed": True,
+                    }
+                ],
+                "outline": [],
+            },
+            ResearchSettings(),
+        )
+        facet_names = [
+            facet.name for facet in plan.sub_questions[0].coverage_contract.must_cover_facets
+        ]
+        assert "identity" in facet_names
+
+    def test_outline_title_preserved(self):
+        """Section titles from LLM output are passed through without
+        language normalization — the planner prompt LANGUAGE RULE is the
+        correct mechanism for language consistency."""
+        plan = _build_plan(
+            "English query",
+            {
+                "sub_questions": [{"question": "Q?", "priority": 3}],
+                "outline": [
+                    {
+                        "title": "Market Overview",
+                        "objective": "O",
+                        "related_question_ids": [0],
+                        "section_archetype": "comparison",
+                    }
+                ],
+            },
+            ResearchSettings(),
+        )
+        assert plan.outline[0].title == "Market Overview"
 
 
 class TestGeneratePlan:
@@ -44,6 +206,19 @@ class TestGeneratePlan:
         plan = await planner.generate_plan("test", memory_context="User prefers Python")
         assert plan is not None
 
+    async def test_standard_floor(self):
+        llm = MockLLM(
+            responses=[
+                '{"sub_questions":[{"question":"Q1","priority":5,"search_strategy":"web","expected_sources":3}],"outline":[{"title":"Overview","objective":"Explain the topic","related_question_ids":[0]}],"estimated_duration_min":5}',
+                '{"sub_questions":[{"question":"Q1","priority":5,"search_strategy":"web","expected_sources":3}],"outline":[{"title":"Overview","objective":"Explain the topic","related_question_ids":[0]}],"estimated_duration_min":5}',
+            ]
+        )
+        planner = ResearchPlanner(llm)
+        with pytest.raises(ValueError, match="fewer than 5 sub-questions"):
+            await planner.generate_plan(
+                "AI agent frameworks", settings=ResearchSettings(depth="standard")
+            )
+
     async def test_returns_clarification(self):
         llm = MockLLM(
             responses=[
@@ -51,7 +226,10 @@ class TestGeneratePlan:
             ]
         )
         planner = ResearchPlanner(llm)
-        draft = await planner.generate_plan_draft("AI agent frameworks")
+        draft = await planner.generate_plan_draft(
+            "AI agent frameworks",
+            settings=ResearchSettings(depth="quick"),
+        )
         assert draft.plan.query == "AI agent frameworks"
         assert draft.clarification is not None
         assert draft.clarification.needs_clarification is True
@@ -65,7 +243,7 @@ class TestGeneratePlan:
             ]
         )
         planner = ResearchPlanner(llm)
-        plan = await planner.generate_plan("test")
+        plan = await planner.generate_plan("test", settings=ResearchSettings(depth="quick"))
         assert len(plan.sub_questions) == 1
         assert len(plan.outline) == 1
         assert llm._call_count == 2
@@ -83,7 +261,7 @@ class TestGeneratePlan:
             ]
         )
         planner = ResearchPlanner(llm)
-        plan = await planner.generate_plan("test")
+        plan = await planner.generate_plan("test", settings=ResearchSettings(depth="quick"))
         assert plan.plan_contract.time_scope == "2024-2026"
         assert plan.plan_contract.must_cover_facets[0].name == "identity"
         local_facet = next(
@@ -107,7 +285,7 @@ class TestGeneratePlan:
             ]
         )
         planner = ResearchPlanner(llm)
-        plan = await planner.generate_plan("test")
+        plan = await planner.generate_plan("test", settings=ResearchSettings(depth="quick"))
         facet_names = [
             facet.name for facet in plan.sub_questions[0].coverage_contract.must_cover_facets
         ]
@@ -122,7 +300,7 @@ class TestGeneratePlan:
             ]
         )
         planner = ResearchPlanner(llm)
-        plan = await planner.generate_plan("test")
+        plan = await planner.generate_plan("test", settings=ResearchSettings(depth="quick"))
         outline_contract = plan.outline[0].coverage_contract
         assert [facet.name for facet in outline_contract.must_cover_facets] == [
             "facet a",
@@ -140,10 +318,25 @@ class TestGeneratePlan:
             ]
         )
         planner = ResearchPlanner(llm)
-        plan = await planner.generate_plan("test")
+        plan = await planner.generate_plan("test", settings=ResearchSettings(depth="quick"))
         outline_contract = plan.outline[0].coverage_contract
         assert [facet.name for facet in outline_contract.must_cover_facets] == ["shared facet"]
         assert outline_contract.comparison_axes == ["time"]
+
+    async def test_entity_contract_added(self):
+        llm = MockLLM(
+            responses=[
+                '{"sub_questions":[{"question":"Who is Sample Person?","priority":5,"search_strategy":"web","expected_sources":3}],"outline":[{"title":"Overview","objective":"Explain the topic","related_question_ids":[0]}],"estimated_duration_min":5}'
+            ]
+        )
+        planner = ResearchPlanner(llm)
+        plan = await planner.generate_plan(
+            "Who is Sample Person?", settings=ResearchSettings(depth="quick")
+        )
+        contract = plan.sub_questions[0].coverage_contract
+        assert contract.must_cover_facets[0].name == "identity"
+        assert "disambiguate same-name entities before making claims" in contract.required_caveats
+        assert "official identity evidence" in contract.evidence_expectations
 
     async def test_expand_deep_outline(self):
         llm = MockLLM(
@@ -255,6 +448,13 @@ class TestParseJson:
         data = _parse_json_response('“{"key": “val”}”')
         assert data == {"key": "val"}
 
+    def test_unescaped_inner_quotes_repaired(self):
+        data = _parse_json_response(
+            '```json\n{"sub_questions": [{"question": "topic "alpha" analysis", "priority": 3}], "outline": []}\n```'
+        )
+        assert data is not None
+        assert data["sub_questions"][0]["question"] == 'topic "alpha" analysis'
+
 
 class TestBoundaryAndInteraction:
     async def test_empty_query_produces_plan(self, mock_llm):
@@ -276,14 +476,14 @@ class TestBoundaryAndInteraction:
             ]
         )
         planner = ResearchPlanner(llm)
-        await planner.generate_plan("quantum computing")
+        await planner.generate_plan("quantum computing", settings=ResearchSettings(depth="quick"))
         assert llm._call_count == 1
 
     async def test_invalid_strategy_fallback(self):
         raw = '{"sub_questions":[{"question":"Q1","search_strategy":"quantum"}],"outline":[{"title":"Overview","objective":"Explain the topic","related_question_ids":[0]}]}'
         llm = MockLLM(responses=[raw])
         planner = ResearchPlanner(llm)
-        plan = await planner.generate_plan("test")
+        plan = await planner.generate_plan("test", settings=ResearchSettings(depth="quick"))
         assert plan.sub_questions[0].search_strategy == SearchStrategy.WEB
 
     async def test_move_reorders_questions(self):

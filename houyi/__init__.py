@@ -12,10 +12,10 @@ from houyi.assurance.evaluation import (
     evaluate,
 )
 from houyi.assurance.verification.assertion import AssertionSpec
-from houyi.decorators import tool
 from houyi.domain.agent import AgentSpec, AgentTeamConfig
 from houyi.domain.skill.spec import SkillSpec
 from houyi.domain.task import TaskSpec
+from houyi.utils.decorators import tool
 
 Skill = SkillSpec
 

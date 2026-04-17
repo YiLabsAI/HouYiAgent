@@ -1,5 +1,3 @@
-"""Unit tests for QualityEvaluator."""
-
 from __future__ import annotations
 
 import json

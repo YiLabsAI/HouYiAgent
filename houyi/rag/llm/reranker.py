@@ -6,8 +6,8 @@ import logging
 import re
 from typing import TYPE_CHECKING
 
-from houyi.rag.llm.json_utils import parse_embedded_json
 from houyi.rag.types import SearchResult
+from houyi.utils.json_utils import parse_embedded_json
 
 if TYPE_CHECKING:
     from houyi.adapters.llm.base import LLMAdapter

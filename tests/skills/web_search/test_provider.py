@@ -23,6 +23,7 @@ from houyi.skills.web_search.providers import (
     SearxNGWebSearchProvider,
     SerperWebSearchProvider,
     TavilyWebSearchProvider,
+    _build_opener,
     _http_json_request,
 )
 
@@ -31,24 +32,37 @@ from houyi.skills.web_search.providers import (
 # ---------------------------------------------------------------------------
 
 
+def _make_fake_opener(payload: bytes = b'{"ok": true}', *, error: Exception | None = None):
+    """Return a fake opener factory for monkeypatching request.build_opener."""
+
+    class _FakeOpener:
+        def open(self, req, *, timeout=None):
+            if error:
+                raise error
+
+            class _Resp:
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *args):
+                    return False
+
+                def read(self):
+                    return payload
+
+            return _Resp()
+
+    return lambda *a: _FakeOpener()
+
+
 class TestHttpJsonRequest:
     """Tests for the shared _http_json_request function."""
 
     def test_success_get(self, monkeypatch) -> None:
-        class _Resp:
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *args):
-                return False
-
-            def read(self):
-                return json.dumps({"ok": True}).encode()
-
         monkeypatch.setattr(
             providers_module.request,
-            "urlopen",
-            lambda *a, **k: _Resp(),
+            "build_opener",
+            _make_fake_opener(json.dumps({"ok": True}).encode()),
         )
         result = _http_json_request("https://example.com", label="test")
         assert result == {"ok": True}
@@ -56,38 +70,42 @@ class TestHttpJsonRequest:
     def test_429_maps_limit(self, monkeypatch) -> None:
         from urllib.error import HTTPError
 
-        def _urlopen(*a, **k):
-            raise HTTPError("", 429, "Rate Limited", {}, None)
-
-        monkeypatch.setattr(providers_module.request, "urlopen", _urlopen)
+        monkeypatch.setattr(
+            providers_module.request,
+            "build_opener",
+            _make_fake_opener(error=HTTPError("", 429, "Rate Limited", {}, None)),
+        )
         with pytest.raises(ProviderRateLimitError):
             _http_json_request("https://example.com", label="test")
 
     def test_403_maps_auth(self, monkeypatch) -> None:
         from urllib.error import HTTPError
 
-        def _urlopen(*a, **k):
-            raise HTTPError("", 403, "Forbidden", {}, None)
-
-        monkeypatch.setattr(providers_module.request, "urlopen", _urlopen)
+        monkeypatch.setattr(
+            providers_module.request,
+            "build_opener",
+            _make_fake_opener(error=HTTPError("", 403, "Forbidden", {}, None)),
+        )
         with pytest.raises(ProviderAuthError):
             _http_json_request("https://example.com", label="test")
 
     def test_400_maps_invalid(self, monkeypatch) -> None:
         from urllib.error import HTTPError
 
-        def _urlopen(*a, **k):
-            raise HTTPError("", 400, "Bad Request", {}, None)
-
-        monkeypatch.setattr(providers_module.request, "urlopen", _urlopen)
+        monkeypatch.setattr(
+            providers_module.request,
+            "build_opener",
+            _make_fake_opener(error=HTTPError("", 400, "Bad Request", {}, None)),
+        )
         with pytest.raises(ProviderInvalidResponse):
             _http_json_request("https://example.com", label="test")
 
     def test_timeout_maps_error(self, monkeypatch) -> None:
-        def _urlopen(*a, **k):
-            raise TimeoutError("timed out")
-
-        monkeypatch.setattr(providers_module.request, "urlopen", _urlopen)
+        monkeypatch.setattr(
+            providers_module.request,
+            "build_opener",
+            _make_fake_opener(error=TimeoutError("timed out")),
+        )
         with pytest.raises(ProviderTimeoutError):
             _http_json_request("https://example.com", label="test")
 
@@ -122,6 +140,91 @@ class TestHttpJsonRequest:
         )
         assert result == {"proxied": True}
         assert opened_urls == ["https://example.com"]
+
+    def test_uses_default_opener(self) -> None:
+        """When no proxy_url is set and policy is 'auto', _build_opener returns a
+        default opener that respects system proxy (urllib's default behaviour)."""
+        opener = _build_opener(proxy_url=None, proxy_policy="auto")
+        # Default opener has standard handler types — just verify it works.
+        handler_names = [type(h).__name__ for h in opener.handlers]
+        assert "HTTPHandler" in handler_names
+
+    def test_policy_off_suppresses_proxy(self) -> None:
+        """When proxy_policy is 'off', ProxyHandler({}) must suppress system proxy."""
+        opener = _build_opener(proxy_url=None, proxy_policy="off")
+        proxy_handlers = [h for h in opener.handlers if hasattr(h, "proxies")]
+        assert all(h.proxies == {} for h in proxy_handlers), (
+            "Expected no proxy entries but found: " + str([h.proxies for h in proxy_handlers])
+        )
+
+    def test_system_proxy_direct_fallback(self, monkeypatch) -> None:
+        """When proxy_source='system' and the proxy times out, _http_json_request
+        should retry once with a direct (no-proxy) connection."""
+        call_count = {"n": 0}
+
+        def _build(*args):
+            call_count["n"] += 1
+
+            class _Opener:
+                def open(self, req, *, timeout=None):
+                    if call_count["n"] == 1:
+                        raise TimeoutError("proxy timeout")
+
+                    class _Resp:
+                        def __enter__(self):
+                            return self
+
+                        def __exit__(self, *a):
+                            return False
+
+                        def read(self):
+                            return b'{"direct": true}'
+
+                    return _Resp()
+
+            return _Opener()
+
+        monkeypatch.setattr(providers_module.request, "build_opener", _build)
+        result = _http_json_request(
+            "https://api.example.com",
+            proxy_url="http://system-proxy:8080",
+            proxy_source="system",
+            label="test",
+        )
+        assert result == {"direct": True}
+        assert call_count["n"] == 2
+
+    def test_explicit_proxy_no_fallback(self, monkeypatch) -> None:
+        """When proxy_source='explicit' and the proxy times out, no direct
+        fallback should be attempted."""
+        monkeypatch.setattr(
+            providers_module.request,
+            "build_opener",
+            _make_fake_opener(error=TimeoutError("proxy timeout")),
+        )
+        with pytest.raises(ProviderTimeoutError, match="proxy timeout"):
+            _http_json_request(
+                "https://api.example.com",
+                proxy_url="http://explicit-proxy:8080",
+                proxy_source="explicit",
+                label="test",
+            )
+
+    def test_system_proxy_both_fail(self, monkeypatch) -> None:
+        """When proxy_source='system' and both proxy and direct fail, the error
+        message should mention both failures."""
+        monkeypatch.setattr(
+            providers_module.request,
+            "build_opener",
+            _make_fake_opener(error=TimeoutError("connection failed")),
+        )
+        with pytest.raises(ProviderTimeoutError, match="proxy and direct"):
+            _http_json_request(
+                "https://api.example.com",
+                proxy_url="http://system-proxy:8080",
+                proxy_source="system",
+                label="test",
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -193,28 +296,10 @@ def test_serper_requires_key() -> None:
 
 @pytest.mark.asyncio
 async def test_serper_normalizes(monkeypatch) -> None:
-    class _Response:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-        def read(self):
-            return json.dumps(
-                {
-                    "organic": [
-                        {
-                            "title": "t",
-                            "link": "u",
-                            "snippet": "s",
-                            "date": "2025-01-01",
-                        }
-                    ]
-                }
-            ).encode("utf-8")
-
-    monkeypatch.setattr(providers_module.request, "urlopen", lambda *_args, **_kwargs: _Response())
+    payload = json.dumps(
+        {"organic": [{"title": "t", "link": "u", "snippet": "s", "date": "2025-01-01"}]}
+    ).encode("utf-8")
+    monkeypatch.setattr(providers_module.request, "build_opener", _make_fake_opener(payload))
 
     provider = SerperWebSearchProvider(api_key="test")
     results = await provider.search("query", max_results=1)
@@ -225,17 +310,11 @@ async def test_serper_normalizes(monkeypatch) -> None:
 
 @pytest.mark.asyncio
 async def test_serper_invalid(monkeypatch) -> None:
-    class _Response:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-        def read(self):
-            return json.dumps({"unexpected": []}).encode("utf-8")
-
-    monkeypatch.setattr(providers_module.request, "urlopen", lambda *_args, **_kwargs: _Response())
+    monkeypatch.setattr(
+        providers_module.request,
+        "build_opener",
+        _make_fake_opener(json.dumps({"unexpected": []}).encode()),
+    )
 
     provider = SerperWebSearchProvider(api_key="test")
     with pytest.raises(ProviderInvalidResponse):
@@ -254,28 +333,19 @@ def test_searxng_requires_url() -> None:
 
 @pytest.mark.asyncio
 async def test_searxng_normalizes(monkeypatch) -> None:
-    class _Response:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-        def read(self):
-            return json.dumps(
+    payload = json.dumps(
+        {
+            "results": [
                 {
-                    "results": [
-                        {
-                            "title": "t",
-                            "url": "https://example.com",
-                            "content": "snippet",
-                            "score": 0.5,
-                        }
-                    ]
+                    "title": "t",
+                    "url": "https://example.com",
+                    "content": "snippet",
+                    "score": 0.5,
                 }
-            ).encode("utf-8")
-
-    monkeypatch.setattr(providers_module.request, "urlopen", lambda *_args, **_kwargs: _Response())
+            ]
+        }
+    ).encode("utf-8")
+    monkeypatch.setattr(providers_module.request, "build_opener", _make_fake_opener(payload))
 
     provider = SearxNGWebSearchProvider(base_url="https://searx.local")
     results = await provider.search("query", max_results=1)
@@ -287,17 +357,11 @@ async def test_searxng_normalizes(monkeypatch) -> None:
 
 @pytest.mark.asyncio
 async def test_searxng_invalid(monkeypatch) -> None:
-    class _Response:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-        def read(self):
-            return json.dumps({"unexpected": []}).encode("utf-8")
-
-    monkeypatch.setattr(providers_module.request, "urlopen", lambda *_args, **_kwargs: _Response())
+    monkeypatch.setattr(
+        providers_module.request,
+        "build_opener",
+        _make_fake_opener(json.dumps({"unexpected": []}).encode()),
+    )
 
     provider = SearxNGWebSearchProvider(base_url="https://searx.local")
     with pytest.raises(ProviderInvalidResponse):
@@ -446,18 +510,11 @@ async def test_bocha_normalizes(monkeypatch) -> None:
             }
         },
     }
-
-    class _Response:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            return False
-
-        def read(self):
-            return json.dumps(response_data).encode("utf-8")
-
-    monkeypatch.setattr(providers_module.request, "urlopen", lambda *a, **k: _Response())
+    monkeypatch.setattr(
+        providers_module.request,
+        "build_opener",
+        _make_fake_opener(json.dumps(response_data).encode()),
+    )
 
     provider = BochaWebSearchProvider(api_key="test-key")
     results = await provider.search("test query", max_results=5)
@@ -473,17 +530,11 @@ async def test_bocha_normalizes(monkeypatch) -> None:
 
 @pytest.mark.asyncio
 async def test_bocha_invalid(monkeypatch) -> None:
-    class _Response:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            return False
-
-        def read(self):
-            return json.dumps({"code": 200, "data": {"unexpected": True}}).encode("utf-8")
-
-    monkeypatch.setattr(providers_module.request, "urlopen", lambda *a, **k: _Response())
+    monkeypatch.setattr(
+        providers_module.request,
+        "build_opener",
+        _make_fake_opener(json.dumps({"code": 200, "data": {"unexpected": True}}).encode()),
+    )
 
     provider = BochaWebSearchProvider(api_key="test-key")
     results = await provider.search("q", max_results=1)

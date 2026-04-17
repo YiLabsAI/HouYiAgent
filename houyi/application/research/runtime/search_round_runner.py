@@ -3,8 +3,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections import Counter
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from urllib.parse import urlparse
 
 from houyi.application.research.runtime.search_budget import _MIN_BUDGET_MS
 from houyi.application.research.runtime.search_telemetry import TelemetryEmitter
@@ -13,6 +15,23 @@ from houyi.skills.web_search.service import WebSearchService
 from houyi.skills.web_search.types import WebSearchResult
 
 logger = logging.getLogger(__name__)
+
+# Cap how many sources from the same domain we accept per round.  This
+# prevents a single high-volume domain from dominating evidence, improving
+# source diversity without discarding the first few authoritative results.
+_MAX_SOURCES_PER_DOMAIN_PER_ROUND = 3
+
+
+def _summarize_metadata_errors(errors: list[dict]) -> str:
+    """Return a compact provider:error-type summary for query-level diagnostics."""
+    if not errors:
+        return "none"
+    parts: list[str] = []
+    for item in errors[:6]:
+        provider = str(item.get("provider") or "unknown")
+        err_type = str(item.get("type") or "UnknownError")
+        parts.append(f"{provider}:{err_type}")
+    return "; ".join(parts)
 
 
 @dataclass(slots=True)
@@ -47,6 +66,8 @@ class RoundRequest:
     target_total_sources: int
     query_budget_ms: int
     round_budget_ms: int
+    # Tracks per-domain source count within this round for diversity filtering.
+    _domain_counts: Counter = field(default_factory=Counter)
 
 
 @dataclass(slots=True)
@@ -254,7 +275,12 @@ class RoundRunner:
             if self.claim_url is not None and not await self.claim_url(hit.url):
                 request.seen_urls.add(hit.url)
                 continue
+            domain = _extract_domain(hit.url)
+            if request._domain_counts[domain] >= _MAX_SOURCES_PER_DOMAIN_PER_ROUND:
+                request.seen_urls.add(hit.url)
+                continue
             request.seen_urls.add(hit.url)
+            request._domain_counts[domain] += 1
             hits.append(hit)
             src = _to_source_ref(hit)
             request.all_sources[src.reference_id] = src
@@ -303,6 +329,22 @@ class RoundRunner:
                 provider="",
                 reason_code="query_error",
             )
+        if not resp.results and resp.metadata.errors:
+            error_summary = _summarize_metadata_errors(resp.metadata.errors)
+            logger.warning(
+                "search query empty: query=%r provider=%s elapsed_ms=%d errors=%s",
+                query[:160],
+                resp.provider,
+                resp.metadata.latency_ms,
+                error_summary,
+            )
+            return QueryExecution(
+                query=query,
+                hits=[],
+                elapsed_ms=(time.perf_counter() - started) * 1000.0,
+                provider=resp.provider,
+                reason_code="empty_with_errors",
+            )
         return QueryExecution(
             query=query,
             hits=[_to_search_hit(result, resp.provider) for result in resp.results],
@@ -339,3 +381,12 @@ def _to_source_ref(hit: SearchHit) -> SourceReference:
         provider=hit.provider,
         reliability_score=0.5,
     )
+
+
+def _extract_domain(url: str) -> str:
+    """Return lowercase domain from a URL, stripping the ``www.`` prefix."""
+    try:
+        netloc = urlparse(url).netloc.lower()
+    except Exception:
+        return ""
+    return netloc.removeprefix("www.")

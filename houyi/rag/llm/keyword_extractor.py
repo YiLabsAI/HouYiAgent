@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
-from houyi.rag.llm.json_utils import parse_embedded_json
+from houyi.utils.json_utils import parse_embedded_json
 
 if TYPE_CHECKING:
     from houyi.adapters.llm.base import LLMAdapter

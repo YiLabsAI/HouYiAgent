@@ -78,6 +78,21 @@ def _start_internal_span(name: str, attributes: dict[str, Any] | None = None) ->
     return span
 
 
+def _summarize_provider_errors(errors: list[dict[str, Any]]) -> str:
+    """Build a compact, deterministic summary string for provider failures."""
+    if not errors:
+        return "none"
+    grouped: dict[str, list[str]] = {}
+    for item in errors:
+        provider = str(item.get("provider") or "unknown")
+        err_type = str(item.get("type") or "UnknownError")
+        grouped.setdefault(provider, []).append(err_type)
+    parts: list[str] = []
+    for provider, types in grouped.items():
+        parts.append(f"{provider}:{','.join(types[:4])}")
+    return "; ".join(parts)
+
+
 def _end_span(span: Any, status: str = "ok", error: str | None = None) -> None:
     """End an internal span if it exists."""
     if span is None:
@@ -346,6 +361,7 @@ class WebSearchService:
                 timeout=resolved_timeout,
                 proxy_url=proxy.proxy_url,
                 proxy_policy=proxy.policy,
+                proxy_source=proxy.proxy_source,
             )
         if normalised == "tavily":
             return TavilyWebSearchProvider(
@@ -360,6 +376,7 @@ class WebSearchService:
                 timeout=resolved_timeout,
                 proxy_url=proxy.proxy_url,
                 proxy_policy=proxy.policy,
+                proxy_source=proxy.proxy_source,
             )
         if normalised == "bocha":
             return BochaWebSearchProvider(
@@ -367,6 +384,7 @@ class WebSearchService:
                 timeout=resolved_timeout,
                 proxy_url=proxy.proxy_url,
                 proxy_policy=proxy.policy,
+                proxy_source=proxy.proxy_source,
             )
         raise ValueError(f"Unsupported web search provider: {normalised}")
 
@@ -784,6 +802,14 @@ class WebSearchService:
             max_results=max_results,
             errors=errors,
         )
+
+        if not execution_result.provider_results:
+            logger.warning(
+                "web_search empty results: query=%r providers=%s error_summary=%s",
+                query[:160],
+                [provider.name for provider in providers],
+                _summarize_provider_errors(errors),
+            )
 
         if not execution_result.provider_results and not errors:
             errors.append(

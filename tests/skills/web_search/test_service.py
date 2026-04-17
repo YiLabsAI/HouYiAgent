@@ -456,6 +456,27 @@ async def test_retry_exhausts():
 
 
 @pytest.mark.asyncio
+async def test_include_provider_errors():
+    class _TimeoutProvider:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        async def search(self, query: str, *, max_results: int) -> list[WebSearchResult]:
+            raise ProviderTimeoutError(f"{self.name} timeout")
+
+    service = WebSearchService(
+        provider=_TimeoutProvider("serper"),
+        fallback_providers=[_TimeoutProvider("tavily")],
+    )
+    response = await service.search("q", max_results=1)
+    assert response.results == []
+    assert response.metadata.error_count >= 2
+    providers = {err.get("provider") for err in response.metadata.errors}
+    assert "serper" in providers
+    assert "tavily" in providers
+
+
+@pytest.mark.asyncio
 async def test_query_creates_spans():
     """_query_provider should create INTERNAL sub-spans when TraceContext has a parent."""
     from houyi.infrastructure.observability import Span, SpanType, TraceContext

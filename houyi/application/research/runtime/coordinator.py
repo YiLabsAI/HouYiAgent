@@ -13,7 +13,7 @@ import asyncio
 import logging
 import time
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from houyi.adapters.llm.base import LLMAdapter
@@ -258,7 +258,10 @@ class ResearchCoordinator:
             await search_coro
 
         t_aggregate = time.perf_counter()
-        aggregated = await self._deps.aggregator.aggregate(self._search_results)
+        aggregated = await self._deps.aggregator.aggregate(
+            self._search_results,
+            user_query=self._plan.query if self._plan else "",
+        )
         aggregate_ms = (time.perf_counter() - t_aggregate) * 1000.0
 
         intermediate_reports: list[Any] = []
@@ -355,6 +358,23 @@ class ResearchCoordinator:
         for sub_question, result in zip(pending, results, strict=True):
             self._search_results.append(self._normalize_result(sub_question, result, "DIRECT"))
 
+    async def _seed_dedup_from_checkpoints(
+        self, questions: list[Any], dedup: _DelegateDedup
+    ) -> None:
+        """Pre-seed dedup tracker with URLs/queries from cached checkpoints."""
+        for sub_question in questions:
+            cached = self._retry_checkpoint.get(sub_question.question_id)
+            if not cached:
+                continue
+            for search_round in cached.rounds:
+                for query in search_round.queries:
+                    normalized = _canonical_collaboration_query(query)
+                    if normalized:
+                        await dedup.claim_query(normalized)
+            for source in cached.sources:
+                if source.url:
+                    await dedup.claim_url(source.url)
+
     async def _search_delegate(self, questions: list[Any]) -> None:
         total = len(questions)
         pending = [
@@ -375,6 +395,11 @@ class ResearchCoordinator:
             if cached:
                 await self._reuse_checkpoint(sub_question, cached, total)
 
+        # Lightweight cross-sub-question dedup: prevents identical URLs and
+        # queries from being fetched by multiple sub-questions in parallel.
+        dedup = _DelegateDedup()
+        await self._seed_dedup_from_checkpoints(questions, dedup)
+
         semaphore = asyncio.Semaphore(self._deps.settings.max_agents)
 
         async def _run_one(sub_question: Any) -> SearchResult:
@@ -388,7 +413,11 @@ class ResearchCoordinator:
                     completed_steps=len(self._search_results),
                     elapsed_seconds=self._deps.elapsed_seconds(),
                 )
-                result = await self._search_question_isolated(sub_question)
+                result = await self._search_question_isolated(
+                    sub_question,
+                    claim_query=dedup.claim_query,
+                    claim_url=dedup.claim_url,
+                )
                 await self._deps.emit(
                     "research.step_completed",
                     step_id=sub_question.question_id,
@@ -815,6 +844,37 @@ class ResearchCoordinator:
         # bounded dynamic cap that scales with planned depth but still converges.
         derived = (rounds * 30) + (min(expected_sources, 6) * 10)
         return max(45, min(configured, 180, derived))
+
+
+@dataclass(slots=True)
+class _DelegateDedup:
+    """Lightweight cross-sub-question dedup for delegate orchestration mode.
+
+    Prevents identical URLs and queries from being fetched by multiple
+    sub-questions running in parallel without the full collaboration
+    overhead of autonomous mode.
+    """
+
+    _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    _seen_queries: set[str] = field(default_factory=set)
+    _seen_urls: set[str] = field(default_factory=set)
+
+    async def claim_query(self, query: str) -> bool:
+        normalized = _canonical_collaboration_query(query)
+        if not normalized:
+            return False
+        async with self._lock:
+            if normalized in self._seen_queries:
+                return False
+            self._seen_queries.add(normalized)
+            return True
+
+    async def claim_url(self, url: str) -> bool:
+        async with self._lock:
+            if url in self._seen_urls:
+                return False
+            self._seen_urls.add(url)
+            return True
 
 
 def _canonical_collaboration_query(query: str) -> str:

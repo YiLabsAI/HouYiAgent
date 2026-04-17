@@ -15,7 +15,7 @@ class TestBudgetPolicy:
             SubQuestion(question="Q?", expected_sources=3),
             _ctx(max_total_sources=10),
         )
-        assert target == 3
+        assert target == 5
 
     def test_query_budget_min_floor(self):
         policy = BudgetPolicy()

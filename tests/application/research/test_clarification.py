@@ -1,5 +1,3 @@
-"""Unit tests for ClarificationAgent."""
-
 from __future__ import annotations
 
 import json

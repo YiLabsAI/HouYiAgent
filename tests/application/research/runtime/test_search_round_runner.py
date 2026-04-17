@@ -4,10 +4,13 @@ import asyncio
 from unittest.mock import AsyncMock
 
 from houyi.application.research.runtime.search_round_runner import (
+    _MAX_SOURCES_PER_DOMAIN_PER_ROUND,
     RoundRequest,
     RoundRunner,
+    _extract_domain,
 )
 from houyi.application.research.runtime.search_telemetry import TelemetryEmitter
+from houyi.skills.web_search.types import WebSearchMetadata, WebSearchResponse
 
 from ..conftest import make_mock_web_search
 
@@ -106,3 +109,42 @@ class TestRoundRunner:
         result = await runner.run(_request(["q1", "q2"], target=1))
         assert result.cancelled_queries >= 1
         assert any(e == "search.query_cancelled" for e, _ in captured)
+
+    async def test_timeout_error(self):
+        ws = make_mock_web_search(results=[])
+        ws.search = AsyncMock(
+            return_value=WebSearchResponse(
+                query="q1",
+                provider="serper",
+                results=[],
+                metadata=WebSearchMetadata(
+                    cached=False,
+                    cache_hit=False,
+                    latency_ms=10,
+                    provider="serper",
+                    errors=[
+                        {
+                            "type": "ProviderTimeoutError",
+                            "message": "timeout",
+                            "provider": "serper",
+                        }
+                    ],
+                ),
+            )
+        )
+        runner = RoundRunner(web_search=ws, telemetry=_noop_telemetry())
+        result = await runner.run(_request(["q1"]))
+        assert len(result.executions) == 1
+        assert result.executions[0].reason_code == "empty_with_errors"
+
+    def test_extract_domain_strips_www(self):
+        assert _extract_domain("https://www.example.com/path") == "example.com"
+
+    def test_extract_domain_keeps_subdomain(self):
+        assert _extract_domain("https://blog.example.com") == "blog.example.com"
+
+    def test_extract_domain_handles_empty(self):
+        assert _extract_domain("") == ""
+
+    def test_domain_limit_is_positive(self):
+        assert _MAX_SOURCES_PER_DOMAIN_PER_ROUND >= 2

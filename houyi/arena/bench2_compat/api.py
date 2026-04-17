@@ -8,8 +8,8 @@ from functools import lru_cache
 from typing import Any
 
 from houyi.adapters.llm.factory import LLMAdapterFactory
-from houyi.rag.llm.json_utils import parse_embedded_json
 from houyi.skills.web_search.content_fetchers import JinaContentFetcher, ReadabilityContentFetcher
+from houyi.utils.json_utils import parse_embedded_json
 
 _DEFAULT_PROVIDER = "siliconflow"
 _BENCH2_PROVIDER_ENV = "HOUYI_BENCH2_PROVIDER"

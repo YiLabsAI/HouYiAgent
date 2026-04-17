@@ -65,6 +65,44 @@ def make_mock_web_search(results: list[WebSearchResult] | None = None) -> WebSea
     return svc
 
 
+def make_unique_url_web_search() -> WebSearchService:
+    """Mock WebSearchService returning unique URLs on every call.
+
+    Useful when cross-sub-question URL dedup (claim_url) is active and each
+    sub-question must receive its own distinct sources.
+    """
+    _counter = {"n": 0}
+
+    async def _search(*args: Any, **kwargs: Any) -> WebSearchResponse:
+        idx = _counter["n"]
+        _counter["n"] += 1
+        return WebSearchResponse(
+            query="test",
+            provider="mock",
+            results=[
+                WebSearchResult(
+                    title=f"Mock Result {idx}a",
+                    url=f"https://example.com/{idx}a",
+                    snippet=f"snippet {idx}a",
+                    content=f"Full content {idx}a",
+                ),
+                WebSearchResult(
+                    title=f"Mock Result {idx}b",
+                    url=f"https://example.com/{idx}b",
+                    snippet=f"snippet {idx}b",
+                    content=f"Full content {idx}b",
+                ),
+            ],
+            metadata=WebSearchMetadata(
+                cached=False, cache_hit=False, latency_ms=10, provider="mock"
+            ),
+        )
+
+    svc = AsyncMock(spec=WebSearchService)
+    svc.search = _search
+    return svc
+
+
 @pytest.fixture
 def mock_llm():
     """Default mock LLM returning valid JSON for planner."""
@@ -89,6 +127,18 @@ def mock_llm():
                     "search_strategy": "web",
                     "expected_sources": 3,
                 },
+                {
+                    "question": "What evidence compares practical tradeoffs?",
+                    "priority": 2,
+                    "search_strategy": "web",
+                    "expected_sources": 3,
+                },
+                {
+                    "question": "What limitations or risks are reported?",
+                    "priority": 1,
+                    "search_strategy": "web",
+                    "expected_sources": 3,
+                },
             ],
             "outline": [
                 {
@@ -102,6 +152,16 @@ def mock_llm():
                     "related_question_ids": [1],
                 },
                 {"title": "Outlook", "objective": "Future directions", "related_question_ids": [2]},
+                {
+                    "title": "Tradeoffs",
+                    "objective": "Practical tradeoff analysis",
+                    "related_question_ids": [3],
+                },
+                {
+                    "title": "Limitations",
+                    "objective": "Known limitations and risks",
+                    "related_question_ids": [4],
+                },
             ],
             "estimated_duration_min": 8,
         }

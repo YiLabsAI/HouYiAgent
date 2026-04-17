@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from houyi.adapters.llm.base import LLMAdapter
+from houyi.application.research.taxonomy import ENTITY_QUERY_HINTS
 from houyi.application.research.types import (
     AnswerCoverageContract,
     ClarificationResult,
@@ -28,13 +29,45 @@ from houyi.application.research.types import (
     SearchStrategy,
     SubQuestion,
 )
-from houyi.rag.llm.json_utils import parse_embedded_json
+from houyi.utils.json_utils import parse_embedded_json
 
 logger = logging.getLogger(__name__)
+
+# Upper bound for planner decomposition by depth. This is the hard ceiling that
+# keeps plan size, prompt size, and downstream execution fan-out predictable.
 _MAX_SUB_QUESTIONS_BY_DEPTH = {"quick": 3, "standard": 5, "deep": 8}
+# Lower bound for planner decomposition by depth. We keep this explicit for all
+# depths so the decomposition contract is symmetric and easier to maintain.
+# It is valid for min and max to be equal for a depth when we intentionally want
+# a fixed-size decomposition instead of a range. Today only standard depth is
+# intentionally fixed at 5; quick/deep stay flexible and therefore keep the
+# historical minimum of 1 while still being defined explicitly here.
+_MIN_SUB_QUESTIONS_BY_DEPTH = {"quick": 1, "standard": 5, "deep": 1}
 _PLAN_MAX_TOKENS_BY_DEPTH = {"quick": 1500, "standard": 2000, "deep": 3000}
-_MIN_OUTLINE_SECTIONS_BY_DEPTH = {"deep": 4}
+# Deep mode requires a broader report skeleton even when the planner returns a
+# compact question set, so we enforce a minimum outline section count per
+# depth. Deep reports target a wide survey structure; lower floors compress
+# the outline and shrink report body coverage.
+_MIN_OUTLINE_SECTIONS_BY_DEPTH = {"deep": 8}
+# Prefix used when the planner derives a synthetic focus section to avoid title
+# collisions with user- or model-provided outline titles.
 _FOCUSED_SECTION_PREFIX = "Focused"
+
+# Entity-like questions need an explicit identity / disambiguation contract so
+# downstream retrieval and writing do not drift into same-name noise.
+_IDENTITY_FACET_NAME = "identity"
+_IDENTITY_FACET_INTENT = "confirm the intended entity and distinguish same-name candidates"
+_IDENTITY_EVIDENCE_HINT = "official profile or organization page"
+_IDENTITY_REQUIRED_CAVEAT = "disambiguate same-name entities before making claims"
+_IDENTITY_EVIDENCE_EXPECTATION = "official identity evidence"
+# Imported from taxonomy module (single source of truth for hint tuples).
+_ENTITY_QUERY_HINTS = ENTITY_QUERY_HINTS
+# Valid values for planner-output metadata fields.  Used during parsing
+# to clamp unexpected LLM output to safe defaults.
+_VALID_QUERY_TYPES = frozenset({"entity", "analytic", "factual"})
+_VALID_SECTION_ARCHETYPES = frozenset(
+    {"overview_and_synthesis", "comparison", "risk_and_caveat", "trend_and_state"}
+)
 
 _PLAN_SYSTEM_PROMPT = """\
 You are an expert research planner specializing in PhD-level, multi-dimensional \
@@ -49,6 +82,8 @@ Output STRICT JSON with:
       "search_strategy": "web"|"local_file"|"rag"|"mixed",
       "expected_sources": <int>,
       "depends_on": [],
+      "query_type": "entity"|"analytic"|"factual",
+      "disambiguation_needed": true/false,
       "coverage_contract": {
         "must_cover_facets": [
           {
@@ -67,7 +102,8 @@ Output STRICT JSON with:
     {
       "title": "Section Title",
       "objective": "What this section covers",
-      "related_question_ids": []
+      "related_question_ids": [],
+      "section_archetype": "overview_and_synthesis"|"comparison"|"risk_and_caveat"|"trend_and_state"
     }
   ],
   "plan_contract": {
@@ -97,7 +133,7 @@ Output STRICT JSON with:
 
 Rules:
 - Decompose the query into sub-questions that are MECE (mutually exclusive, \
-collectively exhaustive). Generate NO MORE than the max specified in the user message. Cover distinct analytical dimensions: background/context, \
+collectively exhaustive). Generate NO MORE than the max specified in the user message and NO FEWER than the min specified in the user message. Cover distinct analytical dimensions: background/context, \
 mechanisms/methodology, empirical evidence, comparative analysis, limitations/debate, \
 and future directions — as applicable to the query.
 - Each sub-question should be SPECIFIC and SEARCHABLE (not vague). Bad: "What are \
@@ -123,10 +159,26 @@ contributing sub-questions via related_question_ids (0-indexed).
 - Default search_strategy is "web" unless context suggests otherwise.
 - Set expected_sources realistically: 3-5 for focused factual queries, 5-10 for \
 broad analytical questions.
+- query_type: classify each sub-question as "entity" (about a specific person, \
+organization, project, or named thing), "analytic" (comparative, trend, or \
+mechanistic analysis), or "factual" (specific facts, statistics, or events). \
+This drives downstream retrieval strategy.
+- disambiguation_needed: set true when the entity in the question has known \
+same-name candidates, multiple notable referents, or the query could be confused \
+with a different entity. This triggers forced identity-anchored retrieval.
+- section_archetype: classify each outline section as "overview_and_synthesis" \
+(default), "comparison" (compares multiple items), "risk_and_caveat" (discusses \
+limitations, risks, disputes), or "trend_and_state" (temporal evolution or \
+current state). This drives evidence mix and narrative style.
 - estimated_duration_min: rough estimate based on depth and question count.
 - Set clarification.needs_clarification=true only when missing constraints or competing interpretations would materially change the research plan.
 - Keep clarification.issues and clarification.suggested_questions short and concrete.
 - If the query is already clear enough to plan, set clarification.needs_clarification=false and clarification.refined_query=null.
+- LANGUAGE RULE: sub-question text and outline section titles MUST be written \
+in the SAME language as the user's research query. If the query is in Chinese, \
+write sub-questions and titles in Chinese (proper nouns like project names or \
+person names may remain in their original script). Never translate a Chinese \
+query's plan into English.
 """
 
 _PLAN_WITH_MEMORY_ADDENDUM = """
@@ -202,11 +254,23 @@ class ResearchPlanner:
             system += _PLAN_WITH_MEMORY_ADDENDUM.format(memory_text=memory_context)
 
         max_qs = _MAX_SUB_QUESTIONS_BY_DEPTH.get(settings.depth, 5)
+        min_qs = _MIN_SUB_QUESTIONS_BY_DEPTH.get(settings.depth, 1)
+        # Detect query language so we can reinforce the language rule in
+        # the user message where the model pays the most attention.
+        _has_cjk = any("\u4e00" <= ch <= "\u9fff" for ch in query)
+        lang_hint = (
+            "\nIMPORTANT: The query is in Chinese. All sub-question text "
+            "and outline section titles MUST be in Chinese. "
+            "Only proper nouns (project names, person names) may stay in their original script."
+            if _has_cjk
+            else ""
+        )
         user_msg = (
             f"Research query: {query}\n"
             f"Depth: {settings.depth.value}\n"
+            f"Min sub-questions: {min_qs}\n"
             f"Max sub-questions: {max_qs}\n"
-            f"Respond ONLY with the JSON object."
+            f"Respond ONLY with the JSON object.{lang_hint}"
         )
 
         plan_max_tokens = _PLAN_MAX_TOKENS_BY_DEPTH.get(settings.depth, 2000)
@@ -286,17 +350,24 @@ class ResearchPlanner:
 def _parse_json_response(content: str) -> dict | None:
     """Extract JSON from LLM response, stripping markdown fences if present."""
     text = _normalize_plan_json_text(content)
-    try:
-        data = parse_embedded_json(text)
-        return data if isinstance(data, dict) else None
-    except json.JSONDecodeError:
-        repaired = _remove_trailing_commas(text)
-        if repaired != text:
-            try:
-                data = parse_embedded_json(repaired)
-                return data if isinstance(data, dict) else None
-            except json.JSONDecodeError:
-                pass
+    repaired_quotes = _escape_unescaped_inner_double_quotes(text)
+    candidates = [
+        text,
+        _remove_trailing_commas(text),
+        repaired_quotes,
+        _remove_trailing_commas(repaired_quotes),
+    ]
+    seen: set[str] = set()
+    for candidate in candidates:
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        try:
+            data = parse_embedded_json(candidate)
+            if isinstance(data, dict):
+                return data
+        except json.JSONDecodeError:
+            continue
 
     logger.warning(
         "Failed to parse plan JSON len=%d preview=%r",
@@ -323,6 +394,51 @@ def _remove_trailing_commas(content: str) -> str:
     return re.sub(r",\s*([}\]])", r"\1", content)
 
 
+def _escape_unescaped_inner_double_quotes(content: str) -> str:
+    """Escape likely inner quotes that break otherwise-valid JSON strings.
+
+    Some model outputs include value text such as:
+    "question": "topic "alpha" analysis"
+    where inner quotes are not escaped. This helper preserves structural
+    delimiters and rewrites only suspicious inner quote characters.
+    """
+    out: list[str] = []
+    in_string = False
+    escape = False
+    length = len(content)
+
+    for i, ch in enumerate(content):
+        if in_string:
+            if escape:
+                out.append(ch)
+                escape = False
+                continue
+            if ch == "\\":
+                out.append(ch)
+                escape = True
+                continue
+            if ch == '"':
+                j = i + 1
+                while j < length and content[j].isspace():
+                    j += 1
+                next_ch = content[j] if j < length else ""
+                # A structural quote is followed by JSON punctuation.
+                if next_ch in {",", "}", "]", ":", ""}:
+                    in_string = False
+                    out.append(ch)
+                else:
+                    out.append(r"\"")
+                continue
+            out.append(ch)
+            continue
+
+        if ch == '"':
+            in_string = True
+        out.append(ch)
+
+    return "".join(out)
+
+
 def _truncate_plan_preview(content: str, limit: int = 2000) -> str:
     if len(content) <= limit:
         return content
@@ -346,14 +462,28 @@ def _build_plan(
         dep_ids = [sub_questions[d].question_id for d in deps if d < len(sub_questions)]
         local_contract = _parse_coverage_contract(sq.get("coverage_contract"))
         local_contracts.append(local_contract)
+        question_text = sq.get("question", f"Sub-question {i + 1}")
+        raw_query_type = str(sq.get("query_type", "factual")).strip().lower()
+        query_type = raw_query_type if raw_query_type in _VALID_QUERY_TYPES else "factual"
+        disambiguation_needed = bool(sq.get("disambiguation_needed", False))
+        merged_contract = _ensure_identity_contract(
+            question_text,
+            _materialize_sub_question_contract(plan_contract, local_contract),
+        )
+        # If planner says entity + disambiguation, make sure identity contract is present
+        # even if _ensure_identity_contract heuristic didn't fire.
+        if query_type == "entity" and disambiguation_needed:
+            merged_contract = _force_identity_contract(merged_contract)
         sub_questions.append(
             SubQuestion(
-                question=sq.get("question", f"Sub-question {i + 1}"),
+                question=question_text,
                 priority=max(1, min(5, int(sq.get("priority", 3)))),
                 search_strategy=SearchStrategy(strategy),
                 expected_sources=int(sq.get("expected_sources", 5)),
                 depends_on=dep_ids,
-                coverage_contract=_materialize_sub_question_contract(plan_contract, local_contract),
+                coverage_contract=merged_contract,
+                query_type=query_type,
+                disambiguation_needed=disambiguation_needed,
             )
         )
 
@@ -362,9 +492,15 @@ def _build_plan(
         related = sec.get("related_question_ids", [])
         qids = [sub_questions[r].question_id for r in related if r < len(sub_questions)]
         related_local_contracts = [local_contracts[r] for r in related if r < len(local_contracts)]
+        raw_archetype = str(sec.get("section_archetype", "overview_and_synthesis")).strip().lower()
+        section_archetype = (
+            raw_archetype
+            if raw_archetype in _VALID_SECTION_ARCHETYPES
+            else "overview_and_synthesis"
+        )
         outline.append(
             OutlineSection(
-                title=sec.get("title", ""),
+                title=str(sec.get("title", "")).strip(),
                 objective=sec.get("objective", ""),
                 related_question_ids=qids,
                 coverage_contract=_derive_section_coverage_contract(
@@ -373,6 +509,7 @@ def _build_plan(
                     section_title=sec.get("title", ""),
                     objective=sec.get("objective", ""),
                 ),
+                section_archetype=section_archetype,
             )
         )
     outline = _expand_outline_for_depth(
@@ -503,6 +640,135 @@ def _derive_section_coverage_contract(
         merged.must_cover_facets = list(plan_contract.must_cover_facets[:2])
     merged.must_cover_facets = merged.must_cover_facets[:6]
     return merged
+
+
+def _force_identity_contract(contract: AnswerCoverageContract) -> AnswerCoverageContract:
+    """Unconditionally ensure the identity facet and caveats are present.
+
+    Called when the planner explicitly marks disambiguation_needed=true,
+    bypassing the heuristic in _looks_entity_like_question.
+    """
+    if any(
+        facet.name.strip().lower() == _IDENTITY_FACET_NAME for facet in contract.must_cover_facets
+    ):
+        return AnswerCoverageContract(
+            must_cover_facets=list(contract.must_cover_facets),
+            comparison_axes=list(contract.comparison_axes),
+            time_scope=contract.time_scope,
+            geo_scope=contract.geo_scope,
+            required_caveats=_merge_text_lists(
+                contract.required_caveats,
+                [_IDENTITY_REQUIRED_CAVEAT],
+                limit=6,
+            ),
+            evidence_expectations=_merge_text_lists(
+                contract.evidence_expectations,
+                [_IDENTITY_EVIDENCE_EXPECTATION],
+                limit=6,
+            ),
+        )
+    identity_facet = CoverageFacet(
+        name=_IDENTITY_FACET_NAME,
+        intent=_IDENTITY_FACET_INTENT,
+        evidence_hint=_IDENTITY_EVIDENCE_HINT,
+    )
+    return AnswerCoverageContract(
+        must_cover_facets=_merge_facets([identity_facet], contract.must_cover_facets),
+        comparison_axes=list(contract.comparison_axes),
+        time_scope=contract.time_scope,
+        geo_scope=contract.geo_scope,
+        required_caveats=_merge_text_lists(
+            contract.required_caveats,
+            [_IDENTITY_REQUIRED_CAVEAT],
+            limit=6,
+        ),
+        evidence_expectations=_merge_text_lists(
+            contract.evidence_expectations,
+            [_IDENTITY_EVIDENCE_EXPECTATION],
+            limit=6,
+        ),
+    )
+
+
+def _ensure_identity_contract(
+    question: str, contract: AnswerCoverageContract
+) -> AnswerCoverageContract:
+    if not _looks_entity_like_question(question, contract):
+        return contract
+    if any(
+        facet.name.strip().lower() == _IDENTITY_FACET_NAME for facet in contract.must_cover_facets
+    ):
+        return AnswerCoverageContract(
+            must_cover_facets=list(contract.must_cover_facets),
+            comparison_axes=list(contract.comparison_axes),
+            time_scope=contract.time_scope,
+            geo_scope=contract.geo_scope,
+            required_caveats=_merge_text_lists(
+                contract.required_caveats,
+                [_IDENTITY_REQUIRED_CAVEAT],
+                limit=6,
+            ),
+            evidence_expectations=_merge_text_lists(
+                contract.evidence_expectations,
+                [_IDENTITY_EVIDENCE_EXPECTATION],
+                limit=6,
+            ),
+        )
+    identity_facet = CoverageFacet(
+        name=_IDENTITY_FACET_NAME,
+        intent=_IDENTITY_FACET_INTENT,
+        evidence_hint=_IDENTITY_EVIDENCE_HINT,
+    )
+    return AnswerCoverageContract(
+        must_cover_facets=_merge_facets([identity_facet], contract.must_cover_facets),
+        comparison_axes=list(contract.comparison_axes),
+        time_scope=contract.time_scope,
+        geo_scope=contract.geo_scope,
+        required_caveats=_merge_text_lists(
+            contract.required_caveats,
+            [_IDENTITY_REQUIRED_CAVEAT],
+            limit=6,
+        ),
+        evidence_expectations=_merge_text_lists(
+            contract.evidence_expectations,
+            [_IDENTITY_EVIDENCE_EXPECTATION],
+            limit=6,
+        ),
+    )
+
+
+def _looks_entity_like_question(question: str, contract: AnswerCoverageContract) -> bool:
+    lowered = question.strip().lower()
+    if re.fullmatch(r"q\d+", lowered):
+        return False
+    if any(hint in lowered for hint in _ENTITY_QUERY_HINTS):
+        return True
+    if any(
+        facet.name.strip().lower() == _IDENTITY_FACET_NAME for facet in contract.must_cover_facets
+    ):
+        return True
+    contract_text = " ".join(
+        [facet.name for facet in contract.must_cover_facets]
+        + [facet.intent for facet in contract.must_cover_facets]
+        + [facet.evidence_hint for facet in contract.must_cover_facets]
+        + contract.required_caveats
+        + contract.evidence_expectations
+    ).lower()
+    if any(
+        token in contract_text
+        for token in ("identity", "same-name", "official profile", "employer")
+    ):
+        return True
+    tokens = [token for token in re.findall(r"[A-Za-z0-9][A-Za-z0-9.&'_-]*", question) if token]
+    alpha_tokens = [token for token in tokens if any(ch.isalpha() for ch in token)]
+    if len(alpha_tokens) == 1 and len(alpha_tokens[0]) <= 3:
+        return False
+    title_like = sum(1 for token in alpha_tokens if token[:1].isupper() or token.isupper())
+    if alpha_tokens and len(alpha_tokens) <= 4 and title_like >= max(1, len(alpha_tokens) - 1):
+        return True
+    compact = re.sub(r"[\s\-_/|:：,，。、“”‘’()（）\[\]{}]+", "", question)
+    cjk_chars = sum(1 for ch in compact if "\u4e00" <= ch <= "\u9fff")
+    return cjk_chars > 0 and cjk_chars <= 6 and len(compact) <= 12
 
 
 def _select_relevant_shared_facets(
@@ -775,6 +1041,9 @@ def _extract_clarification(data: dict[str, Any]) -> ClarificationResult | None:
 def validate_research_plan(plan: ResearchPlan) -> str | None:
     if not plan.sub_questions:
         return "Planner returned no sub-questions"
+    min_sub_questions = _MIN_SUB_QUESTIONS_BY_DEPTH.get(_depth_key(plan.settings), 1)
+    if len(plan.sub_questions) < min_sub_questions:
+        return f"Planner returned fewer than {min_sub_questions} sub-questions"
     if not plan.outline:
         return "Planner returned no outline sections"
     if any(not sq.question.strip() for sq in plan.sub_questions):

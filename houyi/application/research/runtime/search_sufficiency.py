@@ -8,6 +8,7 @@ from urllib.parse import urlparse
 
 from houyi.adapters.llm.base import LLMAdapter
 from houyi.application.research.runtime.search_parsing import _parse_sufficiency
+from houyi.application.research.runtime.search_query_planner import _looks_entity_query
 from houyi.application.research.types import (
     AnswerCoverageContract,
     SourceReference,
@@ -126,6 +127,7 @@ class SufficiencyEvaluator:
             user_query=user_query,
             features=features,
             expected_sources=expected_sources,
+            coverage_contract=coverage_contract,
         )
         if guardrail is not None:
             return guardrail
@@ -180,6 +182,7 @@ class SufficiencyEvaluator:
             coverage_contract,
         )
         noisy_source_count = _count_noisy_sources(sources, question, user_query, coverage_contract)
+        ambiguous_entity = _looks_entity_like(question, user_query, coverage_contract)
         missing_dimensions: list[str] = []
         if source_count < 2 or relevance_score < 0.5:
             missing_dimensions.append("relevance")
@@ -193,6 +196,8 @@ class SufficiencyEvaluator:
             missing_dimensions.append("facet_coverage")
         if noisy_only_facets or noisy_source_count > max(source_count // 2, 1):
             missing_dimensions.append("task_fit")
+        if ambiguous_entity and authority_count == 0:
+            missing_dimensions.append("entity_identity")
         return SufficiencyFeatures(
             source_count=source_count,
             relevant_source_count=relevant_count,
@@ -364,74 +369,90 @@ def _facet_terms(*parts: Any) -> set[str]:
     return terms
 
 
-def _guardrail_sufficiency_decision(
-    *,
+def _looks_entity_like(
     question: str,
     user_query: str,
-    features: SufficiencyFeatures,
-    expected_sources: int,
-) -> SufficiencyDecision | None:
+    coverage_contract: AnswerCoverageContract,
+) -> bool:
+    return _looks_entity_query(question, user_query, coverage_contract)
+
+
+def _guardrail_thresholds(expected_sources: int) -> tuple[int, int, int]:
     minimum_sources = max(1, min(max(expected_sources, 1), 2))
     target_sources = max(minimum_sources, min(max(expected_sources, 1), 4))
-    quality_gate_sources = max(2, target_sources)
     required_domains = 1 if target_sources == 1 else 2
-    recency_required = _requires_recency(question, user_query)
+    return minimum_sources, target_sources, required_domains
+
+
+def _guardrail_decision(
+    *,
+    rationale: str,
+    reason_code: str,
+    features: SufficiencyFeatures,
+    sufficient: bool = False,
+) -> SufficiencyDecision:
+    return SufficiencyDecision(
+        sufficient=sufficient,
+        rationale=rationale,
+        decision_by="guardrail",
+        reason_code=reason_code,
+        missing_dimensions=list(features.missing_dimensions),
+        features=features,
+    )
+
+
+def _baseline_guardrail_failure(
+    *,
+    features: SufficiencyFeatures,
+    minimum_sources: int,
+) -> SufficiencyDecision | None:
     if features.source_count == 0:
-        return SufficiencyDecision(
-            sufficient=False,
+        return _guardrail_decision(
             rationale="No sources collected yet",
-            decision_by="guardrail",
             reason_code="no_sources",
-            missing_dimensions=list(features.missing_dimensions),
             features=features,
         )
     if features.source_count < minimum_sources:
-        return SufficiencyDecision(
-            sufficient=False,
+        return _guardrail_decision(
             rationale="Need more evidence before stopping",
-            decision_by="guardrail",
             reason_code="insufficient_sources",
-            missing_dimensions=list(features.missing_dimensions),
             features=features,
         )
     if features.relevance_score < 0.5:
-        return SufficiencyDecision(
-            sufficient=False,
+        return _guardrail_decision(
             rationale="Collected sources are not relevant enough yet",
-            decision_by="guardrail",
             reason_code="low_relevance",
-            missing_dimensions=list(features.missing_dimensions),
             features=features,
         )
     if features.missing_facets:
-        return SufficiencyDecision(
-            sufficient=False,
+        return _guardrail_decision(
             rationale="Collected evidence still leaves planned answer facets uncovered",
-            decision_by="guardrail",
             reason_code="missing_facets",
-            missing_dimensions=list(features.missing_dimensions),
             features=features,
         )
     if features.noisy_only_facets:
-        return SufficiencyDecision(
-            sufficient=False,
+        return _guardrail_decision(
             rationale="Some answer facets are backed only by noisy or weakly aligned sources",
-            decision_by="guardrail",
             reason_code="noisy_facets",
-            missing_dimensions=list(features.missing_dimensions),
             features=features,
         )
+    return None
+
+
+def _quality_guardrail_failure(
+    *,
+    features: SufficiencyFeatures,
+    quality_gate_sources: int,
+    required_domains: int,
+) -> SufficiencyDecision | None:
     if (
         quality_gate_sources >= 2
         and features.source_count >= quality_gate_sources
         and features.domain_count < required_domains
     ):
-        return SufficiencyDecision(
-            sufficient=False,
+        return _guardrail_decision(
             rationale="Collected sources are still too concentrated on one domain",
-            decision_by="guardrail",
             reason_code="low_diversity",
-            missing_dimensions=list(features.missing_dimensions),
             features=features,
         )
     if (
@@ -439,12 +460,43 @@ def _guardrail_sufficiency_decision(
         and features.source_count >= quality_gate_sources
         and features.authority_source_count == 0
     ):
-        return SufficiencyDecision(
-            sufficient=False,
+        return _guardrail_decision(
             rationale="Collected sources still lack authoritative or primary evidence",
-            decision_by="guardrail",
             reason_code="low_authority",
-            missing_dimensions=list(features.missing_dimensions),
+            features=features,
+        )
+    return None
+
+
+def _guardrail_sufficiency_decision(
+    *,
+    question: str,
+    user_query: str,
+    features: SufficiencyFeatures,
+    expected_sources: int,
+    coverage_contract: AnswerCoverageContract,
+) -> SufficiencyDecision | None:
+    minimum_sources, target_sources, required_domains = _guardrail_thresholds(expected_sources)
+    quality_gate_sources = max(2, target_sources)
+    recency_required = _requires_recency(question, user_query)
+    entity_like = _looks_entity_like(question, user_query, coverage_contract)
+    baseline_failure = _baseline_guardrail_failure(
+        features=features,
+        minimum_sources=minimum_sources,
+    )
+    if baseline_failure is not None:
+        return baseline_failure
+    quality_failure = _quality_guardrail_failure(
+        features=features,
+        quality_gate_sources=quality_gate_sources,
+        required_domains=required_domains,
+    )
+    if quality_failure is not None:
+        return quality_failure
+    if entity_like and features.noisy_source_count > max(features.source_count // 2, 1):
+        return _guardrail_decision(
+            rationale="Entity-like question still has too much noisy same-name evidence",
+            reason_code="entity_noise",
             features=features,
         )
     if (
@@ -453,12 +505,9 @@ def _guardrail_sufficiency_decision(
         and features.source_count >= quality_gate_sources
         and features.recent_source_count == 0
     ):
-        return SufficiencyDecision(
-            sufficient=False,
+        return _guardrail_decision(
             rationale="Collected sources still lack recent evidence for a recency-sensitive question",
-            decision_by="guardrail",
             reason_code="low_recency",
-            missing_dimensions=list(features.missing_dimensions),
             features=features,
         )
     if (
@@ -468,12 +517,10 @@ def _guardrail_sufficiency_decision(
         and features.authority_source_count >= 1
         and (not recency_required or features.recent_source_count >= 1)
     ):
-        return SufficiencyDecision(
+        return _guardrail_decision(
             sufficient=True,
             rationale="Structured evidence already covers relevance, diversity, and authority",
-            decision_by="guardrail",
             reason_code="guardrail_sufficient",
-            missing_dimensions=list(features.missing_dimensions),
             features=features,
         )
     return None

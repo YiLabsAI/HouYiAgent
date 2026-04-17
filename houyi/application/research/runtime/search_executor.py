@@ -15,6 +15,7 @@ from houyi.application.research.runtime.search_query_planner import (
     CollaborationSnapshotCallback,
     QueryPlanner,
     _collaboration_stop_reason,
+    _looks_entity_query,
 )
 from houyi.application.research.runtime.search_round_runner import RoundRequest, RoundRunner
 from houyi.application.research.runtime.search_sufficiency import SufficiencyEvaluator
@@ -35,6 +36,25 @@ from houyi.application.research.types import (
 from houyi.skills.web_search.service import WebSearchService
 
 logger = logging.getLogger(__name__)
+
+# Follow-up query budgeting keeps the first round broad enough to establish
+# coverage, then narrows quickly to control search latency. The current values
+# preserve the pre-existing heuristic shape: 3 queries to start, 2 when breadth
+# is still required, 1 when signals indicate focused deepening is cheaper.
+_INITIAL_QUERY_CAP = 3
+_BREADTH_QUERY_CAP = 2
+_FOCUSED_QUERY_CAP = 1
+# Once we already have ~4 accumulated sources or 2 shared-source signals, the
+# executor can usually switch from exploration to focused follow-up without
+# hurting coverage; these thresholds are kept behavior-compatible with the
+# earlier inline heuristic and should be revisited together with benchmark data.
+_FOCUSED_SOURCE_THRESHOLD = 4
+_SHARED_SIGNAL_THRESHOLD = 2
+# When remaining sub-question budget drops below this fraction, allow early
+# termination even if critical gaps (authority / identity / facet) are still
+# open.  This prevents search-phase latency blowout on hard-to-resolve
+# sub-questions while preserving thorough search when budget allows.
+_EARLY_STOP_BUDGET_FLOOR = 0.20
 
 
 class SearchExecutor:
@@ -161,7 +181,10 @@ class SearchExecutor:
                 completed_sources = dict(all_sources)
                 completed_summary = prior[-1] if prior else ""
 
-                if self._can_terminate_early(rounds):
+                remaining_ratio = self._remaining_budget_ms(
+                    search_started, sub_question_budget_ms
+                ) / max(sub_question_budget_ms, 1)
+                if _can_terminate_early(rounds, remaining_budget_ratio=remaining_ratio):
                     rounds[-1].stop_layer = "early_termination"
                     await self._notify(
                         "search.early_termination",
@@ -169,7 +192,7 @@ class SearchExecutor:
                             "question_id": sub_question.question_id,
                             "round": round_number,
                             "new_unique_urls": len(rounds[-1].hits),
-                            "new_domains": self._count_domains(rounds[-1].hits),
+                            "new_domains": _count_domains(rounds[-1].hits),
                             "missing_dimensions_count": len(rounds[-1].missing_dimensions),
                         },
                     )
@@ -458,7 +481,7 @@ class SearchExecutor:
             cancelled_queries=round_result.cancelled_queries,
             stop_layer=round_result.stop_layer,
             new_unique_urls=len(hits),
-            new_domains=self._count_domains(hits),
+            new_domains=_count_domains(hits),
             zero_hit_query_count=zero_hit_query_count,
             duplicate_url_rate=round(duplicate_url_rate, 3),
             missing_dimensions_count=len(decision.missing_dimensions),
@@ -475,7 +498,7 @@ class SearchExecutor:
             cancelled_queries=round_result.cancelled_queries,
             stop_layer=round_result.stop_layer,
             new_unique_urls=len(hits),
-            new_domains=self._count_domains(hits),
+            new_domains=_count_domains(hits),
             zero_hit_query_count=zero_hit_query_count,
             duplicate_url_rate=round(duplicate_url_rate, 3),
             missing_dimensions_count=len(decision.missing_dimensions),
@@ -509,6 +532,8 @@ class SearchExecutor:
             round_idx,
             collaboration,
             sub_question.coverage_contract,
+            query_type=sub_question.query_type,
+            disambiguation_needed=sub_question.disambiguation_needed,
         )
         queries, skipped_queries = await self._query_planner.claim_queries(
             self._trim_queries_for_round(
@@ -518,9 +543,34 @@ class SearchExecutor:
                 prior_count=len(prior),
                 collaboration=collaboration,
                 previous_round=previous_round,
+                sub_question=sub_question,
+                user_query=context.user_query,
             ),
             seen_queries,
         )
+        # Disambiguation enrichment: when entity_identity gaps persist after
+        # round 0 AND the LLM's queries were all deduplicated (leaving no
+        # new queries), append forced disambiguation queries as a fallback.
+        # Kept narrow to avoid flooding the search API with extra queries
+        # when the LLM already produced viable ones.
+        if (
+            not queries
+            and round_idx > 0
+            and previous_round is not None
+            and "entity_identity" in (previous_round.missing_dimensions or [])
+        ):
+            fallbacks = _make_disambiguation_queries(
+                sub_question.question,
+                context.user_query,
+            )
+            disam_queries, extra_skipped = await self._query_planner.claim_queries(
+                fallbacks,
+                seen_queries,
+            )
+            skipped_queries += extra_skipped
+            if disam_queries:
+                queries.extend(disam_queries)
+                query_metadata["disambiguation_fallback_applied"] = True
         await self._notify(
             "search.queries_generated",
             {
@@ -668,6 +718,9 @@ class SearchExecutor:
         round_idx: int,
         collaboration: dict[str, Any],
         coverage_contract: AnswerCoverageContract,
+        *,
+        query_type: str = "factual",
+        disambiguation_needed: bool = False,
     ) -> tuple[list[str], dict[str, Any]]:
         return await self._query_planner.generate_queries(
             question,
@@ -676,6 +729,8 @@ class SearchExecutor:
             round_idx,
             collaboration,
             coverage_contract=coverage_contract,
+            query_type=query_type,
+            disambiguation_needed=disambiguation_needed,
         )
 
     async def _evaluate_sufficiency(
@@ -720,69 +775,187 @@ class SearchExecutor:
         prior_count: int,
         collaboration: dict[str, Any],
         previous_round: SearchRound | None,
+        sub_question: SubQuestion | None = None,
+        user_query: str = "",
     ) -> list[str]:
         if round_idx <= 0:
-            return queries[:3]
-        gap_count = self._gap_count(previous_round)
+            return queries[:_INITIAL_QUERY_CAP]
+        gap_count = _gap_count(previous_round)
         if gap_count == 0:
             return []
+        features = previous_round.features if previous_round is not None else None
+        ambiguous_entity = bool(
+            sub_question
+            and _looks_entity_query(
+                sub_question.question,
+                user_query,
+                sub_question.coverage_contract,
+            )
+        )
+        needs_breadth = bool(
+            ambiguous_entity
+            or gap_count is None
+            or gap_count >= 2
+            or (features is not None and features.authority_source_count == 0)
+            or (
+                features is not None
+                and features.noisy_source_count > max(features.source_count // 2, 1)
+            )
+        )
         if gap_count == 1:
-            return queries[:1]
+            if needs_breadth:
+                return queries[:_BREADTH_QUERY_CAP]
+            return queries[:_FOCUSED_QUERY_CAP]
         shared_source_count = collaboration.get("shared_source_count", 0)
         if round_idx == 1:
-            cap = 1 if accumulated_source_count >= 4 or shared_source_count >= 2 else 2
+            cap = (
+                _BREADTH_QUERY_CAP
+                if needs_breadth
+                else (
+                    _FOCUSED_QUERY_CAP
+                    if accumulated_source_count >= _FOCUSED_SOURCE_THRESHOLD
+                    or shared_source_count >= _SHARED_SIGNAL_THRESHOLD
+                    else _BREADTH_QUERY_CAP
+                )
+            )
             return queries[:cap]
         cap = (
-            1 if (accumulated_source_count > 0 or prior_count > 0 or shared_source_count > 0) else 2
+            _BREADTH_QUERY_CAP
+            if needs_breadth
+            else (
+                _FOCUSED_QUERY_CAP
+                if (accumulated_source_count > 0 or prior_count > 0 or shared_source_count > 0)
+                else _BREADTH_QUERY_CAP
+            )
         )
         return queries[:cap]
 
-    def _gap_count(self, round_: SearchRound | None) -> int | None:
-        if round_ is None:
-            return None
-        return len(round_.missing_dimensions)
 
-    def _count_domains(self, hits: list[Any]) -> int:
-        domains = {
-            (getattr(hit, "domain", None) or urlparse(getattr(hit, "url", "")).netloc).lower()
-            for hit in hits
-            if getattr(hit, "url", None)
-        }
-        return len({domain for domain in domains if domain})
+def _gap_count(round_: SearchRound | None) -> int | None:
+    if round_ is None:
+        return None
+    return len(round_.missing_dimensions)
 
-    def _can_terminate_early(self, rounds: list[SearchRound]) -> bool:
-        """Determine whether additional search rounds can be skipped.
 
-        Returns ``True`` when the search shows diminishing returns:
+def _count_domains(hits: list[Any]) -> int:
+    domains = {
+        (getattr(hit, "domain", None) or urlparse(getattr(hit, "url", "")).netloc).lower()
+        for hit in hits
+        if getattr(hit, "url", None)
+    }
+    return len({domain for domain in domains if domain})
 
-        - **Yield decay**: the current round produced ≤ 50% of the new
-          unique URLs that the previous round found (or zero hits), AND
-        - **Gap stall**: the number of missing coverage dimensions did not
-          decrease between rounds.
 
-        This replaces the previous ultra-strict threshold (hits ≤ 1) which
-        almost never triggered in practice.  The new logic cuts 1–2 wasted
-        rounds per sub-question, saving ~1 QueryPlanner + 1 Sufficiency
-        LLM call each time.
-        """
-        if len(rounds) < 2:
+def _can_terminate_early(
+    rounds: list[SearchRound],
+    *,
+    remaining_budget_ratio: float = 1.0,
+) -> bool:
+    """Determine whether additional search rounds can be skipped.
+
+    Returns ``True`` when the search shows diminishing returns:
+
+    - **Yield decay**: the current round produced ≤ 50% of the new
+      unique URLs that the previous round found (or zero hits), AND
+    - **Gap stall**: the number of missing coverage dimensions did not
+      decrease between rounds.
+
+    Critical-gap guard: keeps searching when core authority / identity /
+    facet-fit gaps are still open — *unless* the sub-question time budget
+    is almost exhausted (``remaining_budget_ratio < _EARLY_STOP_BUDGET_FLOOR``),
+    in which case early termination is allowed to prevent latency blowout.
+    """
+    if len(rounds) < 2:
+        return False
+    previous_round = rounds[-2]
+    current_round = rounds[-1]
+    if current_round.sufficient:
+        return False
+    previous_gap_count = _gap_count(previous_round)
+    current_gap_count = _gap_count(current_round)
+    if previous_gap_count is None or current_gap_count is None:
+        return False
+    # When both rounds produced zero new URLs, further rounds are futile
+    # (e.g. all search providers are failing).  Continuing only wastes
+    # budget and amplifies rate-limit pressure.
+    if previous_round.new_unique_urls == 0 and current_round.new_unique_urls == 0:
+        return True
+    current_features = current_round.features
+    # Only block early termination for critical gaps when budget still allows
+    # another round.  When budget is nearly exhausted, let it stop gracefully.
+    budget_allows_guard = remaining_budget_ratio >= _EARLY_STOP_BUDGET_FLOOR
+    if budget_allows_guard and current_gap_count > 0 and current_features is not None:
+        if any(
+            dim in {"authority", "entity_identity", "facet_coverage", "task_fit"}
+            for dim in current_features.missing_dimensions
+        ):
             return False
-        previous_round = rounds[-2]
-        current_round = rounds[-1]
-        if current_round.sufficient:
+        if current_features.authority_source_count == 0:
             return False
-        previous_gap_count = self._gap_count(previous_round)
-        current_gap_count = self._gap_count(current_round)
-        if previous_gap_count is None or current_gap_count is None:
+        if current_features.noisy_source_count > max(current_features.source_count // 2, 1):
             return False
 
-        prev_yield = previous_round.new_unique_urls
-        curr_yield = current_round.new_unique_urls
+    prev_yield = previous_round.new_unique_urls
+    curr_yield = current_round.new_unique_urls
+    yield_decayed = curr_yield == 0 or (prev_yield > 0 and curr_yield <= prev_yield * 0.5)
+    gap_stalled = current_gap_count >= previous_gap_count
+    return yield_decayed and gap_stalled
 
-        # Yield decayed by >= 50% (or current round produced nothing)
-        yield_decayed = curr_yield == 0 or (prev_yield > 0 and curr_yield <= prev_yield * 0.5)
 
-        # Coverage gap is not shrinking
-        gap_stalled = current_gap_count >= previous_gap_count
+# Disambiguation query budget: max queries returned to the caller.
+_DISAMBIGUATION_QUERY_BUDGET = 3
+# Max context terms composed with the entity anchor per query.
+_DISAMBIGUATION_CONTEXT_TERMS = 4
+# Min token length to be considered a meaningful context term.
+# Single-character tokens (articles, CJK particles) add noise.
+_MIN_CONTEXT_TOKEN_LEN = 2
+# Min token length for English-only extraction (skip 2-letter prepositions).
+_MIN_ASCII_TOKEN_LEN = 3
 
-        return yield_decayed and gap_stalled
+
+def _make_disambiguation_queries(
+    question: str,
+    user_query: str,
+) -> list[str]:
+    """Generate deterministic disambiguation queries from user_query context.
+
+    Called when LLM-generated queries are all deduped in a later round.
+    Composes the entity anchor with non-anchor context tokens from the
+    original user query, plus the raw sub-question and an English variant.
+
+    Limitation: whitespace tokenisation is ineffective for unsegmented CJK
+    queries.  A future improvement should use a lightweight tokeniser.
+    """
+    from houyi.application.research.runtime.search_query_planner import (
+        _extract_entity_anchor,
+    )
+
+    anchor = _extract_entity_anchor(question, user_query)
+    if not anchor:
+        return []
+    # Extract context terms from user_query that are NOT just the anchor.
+    context_tokens = [
+        tok
+        for tok in user_query.split()
+        if tok.strip() and tok.strip().lower() != anchor.lower() and anchor not in tok
+    ]
+    # Filter trivially short tokens (articles, particles).
+    context_terms = [tok for tok in context_tokens if len(tok) >= _MIN_CONTEXT_TOKEN_LEN]
+    queries: list[str] = []
+    if context_terms:
+        context_chunk = " ".join(context_terms[:_DISAMBIGUATION_CONTEXT_TERMS])
+        queries.append(f"{anchor} {context_chunk}".strip())
+    # Raw sub-question carries the richest context from the planner.
+    if question and question not in queries:
+        queries.append(question.strip())
+    # English variant: extract ASCII terms from user_query + anchor.
+    ascii_terms = [
+        tok
+        for tok in user_query.split()
+        if tok.isascii() and any(ch.isalpha() for ch in tok) and len(tok) >= _MIN_ASCII_TOKEN_LEN
+    ]
+    if ascii_terms:
+        en_query = f"{anchor} {' '.join(ascii_terms[:_DISAMBIGUATION_CONTEXT_TERMS])}".strip()
+        if en_query not in queries:
+            queries.append(en_query)
+    return queries[:_DISAMBIGUATION_QUERY_BUDGET]

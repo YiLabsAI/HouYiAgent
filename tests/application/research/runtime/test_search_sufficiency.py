@@ -61,7 +61,14 @@ def _rich_features() -> SufficiencyFeatures:
 
 def _contract() -> AnswerCoverageContract:
     return AnswerCoverageContract(
-        must_cover_facets=[CoverageFacet(name="current role", intent="identify employer")]
+        must_cover_facets=[
+            CoverageFacet(
+                name="current role",
+                intent="identify employer",
+                evidence_hint="official profile",
+                bilingual_terms=["Messi official profile"],
+            )
+        ]
     )
 
 
@@ -149,6 +156,35 @@ class TestSufficiencyEvaluator:
             coverage_contract=_contract(),
         )
         assert decision.reason_code == "missing_facets"
+
+    def test_build_features_marks_entity(self):
+        evaluator = SufficiencyEvaluator(llm=MockLLM(), llm_kwargs={})
+        sources = [
+            _src("https://news.example.com/story", "Biography overview", "general biography story")
+        ]
+        features = evaluator.build_features(sources, "Messi", "Messi", _contract())
+        assert "entity_identity" in features.missing_dimensions
+
+    async def test_guardrail_blocks_entity_noise(self):
+        evaluator = SufficiencyEvaluator(llm=MockLLM(responses=[]), llm_kwargs={})
+        features = _rich_features()
+        features.noisy_source_count = 2
+        features.source_count = 3
+        decision = await evaluator.evaluate(
+            question="Messi",
+            user_query="Messi",
+            summary="summary",
+            sources=[
+                _src(title="General index", snippet="list of unrelated same-name pages"),
+                _src(title="Biography", snippet="general overview"),
+                _src(title="Forum thread", snippet="unverified discussion"),
+            ],
+            collaboration={},
+            features=features,
+            expected_sources=3,
+            coverage_contract=_contract(),
+        )
+        assert decision.reason_code == "entity_noise"
 
 
 class TestHelpers:

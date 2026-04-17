@@ -18,6 +18,10 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from houyi.adapters.llm.base import LLMAdapter
+from houyi.application.research.taxonomy import (
+    ARCHETYPE_COMPLIANCE_KEYWORDS,
+    COUNTER_EVIDENCE_MARKERS,
+)
 from houyi.application.research.types import (
     AggregatedSources,
     AnswerCoverageContract,
@@ -60,6 +64,105 @@ _DEFAULT_SNIPPET_MAX_CHARS = 200
 _DEFAULT_INTERMEDIATE_CONTEXT_MAX_CHARS = 2400
 _DEFAULT_INTERMEDIATE_PER_QUESTION_MAX_CHARS = 800
 
+# Minimum question-aligned candidates before the global source pool is
+# mixed in.  Set equal to _DEFAULT_MAX_SECTION_SOURCES so every section
+# has at least a full selection window of candidates; when fewer are
+# available from the question mapping the global pool fills the gap.
+# This prevents "citation deserts" where sections only see a handful of
+# low-relevance sources from their aligned questions.
+_SECTION_SOURCE_FLOOR = _DEFAULT_MAX_SECTION_SOURCES
+
+# Default max output tokens for a single section generation LLM call.
+# Covers both the Markdown body and the JSON citation envelope. At roughly
+# 1.5 CJK chars or 0.75 English words per token, 2000 tokens comfortably
+# fits a section of ~400-800 words plus the citation overhead.
+_DEFAULT_SECTION_MAX_TOKENS = 2000
+
+# ---------------------------------------------------------------------------
+# Post-generation noise detection.  Regex patterns that flag paragraphs
+# containing search-process narration, same-name dump lists, or prose
+# without any inline citation.  Detection is zero-LLM-cost; only flagged
+# paragraphs trigger a targeted micro-rewrite.
+# ---------------------------------------------------------------------------
+
+# Patterns indicating retrieval-process narration that should not appear
+# in the final report prose.
+_NOISE_PATTERNS: list[re.Pattern[str]] = [
+    # Retrieval-process narration.
+    re.compile(r"search(ed|ing)?\s+(for|the web|online|results)", re.IGNORECASE),
+    re.compile(r"(no|few|limited)\s+results?\s+(were\s+)?found", re.IGNORECASE),
+    re.compile(r"(query|queries|retrieval|crawl|scrape)", re.IGNORECASE),
+    re.compile(
+        r"multiple\s+(people|individuals|entities)\s+(share|with)\s+(the\s+)?(same|this)\s+name",
+        re.IGNORECASE,
+    ),
+    re.compile(r"disambiguation\s+page", re.IGNORECASE),
+    # Thinking-trajectory / chain-of-thought leaks.
+    re.compile(r"^(let me|I need to|I should|I will|I'll)\s", re.IGNORECASE),
+    re.compile(r"^(first,?\s+I|next,?\s+I|now,?\s+I)", re.IGNORECASE),
+    re.compile(r"(based on my analysis|upon (my )?reflection|after review)", re.IGNORECASE),
+    re.compile(
+        r"(the (key )?takeaway (here )?is|to summarize my (thought|finding))", re.IGNORECASE
+    ),
+    re.compile(r"(as (an|the) (AI|assistant|researcher),?\s+I)", re.IGNORECASE),
+    re.compile(r"(I (can |will )?(observe|note|notice) that)", re.IGNORECASE),
+]
+
+# Minimum paragraph length (chars) to consider for citation-absence detection.
+# Short paragraphs (headings, transitions) are exempt.
+_MIN_PARAGRAPH_CHARS_FOR_CITATION = 80
+
+# ---------------------------------------------------------------------------
+# Archetype-specific analysis hints injected into the soft checklist to
+# steer the LLM toward archetype-appropriate analytical depth.
+# Only non-default archetypes carry hints; overview_and_synthesis relies
+# on the base prompt rules.
+# ---------------------------------------------------------------------------
+
+_ARCHETYPE_ANALYSIS_HINTS: dict[str, str] = {
+    "comparison": (
+        "Organize analysis around explicit comparison dimensions "
+        "(e.g. cost, performance, adoption, limitations). Identify trade-offs "
+        "and conditions under which one approach is preferred over another."
+    ),
+    "risk_and_caveat": (
+        "Identify tensions or contradictions between sources. "
+        "Distinguish confirmed risks from speculative concerns. "
+        "Note where evidence is limited, contested, or evolving."
+    ),
+    "trend_and_state": (
+        "Structure analysis along a temporal axis where applicable. "
+        "Distinguish established trends from emerging signals. "
+        "Note inflection points, drivers of change, and current trajectory."
+    ),
+}
+
+# ---------------------------------------------------------------------------
+# Sidecar verification constants.  Used by _compute_section_sidecar_metrics
+# to produce deterministic prompt-compliance signals at zero LLM cost.
+# Metrics are attached to section_input_metrics for offline analysis.
+# ---------------------------------------------------------------------------
+
+_SENTENCE_TERMINATORS = re.compile(r"[.!?]\s|[.!?]$")
+
+
+_NOISE_REWRITE_PROMPT = """\
+The following paragraph from a research report section contains noise \
+(search-process narration, same-name dumps, or uncited factual claims). \
+Rewrite it to be clean, factual, and well-cited. Keep only claims that \
+can be supported by the available sources. If nothing salvageable remains, \
+respond with an empty string.
+
+Section context: {title} — {objective}
+Available reference IDs: {available_refs}
+
+Noisy paragraph:
+{paragraph}
+
+Respond with ONLY the rewritten paragraph text (no JSON, no explanation). \
+If the paragraph is entirely noise, respond with exactly: (empty)
+"""
+
 
 @dataclass(frozen=True, slots=True)
 class SectionEvidencePolicy:
@@ -70,6 +173,7 @@ class SectionEvidencePolicy:
     require_content_usable: bool = True
     min_cross_question_sources: int = 2
     min_authority_sources: int = 1
+    min_counter_evidence_sources: int = 1
 
 
 if TYPE_CHECKING:
@@ -81,40 +185,44 @@ You are writing a section of an academic-grade research report.
 Report title context: {query}
 Section: {title}
 Section objective: {objective}
-Must-cover obligations:
-{coverage_facets}
-Comparison axes to address when relevant:
-{comparison_axes}
-Evidence expectations:
-{evidence_expectations}
-Time scope:
-{time_scope}
-Geographic scope:
-{geo_scope}
+Section archetype: {section_archetype}
+Section position in report: {section_position}
+Previous section: {previous_section}
+Next section: {next_section}
+Related sub-question focus:
+{related_questions}
 Available sources (reference_id | title | snippet):
 {sources_text}
 Primary evidence:
 {primary_evidence}
 Counter-evidence or tension points:
 {counter_evidence}
-Unresolved gaps that must be acknowledged:
-{unresolved_gaps}
-Caveats that must be made explicit:
-{caveat_obligations}
 
 Write the section in Markdown. Rules:
 - Do NOT include a heading for this section (the heading is added externally).
 - CITATION DISCIPLINE: Every factual claim, statistic, date, or attribution MUST \
 have an inline citation as [ref_id]. A paragraph without citations is unacceptable. \
 Use multiple citations when claims are supported by multiple sources.
+- NARRATIVE CONTROL: Lead each major paragraph or sub-section with the claim or finding first, \
+then support it with evidence, and place caveats / uncertainty / boundary conditions after the evidence.
+- Keep retrieval noise out of the main narrative: do not narrate search-process artifacts, same-name dump lists, \
+or generic source-hunting commentary unless they are directly relevant evidence.
+- When entities share the same or similar names, keep the prose anchored to the intended entity only and compress \
+irrelevant disambiguation into a short caveat instead of letting it dominate the section.
 - Only cite sources from the provided list. Do NOT fabricate reference IDs.
 - ANALYSIS DEPTH: Go beyond summarizing — synthesize across sources, identify \
 patterns, note contradictions, and provide analytical commentary.
-- STRUCTURE: Use sub-headings (###), bullet points, or numbered lists to organize \
-complex information. Include comparison tables when relevant.
+- STRUCTURE: Use **bold** sub-headings (### level) to separate major topics. \
+Produce multiple distinct analytical paragraphs; target 6 to 10 substantive \
+paragraphs per section and do NOT fold unrelated claims into a single oversized \
+paragraph. Use bullet points or tables only when listing distinct items \
+(e.g., comparison dimensions, timelines).
+- Maintain continuity with the surrounding report structure: do not repeat the previous
+  section, and end in a way that keeps the transition to the next section natural.
 - Write in the SAME language as the report title / query above. \
 If the query is in Chinese, write in Chinese. If English, write in English.
 - Use clear, professional, scholarly prose. Aim for 400-800 words per section.
+{soft_checklist}
 
 Respond ONLY with JSON:
 {{
@@ -148,6 +256,7 @@ class SectionEvidenceBundle:
     selected_sources: list[SourceReference]
     primary_evidence: list[SourceReference]
     counter_evidence: list[SourceReference]
+    reserve_evidence: list[SourceReference]
     unresolved_gaps: list[str]
     caveat_obligations: list[str]
     coverage_facets: list[str]
@@ -155,6 +264,7 @@ class SectionEvidenceBundle:
     evidence_expectations: list[str]
     time_scope: str
     geo_scope: str
+    section_archetype: str = "overview_and_synthesis"
 
 
 class ReportGenerator:
@@ -172,7 +282,7 @@ class ReportGenerator:
         snippet_max_chars: int = _DEFAULT_SNIPPET_MAX_CHARS,
         intermediate_context_max_chars: int = _DEFAULT_INTERMEDIATE_CONTEXT_MAX_CHARS,
         intermediate_per_question_max_chars: int = _DEFAULT_INTERMEDIATE_PER_QUESTION_MAX_CHARS,
-        section_max_tokens: int = 2000,
+        section_max_tokens: int = _DEFAULT_SECTION_MAX_TOKENS,
         section_evidence_policy: SectionEvidencePolicy | None = None,
         # Max concurrent section generation tasks.  Typical reports have
         # 5-7 sections; default 8 fires them all in one batch.  Lower this
@@ -234,12 +344,14 @@ class ReportGenerator:
 
         async def _gen(outline_sec: OutlineSection) -> tuple[ReportSection, dict[str, Any]]:
             async with sem:
+                section_index = plan.outline.index(outline_sec)
                 bundle, relevant_total, evidence_metrics = self.build_section_evidence_bundle(
                     outline_sec.related_question_ids,
                     sources,
                     section_title=outline_sec.title,
                     objective=outline_sec.objective,
                     coverage_contract=outline_sec.coverage_contract,
+                    section_archetype=outline_sec.section_archetype,
                 )
                 ir_context = _intermediate_context(
                     outline_sec.related_question_ids,
@@ -254,8 +366,19 @@ class ReportGenerator:
                     bundle.selected_sources,
                     intermediate_context=ir_context,
                     evidence_bundle=bundle,
+                    section_context=_build_section_prompt_context(
+                        plan=plan,
+                        outline=plan.outline,
+                        section_index=section_index,
+                    ),
                 )
                 section.section_id = outline_sec.section_id
+                # Sidecar verification: deterministic prompt-compliance
+                # metrics computed on final content.  Zero LLM cost.
+                sidecar = _compute_section_sidecar_metrics(
+                    section.content,
+                    bundle.section_archetype,
+                )
                 return section, {
                     "section_id": outline_sec.section_id,
                     "title": outline_sec.title,
@@ -263,6 +386,7 @@ class ReportGenerator:
                     "selected_source_count": len(bundle.selected_sources),
                     **evidence_metrics,
                     "intermediate_context_chars": len(ir_context),
+                    **sidecar,
                 }
 
         t_sections = time.monotonic()
@@ -338,11 +462,17 @@ class ReportGenerator:
                 objective=outline_sec.objective,
                 coverage_contract=outline_sec.coverage_contract,
             )
+            section_index = plan.outline.index(outline_sec)
             section = await self._generate_section(
                 plan.query,
                 outline_sec.title,
                 outline_sec.objective,
                 relevant,
+                section_context=_build_section_prompt_context(
+                    plan=plan,
+                    outline=plan.outline,
+                    section_index=section_index,
+                ),
             )
 
             seq += 1
@@ -395,14 +525,21 @@ class ReportGenerator:
         section_title: str,
         objective: str,
         coverage_contract: AnswerCoverageContract | None = None,
+        section_archetype: str = "",
     ) -> tuple[SectionEvidenceBundle, int, dict[str, int]]:
         """Build the evidence packet consumed by section writing.
 
         This keeps retrieval/ranking compatible with the existing source selection
         logic while making the writing contract explicit.
+
+        When *section_archetype* is provided (from the planner), it takes
+        precedence over the keyword-based ``_classify_section_archetype``
+        fallback, giving the planner full control over evidence policy.
         """
 
         coverage_contract = coverage_contract or AnswerCoverageContract()
+        # Use planner-assigned archetype; fall back to keyword classification.
+        resolved_archetype = section_archetype or _classify_section_archetype(coverage_contract)
 
         ranked = _relevant_sources(
             question_ids,
@@ -423,8 +560,15 @@ class ReportGenerator:
             max_sources=self._max_section_sources,
             policy=self._section_evidence_policy,
             source_question_counts=source_question_counts,
+            coverage_contract=coverage_contract,
+            section_archetype=resolved_archetype,
         )
-        bundle = _build_section_evidence_bundle(selected, coverage_contract)
+        bundle = _build_section_evidence_bundle(
+            selected,
+            coverage_contract,
+            ranked,
+            section_archetype=resolved_archetype,
+        )
         return (
             bundle,
             len(ranked),
@@ -445,6 +589,7 @@ class ReportGenerator:
                 ),
                 "primary_evidence_count": len(bundle.primary_evidence),
                 "counter_evidence_count": len(bundle.counter_evidence),
+                "reserve_evidence_count": len(bundle.reserve_evidence),
                 "unresolved_gap_count": len(bundle.unresolved_gaps),
                 "caveat_count": len(bundle.caveat_obligations),
             },
@@ -458,30 +603,33 @@ class ReportGenerator:
         sources: list[SourceReference],
         intermediate_context: str = "",
         evidence_bundle: SectionEvidenceBundle | None = None,
+        section_context: dict[str, str] | None = None,
     ) -> ReportSection:
         snip = self._snippet_max_chars
         bundle = evidence_bundle or _build_section_evidence_bundle(
             sources,
             AnswerCoverageContract(),
+            sources,
         )
+        context = section_context or _default_section_prompt_context()
         sources_text = "\n".join(
             f"  {s.reference_id} | {s.title} | {s.snippet[:snip]}"
             for s in sources[: self._max_source_display]
         )
+        soft_checklist = _build_soft_checklist(bundle)
         prompt = _SECTION_PROMPT.format(
             query=query,
             title=title,
             objective=objective,
-            coverage_facets=_format_bundle_lines(bundle.coverage_facets),
-            comparison_axes=_format_bundle_lines(bundle.comparison_axes),
-            evidence_expectations=_format_bundle_lines(bundle.evidence_expectations),
-            time_scope=bundle.time_scope or "(none)",
-            geo_scope=bundle.geo_scope or "(none)",
+            section_archetype=bundle.section_archetype,
+            section_position=context["section_position"],
+            previous_section=context["previous_section"],
+            next_section=context["next_section"],
+            related_questions=context["related_questions"],
             sources_text=sources_text or "(no sources)",
             primary_evidence=_format_bundle_sources(bundle.primary_evidence, snip),
             counter_evidence=_format_bundle_sources(bundle.counter_evidence, snip),
-            unresolved_gaps=_format_bundle_lines(bundle.unresolved_gaps),
-            caveat_obligations=_format_bundle_lines(bundle.caveat_obligations),
+            soft_checklist=soft_checklist,
         )
         if intermediate_context:
             prompt += (
@@ -494,7 +642,78 @@ class ReportGenerator:
             max_tokens=self._section_max_tokens,
             **self._llm_kwargs,
         )
-        return _parse_section(title, resp.content)
+        section = _parse_section(title, resp.content)
+        # Post-generation noise detection pass.  Rewrites only noisy paragraphs
+        # to keep latency bounded (~1 LLM call per noisy paragraph, typically 0-1).
+        available_refs = [s.reference_id for s in sources]
+        section.content = await self._clean_section_noise(
+            section.content,
+            title=title,
+            objective=objective,
+            available_refs=available_refs,
+        )
+        return section
+
+    async def _clean_section_noise(
+        self,
+        content: str,
+        *,
+        title: str,
+        objective: str,
+        available_refs: list[str],
+    ) -> str:
+        """Detect and micro-rewrite noisy paragraphs in generated section content.
+
+        Detection uses regex/heuristic (zero LLM cost).  Only flagged paragraphs
+        trigger a targeted LLM rewrite call, keeping the latency bounded.
+        """
+        paragraphs = content.split("\n\n")
+        if not paragraphs:
+            return content
+        noisy_indices = _detect_noisy_paragraphs(paragraphs)
+        if not noisy_indices:
+            return content
+        ref_str = ", ".join(available_refs[:20])
+        for idx in noisy_indices:
+            rewritten = await self._rewrite_noisy_paragraph(
+                paragraphs[idx],
+                title=title,
+                objective=objective,
+                available_refs=ref_str,
+            )
+            paragraphs[idx] = rewritten
+        # Drop paragraphs that were entirely noise (rewritten to empty).
+        return "\n\n".join(p for p in paragraphs if p.strip())
+
+    async def _rewrite_noisy_paragraph(
+        self,
+        paragraph: str,
+        *,
+        title: str,
+        objective: str,
+        available_refs: str,
+    ) -> str:
+        """Targeted LLM rewrite for a single noisy paragraph."""
+        prompt = _NOISE_REWRITE_PROMPT.format(
+            title=title,
+            objective=objective,
+            available_refs=available_refs,
+            paragraph=paragraph,
+        )
+        try:
+            resp = await self._llm.chat(
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.2,
+                max_tokens=512,
+                **self._llm_kwargs,
+            )
+            result = resp.content.strip()
+            if result.lower() in ("(empty)", ""):
+                return ""
+            return result
+        except Exception:
+            logger.warning("Noise rewrite failed for section '%s'", title, exc_info=True)
+            return paragraph
 
     async def _generate_summary(
         self,
@@ -518,6 +737,115 @@ class ReportGenerator:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _detect_noisy_paragraphs(paragraphs: list[str]) -> list[int]:
+    """Return indices of paragraphs that contain retrieval noise or lack citations.
+
+    Detection is pure regex/heuristic — zero LLM cost.
+    """
+    noisy: list[int] = []
+    for idx, para in enumerate(paragraphs):
+        stripped = para.strip()
+        if not stripped:
+            continue
+        # Skip headings and very short transition lines.
+        if stripped.startswith("#") or len(stripped) < _MIN_PARAGRAPH_CHARS_FOR_CITATION:
+            continue
+        # Check for retrieval-process narration patterns.
+        if any(pattern.search(stripped) for pattern in _NOISE_PATTERNS):
+            noisy.append(idx)
+            continue
+        # Flag substantial paragraphs that contain no inline citation [ref_xxx].
+        if not re.search(r"\[ref_\w+\]", stripped):
+            noisy.append(idx)
+    return noisy
+
+
+def _compute_section_sidecar_metrics(
+    content: str,
+    section_archetype: str,
+) -> dict[str, Any]:
+    """Deterministic prompt-compliance metrics for sidecar verification.
+
+    Zero LLM cost.  Computed on final section content after noise cleanup.
+    Attached to ``section_input_metrics`` for offline analysis during
+    benchmark runs — never enters the main scoring or generation path.
+
+    Metrics produced:
+
+    - ``sidecar_bullet_line_ratio``: fraction of non-empty lines that are
+      bullet/list items.  High values (>0.5) indicate the LLM ignored the
+      "prefer dense analytical paragraphs" instruction.
+    - ``sidecar_avg_paragraph_sentences``: average sentence count per
+      substantive paragraph.  Below 3 indicates shallow paragraphs.
+    - ``sidecar_bold_heading_count``: Markdown ``###`` headings found.
+    - ``sidecar_citation_count`` / ``sidecar_unique_citation_count``:
+      total and unique inline ``[ref_xxx]`` citations.
+    - ``sidecar_uncited_paragraph_count``: substantive paragraphs without
+      any inline citation.
+    - ``sidecar_word_count``: total whitespace-delimited tokens.
+    - ``sidecar_archetype``: the resolved archetype label.
+    - ``sidecar_archetype_compliant``: whether archetype-specific keywords
+      were detected (English-only; CJK content yields ``false``, which is
+      itself a useful diagnostic signal).
+    """
+    lines = [ln for ln in content.split("\n") if ln.strip()]
+    paragraphs = [p.strip() for p in content.split("\n\n") if p.strip()]
+
+    # Bullet / list line ratio.
+    bullet_lines = sum(
+        1 for ln in lines if re.match(r"\s*[-*]\s", ln) or re.match(r"\s*\d+[.)]\s", ln)
+    )
+    bullet_line_ratio = round(bullet_lines / max(len(lines), 1), 2)
+
+    # Average paragraph sentence count (skip headings / short transitions).
+    sentence_counts: list[int] = []
+    for para in paragraphs:
+        if para.startswith("#") or len(para) < _MIN_PARAGRAPH_CHARS_FOR_CITATION:
+            continue
+        parts = _SENTENCE_TERMINATORS.split(para)
+        sentence_counts.append(len([s for s in parts if s.strip()]))
+    avg_paragraph_sentences = round(sum(sentence_counts) / max(len(sentence_counts), 1), 1)
+
+    # Bold sub-headings.
+    bold_heading_count = len(re.findall(r"^#{2,4}\s", content, re.MULTILINE))
+
+    # Citation counts.
+    citations = re.findall(r"\[ref_\w+\]", content)
+    citation_count = len(citations)
+    unique_citation_count = len(set(citations))
+
+    # Uncited substantive paragraphs.
+    uncited_paragraphs = 0
+    for para in paragraphs:
+        if para.startswith("#") or len(para) < _MIN_PARAGRAPH_CHARS_FOR_CITATION:
+            continue
+        if not re.search(r"\[ref_\w+\]", para):
+            uncited_paragraphs += 1
+
+    # Word count.
+    word_count = len(content.split())
+
+    # Archetype keyword compliance (English-only; CN extension deferred).
+    archetype_keywords = ARCHETYPE_COMPLIANCE_KEYWORDS.get(section_archetype, ())
+    content_lower = content.lower()
+    matched_keywords = [kw for kw in archetype_keywords if kw in content_lower]
+
+    return {
+        "sidecar_bullet_line_ratio": bullet_line_ratio,
+        "sidecar_avg_paragraph_sentences": avg_paragraph_sentences,
+        "sidecar_bold_heading_count": bold_heading_count,
+        "sidecar_citation_count": citation_count,
+        "sidecar_unique_citation_count": unique_citation_count,
+        "sidecar_uncited_paragraph_count": uncited_paragraphs,
+        "sidecar_word_count": word_count,
+        "sidecar_archetype": section_archetype,
+        # Serialized as int/str to comply with section_input_metrics
+        # type constraint: dict[str, int | str].
+        "sidecar_archetype_compliant": 1 if matched_keywords else 0,
+        "sidecar_archetype_keywords_matched": ",".join(matched_keywords[:5]),
+    }
 
 
 def _intermediate_context(
@@ -564,10 +892,18 @@ def _relevant_sources(
     for qid in question_ids:
         ref_ids.update(agg.grouped_by_question.get(qid, []))
     lookup = {s.reference_id: s for s in agg.sources}
-    if not ref_ids:
-        candidates = list(agg.sources)
+    question_candidates = [lookup[rid] for rid in ref_ids if rid in lookup]
+
+    # When question-aligned candidates are below the floor, supplement
+    # with the full source pool so the scoring function can surface
+    # globally relevant sources.  Question-aligned sources retain a
+    # natural advantage via the cross_question_coverage scoring bonus.
+    if len(question_candidates) < _SECTION_SOURCE_FLOOR:
+        seen = ref_ids.copy()
+        global_extra = [s for s in agg.sources if s.reference_id not in seen]
+        candidates = question_candidates + global_extra
     else:
-        candidates = [lookup[rid] for rid in ref_ids if rid in lookup]
+        candidates = question_candidates
 
     source_question_counts: dict[str, int] = {}
     for grouped_ids in agg.grouped_by_question.values():
@@ -693,10 +1029,13 @@ def _assemble_section_sources(
     max_sources: int,
     policy: SectionEvidencePolicy,
     source_question_counts: dict[str, int],
+    coverage_contract: AnswerCoverageContract,
+    section_archetype: str = "overview_and_synthesis",
 ) -> list[SourceReference]:
     selected: list[SourceReference] = []
     seen_ids: set[str] = set()
     seen_domains: set[str] = set()
+    targets = _archetype_targets(policy, section_archetype)
 
     for src in candidate_pool:
         _try_add_section_source(
@@ -746,7 +1085,24 @@ def _assemble_section_sources(
         seen_ids=seen_ids,
         seen_domains=seen_domains,
         max_sources=max_sources,
+        policy=targets,
+    )
+    _ensure_facet_coverage_sources(
+        ranked,
+        selected=selected,
+        seen_ids=seen_ids,
+        seen_domains=seen_domains,
+        max_sources=max_sources,
         policy=policy,
+        coverage_contract=coverage_contract,
+    )
+    _ensure_counter_evidence_sources(
+        ranked,
+        selected=selected,
+        seen_ids=seen_ids,
+        seen_domains=seen_domains,
+        max_sources=max_sources,
+        policy=targets,
     )
 
     _fill_section_sources(
@@ -765,7 +1121,12 @@ def _assemble_section_sources(
 def _build_section_evidence_bundle(
     selected_sources: list[SourceReference],
     coverage_contract: AnswerCoverageContract,
+    ranked_sources: list[SourceReference],
+    *,
+    section_archetype: str = "",
 ) -> SectionEvidenceBundle:
+    # Use caller-provided archetype; fall back to keyword classification.
+    section_archetype = section_archetype or _classify_section_archetype(coverage_contract)
     primary: list[SourceReference] = []
     counter: list[SourceReference] = []
     for src in selected_sources:
@@ -776,10 +1137,17 @@ def _build_section_evidence_bundle(
     if not primary:
         primary = selected_sources[: min(3, len(selected_sources))]
     unresolved_gaps = _missing_bundle_facets(selected_sources, coverage_contract)
+    reserve = _build_reserve_evidence(
+        selected_sources,
+        ranked_sources,
+        coverage_contract,
+        unresolved_gaps,
+    )
     return SectionEvidenceBundle(
         selected_sources=selected_sources,
         primary_evidence=primary,
         counter_evidence=counter,
+        reserve_evidence=reserve,
         unresolved_gaps=unresolved_gaps,
         caveat_obligations=list(coverage_contract.required_caveats),
         coverage_facets=[facet.name for facet in coverage_contract.must_cover_facets],
@@ -787,15 +1155,135 @@ def _build_section_evidence_bundle(
         evidence_expectations=list(coverage_contract.evidence_expectations),
         time_scope=coverage_contract.time_scope,
         geo_scope=coverage_contract.geo_scope,
+        section_archetype=section_archetype,
     )
+
+
+def _classify_section_archetype(coverage_contract: AnswerCoverageContract) -> str:
+    contract_text = " ".join(
+        [
+            " ".join(coverage_contract.comparison_axes),
+            " ".join(coverage_contract.required_caveats),
+            " ".join(coverage_contract.evidence_expectations),
+            " ".join(facet.name for facet in coverage_contract.must_cover_facets),
+            " ".join(facet.intent for facet in coverage_contract.must_cover_facets),
+        ]
+    ).lower()
+    if any(
+        token in contract_text for token in ("compare", "comparison", "versus", "vs", "trade-off")
+    ):
+        return "comparison"
+    if any(
+        token in contract_text
+        for token in ("risk", "limitation", "caveat", "uncertainty", "constraint")
+    ):
+        return "risk_and_caveat"
+    if any(
+        token in contract_text for token in ("trend", "timeline", "evolution", "history", "current")
+    ):
+        return "trend_and_state"
+    return "overview_and_synthesis"
+
+
+def _archetype_targets(
+    policy: SectionEvidencePolicy,
+    section_archetype: str,
+) -> SectionEvidencePolicy:
+    if section_archetype == "comparison":
+        return SectionEvidencePolicy(
+            candidate_pool_size=policy.candidate_pool_size,
+            min_domain_diversity=policy.min_domain_diversity,
+            require_content_usable=policy.require_content_usable,
+            min_cross_question_sources=max(policy.min_cross_question_sources, 2),
+            min_authority_sources=max(policy.min_authority_sources, 1),
+            min_counter_evidence_sources=max(policy.min_counter_evidence_sources, 1),
+        )
+    if section_archetype == "risk_and_caveat":
+        return SectionEvidencePolicy(
+            candidate_pool_size=policy.candidate_pool_size,
+            min_domain_diversity=policy.min_domain_diversity,
+            require_content_usable=policy.require_content_usable,
+            min_cross_question_sources=max(policy.min_cross_question_sources, 1),
+            min_authority_sources=max(policy.min_authority_sources, 1),
+            min_counter_evidence_sources=max(policy.min_counter_evidence_sources, 1),
+        )
+    return policy
 
 
 def _looks_counter_evidence(src: SourceReference) -> bool:
     text = f"{src.title} {src.snippet}".lower()
-    return any(
-        marker in text
-        for marker in ("however", "contradict", "dispute", "critic", "limitation", "risk")
+    return any(marker in text for marker in COUNTER_EVIDENCE_MARKERS)
+
+
+def _default_section_prompt_context() -> dict[str, str]:
+    return {
+        "section_position": "(unknown)",
+        "previous_section": "(none)",
+        "next_section": "(none)",
+        "related_questions": "(none)",
+    }
+
+
+def _build_section_prompt_context(
+    *,
+    plan: ResearchPlan,
+    outline: list[OutlineSection],
+    section_index: int,
+) -> dict[str, str]:
+    context = _default_section_prompt_context()
+    total_sections = len(outline)
+    if 0 <= section_index < total_sections:
+        context["section_position"] = f"{section_index + 1} of {total_sections}"
+        if section_index > 0:
+            context["previous_section"] = outline[section_index - 1].title
+        if section_index + 1 < total_sections:
+            context["next_section"] = outline[section_index + 1].title
+        related_ids = outline[section_index].related_question_ids
+        question_lookup = {
+            question.question_id: question.question for question in plan.sub_questions
+        }
+        related = [question_lookup[qid] for qid in related_ids if qid in question_lookup]
+        if related:
+            context["related_questions"] = _format_bundle_lines(related[:3])
+    return context
+
+
+def _build_reserve_evidence(
+    selected_sources: list[SourceReference],
+    ranked_sources: list[SourceReference],
+    coverage_contract: AnswerCoverageContract,
+    unresolved_gaps: list[str],
+    *,
+    cap: int = 2,
+) -> list[SourceReference]:
+    if not unresolved_gaps:
+        return []
+    selected_ids = {src.reference_id for src in selected_sources}
+    unresolved = set(unresolved_gaps)
+    reserve: list[SourceReference] = []
+    for facet in coverage_contract.must_cover_facets:
+        if facet.name not in unresolved:
+            continue
+        for src in ranked_sources:
+            if src.reference_id in selected_ids or src in reserve:
+                continue
+            if _facet_match_count(src, facet) <= 0:
+                continue
+            reserve.append(src)
+            break
+        if len(reserve) >= cap:
+            break
+    return reserve
+
+
+def _facet_match_count(src: SourceReference, facet: Any) -> int:
+    terms = _extract_section_keywords(
+        f"{facet.name} {facet.intent} {facet.evidence_hint} {' '.join(facet.bilingual_terms)}"
     )
+    if not terms:
+        return 0
+    text = f"{src.title} {src.snippet} {src.url or ''}".lower()
+    return sum(1 for term in terms if term in text)
 
 
 def _missing_bundle_facets(
@@ -804,20 +1292,49 @@ def _missing_bundle_facets(
 ) -> list[str]:
     missing: list[str] = []
     for facet in coverage_contract.must_cover_facets:
-        terms = _extract_section_keywords(
-            f"{facet.name} {facet.intent} {facet.evidence_hint} {' '.join(facet.bilingual_terms)}"
-        )
-        if not terms:
-            continue
         matched = False
         for src in selected_sources:
-            text = f"{src.title} {src.snippet} {src.url or ''}".lower()
-            if sum(1 for term in terms if term in text) >= 2:
+            if _facet_match_count(src, facet) >= 2:
                 matched = True
                 break
         if not matched:
             missing.append(facet.name)
     return missing
+
+
+def _build_soft_checklist(bundle: SectionEvidenceBundle) -> str:
+    """Build a compact reference checklist from the evidence bundle.
+
+    Appended after the core writing rules as optional guidance.  The model
+    treats these as analytical hints rather than mandatory acknowledgments,
+    which preserves writing depth instead of triggering obligation-checking
+    compression.
+    """
+    _MAX_CHECKLIST_ITEMS = 3
+    parts: list[str] = []
+    if bundle.coverage_facets and len(parts) < _MAX_CHECKLIST_ITEMS:
+        items = ", ".join(bundle.coverage_facets[:3])
+        parts.append(f"- Topics to address where relevant: {items}")
+    if bundle.comparison_axes and len(parts) < _MAX_CHECKLIST_ITEMS:
+        items = ", ".join(bundle.comparison_axes[:2])
+        parts.append(f"- Comparison angles: {items}")
+    if bundle.unresolved_gaps and len(parts) < _MAX_CHECKLIST_ITEMS:
+        items = ", ".join(bundle.unresolved_gaps[:2])
+        parts.append(f"- Evidence gaps: {items}")
+    if bundle.caveat_obligations and len(parts) < _MAX_CHECKLIST_ITEMS:
+        items = ", ".join(bundle.caveat_obligations[:2])
+        parts.append(f"- Key caveats: {items}")
+    # Archetype-specific analytical depth hint — not counted against the
+    # topical item cap because it guides structure, not content topics.
+    archetype_hint = _ARCHETYPE_ANALYSIS_HINTS.get(bundle.section_archetype, "")
+    if archetype_hint:
+        parts.append(f"- ARCHETYPE GUIDANCE ({bundle.section_archetype}): {archetype_hint}")
+    if not parts:
+        return ""
+    return (
+        "\n- REFERENCE GUIDANCE (interpret in the report's target language; "
+        "use as analytical hints, not rigid obligations):\n" + "\n".join(parts)
+    )
 
 
 def _format_bundle_sources(sources: list[SourceReference], snippet_cap: int) -> str:
@@ -923,6 +1440,71 @@ def _ensure_authority_sources(
         current += 1
         if current >= policy.min_authority_sources:
             break
+
+
+def _ensure_counter_evidence_sources(
+    ranked: list[SourceReference],
+    *,
+    selected: list[SourceReference],
+    seen_ids: set[str],
+    seen_domains: set[str],
+    max_sources: int,
+    policy: SectionEvidencePolicy,
+) -> None:
+    current = sum(1 for src in selected if _looks_counter_evidence(src))
+    if current >= policy.min_counter_evidence_sources:
+        return
+    for src in ranked:
+        if not _looks_counter_evidence(src):
+            continue
+        before = len(selected)
+        _try_add_section_source(
+            src,
+            selected=selected,
+            seen_ids=seen_ids,
+            seen_domains=seen_domains,
+            max_sources=max_sources,
+            policy=policy,
+            prefer_new_domain=False,
+        )
+        if len(selected) == before:
+            continue
+        current += 1
+        if current >= policy.min_counter_evidence_sources:
+            break
+
+
+def _ensure_facet_coverage_sources(
+    ranked: list[SourceReference],
+    *,
+    selected: list[SourceReference],
+    seen_ids: set[str],
+    seen_domains: set[str],
+    max_sources: int,
+    policy: SectionEvidencePolicy,
+    coverage_contract: AnswerCoverageContract,
+) -> None:
+    missing = set(_missing_bundle_facets(selected, coverage_contract))
+    if not missing:
+        return
+    for facet in coverage_contract.must_cover_facets:
+        if facet.name not in missing:
+            continue
+        for src in ranked:
+            if _facet_match_count(src, facet) <= 0:
+                continue
+            before = len(selected)
+            _try_add_section_source(
+                src,
+                selected=selected,
+                seen_ids=seen_ids,
+                seen_domains=seen_domains,
+                max_sources=max_sources,
+                policy=policy,
+                prefer_new_domain=False,
+            )
+            if len(selected) > before:
+                break
 
 
 def _try_add_section_source(

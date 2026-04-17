@@ -249,6 +249,7 @@ def _report_to_article(report: Any) -> str:
     for ref in report.references:
         ref_lookup[ref.reference_id] = (ref.title or ref.reference_id, ref.url)
 
+    cited_urls: set[str] = set()
     for section in report.sections:
         parts.append(f"## {section.title}\n")
         content = section.content
@@ -259,13 +260,30 @@ def _report_to_article(report: Any) -> str:
                     f"[{cit.reference_id}]",
                     f"[{label}]({url})",
                 )
-        content = re.sub(r"\[ref_[a-f0-9]+\](?!\()", "", content)
+                cited_urls.add(url)
+
+        # Second pass: resolve any [ref_xxx] the LLM wrote in content but
+        # omitted from the structured citations array.  Only strip refs
+        # that genuinely cannot be resolved to a URL.
+        def _resolve_remaining(m: re.Match) -> str:
+            rid = m.group(1)
+            lbl, u = ref_lookup.get(rid, (rid, ""))
+            if u:
+                cited_urls.add(u)
+                return f"[{lbl}]({u})"
+            return ""
+
+        content = re.sub(r"\[(ref_[a-f0-9]+)\](?!\()", _resolve_remaining, content)
         parts.append(content)
         parts.append("")
 
-    if report.references:
+    # Only include references that are actually cited inline. Retrieved
+    # sources that never made it into the prose should not appear in the
+    # final References list, since they add noise without evidentiary value.
+    cited_refs = [ref for ref in report.references if ref.url and ref.url in cited_urls]
+    if cited_refs:
         parts.append("## References\n")
-        for ref in report.references:
+        for ref in cited_refs:
             parts.append(f"- [{ref.title}]({ref.url})")
 
     return "\n".join(parts)

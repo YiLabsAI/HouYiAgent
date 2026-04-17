@@ -111,6 +111,12 @@ class SubQuestion(BaseModel):
     coverage_contract: AnswerCoverageContract = Field(
         default_factory=lambda: AnswerCoverageContract()
     )
+    # Planner-assigned structured metadata.  Downstream modules read these
+    # instead of guessing via keyword hints.
+    # query_type: "entity" | "analytic" | "factual" (default "factual").
+    query_type: str = "factual"
+    # True when the planner judges the entity may be ambiguous or share a name.
+    disambiguation_needed: bool = False
 
 
 class OutlineSection(BaseModel):
@@ -124,6 +130,10 @@ class OutlineSection(BaseModel):
     coverage_contract: AnswerCoverageContract = Field(
         default_factory=lambda: AnswerCoverageContract()
     )
+    # Planner-assigned archetype guides evidence mix and narrative style.
+    # Values: "overview_and_synthesis" | "comparison" | "risk_and_caveat" |
+    #         "trend_and_state" (default "overview_and_synthesis").
+    section_archetype: str = "overview_and_synthesis"
 
 
 # Maximum search rounds per sub-question, keyed by ResearchDepth.value.
@@ -436,7 +446,7 @@ class ReportMetadata(BaseModel):
     quality_overall: float | None = None
     generated_by_mode: OrchestrationMode = OrchestrationMode.DELEGATE
     duration_seconds: float | None = None
-    section_input_metrics: list[dict[str, int | str]] = Field(default_factory=list)
+    section_input_metrics: list[dict[str, int | float | str]] = Field(default_factory=list)
 
 
 class ResearchReport(BaseModel):

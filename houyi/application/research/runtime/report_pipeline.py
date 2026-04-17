@@ -47,6 +47,15 @@ _MAX_REPAIR_SECTIONS = 2
 _INTERMEDIATE_TARGET_BY_DEPTH = {"standard": 3, "deep": 5}
 _RETENTION_RATIO_FLOOR = 0.55
 
+# Repair extra-source search budget per section.  2 queries x 3 results
+# balances coverage against latency; the hard timeout below prevents
+# runaway total repair time.
+_REPAIR_EXTRA_QUERY_LIMIT = 2
+_REPAIR_EXTRA_RESULTS_PER_QUERY = 3
+# Hard wall-clock budget (seconds) for the entire repair phase.  Prevents
+# runaway rewrites from dominating the pipeline.
+_REPAIR_PHASE_TIMEOUT_S = 120.0
+
 EmitFn = Callable[..., Awaitable[None]]
 
 
@@ -330,6 +339,7 @@ class ReportPipeline:
                 self._execute_validation(
                     report,
                     plan.query,
+                    plan=plan,
                     section_titles=validation_titles or None,
                     content_char_limit=timing_budget["validation_char_limit"],
                 ),
@@ -366,13 +376,27 @@ class ReportPipeline:
             timings,
         )
         t = time.perf_counter()
-        repair_metrics = await self._repair_weak_sections(
-            validation,
-            report,
-            plan,
-            aggregated,
-            limit=timing_budget["repair_limit"],
-        )
+        try:
+            repair_metrics = await asyncio.wait_for(
+                self._repair_weak_sections(
+                    validation,
+                    report,
+                    plan,
+                    aggregated,
+                    limit=timing_budget["repair_limit"],
+                ),
+                timeout=_REPAIR_PHASE_TIMEOUT_S,
+            )
+        except TimeoutError:
+            logger.warning(
+                "Repair phase exceeded %ss budget, skipping remaining repairs",
+                _REPAIR_PHASE_TIMEOUT_S,
+            )
+            repair_metrics = {
+                "repair_query_ms": 0.0,
+                "repair_extra_source_count": 0,
+                "repair_section_count": 0,
+            }
         timings["repair_ms"] = (time.perf_counter() - t) * 1000.0
         timings["repair_query_ms"] = repair_metrics["repair_query_ms"]
         timings["repair_extra_source_count"] = float(repair_metrics["repair_extra_source_count"])
@@ -466,6 +490,7 @@ class ReportPipeline:
         report: ResearchReport,
         query: str,
         *,
+        plan: ResearchPlan | None = None,
         section_titles: set[str] | None = None,
         content_char_limit: int | None = None,
     ) -> tuple[ValidationReport | None, float]:
@@ -481,6 +506,7 @@ class ReportPipeline:
             validation = await self._validator.validate(
                 report,
                 query,
+                plan=plan,
                 section_titles=section_titles,
                 content_char_limit=content_char_limit,
             )
@@ -586,26 +612,21 @@ class ReportPipeline:
             unreachable = {r.url for r in vr.results if not r.reachable}
             if not unreachable:
                 return
-            broken_ref_ids: set[str] = set()
+            degraded_count = 0
             for src in aggregated.sources:
                 if src.url in unreachable:
                     src.reliability_score = max(0.0, src.reliability_score - 0.3)
-                    if hasattr(src, "reference_id") and src.reference_id:
-                        broken_ref_ids.add(src.reference_id)
-            if broken_ref_ids:
-                for section in report.sections:
-                    section.citations = [
-                        c for c in section.citations if c.reference_id not in broken_ref_ids
-                    ]
-                report.references = [
-                    r for r in report.references if r.reference_id not in broken_ref_ids
-                ]
+                    degraded_count += 1
+            # Intentionally keep section.citations and report.references
+            # intact: removing refs strips inline citations from the final
+            # article, destroying evidence grounding that RACE evaluates.
+            # FACT evaluation handles URL validity independently.
             await self._emit(
                 "research.url_validation",
                 total=vr.total,
                 reachable=vr.reachable,
                 unreachable=vr.unreachable,
-                removed_refs=len(broken_ref_ids),
+                degraded_refs=degraded_count,
                 error_rate=vr.error_rate,
             )
         except Exception:
@@ -752,9 +773,11 @@ class ReportPipeline:
             hasattr(section_validation, "suggested_queries")
             and section_validation.suggested_queries
         ):
-            extra, repair_query_ms = await self._search_extra_sources_for_repair(
+            extra, repair_query_ms = await _search_extra_sources_for_repair(
                 section_validation.suggested_queries,
-                query_semaphore,
+                self._web_search,
+                query_semaphore=query_semaphore,
+                fallback_semaphore=self._repair_query_sem,
             )
             if extra:
                 repair_sources.extend(extra)
@@ -805,51 +828,61 @@ class ReportPipeline:
             repair_extra_source_count,
         )
 
-    async def _search_extra_sources_for_repair(
-        self,
-        queries: list[str],
-        query_semaphore: asyncio.Semaphore | None = None,
-    ) -> tuple[list[SourceReference], float]:
-        """Fetch additional sources for repair via web search.
 
-        Bounded to 2 queries and 3 results per query to keep latency
-        predictable. Failures are logged but do not block the repair
-        (best-effort enrichment). Uses the provided query_semaphore if
-        available; otherwise creates a local semaphore for backward compatibility.
-        """
-        bounded_queries = queries[:2]
-        if not bounded_queries:
-            return [], 0.0
+async def _search_extra_sources_for_repair(
+    queries: list[str],
+    web_search: WebSearchService,
+    *,
+    query_semaphore: asyncio.Semaphore | None = None,
+    fallback_semaphore: asyncio.Semaphore | None = None,
+) -> tuple[list[SourceReference], float]:
+    """Fetch additional sources for repair via web search.
 
-        semaphore = query_semaphore if query_semaphore is not None else self._repair_query_sem
-        t0 = time.perf_counter()
+    Bounded to _REPAIR_EXTRA_QUERY_LIMIT queries and
+    _REPAIR_EXTRA_RESULTS_PER_QUERY results per query to keep latency
+    predictable. Failures are logged but do not block the repair
+    (best-effort enrichment).
+    """
+    bounded_queries = queries[:_REPAIR_EXTRA_QUERY_LIMIT]
+    if not bounded_queries:
+        return [], 0.0
 
-        async def _search_one(query: str) -> list[SourceReference]:
-            try:
+    semaphore = query_semaphore if query_semaphore is not None else fallback_semaphore
+    t0 = time.perf_counter()
+
+    async def _search_one(query: str) -> list[SourceReference]:
+        try:
+            if semaphore is not None:
                 async with semaphore:
-                    response = await self._web_search.search(
+                    response = await web_search.search(
                         query,
-                        max_results=3,
+                        max_results=_REPAIR_EXTRA_RESULTS_PER_QUERY,
                         include_content=True,
                     )
-                return [
-                    SourceReference(
-                        url=result.url,
-                        title=result.title,
-                        snippet=result.snippet,
-                        source_type="web",
-                        reliability_score=0.5,
-                    )
-                    for result in response.results
-                ]
-            except Exception:
-                logger.warning("Re-search failed for query: %s", query, exc_info=True)
-                return []
+            else:
+                response = await web_search.search(
+                    query,
+                    max_results=_REPAIR_EXTRA_RESULTS_PER_QUERY,
+                    include_content=True,
+                )
+            return [
+                SourceReference(
+                    url=result.url,
+                    title=result.title,
+                    snippet=result.snippet,
+                    source_type="web",
+                    reliability_score=0.5,
+                )
+                for result in response.results
+            ]
+        except Exception:
+            logger.warning("Re-search failed for query: %s", query, exc_info=True)
+            return []
 
-        extra_groups = await asyncio.gather(*[_search_one(query) for query in bounded_queries])
-        return [source for group in extra_groups for source in group], (
-            time.perf_counter() - t0
-        ) * 1000.0
+    extra_groups = await asyncio.gather(*[_search_one(query) for query in bounded_queries])
+    return [source for group in extra_groups for source in group], (
+        time.perf_counter() - t0
+    ) * 1000.0
 
 
 def _collect_sections_to_repair(
@@ -872,8 +905,26 @@ def _collect_sections_to_repair(
         if outline_section is None:
             continue
         sections_to_repair.append((report_index, section_validation, outline_section))
-    sections_to_repair.sort(key=lambda item: getattr(item[1], "quality_score", 100))
+    sections_to_repair.sort(key=lambda item: _repair_priority_key(item[1]))
     return sections_to_repair[: max(limit, 1)]
+
+
+def _repair_priority_key(section_validation: Any) -> tuple[int, int, int, str]:
+    quality_score = int(getattr(section_validation, "quality_score", 100) or 100)
+    issues = list(getattr(section_validation, "issues", []) or [])
+    has_citations = bool(getattr(section_validation, "has_citations", False))
+    suggested_queries = list(getattr(section_validation, "suggested_queries", []) or [])
+    severity_bonus = 0
+    if not has_citations:
+        severity_bonus += 3
+    if suggested_queries:
+        severity_bonus += 1
+    return (
+        quality_score,
+        -(len(issues) + severity_bonus),
+        0 if suggested_queries else 1,
+        str(getattr(section_validation, "title", "")),
+    )
 
 
 def _find_report_section_index(report: ResearchReport, title: str) -> int | None:

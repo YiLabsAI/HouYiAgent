@@ -17,30 +17,52 @@ from __future__ import annotations
 
 import json
 import logging
+from dataclasses import dataclass
 from typing import Any
 
 from pydantic import BaseModel, Field
 
 from houyi.adapters.llm.base import LLMAdapter
-from houyi.application.research.types import ReportSection, ResearchReport
+from houyi.application.research.taxonomy import IDENTITY_CONTEXT_HINTS
+from houyi.application.research.types import (
+    OutlineSection,
+    ReportSection,
+    ResearchPlan,
+    ResearchReport,
+)
 
 logger = logging.getLogger(__name__)
+
+# Imported from taxonomy module (single source of truth).
+_IDENTITY_CONTEXT_HINTS = IDENTITY_CONTEXT_HINTS
 
 _VALIDATION_PROMPT = """\
 You are a research report quality inspector. Evaluate the following \
 report section for quality issues.
 
+Research query: {query}
 Section title: {title}
+Section objective: {objective}
+Section position in report: {section_position}
+Previous section: {previous_section}
+Next section: {next_section}
+Must-cover obligations:
+{coverage_facets}
+Required caveats:
+{required_caveats}
 Section content:
 {content}
-
-Research query: {query}
 
 Evaluate on these dimensions:
 1. **Citation coverage**: Does the section cite sources? (look for [ref_XXX] patterns)
 2. **Substance**: Is there actual analysis, not just filler text?
-3. **Relevance**: Does the content address the section's stated objective?
-4. **Coherence**: Is the writing clear and logically structured?
+3. **Relevance and completeness**: Does the content address the section objective and cover the must-cover obligations?
+4. **Coherence and continuity**: Is the writing clear, logically structured, and well-aligned with surrounding sections?
+5. **Caveats and tensions**: Does the section acknowledge important caveats, uncertainty, or unresolved gaps when needed?
+6. **Narrative control**: Does the section present claims first, then support them with evidence, instead of narrating retrieval noise or source-hunting process?
+7. **Entity anchoring**: When the topic could be ambiguous, does the section stay anchored to the intended entity and avoid drifting into same-name or weakly related material?
+
+If the section is weak, suggested_queries must be targeted web search queries that fill the missing evidence or coverage gap. Keep suggested_queries concise and specific.
 
 Respond ONLY with JSON:
 {{
@@ -54,6 +76,19 @@ Respond ONLY with JSON:
 """
 
 _QUALITY_THRESHOLD = 40
+
+
+@dataclass(frozen=True, slots=True)
+class ValidationSectionContext:
+    objective: str
+    section_position: str
+    previous_section: str
+    next_section: str
+    coverage_facets: list[str]
+    required_caveats: list[str]
+    # Planner-assigned metadata; True when any related sub-question was marked
+    # disambiguation_needed by the planner.  Supersedes keyword-hint detection.
+    disambiguation_needed: bool = False
 
 
 class SectionValidation(BaseModel):
@@ -101,6 +136,7 @@ class ValidationAgent:
         report: ResearchReport,
         query: str,
         *,
+        plan: ResearchPlan | None = None,
         section_titles: set[str] | None = None,
         content_char_limit: int | None = None,
     ) -> ValidationReport:
@@ -112,8 +148,14 @@ class ValidationAgent:
             for section in report.sections
             if not section_titles or section.title in section_titles
         ]
+        context_by_title = _build_validation_contexts(report, plan)
         coros = [
-            self._validate_section(section, query, content_char_limit=content_char_limit)
+            self._validate_section(
+                section,
+                query,
+                context=context_by_title.get(section.title),
+                content_char_limit=content_char_limit,
+            )
             for section in sections
         ]
         results = list(await asyncio.gather(*coros))
@@ -135,12 +177,20 @@ class ValidationAgent:
         section: ReportSection,
         query: str,
         *,
+        context: ValidationSectionContext | None = None,
         content_char_limit: int | None = None,
     ) -> SectionValidation:
+        section_context = context or _default_validation_context()
         prompt = _VALIDATION_PROMPT.format(
-            title=section.title,
-            content=section.content[: content_char_limit or 3000],
             query=query,
+            title=section.title,
+            objective=section_context.objective,
+            section_position=section_context.section_position,
+            previous_section=section_context.previous_section,
+            next_section=section_context.next_section,
+            coverage_facets=_format_validation_lines(section_context.coverage_facets),
+            required_caveats=_format_validation_lines(section_context.required_caveats),
+            content=section.content[: content_char_limit or 3000],
         )
         try:
             resp = await self._llm.chat(
@@ -153,6 +203,13 @@ class ValidationAgent:
             result.section_id = section.section_id
             result.title = section.title
             result.needs_rewrite = result.quality_score < self._threshold
+            if result.needs_rewrite:
+                result.suggested_queries = _normalize_suggested_queries(
+                    result.suggested_queries,
+                    query=query,
+                    section=section,
+                    context=section_context,
+                )
             return result
         except Exception:
             logger.warning("Validation failed for section %s", section.title)
@@ -182,3 +239,120 @@ def _parse_validation(content: str) -> SectionValidation:
         )
     except (json.JSONDecodeError, ValueError, KeyError):
         return SectionValidation(quality_score=50, reasoning="Failed to parse validation response")
+
+
+def _build_validation_contexts(
+    report: ResearchReport,
+    plan: ResearchPlan | None,
+) -> dict[str, ValidationSectionContext]:
+    contexts: dict[str, ValidationSectionContext] = {}
+    outline_by_title = {
+        section.title: section for section in (plan.outline if plan is not None else [])
+    }
+    total_sections = len(report.sections)
+    for index, section in enumerate(report.sections):
+        outline_section = outline_by_title.get(section.title)
+        disambiguation_needed = _section_disambiguation_needed(
+            outline_section,
+            plan,
+        )
+        contexts[section.title] = ValidationSectionContext(
+            objective=getattr(outline_section, "objective", ""),
+            section_position=f"{index + 1} of {total_sections}" if total_sections else "(unknown)",
+            previous_section=report.sections[index - 1].title if index > 0 else "(none)",
+            next_section=report.sections[index + 1].title
+            if index + 1 < total_sections
+            else "(none)",
+            coverage_facets=_outline_coverage_facets(outline_section),
+            required_caveats=_outline_required_caveats(outline_section),
+            disambiguation_needed=disambiguation_needed,
+        )
+    return contexts
+
+
+def _default_validation_context() -> ValidationSectionContext:
+    return ValidationSectionContext(
+        objective="",
+        section_position="(unknown)",
+        previous_section="(none)",
+        next_section="(none)",
+        coverage_facets=[],
+        required_caveats=[],
+    )
+
+
+def _outline_coverage_facets(outline_section: OutlineSection | None) -> list[str]:
+    if outline_section is None:
+        return []
+    return [facet.name for facet in outline_section.coverage_contract.must_cover_facets]
+
+
+def _outline_required_caveats(outline_section: OutlineSection | None) -> list[str]:
+    if outline_section is None:
+        return []
+    return list(outline_section.coverage_contract.required_caveats)
+
+
+def _format_validation_lines(items: list[str]) -> str:
+    if not items:
+        return "(none)"
+    return "\n".join(f"- {item}" for item in items)
+
+
+def _normalize_suggested_queries(
+    queries: list[str],
+    *,
+    query: str,
+    section: ReportSection,
+    context: ValidationSectionContext,
+) -> list[str]:
+    cleaned = [item.strip() for item in queries if item and item.strip()]
+    if cleaned:
+        return cleaned[:2]
+    if _needs_identity_repair(context, section):
+        focus = section.title.strip() or query.strip()
+        return [
+            f"{query.strip()} {focus} official profile".strip(),
+            f"{focus} employer biography disambiguation".strip(),
+        ]
+    fallback_parts = [section.title.strip()]
+    if context.objective.strip():
+        fallback_parts.append(context.objective.strip())
+    if context.coverage_facets:
+        fallback_parts.append(" ".join(context.coverage_facets[:2]))
+    fallback = " ".join(part for part in fallback_parts if part)
+    if not fallback:
+        fallback = section.title.strip() or query.strip()
+    secondary = section.title.strip() or query.strip()
+    return [
+        f"{query.strip()} {fallback}".strip(),
+        f"{secondary} evidence analysis".strip(),
+    ]
+
+
+def _needs_identity_repair(
+    context: ValidationSectionContext,
+    section: ReportSection,
+) -> bool:
+    # Planner metadata takes precedence over keyword heuristic.
+    if context.disambiguation_needed:
+        return True
+    text = " ".join(
+        context.coverage_facets + context.required_caveats + [context.objective, section.title]
+    ).lower()
+    return any(hint in text for hint in _IDENTITY_CONTEXT_HINTS)
+
+
+def _section_disambiguation_needed(
+    outline_section: OutlineSection | None,
+    plan: ResearchPlan | None,
+) -> bool:
+    """Check if any sub-question related to this section has disambiguation_needed set."""
+    if outline_section is None or plan is None:
+        return False
+    related_ids = set(outline_section.related_question_ids)
+    if not related_ids:
+        return False
+    return any(
+        sq.disambiguation_needed for sq in plan.sub_questions if sq.question_id in related_ids
+    )
