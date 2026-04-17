@@ -186,9 +186,24 @@ class TestLoadSkillPaths:
 
     def test_load_url_404(self):
         svc = self._svc()
-        ok, code, err = svc.load_skill("https://httpstat.us/404")
+        import urllib.error
+        import urllib.request
+
+        with patch.object(
+            urllib.request,
+            "urlopen",
+            side_effect=urllib.error.HTTPError(
+                url="https://example.com/missing/SKILL.md",
+                code=404,
+                msg="Not Found",
+                hdrs=None,
+                fp=None,
+            ),
+        ):
+            ok, code, err = svc.load_skill("https://example.com/missing/SKILL.md")
         assert ok is False
-        assert code in ("url_http_error", "url_download_failed", "url_unreachable")
+        assert code == "url_http_error"
+        assert "HTTP 404" in err
 
     def test_load_url_invalid_scheme(self):
         svc = self._svc()

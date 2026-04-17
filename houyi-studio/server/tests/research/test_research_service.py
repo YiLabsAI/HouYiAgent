@@ -27,6 +27,11 @@ from houyi.application.research.types import (
     SearchResult,
     SourceReference,
 )
+from houyi.application.research.url_validator import (
+    URLValidationReport,
+    URLValidationResult,
+    URLValidator,
+)
 from houyi.infrastructure.config.env_config import (
     ENV_RESEARCH_MAX_AGENTS,
     ENV_RESEARCH_ORCHESTRATION_MODE,
@@ -130,6 +135,29 @@ def _mock_ws() -> WebSearchService:
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _fast_url_validation(monkeypatch: pytest.MonkeyPatch):
+    """Keep service tests focused on lifecycle and persistence behavior.
+
+    URL reachability has dedicated coverage in URL validator tests. Stubbing it
+    here prevents external-network timeouts from dominating runtime.
+    """
+
+    async def _validate(_self, urls: list[str]) -> URLValidationReport:
+        unique_urls = list(dict.fromkeys(urls))
+        return URLValidationReport(
+            total=len(unique_urls),
+            reachable=len(unique_urls),
+            unreachable=0,
+            error_rate=0.0,
+            results=[
+                URLValidationResult(url=url, reachable=True, status_code=200) for url in unique_urls
+            ],
+        )
+
+    monkeypatch.setattr(URLValidator, "validate", _validate)
 
 
 class TestCreateRun:

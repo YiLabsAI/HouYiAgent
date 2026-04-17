@@ -12,6 +12,8 @@ from collections.abc import AsyncIterator
 from typing import Any
 from unittest.mock import AsyncMock
 
+import pytest
+
 from houyi.adapters.llm.base import LLMAdapter, LLMResponse, StreamChunk
 from houyi.application.research.runtime import ResearchRuntime
 from houyi.application.research.types import (
@@ -20,6 +22,11 @@ from houyi.application.research.types import (
     PlanStatus,
     ResearchSettings,
     ResearchStatus,
+)
+from houyi.application.research.url_validator import (
+    URLValidationReport,
+    URLValidationResult,
+    URLValidator,
 )
 from houyi.application.runtime.events import AgentEvent, EventEmitter
 from houyi.skills.web_search.service import WebSearchService
@@ -268,6 +275,30 @@ def _mock_web_search() -> WebSearchService:
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _fast_url_validation(monkeypatch: pytest.MonkeyPatch):
+    """Keep runtime lifecycle tests deterministic and network-independent.
+
+    These tests focus on lifecycle / event ordering. URL reachability is covered
+    in URL validator tests, so we stub validation here to avoid 10s network
+    timeout tails from external URL probes.
+    """
+
+    async def _validate(_self, urls: list[str]) -> URLValidationReport:
+        unique_urls = list(dict.fromkeys(urls))
+        return URLValidationReport(
+            total=len(unique_urls),
+            reachable=len(unique_urls),
+            unreachable=0,
+            error_rate=0.0,
+            results=[
+                URLValidationResult(url=url, reachable=True, status_code=200) for url in unique_urls
+            ],
+        )
+
+    monkeypatch.setattr(URLValidator, "validate", _validate)
 
 
 class TestRuntimeLifecycle:
