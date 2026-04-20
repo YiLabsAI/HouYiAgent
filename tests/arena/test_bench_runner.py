@@ -17,6 +17,7 @@ from houyi.arena.benchmark_runner import (
     _load_done_ids,
     _load_queries,
     _metrics_output_path,
+    _renumber_citations,
     _report_to_article,
 )
 
@@ -150,8 +151,9 @@ class TestReportToArticle:
 
         article = _report_to_article(report)
         assert "# Test Report" in article
-        assert "[Source 1](https://example.com)" in article
+        assert "Claim A [1]." in article
         assert "## References" in article
+        assert "- [1] [Source 1](https://example.com)" in article
 
     def test_strips_orphan_refs(self):
         report = MagicMock()
@@ -173,9 +175,9 @@ class TestReportToArticle:
         report.sections = [section]
 
         article = _report_to_article(report)
-        assert "[A](https://a.example)" in article
+        assert "Known [1] and orphan  token." in article
         assert "[ref_bbb123]" not in article
-        assert "orphan  token." in article
+        assert "- [1] [A](https://a.example)" in article
 
     def test_drops_uncited_references(self):
         report = MagicMock()
@@ -203,7 +205,8 @@ class TestReportToArticle:
         report.sections = [section]
 
         article = _report_to_article(report)
-        assert "[Cited](https://cited.example)" in article
+        assert "Claim A [1]." in article
+        assert "- [1] [Cited](https://cited.example)" in article
         assert "https://unrelated.example" not in article
 
     def test_uses_id_without_title(self):
@@ -226,7 +229,9 @@ class TestReportToArticle:
         report.sections = [section]
 
         article = _report_to_article(report)
-        assert "[ref_1](https://example.com)" in article
+        assert "Claim A [1]." in article
+        # Title falls back to the reference id when no human-readable title.
+        assert "- [1] [ref_1](https://example.com)" in article
 
     def test_resolves_refs(self):
         """Refs written in content but omitted from the structured citations
@@ -255,9 +260,40 @@ class TestReportToArticle:
         report.sections = [section]
 
         article = _report_to_article(report)
-        assert "[Source A](https://a.example)" in article
-        assert "[Source B](https://b.example)" in article
-        assert "[ref_bbb]" not in article  # should be resolved, not stripped
+        assert "Fact A [1]. Fact B [2]." in article
+        assert "[ref_bbb]" not in article
+        assert "- [1] [Source A](https://a.example)" in article
+        assert "- [2] [Source B](https://b.example)" in article
+
+
+class TestRenumberCitations:
+    def test_numbers_by_first_appearance(self):
+        article = (
+            "# Title\n\nClaim A [Source B](https://b.example). "
+            "Claim B [Source A](https://a.example)."
+        )
+        out = _renumber_citations(article)
+        # The first appearance wins: B=1, A=2.
+        assert "Claim A [1]. Claim B [2]." in out
+        assert "- [1] [Source B](https://b.example)" in out
+        assert "- [2] [Source A](https://a.example)" in out
+
+    def test_dedups_repeated_url(self):
+        article = (
+            "# Title\n\nFact [Shared](https://same.example) and "
+            "again [Other Title](https://same.example)."
+        )
+        out = _renumber_citations(article)
+        # Same URL reuses the same number; the first-appearance title wins.
+        assert "Fact [1] and again [1]." in out
+        assert out.count("- [1]") == 1
+        assert "- [1] [Shared](https://same.example)" in out
+
+    def test_noop_without_links(self):
+        article = "# Plain\n\nNo citations here."
+        out = _renumber_citations(article)
+        assert out.rstrip() == article.rstrip()
+        assert "## References" not in out
 
 
 class TestRunnerInit:

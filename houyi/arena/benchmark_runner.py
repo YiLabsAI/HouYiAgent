@@ -234,11 +234,65 @@ class BenchmarkRunner:
 # ---------------------------------------------------------------------------
 
 
+# Matches inline markdown links whose anchor text is non-empty (any chars
+# except closing bracket / newline) and whose URL is http(s). Used by
+# ``_renumber_citations`` to convert verbose ``[title](url)`` citations
+# into short ``[N]`` numbered form that matches clean-reading-experience
+# conventions (matches the ms-agent gpt5 reporter spec).
+_INLINE_LINK_RE = re.compile(r"\[([^\]\n]+)\]\((https?://[^\s)]+)\)")
+_REFERENCES_HEADING_RE = re.compile(r"^## References\s*$", re.MULTILINE)
+
+
+def _renumber_citations(article: str) -> str:
+    """Convert ``[title](url)`` inline citations into ``[N]`` numbered form.
+
+    Scans the article body (content before any ``## References`` heading),
+    assigns sequential numbers by URL first-appearance order (repeated URLs
+    reuse the same number), and replaces each inline link with ``[N]``.
+    Rebuilds the References section as ``- [N] [title](url)`` entries.
+
+    The body is otherwise preserved verbatim. If the article contains no
+    inline links, it is returned unchanged.
+    """
+    ref_match = _REFERENCES_HEADING_RE.search(article)
+    if ref_match is not None:
+        body = article[: ref_match.start()].rstrip()
+    else:
+        body = article
+
+    url_to_num: dict[str, int] = {}
+    num_to_entry: dict[int, tuple[str, str]] = {}
+
+    def _sub(m: re.Match[str]) -> str:
+        title = m.group(1).strip()
+        url = m.group(2)
+        n = url_to_num.get(url)
+        if n is None:
+            n = len(url_to_num) + 1
+            url_to_num[url] = n
+            num_to_entry[n] = (title, url)
+        return f"[{n}]"
+
+    new_body = _INLINE_LINK_RE.sub(_sub, body)
+
+    if not num_to_entry:
+        return new_body.rstrip() + "\n" if new_body else new_body
+
+    refs = ["## References", ""]
+    for n in sorted(num_to_entry):
+        title, url = num_to_entry[n]
+        refs.append(f"- [{n}] [{title}]({url})")
+    return new_body.rstrip() + "\n\n" + "\n".join(refs) + "\n"
+
+
 def _report_to_article(report: Any) -> str:
     """Convert a ResearchReport into a flat Markdown article with citations.
 
-    DeepResearch-Bench expects a single Markdown string with inline URL
-    citations for FACT evaluation.
+    DeepResearch-Bench expects a single Markdown string with inline
+    citations for FACT / RACE evaluation. Inline citations are emitted as
+    short numbered markers ``[N]`` with a clean numbered References
+    section at the end, matching academic conventions and the clean
+    reading-experience requirement.
     """
     parts: list[str] = []
     parts.append(f"# {report.title}\n")
@@ -286,7 +340,8 @@ def _report_to_article(report: Any) -> str:
         for ref in cited_refs:
             parts.append(f"- [{ref.title}]({ref.url})")
 
-    return "\n".join(parts)
+    # Renumber verbose ``[title](url)`` citations to short ``[N]`` form.
+    return _renumber_citations("\n".join(parts))
 
 
 # ---------------------------------------------------------------------------
