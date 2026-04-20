@@ -9,6 +9,7 @@ from houyi.application.research.planner import (
     _VALID_SECTION_ARCHETYPES,
     ResearchPlanner,
     _build_plan,
+    _ensure_universal_backbone_contract,
     _force_identity_contract,
     _parse_json_response,
 )
@@ -20,6 +21,7 @@ from houyi.application.research.types import (
     PlanEdit,
     PlanEditOperation,
     PlanStatus,
+    ResearchDepth,
     ResearchPlan,
     ResearchSettings,
     SearchStrategy,
@@ -725,3 +727,31 @@ def test_research_settings_defaults() -> None:
     assert settings.orchestration_mode == OrchestrationMode.DELEGATE
     assert settings.depth.value == "standard"
     assert settings.max_agents == 5
+
+
+class TestUniversalBackboneContract:
+    def test_injects_in_deep(self):
+        deep = ResearchSettings(depth=ResearchDepth.DEEP)
+        augmented = _ensure_universal_backbone_contract(AnswerCoverageContract(), deep)
+        names = [facet.name for facet in augmented.must_cover_facets]
+        assert "framework_and_definition" in names
+        assert "controversies_and_caveats" in names
+
+    def test_skips_in_standard(self):
+        standard = ResearchSettings(depth=ResearchDepth.STANDARD)
+        augmented = _ensure_universal_backbone_contract(AnswerCoverageContract(), standard)
+        assert augmented.must_cover_facets == []
+
+    def test_preserves_existing_facets(self):
+        deep = ResearchSettings(depth=ResearchDepth.DEEP)
+        original = AnswerCoverageContract(
+            must_cover_facets=[
+                CoverageFacet(name="framework_and_definition", intent="already there"),
+            ],
+        )
+        augmented = _ensure_universal_backbone_contract(original, deep)
+        names = [facet.name for facet in augmented.must_cover_facets]
+        # No duplication of the pre-existing facet.
+        assert names.count("framework_and_definition") == 1
+        # The missing backbone facet is still appended.
+        assert "controversies_and_caveats" in names

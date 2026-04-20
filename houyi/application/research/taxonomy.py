@@ -296,3 +296,116 @@ QUERY_HYGIENE_EN_STOPWORDS: tuple[str, ...] = (
     "etc.",
     "currently",
 )
+
+
+# ---------------------------------------------------------------------------
+# Section structural contract vocabularies
+# ---------------------------------------------------------------------------
+#
+# These lexicons support a topic-agnostic structural contract applied to each
+# generated report section. The goal is to let any research topic benefit from
+# the same "critical analysis + data visualisation" discipline without
+# hard-coding any specific domain.
+#
+# Three vocabularies power the contract:
+#
+# * ``SECTION_CRITICAL_ANALYSIS_KEYWORDS`` - presence of any of these tokens
+#   in a section body signals that the author has acknowledged limitations,
+#   caveats, or competing interpretations. Postprocess guards attach a debug
+#   hint (HTML comment) when none of the tokens are found.
+# * ``SECTION_VISUAL_TRIGGER_KEYWORDS`` - hierarchy/sequence cues that justify
+#   a mermaid diagram. Postprocess guards attach a visualization hint when the
+#   cue is present but no mermaid fence is detected.
+# * ``UNIVERSAL_BACKBONE_FACETS`` - the minimal topic-agnostic outline
+#   contract. Only two facets are included: concept-framework and
+#   controversies-and-caveats. Any further facet would drift into
+#   topic-specific territory and is deliberately excluded.
+#
+# Matching is case-insensitive after lowercase normalisation for ASCII and
+# raw-substring for CJK.
+
+SECTION_CRITICAL_ANALYSIS_KEYWORDS: tuple[str, ...] = (
+    # English markers
+    "limitation",
+    "limitations",
+    "caveat",
+    "caveats",
+    "methodological",
+    "methodology",
+    "competing",
+    "dispute",
+    "contested",
+    "debated",
+    "however",
+    "uncertainty",
+    "trade-off",
+    "tradeoff",
+    # CJK markers
+    "\u5c40\u9650",  # juxian - limitation
+    "\u9650\u5236",  # xianzhi - restriction
+    "\u53e3\u5f84",  # koujing - caliber/scope
+    "\u4e89\u8bae",  # zhengyi - controversy
+    "\u5206\u6b67",  # fenqi - divergence
+    "\u5dee\u5f02",  # chayi - difference
+    "\u4e0d\u786e\u5b9a",  # buqueding - uncertainty
+    "\u65b9\u6cd5\u8bba",  # fangfa-lun - methodology
+    "\u6279\u8bc4",  # piping - critique
+    "\u6743\u8861",  # quanheng - trade-off
+)
+
+
+SECTION_VISUAL_TRIGGER_KEYWORDS: tuple[str, ...] = (
+    # English cues for hierarchy / sequence / flow
+    "hierarchy",
+    "framework",
+    "pipeline",
+    "workflow",
+    "sequence",
+    "stages",
+    "levels",
+    "tiers",
+    "taxonomy",
+    "architecture",
+    # CJK cues
+    "\u5c42\u7ea7",  # cengji - hierarchy/level
+    "\u9636\u5c42",  # jieceng - stratum
+    "\u6846\u67b6",  # kuangjia - framework
+    "\u6d41\u7a0b",  # liucheng - flow
+    "\u6b65\u9aa4",  # buzhou - step/stage
+    "\u9636\u6bb5",  # jieduan - stage/phase
+    "\u7ed3\u6784",  # jiegou - structure
+    "\u5206\u7c7b",  # fenlei - classification
+)
+
+
+# Minimal topic-agnostic outline contract. Facet names use semantic English
+# snake_case; descriptions are intentionally topic-neutral so the contract
+# adapts to any research question without case-specific alignment.
+#
+# Two facets are the maximum that stay unambiguously universal:
+# * framework_and_definition - any rigorous report defines its terms and the
+#   framework it uses; this hits the Insight rigor dimension.
+# * controversies_and_caveats - any rigorous report surfaces dissenting views
+#   and known limitations; this hits the Insight critical-analysis dimension.
+#
+# Additional facets that look "universal" at first glance (stakeholders,
+# metrics, timeline...) quickly drift into domain-specific shapes and are
+# excluded to keep the contract purely structural.
+UNIVERSAL_BACKBONE_FACETS: tuple[dict[str, str], ...] = (
+    {
+        "name": "framework_and_definition",
+        "description": (
+            "Introduce the conceptual framework and define the core terms "
+            "used across the report, including any competing definitions "
+            "that matter for the research question."
+        ),
+    },
+    {
+        "name": "controversies_and_caveats",
+        "description": (
+            "Surface the main controversies, limitations, data caveats, "
+            "and competing interpretations relevant to the research "
+            "question, so the analysis does not read as one-sided."
+        ),
+    },
+)

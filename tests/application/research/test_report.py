@@ -6,8 +6,11 @@ from houyi.application.research.report import (
     ReportGenerator,
     SectionEvidenceBundle,
     SectionEvidencePolicy,
+    _analyse_critical_analysis,
+    _analyse_visualization_gaps,
     _build_soft_checklist,
     _compute_section_sidecar_metrics,
+    _consolidate_short_paragraphs,
     _detect_noisy_paragraphs,
 )
 from houyi.application.research.types import (
@@ -1074,3 +1077,73 @@ class TestSectionMetadata:
     def test_outline_archetype_defaults(self):
         section = OutlineSection(title="Overview", objective="Survey")
         assert section.section_archetype == "overview_and_synthesis"
+
+
+class TestCriticalAnalysisSignal:
+    def test_detects_keyword(self):
+        body = (
+            "The economy grew 3.4% in 2024 [ref_001]. However, the "
+            "methodology behind national accounts carries known limitations "
+            "when comparing across provinces [ref_002]."
+        )
+        assert _analyse_critical_analysis(body) is True
+
+    def test_misses_without_keyword(self):
+        body = "Survey coverage rose to 80% in 2024 [ref_001]."
+        assert _analyse_critical_analysis(body) is False
+
+
+class TestVisualizationSignal:
+    def test_detects_table_gap(self):
+        body = (
+            "Revenue was 1,234 units in 2021, 2,456 units in 2022, "
+            "and 3,678 units in 2023 [ref_001]."
+        )
+        gaps = _analyse_visualization_gaps(body)
+        assert gaps["needs_table"] is True
+        assert gaps["needs_mermaid"] is False
+
+    def test_detects_mermaid_gap(self):
+        body = (
+            "The proposed framework classifies the pipeline into three "
+            "distinct stages with nested levels of responsibility."
+        )
+        gaps = _analyse_visualization_gaps(body)
+        assert gaps["needs_mermaid"] is True
+
+    def test_noop_with_table(self):
+        body = (
+            "| Metric | 2021 | 2022 | 2023 |\n"
+            "| ---- | ---- | ---- | ---- |\n"
+            "| Revenue | 1,234 | 2,456 | 3,678 |"
+        )
+        gaps = _analyse_visualization_gaps(body)
+        assert gaps["needs_table"] is False
+
+
+class TestParagraphConsolidation:
+    def test_merges_short_paragraphs(self):
+        body = "First claim.\n\nSecond claim.\n\nThird claim."
+        out = _consolidate_short_paragraphs(body)
+        # All three short paragraphs collapse into a single merged paragraph
+        # because each is a single sentence and the running buffer crosses
+        # the target length at the third one.
+        assert out.count("\n\n") == 0
+        assert out.startswith("First claim.")
+        assert "Third claim." in out
+
+    def test_preserves_structure(self):
+        body = (
+            "Short intro.\n\n"
+            "- bullet one\n- bullet two\n\n"
+            "Short mid.\n\n"
+            "```python\nprint('x')\n```\n\n"
+            "Short end."
+        )
+        out = _consolidate_short_paragraphs(body)
+        # The list block and the code fence must survive untouched.
+        assert "- bullet one" in out
+        assert "```python" in out
+        parts = out.split("\n\n")
+        assert any(part.startswith("- bullet") for part in parts)
+        assert any("```python" in part for part in parts)

@@ -21,7 +21,10 @@ from houyi.application.research.taxonomy import (
 from houyi.application.research.taxonomy import (
     ENGLISH_INTERROGATIVE_LEADS as _ENGLISH_LEADS,
 )
-from houyi.application.research.taxonomy import ENTITY_QUERY_HINTS
+from houyi.application.research.taxonomy import (
+    ENTITY_QUERY_HINTS,
+    UNIVERSAL_BACKBONE_FACETS,
+)
 from houyi.application.research.types import (
     AnswerCoverageContract,
     ClarificationResult,
@@ -454,6 +457,51 @@ def _truncate_plan_preview(content: str, limit: int = 2000) -> str:
     return content[:limit] + "...<truncated>"
 
 
+def _ensure_universal_backbone_contract(
+    contract: AnswerCoverageContract,
+    settings: ResearchSettings,
+) -> AnswerCoverageContract:
+    """Augment a plan-level contract with topic-agnostic backbone facets.
+
+    Only activates for deep-depth plans so quick/standard plans stay lean.
+    Facets already present (matched by case-insensitive name) are preserved
+    exactly; missing backbone facets are appended without reordering.
+
+    The backbone vocabulary is defined in ``taxonomy.UNIVERSAL_BACKBONE_FACETS``
+    and is deliberately topic-agnostic: every rigorous report defines its
+    terms/framework and surfaces controversies/caveats, so injecting these two
+    facets is a structural improvement rather than any case-specific
+    alignment.
+    """
+    if _depth_key(settings) != "deep":
+        return contract
+    existing_names = {
+        facet.name.strip().lower() for facet in contract.must_cover_facets if facet.name
+    }
+    additions: list[CoverageFacet] = []
+    for spec in UNIVERSAL_BACKBONE_FACETS:
+        name = str(spec.get("name", "")).strip()
+        if not name or name.lower() in existing_names:
+            continue
+        additions.append(
+            CoverageFacet(
+                name=name,
+                intent=str(spec.get("description", "")).strip(),
+                evidence_hint="",
+            )
+        )
+    if not additions:
+        return contract
+    return AnswerCoverageContract(
+        must_cover_facets=list(contract.must_cover_facets) + additions,
+        comparison_axes=list(contract.comparison_axes),
+        time_scope=contract.time_scope,
+        geo_scope=contract.geo_scope,
+        required_caveats=list(contract.required_caveats),
+        evidence_expectations=list(contract.evidence_expectations),
+    )
+
+
 def _build_plan(
     query: str,
     data: dict,
@@ -461,6 +509,7 @@ def _build_plan(
 ) -> ResearchPlan:
     """Convert raw LLM JSON into a typed ResearchPlan."""
     plan_contract = _parse_coverage_contract(data.get("plan_contract"))
+    plan_contract = _ensure_universal_backbone_contract(plan_contract, settings)
     sub_questions: list[SubQuestion] = []
     local_contracts: list[AnswerCoverageContract] = []
     for i, sq in enumerate(data.get("sub_questions", [])):

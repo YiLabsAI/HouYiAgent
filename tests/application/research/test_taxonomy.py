@@ -9,6 +9,9 @@ from houyi.application.research.taxonomy import (
     QUERY_HYGIENE_CJK_STOPWORDS,
     QUERY_HYGIENE_EN_STOPWORDS,
     QUERY_HYGIENE_FILLER_TOKENS,
+    SECTION_CRITICAL_ANALYSIS_KEYWORDS,
+    SECTION_VISUAL_TRIGGER_KEYWORDS,
+    UNIVERSAL_BACKBONE_FACETS,
 )
 
 
@@ -46,3 +49,25 @@ class TestTaxonomy:
     def test_en_stopwords_ascii(self):
         for token in QUERY_HYGIENE_EN_STOPWORDS:
             assert token.isascii(), "EN stopwords must be ASCII-only"
+
+    def test_critical_keywords_bilingual(self):
+        en = [m for m in SECTION_CRITICAL_ANALYSIS_KEYWORDS if m.isascii()]
+        cjk = [m for m in SECTION_CRITICAL_ANALYSIS_KEYWORDS if not m.isascii()]
+        assert len(en) >= 4, "need English critical-analysis markers"
+        assert len(cjk) >= 4, "need CJK critical-analysis markers"
+
+    def test_visual_triggers_bilingual(self):
+        en = [m for m in SECTION_VISUAL_TRIGGER_KEYWORDS if m.isascii()]
+        cjk = [m for m in SECTION_VISUAL_TRIGGER_KEYWORDS if not m.isascii()]
+        assert len(en) >= 4, "need English visual trigger cues"
+        assert len(cjk) >= 4, "need CJK visual trigger cues"
+
+    def test_backbone_topic_agnostic(self):
+        # The contract must stay minimal and topic-neutral. Any facet name
+        # hinting at a concrete domain (people, market, policy, etc.) would
+        # drift the contract toward case-specific alignment.
+        assert len(UNIVERSAL_BACKBONE_FACETS) == 2
+        names = {spec["name"] for spec in UNIVERSAL_BACKBONE_FACETS}
+        assert names == {"framework_and_definition", "controversies_and_caveats"}
+        for spec in UNIVERSAL_BACKBONE_FACETS:
+            assert spec.get("description"), "each facet must carry a description"

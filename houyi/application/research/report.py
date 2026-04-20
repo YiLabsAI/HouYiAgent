@@ -21,6 +21,8 @@ from houyi.adapters.llm.base import LLMAdapter
 from houyi.application.research.taxonomy import (
     ARCHETYPE_COMPLIANCE_KEYWORDS,
     COUNTER_EVIDENCE_MARKERS,
+    SECTION_CRITICAL_ANALYSIS_KEYWORDS,
+    SECTION_VISUAL_TRIGGER_KEYWORDS,
 )
 from houyi.application.research.types import (
     AggregatedSources,
@@ -222,6 +224,16 @@ paragraph. Use bullet points or tables only when listing distinct items \
 - Write in the SAME language as the report title / query above. \
 If the query is in Chinese, write in Chinese. If English, write in English.
 - Use clear, professional, scholarly prose. Aim for 400-800 words per section.
+- CRITICAL ANALYSIS: After presenting the main evidence, include a concise \
+critical passage that acknowledges data source limitations, methodological \
+caveats, or competing interpretations where relevant to this section. Keep it \
+proportionate to the evidence above; skip entirely if no meaningful caveat applies.
+- DATA PRESENTATION: When quantitative data (figures, ranges, percentages, \
+comparisons) is central to this section, prefer a compact markdown table for \
+side-by-side comparison over long prose enumerations.
+- STRUCTURAL DIAGRAMS: When the section describes a hierarchy, taxonomy, \
+pipeline, or sequence of stages, consider a ```mermaid flowchart or graph \
+to visualize the relationships.
 {soft_checklist}
 
 Respond ONLY with JSON:
@@ -652,6 +664,12 @@ class ReportGenerator:
             objective=objective,
             available_refs=available_refs,
         )
+        # Structural postprocess: the only content-mutating guard is the
+        # paragraph consolidator (human-visible layout repair). Critical and
+        # visualization signals are computed later by
+        # ``_compute_section_sidecar_metrics`` and emitted as observability
+        # only, so they do not leak HTML markers into the scored article.
+        section.content = _consolidate_short_paragraphs(section.content)
         return section
 
     async def _clean_section_noise(
@@ -769,6 +787,169 @@ def _detect_noisy_paragraphs(paragraphs: list[str]) -> list[int]:
     return noisy
 
 
+# ---------------------------------------------------------------------------
+# Section structural contract postprocess guards.
+#
+# These helpers run after the LLM section generation and the noise rewrite
+# pass. They are deliberately zero-LLM-cost, topic-agnostic, and idempotent
+# so they can also run in isolation against any Markdown body.
+#
+# * ``_consolidate_short_paragraphs`` merges adjacent short paragraphs so the
+#   reader sees cohesive multi-sentence blocks instead of fragmented lines.
+#   This is the only helper that mutates ``section.content`` — it performs a
+#   human-visible layout repair.
+# * ``_analyse_critical_analysis`` checks whether any critical-analysis
+#   keyword is present in the body and returns a boolean flag.
+# * ``_analyse_visualization_gaps`` checks whether the body lacks an expected
+#   table (numeric-dense prose) or mermaid fence (hierarchy/sequence prose)
+#   and returns the gap flags.
+#
+# The ``_analyse_*`` helpers **never mutate the content**. Their signals are
+# collected by ``_compute_section_sidecar_metrics`` and surface through
+# ``section_input_metrics`` for offline bench analysis. Writing the signals
+# into ``section.content`` as HTML comments would leak them into the scored
+# article text when upstream RACE cleaning falls back to the raw body.
+# ---------------------------------------------------------------------------
+
+
+_MERGEABLE_MIN_SENTENCES = 3
+_MERGEABLE_TARGET_SENTENCES = 5
+_VISUALIZATION_NUMERIC_THRESHOLD = 3
+
+# Numeric density heuristic: counts runs of digits with optional thousands
+# separators or decimals, matching both Arabic numerals and percent signs.
+_NUMERIC_TOKEN_PATTERN = re.compile(r"\d[\d,\.]*%?")
+
+_MARKDOWN_TABLE_ROW = re.compile(r"^\s*\|.+\|\s*$", re.MULTILINE)
+_MERMAID_FENCE = re.compile(r"```\s*mermaid", re.IGNORECASE)
+
+
+def _is_structural_paragraph(text: str) -> bool:
+    """Return True when a paragraph must not be merged with its neighbours."""
+    stripped = text.strip()
+    if not stripped:
+        return True
+    first_line = stripped.splitlines()[0].lstrip()
+    # Headings (ATX markdown).
+    if first_line.startswith("#"):
+        return True
+    # List items (ordered or unordered).
+    if re.match(r"^[-*+]\s", first_line) or re.match(r"^\d+[\.)]\s", first_line):
+        return True
+    # Table fragments.
+    if first_line.startswith("|"):
+        return True
+    # Code / mermaid fences anywhere in the paragraph.
+    if "```" in stripped:
+        return True
+    # Standalone HTML comment markers (already-attached hints or block quotes).
+    return first_line.startswith("<!--") or first_line.startswith(">")
+
+
+def _count_sentences(text: str) -> int:
+    stripped = text.strip()
+    if not stripped:
+        return 0
+    # Count sentence terminators plus one for any trailing non-terminated
+    # fragment, so a single-sentence paragraph without a terminator still
+    # registers as one sentence.
+    terminators = len(_SENTENCE_TERMINATORS.findall(stripped))
+    if terminators == 0:
+        return 1
+    return terminators
+
+
+def _consolidate_short_paragraphs(content: str) -> str:
+    """Merge adjacent short paragraphs up to a readable target length.
+
+    Structural paragraphs (headings, lists, tables, code fences, existing
+    HTML comments) are never merged. The merge target is expressed in
+    sentences so the heuristic remains language-agnostic.
+    """
+    if not content:
+        return content
+    paragraphs = content.split("\n\n")
+    if len(paragraphs) < 2:
+        return content
+    merged: list[str] = []
+    buffer: list[str] = []
+    buffer_sentences = 0
+
+    def _flush() -> None:
+        nonlocal buffer, buffer_sentences
+        if buffer:
+            merged.append(" ".join(part.strip() for part in buffer))
+            buffer = []
+            buffer_sentences = 0
+
+    for para in paragraphs:
+        if _is_structural_paragraph(para):
+            _flush()
+            merged.append(para)
+            continue
+        sentences = _count_sentences(para)
+        if sentences >= _MERGEABLE_TARGET_SENTENCES:
+            _flush()
+            merged.append(para)
+            continue
+        if sentences >= _MERGEABLE_MIN_SENTENCES and not buffer:
+            # Standalone paragraph already meets the minimum; leave as-is so
+            # well-formed sections stay untouched.
+            merged.append(para)
+            continue
+        buffer.append(para)
+        buffer_sentences += sentences
+        if buffer_sentences >= _MERGEABLE_TARGET_SENTENCES:
+            _flush()
+    _flush()
+    return "\n\n".join(merged)
+
+
+def _analyse_visualization_gaps(content: str) -> dict[str, bool]:
+    """Return structural signals describing missing visualisations.
+
+    The result carries two boolean flags, both observational only:
+
+    * ``needs_table`` — numeric token density meets
+      ``_VISUALIZATION_NUMERIC_THRESHOLD`` but the body contains no markdown
+      table row, hinting the writer should prefer a compact table;
+    * ``needs_mermaid`` — any hierarchy/sequence keyword from
+      ``SECTION_VISUAL_TRIGGER_KEYWORDS`` is present but the body contains no
+      ``mermaid`` fence, hinting a flowchart could clarify the relationships.
+
+    The function never mutates ``content``. Callers emit these flags as
+    sidecar metrics for offline bench analysis.
+    """
+    if not content:
+        return {"needs_table": False, "needs_mermaid": False}
+    numeric_hits = len(_NUMERIC_TOKEN_PATTERN.findall(content))
+    has_table = bool(_MARKDOWN_TABLE_ROW.search(content))
+    needs_table = numeric_hits >= _VISUALIZATION_NUMERIC_THRESHOLD and not has_table
+    lowered = content.lower()
+    trigger_hit = any(keyword.lower() in lowered for keyword in SECTION_VISUAL_TRIGGER_KEYWORDS)
+    has_mermaid = bool(_MERMAID_FENCE.search(content))
+    needs_mermaid = trigger_hit and not has_mermaid
+    return {"needs_table": needs_table, "needs_mermaid": needs_mermaid}
+
+
+def _analyse_critical_analysis(content: str) -> bool:
+    """Return True when at least one critical-analysis keyword is present.
+
+    Keywords come from ``SECTION_CRITICAL_ANALYSIS_KEYWORDS`` (bilingual,
+    topic-agnostic). The check is case-insensitive. Absence of any keyword
+    is itself a useful signal — surfaced as a sidecar metric, not injected
+    back into the narrative.
+    """
+    if not content:
+        return False
+    lowered = content.lower()
+    for keyword in SECTION_CRITICAL_ANALYSIS_KEYWORDS:
+        token = keyword.lower()
+        if token and token in lowered:
+            return True
+    return False
+
+
 def _compute_section_sidecar_metrics(
     content: str,
     section_archetype: str,
@@ -796,6 +977,14 @@ def _compute_section_sidecar_metrics(
     - ``sidecar_archetype_compliant``: whether archetype-specific keywords
       were detected (English-only; CJK content yields ``false``, which is
       itself a useful diagnostic signal).
+    - ``sidecar_critical_analysis_present``: whether any bilingual
+      critical-analysis keyword (``SECTION_CRITICAL_ANALYSIS_KEYWORDS``) is
+      present in the body.
+    - ``sidecar_visualization_needs_table`` /
+      ``sidecar_visualization_needs_mermaid``: whether the body is dense in
+      numeric tokens without a table, or mentions hierarchy/sequence cues
+      without a mermaid fence. Both are observability-only; the signals do
+      not mutate the section body so nothing leaks into the scored article.
     """
     lines = [ln for ln in content.split("\n") if ln.strip()]
     paragraphs = [p.strip() for p in content.split("\n\n") if p.strip()]
@@ -839,6 +1028,11 @@ def _compute_section_sidecar_metrics(
     content_lower = content.lower()
     matched_keywords = [kw for kw in archetype_keywords if kw in content_lower]
 
+    # Structural contract signals (bilingual, topic-agnostic). Emitted as
+    # observability only; never written back into section content.
+    critical_present = _analyse_critical_analysis(content)
+    visual_gaps = _analyse_visualization_gaps(content)
+
     return {
         "sidecar_bullet_line_ratio": bullet_line_ratio,
         "sidecar_avg_paragraph_sentences": avg_paragraph_sentences,
@@ -852,6 +1046,9 @@ def _compute_section_sidecar_metrics(
         # type constraint: dict[str, int | str].
         "sidecar_archetype_compliant": 1 if matched_keywords else 0,
         "sidecar_archetype_keywords_matched": ",".join(matched_keywords[:5]),
+        "sidecar_critical_analysis_present": 1 if critical_present else 0,
+        "sidecar_visualization_needs_table": 1 if visual_gaps["needs_table"] else 0,
+        "sidecar_visualization_needs_mermaid": 1 if visual_gaps["needs_mermaid"] else 0,
     }
 
 
