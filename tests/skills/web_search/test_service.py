@@ -12,6 +12,7 @@ from houyi.infrastructure.config.env_config import (
     ENV_SERPER_API_KEY,
     ENV_TAVILY_API_KEY,
     ENV_WEB_SEARCH_CACHE_ENABLED,
+    ENV_WEB_SEARCH_CACHE_MIN_RESULTS,
     ENV_WEB_SEARCH_CACHE_TTL,
     ENV_WEB_SEARCH_PROVIDER,
     ENV_WEB_SEARCH_PROXY_POLICY,
@@ -300,9 +301,10 @@ async def test_include_content_dep(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_cache_hits():
+async def test_cache_hits(monkeypatch):
     """Cache should return cached responses and mark metadata.cached."""
 
+    monkeypatch.setenv(ENV_WEB_SEARCH_CACHE_MIN_RESULTS, "1")
     provider = _Provider(results=[{"title": "t", "url": "u"}])
     cache = LRUCache(max_size=10, default_ttl=60)
     service = WebSearchService(provider=provider, cache=cache, cache_ttl=60)
@@ -315,8 +317,18 @@ async def test_cache_hits():
 
 
 @pytest.mark.asyncio
-async def test_cache_key_scopes():
-    """Switching provider should NOT hit the other provider's cache."""
+async def test_provider_agnostic_cache(monkeypatch):
+    """Same (query, max_results, include_content) should hit the cache across providers.
+
+    Legacy behavior embedded the primary provider name in the cache key,
+    which (a) invalidated the entire cache when the configured primary
+    changed and (b) made fallback-served responses unreachable for a
+    later primary-configured service.  The key now excludes the provider
+    so any service instance that hits the same shared cache retrieves the
+    previously stored response.
+    """
+
+    monkeypatch.setenv(ENV_WEB_SEARCH_CACHE_MIN_RESULTS, "1")
 
     class _ProviderA(_Provider):
         def __init__(self):
@@ -336,8 +348,8 @@ async def test_cache_key_scopes():
     assert resp_a.results[0].title == "from_a"
 
     resp_b = await svc_b.search("q", max_results=1)
-    assert resp_b.results[0].title == "from_b"
-    assert resp_b.metadata.cache_hit is False
+    assert resp_b.results[0].title == "from_a"
+    assert resp_b.metadata.cache_hit is True
 
 
 @pytest.mark.asyncio
@@ -359,6 +371,7 @@ async def test_use_cache_off(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_cache_hit_keeps(monkeypatch):
+    monkeypatch.setenv(ENV_WEB_SEARCH_CACHE_MIN_RESULTS, "1")
     provider = _Provider(results=[{"title": "t", "url": "u"}])
 
     async def _fetch(self, urls):

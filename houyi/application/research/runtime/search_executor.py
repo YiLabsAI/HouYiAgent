@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable
 from typing import Any
 from urllib.parse import urlparse
 
@@ -22,6 +22,11 @@ from houyi.application.research.runtime.search_sufficiency import SufficiencyEva
 from houyi.application.research.runtime.search_telemetry import (
     SearchEventCallback,
     TelemetryEmitter,
+)
+from houyi.application.research.taxonomy import (
+    QUERY_HYGIENE_CJK_STOPWORDS,
+    QUERY_HYGIENE_EN_STOPWORDS,
+    QUERY_HYGIENE_FILLER_TOKENS,
 )
 from houyi.application.research.types import (
     AnswerCoverageContract,
@@ -535,6 +540,13 @@ class SearchExecutor:
             query_type=sub_question.query_type,
             disambiguation_needed=sub_question.disambiguation_needed,
         )
+        # Drop noisy LLM-emitted queries (repeated tokens, filler-only,
+        # stopword-only) before they consume dedup / budget / provider slots.
+        # Hygiene is purely reductive and never rewrites query text so
+        # downstream attribution remains clean.
+        raw_queries, hygiene_dropped = _apply_query_hygiene(raw_queries)
+        if hygiene_dropped:
+            query_metadata["hygiene_dropped"] = hygiene_dropped
         queries, skipped_queries = await self._query_planner.claim_queries(
             self._trim_queries_for_round(
                 raw_queries,
@@ -911,6 +923,80 @@ _DISAMBIGUATION_CONTEXT_TERMS = 4
 _MIN_CONTEXT_TOKEN_LEN = 2
 # Min token length for English-only extraction (skip 2-letter prepositions).
 _MIN_ASCII_TOKEN_LEN = 3
+
+
+def _is_cjk_char(ch: str) -> bool:
+    """Return True when ``ch`` is a CJK unified ideograph or common extension.
+
+    Scope is intentionally narrow to the ranges actually seen in planner
+    output (Basic Multilingual Plane CJK + Extension A + Compatibility).
+    Symbols, punctuation, and Latin characters all return False so the
+    hygiene logic can distinguish mixed-script queries from CJK-only ones.
+    """
+    code = ord(ch)
+    return 0x4E00 <= code <= 0x9FFF or 0x3400 <= code <= 0x4DBF or 0xF900 <= code <= 0xFAFF
+
+
+def _apply_query_hygiene(queries: Iterable[str]) -> tuple[list[str], int]:
+    """Drop search queries that cannot contribute useful retrieval signal.
+
+    Applied rules, in order, all case-insensitive:
+
+    1. **Repeated token**: queries with two or more tokens where any token
+       appears more than once (e.g. ``"X X"``).  These are almost always
+       planner bugs and waste provider quota.
+    2. **Filler/stopword-only**: queries whose every token is drawn from
+       the shared taxonomy vocabularies (filler fragments, CJK
+       interrogatives, English WH-words).  Nothing informative remains.
+    3. **CJK collapse**: queries that contain CJK characters where removing
+       noise tokens leaves fewer than two content tokens *and* at least one
+       token was removed.  Pure-content short queries (e.g. a lone domain
+       term) are preserved because they may still be useful.
+
+    Hygiene is purely reductive: each kept query is returned unchanged, in
+    its original order, so downstream dedup and budget logic observes a
+    strict subset of what the planner proposed.
+
+    Args:
+        queries: iterable of raw query strings.
+
+    Returns:
+        Tuple ``(kept_queries, dropped_count)``.  ``dropped_count`` also
+        counts blank / whitespace-only entries.
+    """
+    filler_lower = {token.lower() for token in QUERY_HYGIENE_FILLER_TOKENS}
+    en_stopwords = {token.lower() for token in QUERY_HYGIENE_EN_STOPWORDS}
+    cjk_stopwords = set(QUERY_HYGIENE_CJK_STOPWORDS)
+
+    def _is_noise_token(raw: str) -> bool:
+        lowered = raw.lower()
+        return lowered in filler_lower or lowered in en_stopwords or raw in cjk_stopwords
+
+    kept: list[str] = []
+    dropped = 0
+    for query in queries:
+        if not query or not query.strip():
+            dropped += 1
+            continue
+        stripped = query.strip()
+        tokens = stripped.split()
+        if not tokens:
+            dropped += 1
+            continue
+        lowered_tokens = [token.lower() for token in tokens]
+        if len(tokens) >= 2 and len(set(lowered_tokens)) < len(lowered_tokens):
+            dropped += 1
+            continue
+        content_tokens = [token for token in tokens if not _is_noise_token(token)]
+        if not content_tokens:
+            dropped += 1
+            continue
+        has_cjk = any(_is_cjk_char(ch) for ch in stripped)
+        if has_cjk and len(content_tokens) < 2 and len(content_tokens) < len(tokens):
+            dropped += 1
+            continue
+        kept.append(stripped)
+    return kept, dropped
 
 
 def _make_disambiguation_queries(

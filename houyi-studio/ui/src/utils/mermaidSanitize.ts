@@ -35,6 +35,90 @@ export function normalizeFullWidthPunctuation(code: string): string {
   return code.replace(re, (ch) => map[ch] ?? ch);
 }
 
+// First non-blank line already declares the diagram kind? These are the
+// keywords Mermaid treats as a valid diagram type — ordered by frequency
+// so the common cases short-circuit the regex engine.
+const DIAGRAM_TYPE_KEYWORDS = [
+  'sequenceDiagram',
+  'flowchart',
+  'graph',
+  'classDiagram',
+  'stateDiagram',
+  'stateDiagram-v2',
+  'erDiagram',
+  'journey',
+  'gantt',
+  'pie',
+  'gitGraph',
+  'timeline',
+  'mindmap',
+  'quadrantChart',
+  'requirementDiagram',
+  'C4Context',
+  'C4Container',
+  'C4Component',
+  'sankey',
+  'xychart-beta',
+  'block',
+];
+
+const DIAGRAM_TYPE_RE = new RegExp(
+  `^\\s*(?:${DIAGRAM_TYPE_KEYWORDS.join('|')})\\b`,
+);
+
+/**
+ * Prepend an inferred diagram-type header when the first non-blank line
+ * of `code` is not a recognised Mermaid diagram kind.
+ *
+ * LLM writers occasionally emit only the body of a diagram (the opening
+ * ```mermaid fence + type keyword were truncated or never written), so
+ * mermaid.parse fails with "No diagram type detected". Probe the body
+ * for syntax markers unique to one of the common diagram types and
+ * prepend the matching keyword so the parser has a chance.
+ *
+ * Returns the input unchanged when a valid header is already present or
+ * the body does not match any known diagram shape.
+ */
+export function ensureDiagramTypeHeader(code: string): string {
+  const trimmed = code.replace(/^\s+/, '');
+  if (DIAGRAM_TYPE_RE.test(trimmed)) return code;
+
+  // Sequence diagrams — ``Alice->>Bob`` style arrows plus the common
+  // grouping keywords (alt / else / loop / par / opt / note / activate)
+  // appearing on their own line. The `end` keyword alone is too generic.
+  if (
+    /(^|\n)\s*[^\n]*?-[->x]+>[^\n]*/.test(code) &&
+    /(^|\n)\s*(?:alt|else|loop|par|opt|note|activate|deactivate|participant)\b/.test(
+      code,
+    )
+  ) {
+    return `sequenceDiagram\n${code}`;
+  }
+  if (/(^|\n)\s*participant\b/.test(code)) {
+    return `sequenceDiagram\n${code}`;
+  }
+
+  // State diagram — ``[*] -->`` start-state marker. Probed before
+  // flowchart because its body also contains long arrows.
+  if (/\[\*\]\s*-->/.test(code)) {
+    return `stateDiagram-v2\n${code}`;
+  }
+
+  // Class diagram — ``ClassA <|-- ClassB`` inheritance syntax. Probed
+  // before flowchart for the same reason.
+  if (/<\|--|--\|>|\.\.\|>|\*--|o--/.test(code)) {
+    return `classDiagram\n${code}`;
+  }
+
+  // Flowchart/graph — long arrows (`A --> B`) without the more specific
+  // markers above.
+  if (/(^|\n)[^\n]*?\s--+>\s/.test(code)) {
+    return `flowchart TD\n${code}`;
+  }
+
+  return code;
+}
+
 /**
  * Multi-pass sanitization for Mermaid code that fails to parse.
  *
@@ -43,6 +127,7 @@ export function normalizeFullWidthPunctuation(code: string): string {
  *   2. Subgraph titles containing parentheses  →  quoted titles
  *   3. Node labels containing parentheses      →  quoted labels
  *   4. Edge labels containing dots/CJK/parens  →  quoted labels
+ *   5. Missing diagram-type header            →  inferred keyword prepended
  */
 export function sanitizeMermaidCode(code: string): string {
   // Phase 0: full-width → half-width normalization
@@ -89,5 +174,7 @@ export function sanitizeMermaidCode(code: string): string {
     },
   );
 
-  return safe;
+  // Phase 4: Prepend an inferred diagram-type header when the body is
+  // missing one (e.g. the opening ```mermaid fence + keyword were cut).
+  return ensureDiagramTypeHeader(safe);
 }

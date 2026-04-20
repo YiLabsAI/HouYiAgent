@@ -14,6 +14,7 @@ from houyi_studio.server.research.service import (
     RunNotTerminalError,
     VersionConflictError,
     _ArchivedRun,
+    _normalize_report_sections,
 )
 
 from houyi.adapters.llm.base import LLMAdapter, LLMResponse, StreamChunk
@@ -466,7 +467,7 @@ class TestMemoryIntegration:
 
 
 class TestRehydrate:
-    async def test_rehydrate_resets_plan_to_draft(self, tmp_path):
+    async def test_rehydrate_resets_plan(self, tmp_path):
         svc1 = ResearchService(_MockLLM(), _mock_ws(), data_dir=tmp_path)
         runtime, _ = await svc1.create_run("rehydrate me", settings=_QUICK)
         run_id = runtime.run_id
@@ -502,3 +503,110 @@ class TestRehydrate:
         assert len(live._search_results) == 1
         assert live._search_results[0].question_id == "sq_test1"
         assert live._search_results[0].summary == "done"
+
+
+class TestArchivedReportNormalization:
+    """Envelope-leaked sections must be cleaned when loaded from disk."""
+
+    def test_repairs_truncated_envelope(self):
+        report = {
+            "sections": [
+                {
+                    "title": "Current status",
+                    "content": (
+                        '{\n  "content": "### Career status missing\n\n'
+                        "### Same-name exclusion\n\n"
+                        "Several same-name candidates were ruled out after "
+                        "verification [ref_abc]. Beyond that the evidence is thin"
+                    ),
+                },
+            ],
+        }
+        out = _normalize_report_sections(report)
+        assert out is not None
+        content = out["sections"][0]["content"]
+        assert not content.lstrip().startswith("{")
+        assert '"content"' not in content
+        assert "Same-name exclusion" in content
+
+    def test_normalize_noop_on_clean(self):
+        report = {
+            "sections": [{"title": "T", "content": "Just prose [ref_1]."}],
+        }
+        out = _normalize_report_sections(report)
+        assert out["sections"][0]["content"] == "Just prose [ref_1]."
+
+    def test_normalize_expands_comma_refs(self):
+        # Comma-grouped ``[ref_a, ref_b]`` tokens would bypass the
+        # single-ref resolver and render as literal bracket noise. The
+        # load path must split them into atomic ``[ref_a][ref_b]``.
+        report = {
+            "sections": [
+                {
+                    "title": "Evidence",
+                    "content": "Evidence [ref_aaaaaaaa, ref_bbbbbbbb] support.",
+                },
+            ],
+        }
+        out = _normalize_report_sections(report)
+        assert out is not None
+        content = out["sections"][0]["content"]
+        assert "[ref_aaaaaaaa, ref_bbbbbbbb]" not in content
+        assert "[ref_aaaaaaaa][ref_bbbbbbbb]" in content
+
+    def test_normalize_strips_citation_trailer(self):
+        # An escaped ``","citations":`` trailer embedded in the content
+        # string leaks as visible JSON noise; the load path must cut
+        # the body at the first such boundary.
+        trailer = (
+            'Prose body ends here.",\n  "citations": [\n    {\n      '
+            '"reference_id": "ref_aaaaaaaa"\n    }\n  ]'
+        )
+        report = {"sections": [{"title": "Core", "content": trailer}]}
+        out = _normalize_report_sections(report)
+        assert out is not None
+        content = out["sections"][0]["content"]
+        assert '"citations"' not in content
+        assert '"reference_id"' not in content
+        assert "Prose body ends here" in content
+
+    def test_normalize_restores_orphan_mermaid_fence(self):
+        # An indented diagram body followed by a lone closing ``` must
+        # be wrapped in a matching ```mermaid opener rather than silently
+        # dropped (otherwise the body renders as an unlabelled indented
+        # code block in markdown).
+        fence_content = (
+            "Narrative paragraph one.\n\n"
+            "    Env->>Trigger: change detected\n"
+            "    end\n"
+            "```\n\n"
+            "Narrative paragraph two."
+        )
+        report = {"sections": [{"title": "Arch", "content": fence_content}]}
+        out = _normalize_report_sections(report)
+        assert out is not None
+        content = out["sections"][0]["content"]
+        assert "```mermaid" in content
+        assert content.count("```") == 2
+        assert "Env->>Trigger: change detected" in content
+        assert "Narrative paragraph one" in content
+        assert "Narrative paragraph two" in content
+
+    def test_archived_run_applies_normalization(self):
+        archived = _ArchivedRun(
+            {
+                "run_id": "rr_test",
+                "status": "completed",
+                "report": {
+                    "sections": [
+                        {
+                            "title": "Section one",
+                            "content": '{ "content": "### Sub\n\nBody text with evidence [ref_1].", "citations": [] }',
+                        }
+                    ]
+                },
+            }
+        )
+        content = archived.report_data["sections"][0]["content"]
+        assert not content.lstrip().startswith("{")
+        assert "Body text with evidence" in content

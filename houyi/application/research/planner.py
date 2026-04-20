@@ -15,6 +15,12 @@ from dataclasses import dataclass
 from typing import Any
 
 from houyi.adapters.llm.base import LLMAdapter
+from houyi.application.research.taxonomy import (
+    CJK_INTERROGATIVE_CONNECTORS as _CJK_INTERROGATIVE_CONNECTORS,
+)
+from houyi.application.research.taxonomy import (
+    ENGLISH_INTERROGATIVE_LEADS as _ENGLISH_LEADS,
+)
 from houyi.application.research.taxonomy import ENTITY_QUERY_HINTS
 from houyi.application.research.types import (
     AnswerCoverageContract,
@@ -36,19 +42,22 @@ logger = logging.getLogger(__name__)
 # Upper bound for planner decomposition by depth. This is the hard ceiling that
 # keeps plan size, prompt size, and downstream execution fan-out predictable.
 _MAX_SUB_QUESTIONS_BY_DEPTH = {"quick": 3, "standard": 5, "deep": 8}
-# Lower bound for planner decomposition by depth. We keep this explicit for all
-# depths so the decomposition contract is symmetric and easier to maintain.
-# It is valid for min and max to be equal for a depth when we intentionally want
-# a fixed-size decomposition instead of a range. Today only standard depth is
-# intentionally fixed at 5; quick/deep stay flexible and therefore keep the
-# historical minimum of 1 while still being defined explicitly here.
-_MIN_SUB_QUESTIONS_BY_DEPTH = {"quick": 1, "standard": 5, "deep": 1}
+# Lower bound for planner decomposition by depth. Each depth keeps a floor that
+# is a meaningful fraction of its upper bound so the decomposition contract
+# actually enforces depth semantics rather than degrading silently. In
+# particular deep=5 prevents the pathological case where the LLM returns a
+# single sub-question for a deep research, which would collapse the report
+# into one section. Ranges (MIN < MAX) stay the norm so the planner still has
+# headroom to match prompt complexity without forced expansion.
+_MIN_SUB_QUESTIONS_BY_DEPTH = {"quick": 1, "standard": 3, "deep": 5}
 _PLAN_MAX_TOKENS_BY_DEPTH = {"quick": 1500, "standard": 2000, "deep": 3000}
-# Deep mode requires a broader report skeleton even when the planner returns a
-# compact question set, so we enforce a minimum outline section count per
-# depth. Deep reports target a wide survey structure; lower floors compress
-# the outline and shrink report body coverage.
-_MIN_OUTLINE_SECTIONS_BY_DEPTH = {"deep": 8}
+# Deep mode enforces a modest minimum outline breadth so fully-compressed
+# single-section plans still get multi-section structure. The floor is
+# intentionally close to the typical sub-question count rather than the
+# hard upper bound. Setting the floor too high forced the expansion path to
+# synthesize sections from sub-question text, leaking interrogative phrasing
+# into section titles.
+_MIN_OUTLINE_SECTIONS_BY_DEPTH = {"deep": 4}
 # Prefix used when the planner derives a synthetic focus section to avoid title
 # collisions with user- or model-provided outline titles.
 _FOCUSED_SECTION_PREFIX = "Focused"
@@ -929,7 +938,9 @@ def _try_add_focused_section(
     local_contract = context.qid_to_local.get(question_id)
     if question is None or local_contract is None:
         return
-    title = _resolve_focus_section_title(question.question, state.seen_titles)
+    title = _resolve_focus_section_title(
+        question.question, state.seen_titles, contract=local_contract
+    )
     if title is None:
         return
     objective = _derive_focus_section_objective(question.question)
@@ -950,24 +961,105 @@ def _try_add_focused_section(
     state.individually_covered.add(question_id)
 
 
-def _resolve_focus_section_title(question: str, seen_titles: set[str]) -> str | None:
-    title = _derive_focus_section_title(question)
-    title_key = title.strip().lower()
-    if title_key not in seen_titles:
-        return title
-    deduped = _dedupe_focus_section_title(title)
+def _resolve_focus_section_title(
+    question: str,
+    seen_titles: set[str],
+    *,
+    contract: AnswerCoverageContract | None = None,
+) -> str | None:
+    """Pick a short section title for a promoted sub-question.
+
+    Preference order:
+    1. First non-generic facet name on the sub-question's contract. These
+       are planner-authored noun phrases like "current employer" and make
+       cleaner headings than sub-question text.
+    2. Interrogative-stripped form of the sub-question itself.
+    Falls back to the deduped form if the first choice collides with an
+    already-seen title; returns None if both collide.
+    """
+
+    candidates: list[str] = []
+    if contract is not None:
+        for facet in contract.must_cover_facets:
+            facet_title = _facet_name_as_title(facet.name)
+            if facet_title:
+                candidates.append(facet_title)
+    candidates.append(_derive_focus_section_title(question))
+    for title in candidates:
+        if title.strip().lower() not in seen_titles:
+            return title
+    deduped = _dedupe_focus_section_title(candidates[0])
     if deduped.strip().lower() in seen_titles:
         return None
     return deduped
 
 
-def _derive_focus_section_title(question: str) -> str:
-    """Turn a sub-question into a short section title."""
+# Generic facet names used by planner infrastructure for disambiguation
+# contracts. They carry no topical signal, so we skip them when deriving
+# a section title from facet metadata.
+_GENERIC_FACET_NAMES: frozenset[str] = frozenset({"identity", "scope", "context", "background"})
 
-    cleaned = re.sub(r"\s+", " ", question).strip().rstrip("?？。！!")
+
+def _facet_name_as_title(name: str) -> str | None:
+    cleaned = re.sub(r"\s+", " ", name).strip()
+    if not cleaned:
+        return None
+    if cleaned.lower() in _GENERIC_FACET_NAMES:
+        return None
+    if len(cleaned) > 48:
+        cleaned = cleaned[:45].rstrip(" ,;:，；：") + "..."
+    return cleaned
+
+
+def _derive_focus_section_title(question: str) -> str:
+    """Turn a sub-question into a short topical section heading.
+
+    Pure string transformation (no LLM call). Strips interrogative connectors
+    so the output reads as a heading rather than a question. Inputs that are
+    already short declarative phrases pass through with only punctuation
+    normalized.
+    """
+
+    cleaned = re.sub(r"\s+", " ", question).strip()
+    cleaned = cleaned.rstrip("?？。！!.,，;；")
+    cleaned = _declarativize(cleaned)
+    if not cleaned:
+        return question.strip().rstrip("?？。！!")[:48]
     if len(cleaned) <= 48:
         return cleaned
     return cleaned[:45].rstrip(" ,;:，；：") + "..."
+
+
+# Compiled at module import from the taxonomy lead-word list. Matches
+# "<lead> <helper>...", "<helper> there ...", and bare "<helper> ..." so
+# question prefixes drop cleanly regardless of voicing.
+_HELPER_GROUP = r"(?:is|are|was|were|do|does|did|can|could|should|will|would)"
+_LEAD_GROUP = "|".join(_ENGLISH_LEADS)
+_INTERROGATIVE_LEAD_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(rf"^(?:{_LEAD_GROUP})\s+{_HELPER_GROUP}\s+", re.IGNORECASE),
+    re.compile(rf"^{_HELPER_GROUP}\s+there\s+", re.IGNORECASE),
+    re.compile(rf"^{_HELPER_GROUP}\s+", re.IGNORECASE),
+)
+
+
+def _declarativize(text: str) -> str:
+    """Remove interrogative phrasing so the result reads as a heading.
+
+    Uses the connector vocabularies defined in ``taxonomy`` as the single
+    source of truth so this stays policy-free.
+    """
+
+    stripped = text
+    for connector in _CJK_INTERROGATIVE_CONNECTORS:
+        stripped = stripped.replace(connector, " ")
+    # Remove residual question marks that can survive in compound questions
+    # where one clause's trigger was stripped but the other's "?" remained.
+    stripped = stripped.replace("？", " ").replace("?", " ")
+    stripped = re.sub(r"[\s，,、;；]+", " ", stripped).strip()
+    stripped = stripped.rstrip(" ,;:，；：、")
+    for pattern in _INTERROGATIVE_LEAD_PATTERNS:
+        stripped = pattern.sub("", stripped, count=1).lstrip(" ,;:，；：、")
+    return stripped if stripped else text
 
 
 def _dedupe_focus_section_title(title: str) -> str:

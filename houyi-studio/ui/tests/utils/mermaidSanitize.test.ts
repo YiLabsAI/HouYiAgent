@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+  ensureDiagramTypeHeader,
   normalizeFullWidthPunctuation,
   sanitizeMermaidCode,
 } from '@/utils/mermaidSanitize';
@@ -131,5 +132,69 @@ graph TD
     const once = sanitizeMermaidCode(k8sCode);
     const twice = sanitizeMermaidCode(once);
     expect(twice).toBe(once);
+  });
+
+  it('prepends sequence header to headerless body', () => {
+    // A writer dropped the ``sequenceDiagram`` header and the opening
+    // ```mermaid fence. sanitizeMermaidCode's Phase 4 must restore the
+    // header so mermaid.parse stops failing on "No diagram type".
+    const body = [
+      '    Env->>Trigger: metric change',
+      '    alt satisfied',
+      '        Trigger->>Engine: start',
+      '    else not satisfied',
+      '        Trigger->>Env: hold',
+      '    end',
+    ].join('\n');
+    const result = sanitizeMermaidCode(body);
+    expect(result.startsWith('sequenceDiagram\n')).toBe(true);
+    expect(result).toContain('Env->>Trigger: metric change');
+  });
+});
+
+describe('ensureDiagramTypeHeader', () => {
+  it('keeps existing header', () => {
+    const input = 'sequenceDiagram\n  A->>B: hi';
+    expect(ensureDiagramTypeHeader(input)).toBe(input);
+  });
+
+  it('keeps flowchart header', () => {
+    const input = 'flowchart TD\n  A --> B';
+    expect(ensureDiagramTypeHeader(input)).toBe(input);
+  });
+
+  it('detects sequence by arrow plus keyword', () => {
+    const body = '  A->>B: msg\n  alt ok\n    B->>A: ack\n  end';
+    const out = ensureDiagramTypeHeader(body);
+    expect(out.startsWith('sequenceDiagram\n')).toBe(true);
+  });
+
+  it('detects sequence by participant', () => {
+    const body = '  participant Alice\n  participant Bob\n  Alice->Bob: hi';
+    const out = ensureDiagramTypeHeader(body);
+    expect(out.startsWith('sequenceDiagram\n')).toBe(true);
+  });
+
+  it('detects flowchart by long arrow', () => {
+    const body = '  A --> B\n  B --> C';
+    const out = ensureDiagramTypeHeader(body);
+    expect(out.startsWith('flowchart TD\n')).toBe(true);
+  });
+
+  it('detects class diagram by inheritance arrow', () => {
+    const body = '  Animal <|-- Dog\n  Animal <|-- Cat';
+    const out = ensureDiagramTypeHeader(body);
+    expect(out.startsWith('classDiagram\n')).toBe(true);
+  });
+
+  it('detects state diagram by start marker', () => {
+    const body = '  [*] --> Idle\n  Idle --> Active';
+    const out = ensureDiagramTypeHeader(body);
+    expect(out.startsWith('stateDiagram-v2\n')).toBe(true);
+  });
+
+  it('returns unchanged when nothing matches', () => {
+    const input = 'just some plain text that is not a diagram';
+    expect(ensureDiagramTypeHeader(input)).toBe(input);
   });
 });

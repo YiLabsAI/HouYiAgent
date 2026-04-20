@@ -20,6 +20,10 @@ from typing import Any
 from houyi_studio.server.research.sse import ResearchSSEEnvelope
 
 from houyi.adapters.llm.base import LLMAdapter
+from houyi.application.research.report import (
+    _normalize_section_body,
+    _repair_content_envelope,
+)
 from houyi.application.research.runtime import ResearchRuntime
 from houyi.application.research.runtime.errors import ResearchReportNotReadyError
 from houyi.application.research.runtime.intermediate import IntermediateReport
@@ -52,6 +56,44 @@ _SETTINGS_FIELD_MAX_AGENTS = "max_agents"
 _SUB_AGENT_MODES = (OrchestrationMode.DELEGATE, OrchestrationMode.AUTONOMOUS)
 
 
+def _normalize_report_sections(
+    report_data: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Clean persisted section bodies before handing them to callers.
+
+    Each step is idempotent and safe to re-run. Concrete defect shapes
+    handled:
+
+    - ``{"content": "..."`` envelope wrapping the whole body.
+    - ``","citations":`` trailer double-nested into ``content``.
+    - ``[ref_a, ref_b]`` comma-grouped citations.
+    - Unpaired trailing ```` ``` ```` fence marker.
+    """
+
+    if not isinstance(report_data, dict):
+        return report_data
+    sections = report_data.get("sections")
+    if not isinstance(sections, list):
+        return report_data
+    for section in sections:
+        if not isinstance(section, dict):
+            continue
+        content = section.get("content")
+        if not isinstance(content, str):
+            continue
+        title = section.get("title") or ""
+        # First salvage an envelope wrapper when the whole content string
+        # is still a raw ``{"content": "..."}`` fragment. Newer bodies
+        # skip this branch and go straight to shared normalization.
+        stripped = content.lstrip()
+        if stripped.startswith("{") and '"content"' in stripped[:80]:
+            repaired = _repair_content_envelope(content)
+            if repaired is not None:
+                content = repaired
+        section["content"] = _normalize_section_body(content, title)
+    return report_data
+
+
 class _ArchivedRun:
     """Lightweight read-only run restored from persisted JSON.
 
@@ -66,7 +108,7 @@ class _ArchivedRun:
         self._plan_data: dict[str, Any] | None = data.get("plan")
         self._progress_data: dict[str, Any] = data.get("progress", {})
         self._error: str | None = data.get("error")
-        self._report_data: dict[str, Any] | None = data.get("report")
+        self._report_data: dict[str, Any] | None = _normalize_report_sections(data.get("report"))
         self._search_results_data: list[dict[str, Any]] = data.get("search_results", [])
         self._intermediate_reports_data: list[dict[str, Any]] = data.get("intermediate_reports", [])
         self.created_at: str = data.get("created_at", "")

@@ -164,7 +164,16 @@ def build_bench2_summary_payload(
     sidecar_summary: Bench2RunSummary,
     generation_summary: Bench2GenerationSummary | None,
 ) -> dict[str, Any]:
-    return {
+    # Import lazily so this module does not pull the web-search service into
+    # its dependency graph for code paths that never build a summary.
+    from houyi.skills.web_search.service import get_global_cache_stats
+
+    metrics: dict[str, Any] = {}
+    cache_stats = get_global_cache_stats()
+    if cache_stats is not None:
+        metrics["web_search_cache"] = cache_stats
+
+    payload: dict[str, Any] = {
         "target_model": context.target_model,
         "runtime_mode": context.runtime_mode,
         "query_file": str(context.query_file),
@@ -185,6 +194,9 @@ def build_bench2_summary_payload(
         "generation": generation_summary.to_dict() if generation_summary is not None else None,
         "sidecar": sidecar_summary.to_dict(),
     }
+    if metrics:
+        payload["metrics"] = metrics
+    return payload
 
 
 class Bench2SidecarRunner:

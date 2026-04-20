@@ -15,6 +15,7 @@ from houyi.infrastructure.config.env_config import (
     ENV_TAVILY_API_KEY,
     ENV_WEB_SEARCH_CACHE_ENABLED,
     ENV_WEB_SEARCH_CACHE_MAX_SIZE,
+    ENV_WEB_SEARCH_CACHE_MIN_RESULTS,
     ENV_WEB_SEARCH_CACHE_TTL,
     ENV_WEB_SEARCH_PROVIDER,
     ENV_WEB_SEARCH_TIMEOUT,
@@ -110,6 +111,32 @@ _GLOBAL_CACHE: LRUCache | None = None
 def _reset_global_cache_for_tests() -> None:
     global _GLOBAL_CACHE
     _GLOBAL_CACHE = None
+
+
+def get_global_cache_stats() -> dict[str, Any] | None:
+    """Return a JSON-serializable snapshot of the shared web-search cache.
+
+    Returns ``None`` when caching is disabled or the cache has never been
+    populated, so callers can safely skip the field in their output.  The
+    snapshot format mirrors ``CacheStats`` attributes plus ``hit_rate`` so
+    downstream tooling never needs to recompute it.
+    """
+    cache = _GLOBAL_CACHE
+    if cache is None:
+        return None
+    stats = cache.stats
+    total_lookups = stats.hits + stats.misses
+    if total_lookups == 0 and stats.total_size == 0:
+        return None
+    return {
+        "hits": stats.hits,
+        "misses": stats.misses,
+        "evictions": stats.evictions,
+        "expirations": stats.expirations,
+        "hit_rate": round(stats.hit_rate, 4),
+        "entries": stats.total_size,
+        "max_size": cache.max_size,
+    }
 
 
 def _is_truthy(value: str | None) -> bool:
@@ -298,6 +325,24 @@ class WebSearchService:
         ttl_raw = (os.getenv(ENV_WEB_SEARCH_CACHE_TTL) or "").strip()
         return int(ttl_raw) if ttl_raw else 3600
 
+    @staticmethod
+    def _resolve_cache_min_results() -> int:
+        """Return the minimum provider result count required to cache a response.
+
+        Defaults to ``3``: fewer hits usually indicates a thin or empty
+        fallback response that would contaminate the cache.  Set the env
+        var to ``1`` to effectively disable the gate.  Non-positive or
+        unparseable values fall back to the default.
+        """
+        raw = (os.getenv(ENV_WEB_SEARCH_CACHE_MIN_RESULTS) or "").strip()
+        if not raw:
+            return 3
+        try:
+            parsed = int(raw)
+        except ValueError:
+            return 3
+        return parsed if parsed >= 1 else 3
+
     @classmethod
     def _resolve_cache(cls, ttl: int) -> LRUCache | None:
         enabled_raw = os.getenv(ENV_WEB_SEARCH_CACHE_ENABLED)
@@ -393,10 +438,23 @@ class WebSearchService:
         providers.extend(self.fallback_providers)
         return providers
 
-    def _cache_key(
-        self, query: str, *, provider: str, max_results: int, include_content: bool
-    ) -> str:
-        return f"{query}|{provider}|{max_results}|{int(include_content)}"
+    def _cache_key(self, query: str, *, max_results: int, include_content: bool) -> str:
+        """Return a provider-agnostic cache key.
+
+        Historically the primary provider name was embedded in the key.
+        That produced two defects:
+
+        * When a request fell back to a secondary provider, the successful
+          response was stored under the primary provider's key, so later
+          lookups for the same query under a different primary missed.
+        * Switching the configured primary provider silently invalidated
+          the entire cache.
+
+        Keying by ``(query, max_results, include_content)`` removes both
+        defects.  The provider that actually served the response is still
+        preserved inside ``WebSearchResponse.provider`` for observability.
+        """
+        return f"{query}|{max_results}|{int(include_content)}"
 
     @staticmethod
     def _normalize_results(results: list[Any]) -> list[WebSearchResult]:
@@ -784,10 +842,8 @@ class WebSearchService:
         errors: list[dict[str, Any]] = []
 
         providers = self._resolve_providers()
-        primary_provider_name = providers[0].name if providers else "unknown"
         cache_key = self._cache_key(
             query,
-            provider=primary_provider_name,
             max_results=max_results,
             include_content=include_content,
         )
@@ -860,13 +916,23 @@ class WebSearchService:
         )
 
         if use_cache and self.cache is not None and execution_result.provider_results:
-            ttl = self.cache_ttl if self.cache_ttl is not None else self.cache.default_ttl
-            self.cache.put(cache_key, response, ttl=ttl)
-            logger.info(
-                "web_search CACHE PUT: cache_key=%s ttl=%ds entries=%d",
-                cache_key,
-                ttl,
-                self.cache.stats.total_size,
-            )
+            min_results = self._resolve_cache_min_results()
+            if len(execution_result.provider_results) >= min_results:
+                ttl = self.cache_ttl if self.cache_ttl is not None else self.cache.default_ttl
+                self.cache.put(cache_key, response, ttl=ttl)
+                logger.info(
+                    "web_search CACHE PUT: cache_key=%s ttl=%ds entries=%d results=%d",
+                    cache_key,
+                    ttl,
+                    self.cache.stats.total_size,
+                    len(execution_result.provider_results),
+                )
+            else:
+                logger.info(
+                    "web_search CACHE SKIP: cache_key=%s results=%d threshold=%d",
+                    cache_key,
+                    len(execution_result.provider_results),
+                    min_results,
+                )
 
         return response

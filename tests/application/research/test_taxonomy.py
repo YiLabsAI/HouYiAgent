@@ -6,6 +6,9 @@ from houyi.application.research.taxonomy import (
     COUNTER_EVIDENCE_MARKERS,
     ENTITY_QUERY_HINTS,
     IDENTITY_SOURCE_MARKERS,
+    QUERY_HYGIENE_CJK_STOPWORDS,
+    QUERY_HYGIENE_EN_STOPWORDS,
+    QUERY_HYGIENE_FILLER_TOKENS,
 )
 
 
@@ -30,3 +33,16 @@ class TestTaxonomy:
         # zhengyi (controversy) should match CJK text
         text = "\u8fd9\u4e2a\u9879\u76ee\u5b58\u5728\u4e89\u8bae"
         assert any(m in text for m in COUNTER_EVIDENCE_MARKERS)
+
+    def test_hygiene_vocabs_exist(self):
+        assert len(QUERY_HYGIENE_FILLER_TOKENS) > 0
+        assert len(QUERY_HYGIENE_CJK_STOPWORDS) > 0
+        assert len(QUERY_HYGIENE_EN_STOPWORDS) > 0
+
+    def test_cjk_stopwords_nonascii(self):
+        for token in QUERY_HYGIENE_CJK_STOPWORDS:
+            assert not token.isascii(), "CJK stopwords must contain non-ASCII characters"
+
+    def test_en_stopwords_ascii(self):
+        for token in QUERY_HYGIENE_EN_STOPWORDS:
+            assert token.isascii(), "EN stopwords must be ASCII-only"

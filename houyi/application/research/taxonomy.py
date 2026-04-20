@@ -61,6 +61,39 @@ ANALYTIC_TOPIC_EN_HINTS: tuple[str, ...] = (
 )
 
 # ---------------------------------------------------------------------------
+# Interrogative connector vocabulary (used to convert sub-questions into
+# declarative section titles when the outline expansion path runs).
+# ---------------------------------------------------------------------------
+
+# CJK interrogative connectors that appear between a topical prefix and the
+# object of the question, e.g. "<prefix><connector><object>".  Removing them
+# yields a declarative phrase suitable for a section heading.
+CJK_INTERROGATIVE_CONNECTORS: tuple[str, ...] = (
+    "\u6709\u54ea\u4e9b",  # "what (kinds) are there"
+    "\u662f\u4ec0\u4e48",  # "what is"
+    "\u662f\u591a\u5c11",  # "how much / how many"
+    "\u662f\u600e\u6837",  # "how is / what is like"
+    "\u600e\u4e48\u6837",  # "how"
+    "\u5728\u54ea\u91cc",  # "where"
+    "\u5982\u4f55",  # "how"
+    "\u600e\u6837",  # "how"
+)
+
+# English interrogative leads: "<lead> <rest>" -> "<rest>".  Matched at the
+# start of the string only to avoid chopping substantive prefixes.
+ENGLISH_INTERROGATIVE_LEADS: tuple[str, ...] = (
+    # (lead_word, optional_follow) pairs.  empty follow means the lead
+    # itself is stripped when it starts the phrase.
+    "what",
+    "who",
+    "how",
+    "why",
+    "when",
+    "where",
+    "which",
+)
+
+# ---------------------------------------------------------------------------
 # Identity / disambiguation hints (fallback for planner.disambiguation_needed)
 # ---------------------------------------------------------------------------
 
@@ -205,3 +238,61 @@ ARCHETYPE_COMPLIANCE_KEYWORDS: dict[str, tuple[str, ...]] = {
         "inflection",
     ),
 }
+
+
+# ---------------------------------------------------------------------------
+# Query hygiene vocabularies (consumed by search-executor query cleanup)
+# ---------------------------------------------------------------------------
+#
+# These lexicons let the executor drop noise emitted by the planner, such as:
+# * Filler fragments from user prompts that accidentally become keywords
+#   ("financial-power etc." was observed five times in a single case-1 run).
+# * Pure interrogative/connector tokens that carry no retrieval signal when
+#   they form the entire query content.
+#
+# Membership is matched case-insensitively and after whitespace trimming.
+# The hygiene logic must depend only on this file so the vocabulary stays
+# maintainable in a single place (consistent with ARCHETYPE_COMPLIANCE_KEYWORDS).
+
+# Tokens that are clearly user-prompt detritus. Any query whose tokens are
+# entirely drawn from this set is dropped. Tokens here should be strings the
+# planner has no reason to emit as a standalone keyword under any topic.
+QUERY_HYGIENE_FILLER_TOKENS: tuple[str, ...] = (
+    # "caili dengdeng" - verbatim tail from a user prompt meaning
+    # "financial-power etc.", not a search keyword.
+    "\u8d22\u529b\u7b49\u7b49",
+    # "dengdeng" - lone "etc." marker.
+    "\u7b49\u7b49",
+    # "shoujizhengli" - verbatim "collect and organize" prompt phrasing.
+    "\u6536\u96c6\u6574\u7406",
+)
+
+# High-frequency CJK tokens that are interrogatives or generic connectors.
+# A query built entirely from these tokens is unfit for retrieval.
+QUERY_HYGIENE_CJK_STOPWORDS: tuple[str, ...] = (
+    "\u5982\u4f55",  # ruhe - how
+    "\u662f\u4ec0\u4e48",  # shi shenme - what is
+    "\u4e3a\u4ec0\u4e48",  # weishenme - why
+    "\u600e\u6837",  # zenyang - how
+    "\u54ea\u4e9b",  # naxie - which ones
+    "\u6709\u54ea\u4e9b",  # you naxie - what are there
+    "\u76ee\u524d",  # muqian - currently
+    "\u5f53\u524d",  # dangqian - currently
+    "\u6982\u8ff0",  # gaishu - overview
+)
+
+# English equivalents for the same filter.
+QUERY_HYGIENE_EN_STOPWORDS: tuple[str, ...] = (
+    "what",
+    "why",
+    "how",
+    "when",
+    "where",
+    "which",
+    "who",
+    "overview",
+    "introduction",
+    "etc",
+    "etc.",
+    "currently",
+)

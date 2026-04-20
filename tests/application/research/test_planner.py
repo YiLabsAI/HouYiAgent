@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from houyi.application.research.planner import (
@@ -214,7 +216,7 @@ class TestGeneratePlan:
             ]
         )
         planner = ResearchPlanner(llm)
-        with pytest.raises(ValueError, match="fewer than 5 sub-questions"):
+        with pytest.raises(ValueError, match="fewer than 3 sub-questions"):
             await planner.generate_plan(
                 "AI agent frameworks", settings=ResearchSettings(depth="standard")
             )
@@ -338,10 +340,215 @@ class TestGeneratePlan:
         assert "disambiguate same-name entities before making claims" in contract.required_caveats
         assert "official identity evidence" in contract.evidence_expectations
 
+    def test_focus_title_strips_cjk(self):
+        from houyi.application.research.planner import _derive_focus_section_title
+        from houyi.application.research.taxonomy import CJK_INTERROGATIVE_CONNECTORS
+
+        # Build a synthetic CJK sub-question from the taxonomy connector list
+        # so the test has no hardcoded Chinese literals and auto-covers any
+        # connector added later.
+        topic = "\u4e3b\u9898\u7f16\u53f7A"  # "topic id A"
+        tail = "\u5185\u5bb9\u7f16\u53f7B"  # "content id B"
+        for connector in CJK_INTERROGATIVE_CONNECTORS:
+            question = f"{topic}{connector}{tail}"
+            title = _derive_focus_section_title(question)
+            assert connector not in title, (connector, title)
+            assert "\uff1f" not in title and "?" not in title
+
+    def test_focus_title_strips_en(self):
+        from houyi.application.research.planner import _derive_focus_section_title
+
+        title = _derive_focus_section_title("What is the current status of the subject in 2024?")
+        assert "?" not in title
+        assert not title.lower().startswith("what ")
+
+    def test_focus_title_keeps_topic(self):
+        from houyi.application.research.planner import _derive_focus_section_title
+
+        # Connector in the middle of the phrase ("X<connector>Y") should be
+        # removed while leaving both the prefix topic and the suffix detail.
+        topic = "\u7279\u5f81A"  # "feature A"
+        detail = "\u7ec6\u8282B"  # "detail B"
+        connector = "\u6709\u54ea\u4e9b"  # "what are there"
+        question = f"{topic}{connector}{detail}"
+        title = _derive_focus_section_title(question)
+        assert connector not in title
+        assert topic in title or detail in title
+
+    async def test_outline_prefers_facet_title(self):
+        # When the planner collapses sub-questions into a single outline
+        # section, the expansion path should draw section titles from the
+        # topical facet names on each sub-question's coverage contract
+        # rather than from sub-question text.
+        payload = {
+            "sub_questions": [
+                {
+                    "question": "What is the current role?",
+                    "priority": 5,
+                    "search_strategy": "web",
+                    "expected_sources": 3,
+                    "coverage_contract": {
+                        "must_cover_facets": [
+                            {"name": "identity", "intent": "Confirm subject"},
+                            {"name": "current role", "intent": "Describe role"},
+                        ]
+                    },
+                },
+                {
+                    "question": "How large is the output?",
+                    "priority": 4,
+                    "search_strategy": "web",
+                    "expected_sources": 3,
+                    "coverage_contract": {
+                        "must_cover_facets": [{"name": "recent output", "intent": "List output"}]
+                    },
+                },
+                {
+                    "question": "What are the collaborators?",
+                    "priority": 3,
+                    "search_strategy": "web",
+                    "expected_sources": 3,
+                    "coverage_contract": {
+                        "must_cover_facets": [{"name": "collaborators", "intent": "List partners"}]
+                    },
+                },
+                {
+                    "question": "How did the track record evolve?",
+                    "priority": 2,
+                    "search_strategy": "web",
+                    "expected_sources": 3,
+                    "coverage_contract": {
+                        "must_cover_facets": [
+                            {"name": "track record", "intent": "Summarize history"}
+                        ]
+                    },
+                },
+                {
+                    "question": "What public reception exists?",
+                    "priority": 1,
+                    "search_strategy": "web",
+                    "expected_sources": 3,
+                    "coverage_contract": {
+                        "must_cover_facets": [
+                            {"name": "public reception", "intent": "Describe reception"}
+                        ]
+                    },
+                },
+            ],
+            "outline": [
+                {
+                    "title": "Overview",
+                    "objective": "Summarize",
+                    "related_question_ids": [0, 1, 2, 3, 4],
+                }
+            ],
+            "plan_contract": {
+                "must_cover_facets": [{"name": "limits", "intent": "Describe limits"}]
+            },
+            "estimated_duration_min": 8,
+        }
+        llm = MockLLM(responses=[json.dumps(payload)])
+        planner = ResearchPlanner(llm)
+        plan = await planner.generate_plan(
+            "topic summary",
+            settings=ResearchSettings(depth="deep"),
+        )
+        titles = [s.title for s in plan.outline]
+        # Generic facet names (identity) must be skipped; topical ones win.
+        assert "current role" in titles
+        assert "recent output" in titles
+        assert not any("?" in t for t in titles)
+
+    async def test_outline_no_literal_questions(self):
+        # Regression: when the planner collapses to a single outline section
+        # with many sub-questions, the expansion path used to emit literal
+        # sub-question strings as section titles. Exercised with synthetic
+        # question text composed from the taxonomy connector list.
+        from houyi.application.research.taxonomy import CJK_INTERROGATIVE_CONNECTORS
+
+        topic_a = "\u9898\u76eeA"  # "subject A"
+        topic_b = "\u9898\u76eeB"  # "subject B"
+        detail = "\u7ec6\u8282"  # "detail"
+        q_zh = f"{topic_a}{CJK_INTERROGATIVE_CONNECTORS[0]}{detail}"
+        q_en = "What is the latest status of the subject in 2024"
+        payload = {
+            "sub_questions": [
+                {
+                    "question": q_zh,
+                    "priority": 5,
+                    "search_strategy": "web",
+                    "expected_sources": 3,
+                    "coverage_contract": {
+                        "must_cover_facets": [{"name": "scope", "intent": "Define scope"}]
+                    },
+                },
+                {
+                    "question": q_en,
+                    "priority": 4,
+                    "search_strategy": "web",
+                    "expected_sources": 3,
+                    "coverage_contract": {
+                        "must_cover_facets": [{"name": "status", "intent": "Describe status"}]
+                    },
+                },
+                {
+                    "question": f"{topic_b}{CJK_INTERROGATIVE_CONNECTORS[1]}{detail}",
+                    "priority": 3,
+                    "search_strategy": "web",
+                    "expected_sources": 3,
+                    "coverage_contract": {
+                        "must_cover_facets": [{"name": "impact", "intent": "Describe impact"}]
+                    },
+                },
+                {
+                    "question": "How can the scale be estimated?",
+                    "priority": 2,
+                    "search_strategy": "web",
+                    "expected_sources": 3,
+                    "coverage_contract": {
+                        "must_cover_facets": [{"name": "scale", "intent": "Estimate scale"}]
+                    },
+                },
+                {
+                    "question": "What constraints bound the methodology?",
+                    "priority": 1,
+                    "search_strategy": "web",
+                    "expected_sources": 3,
+                    "coverage_contract": {
+                        "must_cover_facets": [
+                            {"name": "constraints", "intent": "Describe constraints"}
+                        ]
+                    },
+                },
+            ],
+            "outline": [
+                {
+                    "title": "Overview",
+                    "objective": "Summarize",
+                    "related_question_ids": [0, 1, 2, 3, 4],
+                }
+            ],
+            "plan_contract": {
+                "must_cover_facets": [{"name": "limits", "intent": "Describe limits"}]
+            },
+            "estimated_duration_min": 8,
+        }
+        llm = MockLLM(responses=[json.dumps(payload, ensure_ascii=False)])
+        planner = ResearchPlanner(llm)
+        plan = await planner.generate_plan(
+            "topic summary",
+            settings=ResearchSettings(depth="deep"),
+        )
+        for section in plan.outline:
+            assert "?" not in section.title
+            assert "\uff1f" not in section.title
+            for connector in CJK_INTERROGATIVE_CONNECTORS:
+                assert connector not in section.title, (connector, section.title)
+
     async def test_expand_deep_outline(self):
         llm = MockLLM(
             responses=[
-                '{"sub_questions":[{"question":"How is the nine-tier social structure defined?","priority":5,"search_strategy":"web","expected_sources":3,"coverage_contract":{"must_cover_facets":[{"name":"stratification model","intent":"Explain the classification standard"}]}},{"question":"How do income and household finances differ across tiers?","priority":4,"search_strategy":"web","expected_sources":3,"coverage_contract":{"must_cover_facets":[{"name":"income and finance","intent":"Summarize income, assets, and liabilities"}]}},{"question":"How is the middle class defined and characterized?","priority":3,"search_strategy":"web","expected_sources":3,"coverage_contract":{"must_cover_facets":[{"name":"middle class definition","intent":"Define the middle class and key traits"}]}},{"question":"How can middle-class size and financial strength be estimated?","priority":2,"search_strategy":"web","expected_sources":3,"coverage_contract":{"must_cover_facets":[{"name":"middle class scale","intent":"Estimate scale and financial capacity"}]}}],"outline":[{"title":"Overview","objective":"Summarize stratification and middle-class dynamics","related_question_ids":[0,1,2,3]}],"plan_contract":{"must_cover_facets":[{"name":"limits and disputes","intent":"Explain methodological limits and disagreements"}]},"estimated_duration_min":8}'
+                '{"sub_questions":[{"question":"How is the nine-tier social structure defined?","priority":5,"search_strategy":"web","expected_sources":3,"coverage_contract":{"must_cover_facets":[{"name":"stratification model","intent":"Explain the classification standard"}]}},{"question":"How do income and household finances differ across tiers?","priority":4,"search_strategy":"web","expected_sources":3,"coverage_contract":{"must_cover_facets":[{"name":"income and finance","intent":"Summarize income, assets, and liabilities"}]}},{"question":"How is the middle class defined and characterized?","priority":3,"search_strategy":"web","expected_sources":3,"coverage_contract":{"must_cover_facets":[{"name":"middle class definition","intent":"Define the middle class and key traits"}]}},{"question":"How can middle-class size and financial strength be estimated?","priority":2,"search_strategy":"web","expected_sources":3,"coverage_contract":{"must_cover_facets":[{"name":"middle class scale","intent":"Estimate scale and financial capacity"}]}},{"question":"What research disputes surround the framework?","priority":1,"search_strategy":"web","expected_sources":3,"coverage_contract":{"must_cover_facets":[{"name":"research disputes","intent":"Summarize methodological disagreements"}]}}],"outline":[{"title":"Overview","objective":"Summarize stratification and middle-class dynamics","related_question_ids":[0,1,2,3,4]}],"plan_contract":{"must_cover_facets":[{"name":"limits and disputes","intent":"Explain methodological limits and disagreements"}]},"estimated_duration_min":8}'
             ]
         )
         planner = ResearchPlanner(llm)

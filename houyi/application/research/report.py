@@ -683,7 +683,12 @@ class ReportGenerator:
             )
             paragraphs[idx] = rewritten
         # Drop paragraphs that were entirely noise (rewritten to empty).
-        return "\n\n".join(p for p in paragraphs if p.strip())
+        joined = "\n\n".join(p for p in paragraphs if p.strip())
+        # LLM rewrites occasionally re-emit comma-grouped ``[ref_a, ref_b]``
+        # citations that bypass the write-path normalization pipeline.
+        # Re-apply the citation-group normalization here so no call site can
+        # skip it accidentally by wiring directly to _clean_section_noise.
+        return _normalize_citation_groups(joined)
 
     async def _rewrite_noisy_paragraph(
         self,
@@ -710,7 +715,9 @@ class ReportGenerator:
             result = resp.content.strip()
             if result.lower() in ("(empty)", ""):
                 return ""
-            return result
+            # Normalize comma-grouped citations at the earliest point so
+            # every downstream consumer sees atomic ``[ref_x]`` tokens.
+            return _normalize_citation_groups(result)
         except Exception:
             logger.warning("Noise rewrite failed for section '%s'", title, exc_info=True)
             return paragraph
@@ -1547,9 +1554,182 @@ def _parse_section(title: str, content: str) -> ReportSection:
             )
             for c in data.get("citations", [])
         ]
-        body = _strip_leading_heading(title, data["content"])
+        body = _normalize_section_body(data["content"], title)
         return ReportSection(title=title, content=body, citations=citations)
-    return ReportSection(title=title, content=_strip_leading_heading(title, text))
+    # Last-resort recovery: text looks like a {"content": ...} envelope but
+    # json.loads could not parse it. Writers sometimes emit unescaped
+    # newlines or quotes inside a long content string (typical of the final
+    # caveats section), or they hit max_tokens mid-string leaving the
+    # envelope unclosed. Repair by regex-extracting the content field so the
+    # envelope tokens do not leak into the final report.
+    repaired = _repair_content_envelope(text)
+    if repaired is not None:
+        return ReportSection(title=title, content=_normalize_section_body(repaired, title))
+    return ReportSection(title=title, content=_normalize_section_body(text, title))
+
+
+def _normalize_section_body(body: str, title: str) -> str:
+    """Normalize a writer-produced section body before it reaches the report.
+
+    Applies stable, minimal text fixups for recurring writer output defects
+    that otherwise leak into the rendered report and the bench article
+    export. Kept as a single chokepoint so each class of defect has one
+    well-tested repair site.
+    """
+
+    body = _strip_envelope_citations_trailer(body)
+    body = _normalize_citation_groups(body)
+    body = _balance_fence_markers(body)
+    return _strip_leading_heading(title, body)
+
+
+# Line-start triple-backtick fence marker. Allows a leading indent so
+# fences nested inside list items still count, and captures any trailing
+# language tag on the same line (``` / ```python / ```mermaid / etc.).
+_FENCE_MARKER_RE = re.compile(r"(?m)^[ \t]*```[^\n]*$")
+# Four-space (or tab) leading indent — markdown's rule for an implicit
+# "indented code block". Used to detect an orphan diagram body that
+# precedes a dangling closing fence.
+_INDENTED_CODE_LINE_RE = re.compile(r"^(?: {4,}|\t)")
+# Headers and arrow operators unique to Mermaid. When an orphan code
+# block carries any of these markers we can safely restore the opening
+# fence with a ``mermaid`` language tag so the UI renders a real diagram
+# instead of a nameless code stub.
+_MERMAID_HEADER_RE = re.compile(
+    r"\b(?:sequenceDiagram|flowchart|graph\s+(?:TD|LR|BT|RL)|stateDiagram"
+    r"|classDiagram|erDiagram|gantt|pie|gitGraph|journey|timeline|participant)\b"
+)
+_MERMAID_ARROW_RE = re.compile(r"->>|-->|-\.->|==>")
+
+
+def _infer_fence_language(block: str) -> str:
+    """Best-effort language tag for an orphan code block.
+
+    Returns ``"mermaid"`` when the block body contains the diagram
+    keywords or arrow operators specific to Mermaid, otherwise an empty
+    string to keep the restored fence generic.
+    """
+
+    if _MERMAID_HEADER_RE.search(block) or _MERMAID_ARROW_RE.search(block):
+        return "mermaid"
+    return ""
+
+
+def _balance_fence_markers(text: str) -> str:
+    """Pair an orphan trailing ``` fence with a restored opener.
+
+    Writers occasionally emit a closing ``` without a matching opener
+    (observed most often when the intended block was a Mermaid diagram
+    and the opener was lost). Two failure modes then appear in the UI:
+    the raw closer renders as the *opening* of a fresh code block that
+    never closes, or, once the closer is stripped, the indented diagram
+    body below it falls back to markdown's implicit indented-code-block
+    rule and renders as a nameless ``code`` stub.
+
+    When the orphan trailing fence is preceded by a contiguous indented
+    block, restore an opening fence above that block (with a ``mermaid``
+    tag when the body looks like a Mermaid diagram) so the content
+    renders as a proper labelled code block. Fall back to dropping the
+    orphan fence when no indented block precedes it — that covers
+    truncated ``\u0060\u0060\u0060json`` wrappers whose body was already
+    cut by the citations-trailer stripper upstream.
+    """
+
+    matches = list(_FENCE_MARKER_RE.finditer(text))
+    if len(matches) % 2 == 0:
+        return text
+    last = matches[-1]
+    pre = text[: last.start()]
+    post = text[last.end() :]
+
+    lines = pre.splitlines(keepends=True)
+    end_idx = len(lines) - 1
+    while end_idx >= 0 and lines[end_idx].strip() == "":
+        end_idx -= 1
+
+    if end_idx < 0 or not _INDENTED_CODE_LINE_RE.match(lines[end_idx]):
+        before = pre.rstrip("\n")
+        after = post.lstrip("\n")
+        if before and after:
+            return f"{before}\n\n{after}"
+        return before or after
+
+    # Walk upward while the preceding line is still inside the block
+    # (indented lines plus blanks sandwiched between them).
+    start_idx = end_idx
+    while start_idx > 0:
+        prev = lines[start_idx - 1]
+        if prev.strip() == "" or _INDENTED_CODE_LINE_RE.match(prev):
+            start_idx -= 1
+        else:
+            break
+    while start_idx <= end_idx and lines[start_idx].strip() == "":
+        start_idx += 1
+
+    head = "".join(lines[:start_idx]).rstrip("\n")
+    block_lines = lines[start_idx : end_idx + 1]
+    block = "".join(block_lines).rstrip("\n")
+    tail = post.lstrip("\n")
+
+    lang = _infer_fence_language(block)
+    opener = f"```{lang}" if lang else "```"
+    parts: list[str] = []
+    if head:
+        parts.append(head)
+    parts.append(f"{opener}\n{block}\n```")
+    if tail:
+        parts.append(tail)
+    return "\n\n".join(parts)
+
+
+def _strip_envelope_citations_trailer(text: str) -> str:
+    """Truncate an escaped citations-array trailer that leaked into content.
+
+    Some writers produce a malformed envelope where the ``citations``
+    array is double-nested: once escaped inside the ``content`` string
+    and once as a sibling JSON field. ``json.loads`` still succeeds on
+    the outer envelope, but the ``content`` value carries the escaped
+    trailer verbatim::
+
+        ...final sentence.",\n  "citations": [\n    {\n      ...
+
+    Cut the content at the first ``","citations":`` boundary so the
+    trailer does not render into the final section. Returns the input
+    unchanged when no boundary is found.
+    """
+
+    match = _CITATIONS_SEPARATOR.search(text)
+    if match is None:
+        return text
+    # match.start() points at the stray closing quote that belonged to
+    # the envelope's content field, not the prose. Drop it along with
+    # the trailer and any trailing whitespace to avoid a dangling newline
+    # between the salvaged prose and whatever follows.
+    return text[: match.start()].rstrip()
+
+
+# Matches a single bracketed group of two or more comma-separated ref
+# identifiers, e.g. ``[ref_a1b2c3d4, ref_e5f6a7b8]``. Single-ref tokens are
+# intentionally excluded so we leave the already-correct form alone.
+_COMMA_GROUP_CITATION_RE = re.compile(r"\[(ref_[a-f0-9]+(?:\s*,\s*ref_[a-f0-9]+)+)\]")
+
+
+def _normalize_citation_groups(text: str) -> str:
+    """Expand comma-grouped ref citations into atomic bracketed tokens.
+
+    Writers occasionally emit ``[ref_a, ref_b, ref_c]`` to cite several
+    references at the same position. The bench exporter and the
+    downstream citation resolver only match the single-ref form
+    ``[ref_a]``, so comma groups previously survived into the final
+    article as literal noise. Normalize them to ``[ref_a][ref_b][ref_c]``
+    so every citation is an atomic resolvable token.
+    """
+
+    def _expand(match: re.Match[str]) -> str:
+        ids = [token.strip() for token in match.group(1).split(",")]
+        return "".join(f"[{rid}]" for rid in ids if rid)
+
+    return _COMMA_GROUP_CITATION_RE.sub(_expand, text)
 
 
 def _try_parse_json(text: str) -> dict | None:
@@ -1572,6 +1752,66 @@ def _try_parse_json(text: str) -> dict | None:
             pass
 
     return None
+
+
+# Matches the opening of a writer-output JSON envelope. Permissive on
+# whitespace between the brace, the key, and the colon so pretty-printed
+# objects still get repaired.
+_CONTENT_ENVELOPE_OPEN = re.compile(r"^\s*\{\s*\"content\"\s*:\s*\"", re.DOTALL)
+# Matches the tail of a fully-formed envelope: a quote plus optional
+# whitespace plus the closing brace at end of string.
+_CONTENT_ENVELOPE_TAIL = re.compile(r"\"\s*\}\s*$", re.DOTALL)
+# Matches the boundary preceding a ``"citations"`` field when present.
+_CITATIONS_SEPARATOR = re.compile(r"\"\s*,\s*\"citations\"\s*:", re.DOTALL)
+
+
+def _repair_content_envelope(text: str) -> str | None:
+    """Salvage the ``content`` field from an unparsable writer envelope.
+
+    Writers are prompted to emit ``{"content": "...", "citations": [...]}``.
+    Two failure modes cause ``json.loads`` to reject the output:
+
+    1. Unescaped double quotes or raw newlines inside a long prose body.
+    2. The writer hit ``max_tokens`` mid-string, leaving no closing quote,
+       comma, or brace — so neither the tail pattern nor the citations
+       separator can be found.
+
+    The repair path: detect the opener, find the best available right
+    boundary (citations separator, tail brace, or end-of-text for the
+    truncation case), and return the enclosed body with minimal unescaping.
+    Returns ``None`` when the envelope shape is not detected so callers can
+    fall back to returning the text unchanged.
+    """
+
+    open_match = _CONTENT_ENVELOPE_OPEN.match(text)
+    if not open_match:
+        return None
+    body_start = open_match.end()
+    citations = _CITATIONS_SEPARATOR.search(text, body_start)
+    if citations is not None:
+        body_end = citations.start()
+    else:
+        tail = _CONTENT_ENVELOPE_TAIL.search(text, body_start)
+        if tail is not None:
+            body_end = tail.start()
+        else:
+            # Truncation: no tail token exists. Salvage everything after the
+            # opener and drop any trailing partial JSON escape (a lone
+            # backslash) so unescaping below does not create a phantom char.
+            body_end = len(text)
+            while body_end > body_start and text[body_end - 1] == "\\":
+                body_end -= 1
+    if body_end <= body_start:
+        return None
+    body = text[body_start:body_end]
+    # Undo the minimal escapes a writer might have produced without breaking
+    # markdown. Leave ``\\`` sequences alone because content is plain prose,
+    # not regex, and over-unescaping risks corrupting URLs.
+    body = body.replace('\\"', '"').replace("\\n", "\n").replace("\\t", "\t")
+    cleaned = body.strip()
+    if not cleaned:
+        return None
+    return cleaned
 
 
 def _strip_leading_heading(title: str, content: str) -> str:

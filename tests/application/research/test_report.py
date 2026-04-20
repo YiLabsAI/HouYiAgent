@@ -621,6 +621,175 @@ class TestParseSectionEdgeCases:
         assert not section.content.startswith("{")
         assert '"content"' not in section.content
 
+    async def test_repair_unescaped_quote_envelope(self):
+        # Writer envelope where the body contains a stray unescaped quote,
+        # breaking json.loads. The repair fallback must still return clean
+        # prose with the envelope tokens removed.
+        from houyi.application.research.report import _parse_section
+
+        broken = (
+            '{\n  "content": "### Scope of debate\n'
+            'Analysts disagree on thresholds, with "upper middle" definitions.\n'
+            'Sources cluster into income-first and consumption-first camps."\n}'
+        )
+        section = _parse_section("Scope and controversies", broken)
+        assert not section.content.lstrip().startswith("{")
+        assert '"content"' not in section.content
+        assert "Analysts disagree" in section.content
+
+    async def test_repair_truncated_envelope(self):
+        # Writer hit max_tokens mid-string: envelope opens but has no closing
+        # quote, comma, or brace. The repair must still salvage the body.
+        from houyi.application.research.report import _parse_section
+
+        truncated = (
+            '{\n  "content": "### Career status missing\n\n'
+            "### Same-name disambiguation\n\n"
+            "Several individuals share the target name; none match the "
+            "intended subject in the technology domain [ref_abc123]. The "
+            "remaining evidence is too thin to attribute"
+        )
+        section = _parse_section("Current status", truncated)
+        assert not section.content.lstrip().startswith("{")
+        assert '"content"' not in section.content
+        assert "Same-name disambiguation" in section.content
+
+    async def test_restores_orphan_mermaid_fence(self):
+        # A writer that intends a Mermaid diagram sometimes emits only
+        # the closing ``` and leaves the indented diagram body above it.
+        # Markdown then renders the orphan fence as an unclosed code
+        # block, or — once stripped — the indented body falls back to an
+        # unlabelled indented code block. Parsing must restore a matching
+        # opener (with a ``mermaid`` tag when arrows/keywords are present)
+        # so the content renders as a proper labelled code block.
+        from houyi.application.research.report import _parse_section
+
+        content = (
+            "### Architecture overview\n\n"
+            "The evolution loop can be sketched as follows:\n\n"
+            "    Env->>Trigger: metric change\n"
+            "    Trigger->>Engine: start evolution\n"
+            "    Engine->>Auditor: submit for review\n"
+            "    end\n"
+            "```\n\n"
+            "This architecture reflects a move from reactive to proactive "
+            "governance [ref_abc123]."
+        )
+        envelope = json.dumps({"content": content, "citations": []})
+        section = _parse_section("Self-evolution mechanism", envelope)
+        # A balanced ```mermaid ... ``` pair must now wrap the diagram,
+        # and the prose on both sides must survive intact.
+        assert "```mermaid" in section.content
+        assert section.content.count("```") == 2
+        assert "Env->>Trigger: metric change" in section.content
+        assert "move from reactive to proactive governance" in section.content
+
+    async def test_fence_balance_preserves_paired(self):
+        from houyi.application.research.report import _parse_section
+
+        paired = (
+            "### Snippet\n\n"
+            "Look at this code:\n\n"
+            "```python\n"
+            "print('ok')\n"
+            "```\n\n"
+            "Done [ref_123abcde]."
+        )
+        paired_env = json.dumps({"content": paired, "citations": []})
+        paired_section = _parse_section("Snippet", paired_env)
+        # Already balanced fences must not be disturbed.
+        assert paired_section.content.count("```") == 2
+        assert "```python" in paired_section.content
+
+    async def test_drops_orphan(self):
+        # When an orphan fence has no indented body above it (e.g. a
+        # truncated ```json wrapper whose payload was already removed
+        # upstream), the normalizer must drop the lone marker so the
+        # surrounding prose stays readable.
+        from houyi.application.research.report import _parse_section
+
+        content = (
+            "### Pure prose\n\n"
+            "Sources converge on a single conclusion [ref_abc123].\n\n"
+            "```\n\n"
+            "Follow-up paragraph with no code block [ref_abc123]."
+        )
+        envelope = json.dumps({"content": content, "citations": []})
+        section = _parse_section("Pure prose", envelope)
+        assert "```" not in section.content
+        assert "Sources converge" in section.content
+        assert "Follow-up paragraph" in section.content
+
+    async def test_strips_envelope_citations_trailer(self):
+        # Some writers emit a malformed envelope where the citations
+        # array is double-nested (escaped inside the content string AND
+        # as a sibling field). ``json.loads`` still succeeds, but
+        # ``data["content"]`` carries the escaped trailer verbatim and
+        # it renders as visible JSON noise at the end of the section.
+        # The normalizer must cut the content at the first
+        # ``","citations":`` boundary.
+        from houyi.application.research.report import _parse_section
+
+        # Build content whose JSON-escaped form reproduces the trailer
+        # that leaks after json.loads unescapes the outer envelope.
+        leaked_content = (
+            "### Real prose only\n\n"
+            "Sources converge on a single conclusion [ref_abc123]. The "
+            "report's core structure follows an audit\u2011governance "
+            'loop.",\n  "citations": [\n    {\n      '
+            '"reference_id": "ref_abc123",\n      "text_span": '
+            '"audit\u2011governance loop"\n    }\n  ]'
+        )
+        envelope = json.dumps({"content": leaked_content, "citations": []})
+        section = _parse_section("Core structure", envelope)
+        assert "citations" not in section.content
+        assert '"text_span"' not in section.content
+        assert "Sources converge" in section.content
+        # The clean prose ends at the period, not at the escaped quote.
+        assert section.content.rstrip().endswith("audit\u2011governance loop.")
+
+    async def test_comma_grouped_citations_expanded(self):
+        # Writers occasionally emit [ref_a, ref_b, ref_c] as a single
+        # bracketed group. Downstream resolvers only match single-ref
+        # tokens, so the group previously leaked through as literal noise.
+        # _parse_section must expand each group into atomic bracketed
+        # tokens that each contain exactly one ref id.
+        from houyi.application.research.report import _parse_section
+
+        envelope = json.dumps(
+            {
+                "content": (
+                    "Comma group [ref_a1b2c3d4, ref_e5f6a7b8] "
+                    "and trailing triple [ref_c1c1c1c1,  ref_d2d2d2d2 , ref_e3e3e3e3]."
+                ),
+                "citations": [],
+            }
+        )
+        section = _parse_section("Example", envelope)
+        assert "[ref_a1b2c3d4, ref_e5f6a7b8]" not in section.content
+        assert "[ref_a1b2c3d4][ref_e5f6a7b8]" in section.content
+        assert "[ref_c1c1c1c1][ref_d2d2d2d2][ref_e3e3e3e3]" in section.content
+        # Single-ref tokens must not be reshaped by the expansion.
+        single_envelope = json.dumps(
+            {"content": "Only one [ref_single01] reference.", "citations": []}
+        )
+        single = _parse_section("Example", single_envelope)
+        assert "[ref_single01]" in single.content
+
+    async def test_repair_citations_tail_envelope(self):
+        # Envelope with an unescaped quote but with the ,"citations": tail
+        # present. The separator must be the right boundary, not the tail
+        # brace.
+        from houyi.application.research.report import _parse_section
+
+        broken = (
+            '{"content": "Paragraph one has unescaped "quotes".\n'
+            'Paragraph two follows.", "citations": []}'
+        )
+        section = _parse_section("Example", broken)
+        assert not section.content.startswith("{")
+        assert "Paragraph one" in section.content
+
 
 class TestStripLeadingHeadingEdgeCases:
     async def test_blank_lines_before_heading(self):
@@ -630,6 +799,54 @@ class TestStripLeadingHeadingEdgeCases:
         result = _strip_leading_heading("Overview", content)
         assert "Content here." in result
         assert "## Overview" not in result
+
+
+class TestNoiseRewrite:
+    """LLM-assisted rewrite path must never leak comma-grouped citations."""
+
+    async def test_rewrite_splits_groups(self):
+        # The mock LLM returns a paragraph that contains the disallowed
+        # bracketed-group citation form.  The rewrite helper must normalize
+        # it before handing the text back to the caller.
+        llm = MockLLM(
+            responses=[
+                "This is the rewritten paragraph [ref_001, ref_002] with evidence.",
+            ]
+        )
+        gen = ReportGenerator(llm)
+        result = await gen._rewrite_noisy_paragraph(
+            "original noisy paragraph",
+            title="Section",
+            objective="Objective",
+            available_refs="ref_001, ref_002",
+        )
+        assert "[ref_001, ref_002]" not in result
+        assert "[ref_001]" in result
+        assert "[ref_002]" in result
+
+    async def test_clean_normalizes_joined(self):
+        # _clean_section_noise joins rewritten paragraphs.  Even if a late
+        # call site bypasses _rewrite_noisy_paragraph, the joined output
+        # must still have groups normalized as a defense-in-depth step.
+        llm = MockLLM(
+            responses=[
+                "Rewritten paragraph keeps the group format [ref_a, ref_b].",
+            ]
+        )
+        gen = ReportGenerator(llm)
+        noisy = (
+            "We searched extensively across many databases during the "
+            "research process and gathered thin results worth ignoring."
+        )
+        cleaned = await gen._clean_section_noise(
+            noisy,
+            title="Section",
+            objective="Objective",
+            available_refs=["ref_a", "ref_b"],
+        )
+        assert "[ref_a, ref_b]" not in cleaned
+        assert "[ref_a]" in cleaned
+        assert "[ref_b]" in cleaned
 
 
 class TestNoiseDetection:
