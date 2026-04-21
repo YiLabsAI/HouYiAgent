@@ -13,7 +13,7 @@ import logging
 import re
 import time
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -924,16 +924,35 @@ def _split_long_paragraph(text: str) -> list[str]:
     return chunks or [text]
 
 
+def _expand_long_paragraphs(paragraphs: Iterable[str]) -> list[str]:
+    """Return ``paragraphs`` with non-structural giants split into chunks.
+
+    Structural blocks (headings, lists, tables, code fences, HTML
+    comments / blockquotes) pass through untouched. Prose paragraphs
+    above ``_SPLITTABLE_MAX_SENTENCES`` are delegated to
+    ``_split_long_paragraph``; shorter ones are returned as-is. Factored
+    out of ``_consolidate_short_paragraphs`` to keep that function's
+    control flow under the C901 complexity gate.
+    """
+    expanded: list[str] = []
+    for para in paragraphs:
+        if _is_structural_paragraph(para):
+            expanded.append(para)
+            continue
+        expanded.extend(_split_long_paragraph(para))
+    return expanded
+
+
 def _consolidate_short_paragraphs(content: str) -> str:
     """Normalise paragraph structure: split giants, merge shorts.
 
     A single post-generation pass handles both sides of the paragraph
     layout contract:
 
-    * ``_split_long_paragraph`` expands non-structural paragraphs whose
-      sentence count exceeds ``_SPLITTABLE_MAX_SENTENCES`` into chunks of
-      at most ``_SPLITTABLE_CHUNK_SENTENCES`` sentences, exposing reading
-      structure that EN LLM output collapses into 15-20 sentence monoliths.
+    * ``_expand_long_paragraphs`` calls ``_split_long_paragraph`` on
+      non-structural paragraphs whose sentence count exceeds
+      ``_SPLITTABLE_MAX_SENTENCES``, exposing reading structure that EN
+      LLM output collapses into 15-20 sentence monoliths.
     * The merge loop then rejoins adjacent short paragraphs up to
       ``_MERGEABLE_TARGET_SENTENCES`` sentences.
 
@@ -943,7 +962,6 @@ def _consolidate_short_paragraphs(content: str) -> str:
     """
     if not content:
         return content
-    raw_paragraphs = content.split("\n\n")
     # Step 0: unwrap per-paragraph ``{"content": "..."}`` envelopes.
     # Section writers occasionally emit multiple JSON envelopes in a
     # single response, which ``_parse_section`` only strips on the first
@@ -952,14 +970,8 @@ def _consolidate_short_paragraphs(content: str) -> str:
     # upstream source (main writer, noise rewrite, repair rewrite). The
     # helper is a no-op for plain prose so this adds zero overhead on
     # the common path.
-    raw_paragraphs = [_strip_content_envelope(p) for p in raw_paragraphs]
-    # Step 1: expand over-long non-structural paragraphs.
-    paragraphs: list[str] = []
-    for para in raw_paragraphs:
-        if _is_structural_paragraph(para):
-            paragraphs.append(para)
-            continue
-        paragraphs.extend(_split_long_paragraph(para))
+    raw_paragraphs = [_strip_content_envelope(p) for p in content.split("\n\n")]
+    paragraphs = _expand_long_paragraphs(raw_paragraphs)
     if len(paragraphs) < 2:
         return "\n\n".join(paragraphs)
     merged: list[str] = []

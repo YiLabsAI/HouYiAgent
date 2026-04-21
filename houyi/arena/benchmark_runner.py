@@ -246,9 +246,7 @@ class BenchmarkRunner:
 # raw links, inflating body chars by ~34%; on EN5 qid=52: 24 raw links).
 # Kept deliberately conservative — no recursive nesting — to avoid
 # over-matching on prose that happens to contain bracketed phrases.
-_INLINE_LINK_RE = re.compile(
-    r"\[((?:[^\[\]\n]|\[[^\[\]\n]*\])+)\]\((https?://[^\s)]+)\)"
-)
+_INLINE_LINK_RE = re.compile(r"\[((?:[^\[\]\n]|\[[^\[\]\n]*\])+)\]\((https?://[^\s)]+)\)")
 _REFERENCES_HEADING_RE = re.compile(r"^## References\s*$", re.MULTILINE)
 
 
