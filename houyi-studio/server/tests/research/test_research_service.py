@@ -529,14 +529,14 @@ class TestArchivedReportNormalization:
         assert '"content"' not in content
         assert "Same-name exclusion" in content
 
-    def test_normalize_noop_on_clean(self):
+    def test_noop_on_clean(self):
         report = {
             "sections": [{"title": "T", "content": "Just prose [ref_1]."}],
         }
         out = _normalize_report_sections(report)
         assert out["sections"][0]["content"] == "Just prose [ref_1]."
 
-    def test_normalize_expands_comma_refs(self):
+    def test_expands_comma_refs(self):
         # Comma-grouped ``[ref_a, ref_b]`` tokens would bypass the
         # single-ref resolver and render as literal bracket noise. The
         # load path must split them into atomic ``[ref_a][ref_b]``.
@@ -554,7 +554,7 @@ class TestArchivedReportNormalization:
         assert "[ref_aaaaaaaa, ref_bbbbbbbb]" not in content
         assert "[ref_aaaaaaaa][ref_bbbbbbbb]" in content
 
-    def test_normalize_strips_citation_trailer(self):
+    def test_strips_citation_trailer(self):
         # An escaped ``","citations":`` trailer embedded in the content
         # string leaks as visible JSON noise; the load path must cut
         # the body at the first such boundary.
@@ -570,7 +570,7 @@ class TestArchivedReportNormalization:
         assert '"reference_id"' not in content
         assert "Prose body ends here" in content
 
-    def test_normalize_restores_orphan_mermaid_fence(self):
+    def test_restores_orphan_mermaid_fence(self):
         # An indented diagram body followed by a lone closing ``` must
         # be wrapped in a matching ```mermaid opener rather than silently
         # dropped (otherwise the body renders as an unlabelled indented

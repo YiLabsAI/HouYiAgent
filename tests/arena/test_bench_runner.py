@@ -295,6 +295,21 @@ class TestRenumberCitations:
         assert out.rstrip() == article.rstrip()
         assert "## References" not in out
 
+    def test_renumbers_nested_brackets(self):
+        # LLM output routinely emits ``[[PDF] Title](url)`` or
+        # ``[Paper [v2]](url)`` for PDF / versioned sources. The former
+        # regex stopped at the first ``]``, leaving raw links in the body
+        # and inflating ZH case1 body chars by ~34%. The nested-bracket
+        # form must normalise identically to plain anchors.
+        article = (
+            "# Title\n\nFirst [[PDF] Annual Report](https://a.example) "
+            "then [Paper [v2]](https://b.example)."
+        )
+        out = _renumber_citations(article)
+        assert "First [1] then [2]." in out
+        assert "- [1] [[PDF] Annual Report](https://a.example)" in out
+        assert "- [2] [Paper [v2]](https://b.example)" in out
+
 
 class TestRunnerInit:
     def test_default_settings(self):

@@ -736,6 +736,16 @@ class ReportGenerator:
             result = resp.content.strip()
             if result.lower() in ("(empty)", ""):
                 return ""
+            # Strip ``{"content": "..."}`` envelopes the rewrite LLM
+            # occasionally emits. Without this the wrapper leaked into the
+            # paragraph and the escaped mermaid fences inside the JSON
+            # string classified the whole paragraph as structural,
+            # bypassing downstream paragraph-structure normalisation.
+            # Observed on EN5 qid=52 / qid=55: top prose paragraph was a
+            # 4.7KB JSON blob carrying 18 sentences that never got split.
+            # Reuses the same envelope-repair helpers as ``_parse_section``
+            # so both entry points benefit from the same logic.
+            result = _strip_content_envelope(result)
             # Normalize comma-grouped citations at the earliest point so
             # every downstream consumer sees atomic ``[ref_x]`` tokens.
             return _normalize_citation_groups(result)
@@ -817,6 +827,13 @@ def _detect_noisy_paragraphs(paragraphs: list[str]) -> list[int]:
 
 _MERGEABLE_MIN_SENTENCES = 3
 _MERGEABLE_TARGET_SENTENCES = 5
+# Sentence-count based split thresholds (language-agnostic by design):
+# paragraphs with more than _SPLITTABLE_MAX_SENTENCES registered sentences
+# are broken at sentence boundaries into chunks of at most
+# _SPLITTABLE_CHUNK_SENTENCES. Counts come from _SENTENCE_TERMINATORS so
+# ASCII (.!?) and CJK (\u3002\uff01\uff1f) participate symmetrically.
+_SPLITTABLE_MAX_SENTENCES = 8
+_SPLITTABLE_CHUNK_SENTENCES = 4
 _VISUALIZATION_NUMERIC_THRESHOLD = 3
 
 # Numeric density heuristic: counts runs of digits with optional thousands
@@ -862,18 +879,89 @@ def _count_sentences(text: str) -> int:
     return terminators
 
 
-def _consolidate_short_paragraphs(content: str) -> str:
-    """Merge adjacent short paragraphs up to a readable target length.
+def _split_long_paragraph(text: str) -> list[str]:
+    """Break an over-long prose paragraph into chunks at sentence boundaries.
 
-    Structural paragraphs (headings, lists, tables, code fences, existing
-    HTML comments) are never merged. The merge target is expressed in
-    sentences so the heuristic remains language-agnostic.
+    Operates on the same ``_SENTENCE_TERMINATORS`` regex used for the merge
+    threshold, so the behaviour is symmetric across ASCII and CJK prose.
+    Never splits structural blocks; callers must pre-filter those via
+    ``_is_structural_paragraph``.
+
+    Behaviour contract:
+
+    * Paragraphs with ``<= _SPLITTABLE_MAX_SENTENCES`` sentences are
+      returned unchanged (single-element list). This keeps moderate
+      8-sentence paragraphs — the bulk of ZH case1 high-read article —
+      untouched.
+    * Above the threshold, text is sliced at every
+      ``_SPLITTABLE_CHUNK_SENTENCES``-th terminator.
+    * A trailing fragment shorter than 2 sentences is folded back into the
+      previous chunk to avoid orphan single-sentence paragraphs.
+    * No word or character is dropped; only whitespace collapses on the
+      seam, preserving information while exposing paragraph structure.
+    """
+    terminator_ends = [m.end() for m in _SENTENCE_TERMINATORS.finditer(text)]
+    sentence_count = len(terminator_ends) or 1
+    if sentence_count <= _SPLITTABLE_MAX_SENTENCES:
+        return [text]
+    chunks: list[str] = []
+    prev = 0
+    for idx, end in enumerate(terminator_ends, start=1):
+        if idx % _SPLITTABLE_CHUNK_SENTENCES == 0 and idx < sentence_count:
+            piece = text[prev:end].strip()
+            if piece:
+                chunks.append(piece)
+            prev = end
+    tail = text[prev:].strip()
+    if tail:
+        tail_sentences = len(_SENTENCE_TERMINATORS.findall(tail)) or 1
+        if tail_sentences < 2 and chunks:
+            # Re-attach orphan tail to prior chunk so every resulting
+            # paragraph carries >= 2 sentences.
+            chunks[-1] = (chunks[-1] + " " + tail).strip()
+        else:
+            chunks.append(tail)
+    return chunks or [text]
+
+
+def _consolidate_short_paragraphs(content: str) -> str:
+    """Normalise paragraph structure: split giants, merge shorts.
+
+    A single post-generation pass handles both sides of the paragraph
+    layout contract:
+
+    * ``_split_long_paragraph`` expands non-structural paragraphs whose
+      sentence count exceeds ``_SPLITTABLE_MAX_SENTENCES`` into chunks of
+      at most ``_SPLITTABLE_CHUNK_SENTENCES`` sentences, exposing reading
+      structure that EN LLM output collapses into 15-20 sentence monoliths.
+    * The merge loop then rejoins adjacent short paragraphs up to
+      ``_MERGEABLE_TARGET_SENTENCES`` sentences.
+
+    Both stages ignore structural blocks (headings, lists, tables, code
+    fences, HTML comments / blockquotes). All thresholds are expressed in
+    sentences so the behaviour is language-agnostic by design.
     """
     if not content:
         return content
-    paragraphs = content.split("\n\n")
+    raw_paragraphs = content.split("\n\n")
+    # Step 0: unwrap per-paragraph ``{"content": "..."}`` envelopes.
+    # Section writers occasionally emit multiple JSON envelopes in a
+    # single response, which ``_parse_section`` only strips on the first
+    # one; subsequent envelopes survive as raw text paragraphs. Stripping
+    # at the paragraph level here catches every such leak regardless of
+    # upstream source (main writer, noise rewrite, repair rewrite). The
+    # helper is a no-op for plain prose so this adds zero overhead on
+    # the common path.
+    raw_paragraphs = [_strip_content_envelope(p) for p in raw_paragraphs]
+    # Step 1: expand over-long non-structural paragraphs.
+    paragraphs: list[str] = []
+    for para in raw_paragraphs:
+        if _is_structural_paragraph(para):
+            paragraphs.append(para)
+            continue
+        paragraphs.extend(_split_long_paragraph(para))
     if len(paragraphs) < 2:
-        return content
+        return "\n\n".join(paragraphs)
     merged: list[str] = []
     buffer: list[str] = []
     buffer_sentences = 0
@@ -1930,6 +2018,30 @@ def _normalize_citation_groups(text: str) -> str:
         return "".join(f"[{rid}]" for rid in ids if rid)
 
     return _COMMA_GROUP_CITATION_RE.sub(_expand, text)
+
+
+def _strip_content_envelope(text: str) -> str:
+    """Unwrap a ``{"content": "..."}`` envelope emitted by the rewrite LLM.
+
+    Returns the extracted content when the input looks like a writer
+    envelope (parsable JSON with a ``content`` string, or a malformed
+    envelope recoverable by ``_repair_content_envelope``). Falls back to
+    the original text otherwise. Idempotent on already-plain prose.
+
+    Centralises the parse → repair → fallback cascade so
+    ``_parse_section`` and ``_rewrite_noisy_paragraph`` both strip the
+    same envelope shape without code duplication.
+    """
+    stripped = text.strip()
+    if not stripped.startswith("{"):
+        return text
+    data = _try_parse_json(stripped)
+    if data and isinstance(data.get("content"), str):
+        return data["content"]
+    repaired = _repair_content_envelope(stripped)
+    if repaired is not None:
+        return repaired
+    return text
 
 
 def _try_parse_json(text: str) -> dict | None:

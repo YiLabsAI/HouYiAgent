@@ -422,10 +422,15 @@ class Bench2SidecarRunner:
             else f"{repo_parent}{os.pathsep}{existing_pythonpath}"
         )
         if self._subprocess_runner is subprocess.run:
+            # stdin=DEVNULL so the sidecar subprocess survives parent contexts
+            # (nohup, cron, launchd) where fd 0 is closed; otherwise Python
+            # init_sys_streams() raises "Bad file descriptor" before we even
+            # reach user code.
             proc = subprocess.Popen(
                 list(command.argv),
                 cwd=str(repo_root),
                 env=command_env,
+                stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,

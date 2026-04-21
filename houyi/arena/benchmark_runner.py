@@ -234,12 +234,21 @@ class BenchmarkRunner:
 # ---------------------------------------------------------------------------
 
 
-# Matches inline markdown links whose anchor text is non-empty (any chars
-# except closing bracket / newline) and whose URL is http(s). Used by
-# ``_renumber_citations`` to convert verbose ``[title](url)`` citations
-# into short ``[N]`` numbered form that matches clean-reading-experience
-# conventions (matches the ms-agent gpt5 reporter spec).
-_INLINE_LINK_RE = re.compile(r"\[([^\]\n]+)\]\((https?://[^\s)]+)\)")
+# Matches inline markdown links whose anchor text is non-empty and whose
+# URL is http(s). Used by ``_renumber_citations`` to convert verbose
+# ``[title](url)`` citations into short ``[N]`` numbered form.
+#
+# The anchor permits **one level of nested brackets** so that LLM-produced
+# citations like ``[[PDF] Report title](https://...)`` or
+# ``[Paper [v2]](https://...)`` are matched and normalised. Without this
+# allowance the earlier regex stopped at the first ``]``, leaving the
+# verbose anchor leaking into the body (observed on ZH case1: 73 such
+# raw links, inflating body chars by ~34%; on EN5 qid=52: 24 raw links).
+# Kept deliberately conservative — no recursive nesting — to avoid
+# over-matching on prose that happens to contain bracketed phrases.
+_INLINE_LINK_RE = re.compile(
+    r"\[((?:[^\[\]\n]|\[[^\[\]\n]*\])+)\]\((https?://[^\s)]+)\)"
+)
 _REFERENCES_HEADING_RE = re.compile(r"^## References\s*$", re.MULTILINE)
 
 

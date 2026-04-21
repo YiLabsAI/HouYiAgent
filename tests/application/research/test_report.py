@@ -828,6 +828,29 @@ class TestNoiseRewrite:
         assert "[ref_001]" in result
         assert "[ref_002]" in result
 
+    async def test_strips_content_envelope(self):
+        # Rewrite LLM occasionally responds with ``{"content": "..."}``
+        # instead of plain prose. The wrapper must be unwrapped before the
+        # text reaches downstream consumers; otherwise escaped fences
+        # inside the JSON string classify the whole paragraph as
+        # structural and bypass paragraph normalisation. Root cause for
+        # EN5 qid=52 / qid=55 oversized monolith paragraphs.
+        llm = MockLLM(
+            responses=[
+                '{"content": "Repaired prose with [ref_001] evidence."}',
+            ]
+        )
+        gen = ReportGenerator(llm)
+        result = await gen._rewrite_noisy_paragraph(
+            "original noisy paragraph",
+            title="Section",
+            objective="Objective",
+            available_refs="ref_001",
+        )
+        assert result.startswith("Repaired prose")
+        assert '"content"' not in result
+        assert "[ref_001]" in result
+
     async def test_clean_normalizes_joined(self):
         # _clean_section_noise joins rewritten paragraphs.  Even if a late
         # call site bypasses _rewrite_noisy_paragraph, the joined output
@@ -1163,6 +1186,66 @@ class TestParagraphConsolidation:
         assert _count_sentences("\u8b66\u544a\uff01\u9519\u8bef\uff1f\u89e3\u51b3\u3002") == 3
         # Mixed ASCII + CJK terminators.
         assert _count_sentences("First sentence. \u7b2c\u4e8c\u53e5\u3002") == 2
+
+    def test_splits_long_english(self):
+        # 10-sentence EN prose exceeds _SPLITTABLE_MAX_SENTENCES (8). Expect
+        # it to be broken into >=2 chunks of ~4 sentences each. Guards the
+        # EN5 qid=52/54/55 regression where LLM produced 15-20 sentence
+        # monoliths and readability collapsed (read=22-24 vs 42+ baseline).
+        para = " ".join(f"Claim number {i}." for i in range(1, 11))
+        out = _consolidate_short_paragraphs(para)
+        chunks = out.split("\n\n")
+        assert len(chunks) >= 2
+        # No chunk may still carry more than _SPLITTABLE_MAX_SENTENCES.
+        for chunk in chunks:
+            assert _count_sentences(chunk) <= 8
+        # No information loss: every original sentence survives.
+        for i in range(1, 11):
+            assert f"Claim number {i}." in out
+
+    def test_splits_long_cjk(self):
+        # 10-sentence CJK prose must split symmetrically; language-agnostic
+        # by design. Uses the same _SENTENCE_TERMINATORS regex so CJK
+        # terminator "\u3002" participates identically to ASCII ".".
+        para = "".join(f"\u7b2c{i}\u53e5\u8bdd\u3002" for i in range(1, 11))
+        out = _consolidate_short_paragraphs(para)
+        chunks = out.split("\n\n")
+        assert len(chunks) >= 2
+        for i in range(1, 11):
+            assert f"\u7b2c{i}\u53e5\u8bdd\u3002" in out
+
+    def test_preserves_moderate_paragraph(self):
+        # 6 sentences is below the split threshold; paragraph must not be
+        # broken. Protects the ZH case1 52.55 baseline where most body
+        # paragraphs sit in the 5-8 sentence band and already score high.
+        para = " ".join(f"Sentence {i}." for i in range(1, 7))
+        out = _consolidate_short_paragraphs(para)
+        assert out.count("\n\n") == 0
+        assert out.strip() == para
+
+    def test_strips_per_paragraph_envelope(self):
+        # Section writers sometimes emit multiple ``{"content": "..."}``
+        # envelopes in a single response; ``_parse_section`` only strips
+        # the first one, leaving subsequent envelopes as raw paragraphs.
+        # ``_consolidate_short_paragraphs`` must unwrap them defensively
+        # so the final article carries no JSON artefacts. This path was
+        # the residual root cause on EN5 qid=52/54 after the
+        # ``_rewrite_noisy_paragraph`` fix: repair / multi-envelope
+        # writer output continued to leak wrapper prefixes into the body.
+        envelope = '{"content": "Real prose with detail. More detail here."}'
+        body = f"Intro paragraph here.\n\n{envelope}\n\nClosing paragraph."
+        out = _consolidate_short_paragraphs(body)
+        assert '"content"' not in out
+        assert "{" not in out.replace("{#", "")  # allow hypothetical anchors
+        assert "Real prose with detail." in out
+
+    def test_splits_preserve_structure(self):
+        # A structural block sitting between long prose paragraphs must
+        # remain untouched (no split, no merge through the boundary).
+        long_para = " ".join(f"Fact {i}." for i in range(1, 11))
+        body = f"{long_para}\n\n- item one\n- item two\n\n{long_para}"
+        out = _consolidate_short_paragraphs(body)
+        assert "- item one\n- item two" in out
 
     def test_preserves_cjk_paragraph(self):
         # A Chinese prose paragraph with 4 CJK periods must register as 4
