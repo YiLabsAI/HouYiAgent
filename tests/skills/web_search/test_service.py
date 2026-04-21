@@ -477,9 +477,12 @@ async def test_include_provider_errors():
         async def search(self, query: str, *, max_results: int) -> list[WebSearchResult]:
             raise ProviderTimeoutError(f"{self.name} timeout")
 
+    # Disable retry backoff; this test only asserts that failing providers
+    # emit error metadata, not the retry/backoff behaviour (covered elsewhere).
     service = WebSearchService(
         provider=_TimeoutProvider("serper"),
         fallback_providers=[_TimeoutProvider("tavily")],
+        retry_policy=WebSearchRetryPolicy(max_retries=0, base_delay=0.0, max_delay=0.0),
     )
     response = await service.search("q", max_results=1)
     assert response.results == []

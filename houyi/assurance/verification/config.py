@@ -20,7 +20,7 @@ class EscalationPolicy(BaseModel):
     notify_channels: list[str] = Field(
         default_factory=list, description="Notification channels (slack, email)"
     )
-    timeout_seconds: int = Field(300, description="Timeout for human review")
+    timeout_seconds: float = Field(300, description="Timeout for human review")
     default_action: str = Field(
         "fail", description="Default action on timeout: 'fail', 'approve', 'retry'"
     )

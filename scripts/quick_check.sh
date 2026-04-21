@@ -54,7 +54,27 @@ else
 fi
 echo ""
 
-# 2. Quick test run (fail fast)
+# 2. Style rules (no raw CJK, short test names, -h/--help on scripts/ entrypoints)
+# Rules 1-3 run against changed Python files; rule 4 is always enforced across
+# every scripts/ entrypoint so a new script cannot silently drop -h support.
+echo -e "${YELLOW}▶ Style rules (CJK / test names / help)...${NC}"
+CHANGED=$(
+    {
+        git diff --name-only --cached
+        git diff --name-only
+        git ls-files --others --exclude-standard
+    } 2>/dev/null | awk '($0 ~ /\.pyi?$/) && ($0 !~ /^skills\//) { print }' | sort -u | tr '\n' ' '
+)
+# shellcheck disable=SC2086
+if uv run python scripts/check_style_rules.py $CHANGED scripts/*.sh scripts/*.py; then
+    echo -e "${GREEN}✓ Style rules passed${NC}"
+else
+    echo -e "${RED}✗ Style rules failed${NC}"
+    FAILED=1
+fi
+echo ""
+
+# 3. Quick test run (fail fast)
 echo -e "${YELLOW}▶ Quick test run...${NC}"
 if uv run pytest tests/ -m "not benchmark" -x --tb=short -q -n auto; then
     echo -e "${GREEN}✓ Tests passed${NC}"

@@ -145,7 +145,10 @@ _ARCHETYPE_ANALYSIS_HINTS: dict[str, str] = {
 # Metrics are attached to section_input_metrics for offline analysis.
 # ---------------------------------------------------------------------------
 
-_SENTENCE_TERMINATORS = re.compile(r"[.!?]\s|[.!?]$")
+# CJK escapes: U+3002 ideographic period "ju-hao",
+# U+FF01 fullwidth exclamation "jing-tan-hao",
+# U+FF1F fullwidth question "wen-hao".
+_SENTENCE_TERMINATORS = re.compile(r"[.!?]\s|[.!?]$|" + "[\u3002\uff01\uff1f]")
 
 
 _NOISE_REWRITE_PROMPT = """\

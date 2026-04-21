@@ -20,7 +20,7 @@ class ReviewRequest(BaseModel):
     original_output: Any = Field(..., description="Original output that failed")
     suggested_fix: str | None = Field(None, description="Suggested fix")
     created_at: datetime = Field(default_factory=datetime.now, description="Creation timestamp")
-    timeout_seconds: int = Field(300, description="Timeout for review")
+    timeout_seconds: float = Field(300, description="Timeout for review")
     status: str = Field("pending", description="Status: pending, approved, rejected, timeout")
     reviewer: str | None = Field(None, description="Reviewer who handled this")
     reviewed_at: datetime | None = Field(None, description="Review timestamp")

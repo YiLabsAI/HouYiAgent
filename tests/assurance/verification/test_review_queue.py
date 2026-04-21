@@ -92,7 +92,7 @@ async def test_submit_timeout(review_queue):
         error_type="unknown_error",
         error_message="Unknown error",
         original_output="some output",
-        timeout_seconds=1,  # Short timeout (must be int)
+        timeout_seconds=0.05,  # sub-second timeout keeps the test fast
     )
 
     # Submit without approving/rejecting

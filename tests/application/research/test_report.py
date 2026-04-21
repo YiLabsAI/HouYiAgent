@@ -11,6 +11,7 @@ from houyi.application.research.report import (
     _build_soft_checklist,
     _compute_section_sidecar_metrics,
     _consolidate_short_paragraphs,
+    _count_sentences,
     _detect_noisy_paragraphs,
 )
 from houyi.application.research.types import (
@@ -1147,3 +1148,39 @@ class TestParagraphConsolidation:
         parts = out.split("\n\n")
         assert any(part.startswith("- bullet") for part in parts)
         assert any("```python" in part for part in parts)
+
+    def test_counts_cjk_sentence_terminators(self):
+        # CJK terminators "\u3002\uff01\uff1f" must register as sentence
+        # boundaries; otherwise Chinese paragraphs collapse to "1 sentence"
+        # and trigger unwanted merges. Guards the ``_SENTENCE_TERMINATORS``
+        # regex so CJK parity with ASCII stays covered.
+        assert (
+            _count_sentences(
+                "\u7b2c\u4e00\u53e5\u8bdd\u3002\u7b2c\u4e8c\u53e5\u8bdd\u3002\u7b2c\u4e09\u53e5\u8bdd\u3002"
+            )
+            == 3
+        )
+        assert _count_sentences("\u8b66\u544a\uff01\u9519\u8bef\uff1f\u89e3\u51b3\u3002") == 3
+        # Mixed ASCII + CJK terminators.
+        assert _count_sentences("First sentence. \u7b2c\u4e8c\u53e5\u3002") == 2
+
+    def test_preserves_cjk_paragraph(self):
+        # A Chinese prose paragraph with 4 CJK periods must register as 4
+        # sentences and stay un-merged. Mirrors empirical findings on the
+        # two historical bench2 case-1 articles: before the CJK terminator
+        # fix the whole article was mis-counted as "all 1 sentence" and the
+        # summary paragraph got merged; after the fix the 50.76 baseline has
+        # zero merges and the 52.19 baseline has only one.
+        well_formed = (
+            "\u7b2c\u4e00\u53e5\u8bf4\u660e\u80cc\u666f\u3002"
+            "\u7b2c\u4e8c\u53e5\u7ed9\u51fa\u5173\u952e\u53d1\u73b0\u3002"
+            "\u7b2c\u4e09\u53e5\u8ba8\u8bba\u5c40\u9650\u3002"
+            "\u7b2c\u56db\u53e5\u603b\u7ed3\u7ed3\u8bba\u3002"
+        )
+        heading = "## \u7ed3\u6784\u6027\u5206\u8282\u6807\u9898"
+        tail = "\u53e6\u4e00\u6bb5\u5185\u5bb9\u3002"
+        body = f"{well_formed}\n\n{heading}\n\n{tail}"
+        out = _consolidate_short_paragraphs(body)
+        # Well-formed CJK prose must survive verbatim.
+        assert well_formed in out
+        assert heading in out

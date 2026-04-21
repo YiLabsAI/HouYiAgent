@@ -203,8 +203,10 @@ class TestSkillExecutor:
             executor=slow_task,
         )
 
-        # Set very short timeout
-        executor = SkillExecutor(timeout=0.01)
+        # Set very short timeout; disable retries so we do not pay the
+        # exponential backoff (1s + 2s) for a test that only checks the
+        # timeout path.
+        executor = SkillExecutor(timeout=0.01, max_retries=1)
 
         with pytest.raises((SkillExecutionError, asyncio.TimeoutError)):
             await executor.execute(skill, {"duration": 0.05})

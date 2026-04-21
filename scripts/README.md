@@ -10,8 +10,7 @@ The canonical developer entrypoints are the `make` targets in the repo root. The
 
 - Shell scripts use `#!/usr/bin/env bash`.
 - Python scripts use `#!/usr/bin/env python3`.
-- Every top-level script in this directory should support `-h` / `--help` as a self-describing entrypoint.
-- Keep this README as a lightweight index. Detailed flags and examples belong to each script's own help output.
+- Every top-level script in this directory MUST support `-h` / `--help` as a self-describing entrypoint. Run a script with `-h` for its full flag list and examples — this README is a lightweight index and intentionally does not duplicate per-script detail. Enforced by `scripts/check_style_rules.py` (rule 4), which runs in `make check` and `make quick-check`.
 
 This is the current repo convention for portability across environments where the interpreter location may differ.
 
@@ -57,7 +56,7 @@ These commands are the canonical entrypoints. The shell scripts below are conven
 
 ## Script Index
 
-Use `-h` or `--help` on the script itself for detailed flags and examples.
+See the `-h` / `--help` convention in [Script Conventions](#script-conventions) above.
 
 | Script | Category | Purpose |
 |---|---|---|
@@ -65,6 +64,7 @@ Use `-h` or `--help` on the script itself for detailed flags and examples.
 | `check_code.sh` | Quality gate | Main local code-quality gate behind `make check` |
 | `check_integration.sh` | Quality gate | Local integration gate for env-backed coverage |
 | `check_class_size.py` | Quality gate | Report or gate oversized SDK classes |
+| `check_style_rules.py` | Quality gate | Enforce HouYi style conventions: reject raw CJK in source, over-long test names, and scripts/ entrypoints that drop `-h`/`--help`; warn on dense `\uXXXX` escapes without an ASCII pinyin/English gloss |
 | `run_make_check.py` | Quality gate | Wrapper that enforces a global wall-clock budget for `make check` |
 | `dev.sh` | Dev startup | Start backend and frontend together in tmux |
 | `restart-backend.sh` | Dev startup | Restart the local backend service |

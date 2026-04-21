@@ -513,6 +513,7 @@ ruff check houyi/ --fix
 - Use `_with_<input_variant>` or `_without_<dependency>` only for clear setup variants.
 - Keep test names short. Prefer **2-3 semantic segments after `test_`**. Treat **more than 3 underscore-separated semantic segments after `test_`** as a smell that should usually be refactored into the test class, fixture, or docstring.
 - Keep test names readable. Prefer **about 35 characters or fewer**, and treat **45 characters** as a hard limit unless there is a strong reason.
+- Enforced by `scripts/check_style_rules.py` (wired into `make check` and `make quick-check`): tests whose name has **more than 4 underscore segments after `test_`** fail the gate. The same script blocks raw CJK characters in `.py` sources and warns when a file has 5+ `\uXXXX` CJK escapes without an ASCII comment (add a short pinyin or English gloss).
 - Avoid repeating file or module context that is already clear from the test file path or test class.
 - Prefer contract-visible behavior over implementation-detail phrasing.
 - Do not encode execution tier into function names; use `pytest.mark` or CI/workflow selection instead.

@@ -298,6 +298,13 @@ else
     echo ""
 fi
 
+# Style rules: no raw CJK, short test names, -h/--help on scripts/ entrypoints.
+# Rules 1-3 run against changed Python files; rule 4 is always enforced across
+# every scripts/ entrypoint so a new script cannot silently drop -h support.
+STYLE_TARGETS="$CHANGED_PY_FILES_ONELINE scripts/*.sh scripts/*.py"
+run_check "Style Rules (CJK / test names / help)" \
+    uv run python scripts/check_style_rules.py $STYLE_TARGETS
+
 # ── 2. SDK complexity housekeeping (report + changed-file gate) ─────
 echo -e "${YELLOW}▶ Running SDK Complexity Report (full houyi/, non-blocking)...${NC}"
 COMPLEXITY_REPORT=$(uv run ruff check houyi --select "$COMPLEXITY_RULES" --output-format concise 2>/dev/null || true)
