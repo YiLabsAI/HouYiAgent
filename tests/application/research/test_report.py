@@ -9,10 +9,12 @@ from houyi.application.research.report import (
     _analyse_critical_analysis,
     _analyse_visualization_gaps,
     _build_soft_checklist,
+    _cjk_char_ratio,
     _compute_section_sidecar_metrics,
     _consolidate_short_paragraphs,
     _count_sentences,
     _detect_noisy_paragraphs,
+    _query_is_english,
 )
 from houyi.application.research.types import (
     AggregatedSources,
@@ -26,9 +28,15 @@ from houyi.application.research.types import (
 
 from .conftest import MockLLM
 
+# Content is intentionally padded above ``_SHORT_SECTION_WORD_THRESHOLD``
+# (350 words) so legacy tests do not accidentally trigger the EN-only
+# post-generation expansion pass added in the short-section guard.
 _SECTION_JSON = json.dumps(
     {
-        "content": "This section covers AI frameworks [ref_001].",
+        "content": (
+            "This section covers AI frameworks [ref_001]. "
+            + " ".join(f"Expanded narrative sentence {i} anchored to [ref_001]." for i in range(60))
+        ),
         "citations": [
             {"reference_id": "ref_001", "text_span": "AI frameworks", "context": "overview"}
         ],
@@ -833,8 +841,8 @@ class TestNoiseRewrite:
         # instead of plain prose. The wrapper must be unwrapped before the
         # text reaches downstream consumers; otherwise escaped fences
         # inside the JSON string classify the whole paragraph as
-        # structural and bypass paragraph normalisation. Root cause for
-        # EN5 qid=52 / qid=55 oversized monolith paragraphs.
+        # structural and bypass paragraph normalisation, producing
+        # oversized monolith paragraphs.
         llm = MockLLM(
             responses=[
                 '{"content": "Repaired prose with [ref_001] evidence."}',
@@ -1190,8 +1198,8 @@ class TestParagraphConsolidation:
     def test_splits_long_english(self):
         # 10-sentence EN prose exceeds _SPLITTABLE_MAX_SENTENCES (8). Expect
         # it to be broken into >=2 chunks of ~4 sentences each. Guards the
-        # EN5 qid=52/54/55 regression where LLM produced 15-20 sentence
-        # monoliths and readability collapsed (read=22-24 vs 42+ baseline).
+        # regression where the LLM produced 15-20 sentence monoliths and
+        # readability collapsed (~22-24 vs 42+ baseline).
         para = " ".join(f"Claim number {i}." for i in range(1, 11))
         out = _consolidate_short_paragraphs(para)
         chunks = out.split("\n\n")
@@ -1228,10 +1236,9 @@ class TestParagraphConsolidation:
         # envelopes in a single response; ``_parse_section`` only strips
         # the first one, leaving subsequent envelopes as raw paragraphs.
         # ``_consolidate_short_paragraphs`` must unwrap them defensively
-        # so the final article carries no JSON artefacts. This path was
-        # the residual root cause on EN5 qid=52/54 after the
-        # ``_rewrite_noisy_paragraph`` fix: repair / multi-envelope
-        # writer output continued to leak wrapper prefixes into the body.
+        # so the final article carries no JSON artefacts. Without this
+        # path, repair / multi-envelope writer output continues to leak
+        # wrapper prefixes into the body.
         envelope = '{"content": "Real prose with detail. More detail here."}'
         body = f"Intro paragraph here.\n\n{envelope}\n\nClosing paragraph."
         out = _consolidate_short_paragraphs(body)
@@ -1267,3 +1274,574 @@ class TestParagraphConsolidation:
         # Well-formed CJK prose must survive verbatim.
         assert well_formed in out
         assert heading in out
+
+
+class TestScrubArtifacts:
+    """``_scrub_generation_artifacts`` is the last-mile junk-token gate.
+
+    Protects the scored article from three failure modes: multiline
+    ``{"content": "..."}`` envelope leaks, fenced blocks whose body
+    devolved into ``ref_<hex>`` / ``sync`` / ``30s`` tokens, and
+    orphan hex reference IDs that escape the citation renumberer.
+    """
+
+    def test_noop_on_clean_prose(self):
+        from houyi.application.research.report import _scrub_generation_artifacts
+
+        body = (
+            "First paragraph with real content.\n\n"
+            "Second paragraph with a valid citation [ref_abc123].\n\n"
+            "Closing paragraph."
+        )
+        assert _scrub_generation_artifacts(body) == body
+
+    def test_drops_junk_mermaid(self):
+        from houyi.application.research.report import _scrub_generation_artifacts
+
+        body = (
+            "Intro paragraph.\n\n"
+            "```mermaid\n"
+            "graph TD\n"
+            "A --> B ref_c13d306e ref_d66b7514 sync sync sync\n"
+            "```\n\n"
+            "Closing paragraph."
+        )
+        out = _scrub_generation_artifacts(body)
+        assert "mermaid" not in out
+        assert "ref_c13d306e" not in out
+        assert "Intro paragraph." in out
+        assert "Closing paragraph." in out
+
+    def test_keeps_valid_mermaid(self):
+        from houyi.application.research.report import _scrub_generation_artifacts
+
+        body = "Intro.\n\n```mermaid\nflowchart LR\nA[Start] --> B[End]\n```\n\nClosing."
+        out = _scrub_generation_artifacts(body)
+        assert "flowchart LR" in out
+        assert "A[Start]" in out
+
+    def test_unwraps_multiline_json_envelope(self):
+        # Closed envelope with a citations array: the scaffold must be
+        # stripped but the inner prose preserved (the writer relies
+        # on this to keep high-value sections alive on ZH Q1).
+        from houyi.application.research.report import _scrub_generation_artifacts
+
+        envelope = (
+            "{\n"
+            '  "content": "Inner paragraph one.\\n\\nInner paragraph two.",\n'
+            '  "citations": []\n'
+            "}"
+        )
+        body = f"Intro.\n\n{envelope}\n\n## Next Heading"
+        out = _scrub_generation_artifacts(body)
+        assert '"content"' not in out
+        assert "Inner paragraph one." in out
+        assert "Inner paragraph two." in out
+        assert "## Next Heading" in out
+
+    def test_unwraps_truncated_envelope(self):
+        # Malformed (never-closed) envelope leaking into the body.
+        # Observed on ZH Q1: the writer emits ``{\\n  "content": "...``
+        # then flows into a Markdown section heading without closing
+        # the object.  The unwrap path must recover the inner prose.
+        from houyi.application.research.report import _scrub_generation_artifacts
+
+        body = (
+            "Intro paragraph.\n\n"
+            "{\n"
+            '  "content": "Recovered prose with detail.\\n\\n### Sub'
+            "\\nMore detail here.\n\n"
+            "## Next Heading\n\n"
+            "Tail paragraph."
+        )
+        out = _scrub_generation_artifacts(body)
+        assert '"content"' not in out
+        assert "Recovered prose with detail." in out
+        assert "More detail here." in out
+        assert "## Next Heading" in out
+        assert "Tail paragraph." in out
+
+    def test_drops_orphan_ref(self):
+        from houyi.application.research.report import _scrub_generation_artifacts
+
+        body = "Statement one. ref_c13d306e ref_d66b7514 Statement two."
+        out = _scrub_generation_artifacts(body)
+        assert "ref_c13d306e" not in out
+        assert "ref_d66b7514" not in out
+        assert "Statement one." in out
+        assert "Statement two." in out
+
+    def test_keeps_valid_ref_citation(self):
+        from houyi.application.research.report import _scrub_generation_artifacts
+
+        body = "Claim with citation [ref_c13d306e]. Next claim [ref_d66b7514]."
+        out = _scrub_generation_artifacts(body)
+        assert "[ref_c13d306e]" in out
+        assert "[ref_d66b7514]" in out
+
+    def test_idempotent(self):
+        from houyi.application.research.report import _scrub_generation_artifacts
+
+        body = (
+            "Paragraph.\n\n"
+            "```mermaid\n"
+            "graph TD\n"
+            "A --> B ref_c13d306e sync sync sync 30s 30s\n"
+            "```\n\n"
+            "Tail [ref_abc123]."
+        )
+        once = _scrub_generation_artifacts(body)
+        twice = _scrub_generation_artifacts(once)
+        assert once == twice
+
+    def test_drops_unfenced_diagram_junk(self):
+        # Some runs emit an orphan "graph TD" + ref/sync/30s stanza
+        # without surrounding ``` fences, so the fenced-block scrub
+        # cannot reach it.  The paragraph-level detector must catch
+        # the residue without touching clean prose.
+        from houyi.application.research.report import _scrub_generation_artifacts
+
+        junk = (
+            "graph TD\n"
+            "    A[Node] --> B[Other]\n"
+            "    H - (30s)\n"
+            "    (30s\n"
+            " ref_c [6] monetize cognition\n"
+            " sync sync sync\n"
+        )
+        body = f"Intro paragraph.\n\n{junk}\n\nClosing paragraph."
+        out = _scrub_generation_artifacts(body)
+        assert "graph TD" not in out
+        assert "Intro paragraph." in out
+        assert "Closing paragraph." in out
+
+    def test_keeps_prose_with_sync_keyword(self):
+        # Clean prose that mentions "synchronous" or "30 seconds" must
+        # not trip the paragraph-level junk filter; it requires both a
+        # diagram marker and multiple independent junk signals.
+        from houyi.application.research.report import _scrub_generation_artifacts
+
+        body = (
+            "The system syncs updates across nodes every 30s to "
+            "maintain consistency.  Failure to sync within the "
+            "window triggers a fallback path."
+        )
+        assert _scrub_generation_artifacts(body) == body
+
+
+class TestQueryIsEnglish:
+    def test_pure_en_true(self):
+        assert _query_is_english("How do the wealthiest governments invest?") is True
+
+    def test_pure_cjk_false(self):
+        # ZH: zhongguo jiuda shouru jieceng fenbu (income-class distribution query).
+        assert (
+            _query_is_english(
+                "\u4e2d\u56fd\u4e5d\u5927\u6536\u5165\u9636\u5c42\u5206"
+                "\u5e03\u60c5\u51b5\u5982\u4f55\u5212\u5206\uff1f"
+            )
+            is False
+        )
+
+    def test_mixed_en(self):
+        # Duan Yongping (\u6bb5\u6c38\u5e73) appears as a named entity in an EN query.
+        assert _query_is_english("What is \u6bb5\u6c38\u5e73 investment philosophy?") is True
+
+    def test_mixed_cjk(self):
+        # Chinese-dominant query with stray English tokens must still read as ZH.
+        assert (
+            _query_is_english(
+                "\u6bb5\u6c38\u5e73\u7684 investment \u54f2\u5b66\u662f\u4ec0\u4e48\uff1f"
+            )
+            is False
+        )
+
+    def test_empty_false(self):
+        assert _query_is_english("") is False
+
+    def test_digits_false(self):
+        assert _query_is_english("2020 2050") is False
+
+
+class TestCjkCharRatio:
+    """``_cjk_char_ratio`` powers the EN section language gate."""
+
+    def test_pure_english_zero(self):
+        assert _cjk_char_ratio("Pure English prose.") == 0.0
+
+    def test_empty_zero(self):
+        assert _cjk_char_ratio("") == 0.0
+
+    def test_pure_cjk_one(self):
+        # Report body in pure Chinese.
+        body = "\u672c\u62a5\u544a\u5206\u6790\u4e86\u4e2d\u56fd\u9636\u5c42"
+        assert _cjk_char_ratio(body) == 1.0
+
+    def test_mixed_half(self):
+        # Three CJK chars + three ASCII letters (one word) = 0.5.
+        assert _cjk_char_ratio("abc \u4e2d\u56fd\u8fd8") == 0.5
+
+    def test_ignores_digits_and_punct(self):
+        # Digits and punctuation must not dilute the ratio.
+        # Body = "GDP 2024" + 5 CJK chars → ratio = 5/(5+3)=0.625.
+        body = "GDP 2024 \u4e2d\u56fd\u7ecf\u6d4e\u5e74"
+        assert _cjk_char_ratio(body) == 5 / 8
+
+
+class TestLanguageGate:
+    """EN-query language gate: translate CJK bodies to English.
+
+    Protects English queries from emitting Chinese-dominant reports
+    when search evidence is CJK-heavy; this was observed as a major
+    driver of the ``inst`` / ``comp`` gap on EN leaderboard cases.
+    """
+
+    def _source(self) -> SourceReference:
+        return SourceReference(
+            reference_id="ref_001",
+            url="https://a.com",
+            title="Source A",
+            snippet="government wealth and sovereign funds overview",
+        )
+
+    def _cjk_body(self) -> str:
+        # ~100 CJK chars, minimal ASCII — triggers the gate.
+        return (
+            "\u672c\u8282\u5206\u6790\u4e86\u653f\u5e9c\u4e3b\u6743"
+            "\u8d22\u5bcc\u57fa\u91d1\u7684\u6295\u8d44\u7ed3\u6784"
+            "\u4e0e\u6536\u76ca\u8d8b\u52bf [ref_001]\u3002"
+            "\u8fd1\u5e74\u6765\u5728\u4e2d\u4e1c\u4e0e\u4e9a\u6d32"
+            "\u4e3b\u6743\u57fa\u91d1\u6301\u7eed\u62e9\u6301\u79d1"
+            "\u6280\u4e0e\u7eff\u80fd\u8d44\u4ea7 [ref_001]\u3002"
+        )
+
+    def _english_translation(self) -> str:
+        return (
+            "This section analyses the investment structure and "
+            "yield trends of sovereign wealth funds [ref_001]. In "
+            "recent years Middle Eastern and Asian sovereign funds "
+            "have steadily increased allocations to technology and "
+            "green-energy assets [ref_001]. "
+            + " ".join(f"Extra sentence {i} elaborates on governance [ref_001]." for i in range(40))
+        )
+
+    async def test_translates_cjk_body(self):
+        initial = json.dumps(
+            {
+                "content": self._cjk_body(),
+                "citations": [
+                    {
+                        "reference_id": "ref_001",
+                        "text_span": "sovereign funds",
+                        "context": "overview",
+                    }
+                ],
+            }
+        )
+        translated = json.dumps({"content": self._english_translation(), "citations": []})
+        llm = MockLLM(responses=[initial, translated])
+        gen = ReportGenerator(llm, expand_short_sections=False)
+        section = await gen._generate_section(
+            query="Researching how the world's wealthiest governments invest.",
+            title="Sovereign Fund Allocation",
+            objective="Survey sovereign-fund investment trends.",
+            sources=[self._source()],
+        )
+        assert _cjk_char_ratio(section.content) < 0.15
+        assert "sovereign wealth funds" in section.content
+        assert llm._call_count == 2
+
+    async def test_skips_clean_english(self):
+        # Already-English section must not trigger the translator.
+        english = json.dumps(
+            {
+                "content": (
+                    "The global sovereign fund landscape is dominated by "
+                    "Middle Eastern and Asian investors [ref_001]. "
+                    + " ".join(f"Supporting sentence {i} adds detail [ref_001]." for i in range(30))
+                ),
+                "citations": [],
+            }
+        )
+        llm = MockLLM(responses=[english])
+        gen = ReportGenerator(llm, expand_short_sections=False)
+        section = await gen._generate_section(
+            query="How do sovereign funds allocate capital?",
+            title="Allocation",
+            objective="Overview.",
+            sources=[self._source()],
+        )
+        assert llm._call_count == 1
+        assert "sovereign fund landscape" in section.content
+
+    async def test_skips_cjk_query(self):
+        # CJK query: the gate must not fire, even for a CJK body.
+        body = json.dumps({"content": self._cjk_body(), "citations": []})
+        llm = MockLLM(responses=[body])
+        gen = ReportGenerator(llm, expand_short_sections=False)
+        # ZH: zhuquan caifu jijin touzi qushi.
+        section = await gen._generate_section(
+            query=(
+                "\u4e3b\u6743\u8d22\u5bcc\u57fa\u91d1\u6295\u8d44\u8d8b\u52bf\u5982\u4f55\uff1f"
+            ),
+            title="Trend",
+            objective="Survey.",
+            sources=[self._source()],
+        )
+        assert llm._call_count == 1
+        assert _cjk_char_ratio(section.content) > 0.5
+
+    async def test_rejects_no_progress_translation(self):
+        # Misbehaving LLM returns CJK again: original body must survive.
+        initial = json.dumps({"content": self._cjk_body(), "citations": []})
+        still_cjk = json.dumps({"content": self._cjk_body(), "citations": []})
+        llm = MockLLM(responses=[initial, still_cjk])
+        gen = ReportGenerator(llm, expand_short_sections=False)
+        section = await gen._generate_section(
+            query="How do sovereign funds allocate capital?",
+            title="Allocation",
+            objective="Overview.",
+            sources=[self._source()],
+        )
+        # Gate fired (2 calls) but rejected the no-progress response.
+        assert llm._call_count == 2
+        assert _cjk_char_ratio(section.content) > 0.5
+
+
+class TestShortSectionExpand:
+    """EN-only post-gen expansion pass."""
+
+    def _source(self) -> SourceReference:
+        return SourceReference(
+            reference_id="ref_001",
+            url="https://a.com",
+            title="Source A",
+            snippet="concentration data 50-80 percent across 5-10 names",
+        )
+
+    def _short_en_body(self) -> str:
+        # ~120 words: below the 220-word threshold so expansion triggers, but
+        # large enough that Guard B (1.5x growth cap) permits a realistic
+        # expanded draft rather than falsely rejecting a modest rewrite.
+        return " ".join(
+            [
+                f"Sentence {i} about Buffett's shift from Graham cigar-butt "
+                f"style to quality [ref_001]."
+                for i in range(12)
+            ]
+        )
+
+    def _expanded_en_body(self) -> str:
+        # Short body is ~144 words (12 sentences x 12 words); this expansion
+        # lands at ~200 words (20 sentences x 10 words) — about 1.39x — safely
+        # under Guard B's 1.5x cap.
+        return " ".join(
+            [
+                f"Sentence {i} deepens the analysis with quantitative evidence [ref_001]."
+                for i in range(20)
+            ]
+        )
+
+    async def test_expands_en_section(self):
+        short = json.dumps(
+            {
+                "content": self._short_en_body(),
+                "citations": [
+                    {"reference_id": "ref_001", "text_span": "quality", "context": "shift"}
+                ],
+            }
+        )
+        expanded = json.dumps(
+            {
+                "content": self._expanded_en_body(),
+                "citations": [
+                    {
+                        "reference_id": "ref_001",
+                        "text_span": "analysis",
+                        "context": "deep",
+                    }
+                ],
+            }
+        )
+        llm = MockLLM(responses=[short, expanded])
+        gen = ReportGenerator(llm)
+        section = await gen._generate_section(
+            query="How did Buffett evolve from Graham to quality investing?",
+            title="Buffett Evolution",
+            objective="Trace the shift from cigar-butt to quality-business investing.",
+            sources=[self._source()],
+        )
+        # Expanded body contains the new marker phrase and dropped the old one.
+        assert "deepens the analysis" in section.content
+        # Must make a second LLM call beyond the initial section + any noise rewrite.
+        assert llm._call_count >= 2
+
+    async def test_skips_cjk_query(self):
+        short = json.dumps(
+            {
+                "content": self._short_en_body(),
+                "citations": [],
+            }
+        )
+        llm = MockLLM(responses=[short])
+        gen = ReportGenerator(llm)
+        # ZH: bafeite ruhe cong gelieamu zouxiang zhiliang touzi (Buffett-quality-investing query).
+        section = await gen._generate_section(
+            query=(
+                "\u5df4\u83f2\u7279\u5982\u4f55\u4ece\u683c\u96f7\u5384"
+                "\u59c6\u8d70\u5411\u8d28\u91cf\u6295\u8d44\uff1f"
+            ),
+            title="Buffett Evolution",
+            objective="Trace the shift from cigar-butt to quality-business investing.",
+            sources=[self._source()],
+        )
+        # Only the initial section call should have fired for a CJK query.
+        assert llm._call_count == 1
+        assert section.content.startswith("Sentence 0 about Buffett")
+
+    async def test_skips_long_body(self):
+        long_body = " ".join(
+            [f"Sentence {i} provides evidence and context [ref_001]." for i in range(60)]
+        )
+        long_json = json.dumps({"content": long_body, "citations": []})
+        llm = MockLLM(responses=[long_json])
+        gen = ReportGenerator(llm)
+        await gen._generate_section(
+            query="How did Buffett evolve from Graham to quality investing?",
+            title="Buffett Evolution",
+            objective="Trace the shift from cigar-butt to quality-business investing.",
+            sources=[self._source()],
+        )
+        # Long initial body must not trigger a second LLM call.
+        assert llm._call_count == 1
+
+    async def test_flag_skips_expand(self):
+        short = json.dumps(
+            {
+                "content": self._short_en_body(),
+                "citations": [],
+            }
+        )
+        llm = MockLLM(responses=[short])
+        gen = ReportGenerator(llm, expand_short_sections=False)
+        await gen._generate_section(
+            query="How did Buffett evolve from Graham to quality investing?",
+            title="Buffett Evolution",
+            objective="Trace the shift from cigar-butt to quality-business investing.",
+            sources=[self._source()],
+        )
+        assert llm._call_count == 1
+
+    async def test_skips_structured_section(self):
+        # Guard A: section body already carries internal ``###`` subheadings,
+        # which triggered a duplication failure mode where the LLM re-emitted
+        # the whole subheading tree verbatim underneath itself.
+        structured = json.dumps(
+            {
+                "content": (
+                    "Opening paragraph on the shift [ref_001].\n\n"
+                    "### The Cigar-Butt Foundation\n\n"
+                    "Graham era analysis [ref_001].\n\n"
+                    "### The Munger Catalyst\n\n"
+                    "Quality turn analysis [ref_001]."
+                ),
+                "citations": [{"reference_id": "ref_001", "text_span": "shift", "context": ""}],
+            }
+        )
+        llm = MockLLM(responses=[structured])
+        gen = ReportGenerator(llm)
+        section = await gen._generate_section(
+            query="How did Buffett evolve from Graham to quality investing?",
+            title="Buffett Evolution",
+            objective="Trace the shift from cigar-butt to quality-business investing.",
+            sources=[self._source()],
+        )
+        # Guard A must fire: no second LLM call, structured body preserved.
+        assert llm._call_count == 1
+        assert "### The Cigar-Butt Foundation" in section.content
+        assert "### The Munger Catalyst" in section.content
+
+    async def test_rejects_overlong_expand(self):
+        # Guard B: expansion grew >1.5x, must be discarded.
+        short = json.dumps(
+            {
+                "content": self._short_en_body(),
+                "citations": [],
+            }
+        )
+        # 40 sentences x ~10 words = ~400 words.  _short_en_body is ~120 words,
+        # so ratio ~3.3x, well above the 1.5x cap.
+        overlong = json.dumps(
+            {
+                "content": " ".join(
+                    [
+                        f"Sentence {i} overgrown with excessive padded verbose detail [ref_001]."
+                        for i in range(40)
+                    ]
+                ),
+                "citations": [],
+            }
+        )
+        llm = MockLLM(responses=[short, overlong])
+        gen = ReportGenerator(llm)
+        section = await gen._generate_section(
+            query="How did Buffett evolve from Graham to quality investing?",
+            title="Buffett Evolution",
+            objective="Trace the shift from cigar-butt to quality-business investing.",
+            sources=[self._source()],
+        )
+        # LLM was called for expansion, but the result was rejected.
+        assert llm._call_count == 2
+        # Original short body preserved; padded prose must not leak in.
+        assert "overgrown" not in section.content
+        assert "Sentence 0 about Buffett" in section.content
+
+    async def test_rejects_new_subheadings(self):
+        # Guard C: expansion introduced ``###`` subheadings not present in the
+        # original flat body; treat as a duplication-style artifact and drop.
+        short = json.dumps(
+            {
+                "content": self._short_en_body(),
+                "citations": [],
+            }
+        )
+        expanded_with_headings = json.dumps(
+            {
+                "content": (
+                    self._expanded_en_body() + "\n\n### Extra Structure Injected\n\nMore [ref_001]."
+                ),
+                "citations": [],
+            }
+        )
+        llm = MockLLM(responses=[short, expanded_with_headings])
+        gen = ReportGenerator(llm)
+        section = await gen._generate_section(
+            query="How did Buffett evolve from Graham to quality investing?",
+            title="Buffett Evolution",
+            objective="Trace the shift from cigar-butt to quality-business investing.",
+            sources=[self._source()],
+        )
+        assert llm._call_count == 2
+        assert "Extra Structure Injected" not in section.content
+        # Original short body preserved.
+        assert "Sentence 0 about Buffett" in section.content
+
+    async def test_ignores_regression(self):
+        short = json.dumps(
+            {
+                "content": self._short_en_body(),
+                "citations": [],
+            }
+        )
+        regression = json.dumps({"content": "Tiny.", "citations": []})
+        llm = MockLLM(responses=[short, regression])
+        gen = ReportGenerator(llm)
+        section = await gen._generate_section(
+            query="How did Buffett evolve from Graham to quality investing?",
+            title="Buffett Evolution",
+            objective="Trace the shift from cigar-butt to quality-business investing.",
+            sources=[self._source()],
+        )
+        # Regression must be ignored; original short body preserved.
+        assert "Sentence 0 about Buffett" in section.content
+        assert "Tiny" not in section.content

@@ -24,9 +24,31 @@ Checks (in order)
    Rationale: per ``agent.md`` "no Chinese in code" (dai-ma-wu-zhong-wen)
    and B3-106 in ``docs/design/deep-research-acceptance.md``.
 2. **ERROR** — test function names must stay short. Any ``def test_<name>``
-   under ``tests/`` where ``<name>`` contains more than 4 underscore segments
-   fails (e.g. ``test_a_b_c_d_e_f``). See ``agent.md`` §Test Function Naming
-   (2-3 segments preferred, >3 a smell; 4 is the enforced hard limit here).
+   under ``tests/`` fails when ``<name>`` (the portion AFTER the leading
+   ``test_``) contains more than 4 literal underscore characters. The check
+   counts underscores in the captured tail only; the ``test_`` prefix itself
+   is never included.
+
+   ``agent.md`` §Test Function Naming uses three layers; this gate maps onto
+   them as follows (examples use ``<name>`` = ``alpha_beta_...``):
+
+   - ``test_alpha_beta_gamma`` — 3 tail segments, 2 underscores: **preferred**.
+   - ``test_alpha_beta_gamma_delta`` — 4 tail segments, 3 underscores: still
+     passes. This is the boundary of what reviewers should accept as normal.
+   - ``test_alpha_beta_gamma_delta_epsilon`` — 5 tail segments, 4 underscores:
+     agent.md flags this as a smell, but the gate currently still PASSES
+     it because the existing test corpus carries a large legacy backlog
+     in this band. The hard cap will tighten to 3 underscores once a
+     dedicated rename pass clears the backlog.
+   - ``test_alpha_beta_gamma_delta_epsilon_zeta`` — 6 tail segments,
+     5 underscores: FAILS (the hard cap today).
+
+   A **WARN** also fires when the captured tail length exceeds 35 characters
+   (soft preference) or 45 characters (hard limit per ``agent.md``). Both
+   thresholds are advisory today for the same legacy-backlog reason; they
+   surface borderline names without blocking commits on files that happen
+   to touch grandfathered neighbours, and will be promoted to ERROR in
+   the same follow-up that tightens the underscore cap.
 3. **WARN**  — files that embed 5+ ``\\uXXXX`` CJK escapes but carry no ASCII
    ``#`` comment anywhere in the file emit a warning so reviewers remember to
    add a short pinyin or English gloss.
@@ -62,6 +84,13 @@ _ASCII_COMMENT_RE = re.compile(r"^\s*#\s")
 _HELP_SUPPORT_RE = re.compile(r'--help|"-h"|"\-\-help"|argparse|ArgumentParser|add_help')
 
 _MAX_TEST_UNDERSCORES = 4
+# Character-length limits for the captured tail of a test function name
+# (everything after the leading ``test_``).  Matches ``agent.md`` §Test
+# Function Naming: names should normally fit ~35 chars, and 45 is the hard
+# cap.  The WARN threshold lets reviewers nudge borderline names before the
+# next developer piles on a longer neighbour.
+_TEST_NAME_WARN_CHARS = 35
+_TEST_NAME_MAX_CHARS = 45
 _CJK_ESCAPE_WARN_THRESHOLD = 5
 
 
@@ -71,7 +100,17 @@ def _check_file(path: Path, text: str) -> tuple[list[str], list[str]]:
 
     is_python = path.suffix == ".py"
     is_test_file = is_python and "tests" in path.parts
-    is_script_entrypoint = path.parent.name == "scripts" and path.suffix in {".sh", ".py"}
+    # Only the repo-level ``scripts/`` directory holds true entrypoints.
+    # A test fixture path such as ``tests/scripts/__init__.py`` must not
+    # trip this gate just because its parent directory happens to be
+    # named ``scripts``.  Empty ``__init__.py`` files are also never
+    # entrypoints by convention.
+    is_script_entrypoint = (
+        path.parent.name == "scripts"
+        and path.suffix in {".sh", ".py"}
+        and path.name != "__init__.py"
+        and "tests" not in path.parts
+    )
     cjk_escape_count = 0
     has_ascii_comment = False
 
@@ -86,13 +125,29 @@ def _check_file(path: Path, text: str) -> tuple[list[str], list[str]]:
             if is_test_file:
                 match = _TEST_FUNC_RE.match(line)
                 if match:
-                    underscores = match.group(1).count("_")
+                    tail = match.group(1)
+                    underscores = tail.count("_")
                     if underscores > _MAX_TEST_UNDERSCORES:
                         errors.append(
-                            f"{path}:{lineno}: test_{match.group(1)} has "
+                            f"{path}:{lineno}: test_{tail} has "
                             f"{underscores} underscore segments after 'test_' "
                             f"(limit {_MAX_TEST_UNDERSCORES}). Shorten the name "
                             f"or push scenario details into a test class/docstring."
+                        )
+                    tail_chars = len(tail)
+                    if tail_chars > _TEST_NAME_MAX_CHARS:
+                        warnings.append(
+                            f"{path}:{lineno}: test_{tail} tail is "
+                            f"{tail_chars} characters (exceeds hard limit "
+                            f"{_TEST_NAME_MAX_CHARS}). Shorten the name or "
+                            f"move scenario detail into a docstring."
+                        )
+                    elif tail_chars > _TEST_NAME_WARN_CHARS:
+                        warnings.append(
+                            f"{path}:{lineno}: test_{tail} tail is "
+                            f"{tail_chars} characters (prefer "
+                            f"<= {_TEST_NAME_WARN_CHARS}, hard limit "
+                            f"{_TEST_NAME_MAX_CHARS})."
                         )
 
             cjk_escape_count += len(_CJK_ESCAPE_RE.findall(line))

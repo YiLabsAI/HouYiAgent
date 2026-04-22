@@ -244,7 +244,7 @@ PY
 
     if [ -n "$TIMING_FILE" ]; then
         : > "$TIMING_FILE"
-        for step in "${STEP_TIMINGS[@]}"; do
+        for step in "${STEP_TIMINGS[@]+"${STEP_TIMINGS[@]}"}"; do
             printf '%s\n' "$step" >> "$TIMING_FILE"
         done
         printf 'total:%s\n' "$total_seconds" >> "$TIMING_FILE"
@@ -262,7 +262,7 @@ PY
     echo ""
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo "check-unit timing summary"
-    for step in "${STEP_TIMINGS[@]}"; do
+    for step in "${STEP_TIMINGS[@]+"${STEP_TIMINGS[@]}"}"; do
         echo "  - ${step} s"
     done
     echo "  - total:${total_seconds} s"
@@ -294,6 +294,7 @@ if [ -n "$CHANGED_PY_FILES" ]; then
     run_check "Ruff (lint)" uv run ruff check --fix $CHANGED_PY_FILES_ONELINE
     run_check "Ruff (format)" uv run ruff format $CHANGED_PY_FILES_ONELINE
 else
+    CHANGED_PY_FILES_ONELINE=""
     echo -e "${YELLOW}▶ Ruff (lint/format) skipped (no changed Python files)${NC}"
     echo ""
 fi

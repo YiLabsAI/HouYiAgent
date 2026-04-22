@@ -187,6 +187,15 @@ if TYPE_CHECKING:
 _SECTION_PROMPT = """\
 You are writing a section of an academic-grade research report.
 
+MANDATORY OUTPUT LANGUAGE
+-------------------------
+Match the language of the report title / query EXACTLY.  If the query \
+is in English, the ENTIRE section body — every paragraph, heading, \
+list item, table cell, and caption — MUST be in English.  If some \
+search evidence is in Chinese, translate factual content into English \
+rather than copying Chinese text.  Mixing languages inside a section \
+is a hard failure.
+
 Report title context: {query}
 Section: {title}
 Section objective: {objective}
@@ -260,6 +269,149 @@ Respond with plain text (no JSON).
 """
 
 
+# Post-generation English-only expansion.  EN reports underperform ZH on the
+# ``read`` / ``comp`` leaderboard dimensions mainly because sections come in
+# too short.  Prompt-level length rules triggered a ZH draft-duplication
+# failure mode, so we instead run a deterministic post-check: if the EN
+# section body falls below _SHORT_SECTION_WORD_THRESHOLD words, we issue one
+# additional LLM call asking the model to expand the already-produced text
+# in-place.  The expand prompt never asks for a rewrite, so it cannot
+# trigger the observed "write twice" behavior.
+_SHORT_SECTION_WORD_THRESHOLD = 350
+_EXPAND_TARGET_WORDS_LOW = 500
+_EXPAND_TARGET_WORDS_HIGH = 700
+# Hard cap on post-expansion growth: if the LLM returns more than this
+# multiple of the original body length, discard the expansion and keep the
+# original section.  Observed runaway expansions inflate bodies by 70%+
+# while losing insight/comp, so we refuse to ship them.
+_EXPAND_MAX_GROWTH_RATIO = 1.5
+# Minimum ASCII-to-CJK token ratio for the query to be treated as English
+# for expansion purposes.  A few CJK chars in an otherwise English query
+# (e.g. a brand name) should not suppress the expansion.
+_EN_QUERY_ASCII_RATIO = 0.8
+
+# Sub-agent retries and tool-layer plumbing occasionally leak raw
+# runtime artifacts into the final section body: orphan ``ref_<hex>``
+# tokens, ``30s`` retry markers, ``sync`` flags, and broken mermaid
+# fences can survive upstream cleanup and tank readability.  These
+# regexes are applied as a deterministic last-mile scrubber after the
+# section parse/consolidate pipeline.
+#
+# ``_VALID_REF_CITATION`` keeps legitimate ``[ref_<hex>]`` citations
+# intact during the orphan-token scrub.  Valid citations always appear
+# inside square brackets; bare hex refs in prose are garbage.
+_VALID_REF_CITATION = re.compile(r"\[ref_[a-fA-F0-9]{6,}\]")
+# Fenced code blocks captured with their body so we can inspect and
+# drop blocks whose contents devolved into junk tokens.  The closing
+# fence is optional so a truncated tail still matches.
+_FENCED_BLOCK_RE = re.compile(r"```[^\n]*\n(.*?)(?:\n```|\Z)", re.DOTALL)
+# Orphan ``ref_<hex>`` fragments that slipped past the citation
+# renumberer.  Only matches the token itself plus an optional leading
+# ``[`` or trailing ``]`` so the regex cannot swallow neighbouring
+# prose.  Valid ``[ref_<hex>]`` citations are masked out before this
+# regex runs so only truly-orphan fragments remain.
+_ORPHAN_REF_RE = re.compile(r"\[?ref_[a-fA-F0-9]{6,}\]?")
+# Multiline ``{"content": "..."}`` envelope that survived the per-
+# paragraph unwrap because it spans paragraph boundaries.  The two
+# patterns below locate the opener and (best-effort) tail so the
+# scrubber can UNWRAP the envelope — extracting the inner prose and
+# un-escaping JSON string escapes — rather than deleting.  Pure
+# deletion would strip legitimate prose when the writer emits a
+# malformed, never-closed envelope that still carries valuable body.
+_ENVELOPE_OPENER_RE = re.compile(
+    r"(?ms)^\{\s*\n?\s*\"content\"\s*:\s*\"",
+)
+# Matching tail: closing quote, optional citations array, optional
+# whitespace/newline, closing brace.  ``_ENVELOPE_TAIL_RE.search``
+# is anchored after the opener so stray closing braces elsewhere in
+# the body (e.g. inside mermaid diagrams) do not get confused with
+# the envelope tail.
+_ENVELOPE_TAIL_RE = re.compile(
+    r"\"\s*(?:,\s*\"citations\"\s*:\s*\[[^\]]*\])?\s*\n?\s*\}",
+)
+
+
+# Language-consistency gate for EN queries.  The soft prompt rule is
+# insufficient when search evidence is Chinese-dominant: the model
+# follows the evidence language and can emit substantially CJK output
+# on English queries.  When the post-gen CJK ratio exceeds this
+# threshold we trigger a
+# deterministic translation pass to force the section back into
+# English without waiting for a regeneration cycle.
+_EN_SECTION_CJK_RATIO_MAX = 0.15
+
+_TRANSLATE_PROMPT = """\
+You are translating a research section from Chinese (or mixed Chinese/\
+English) into fluent academic English.  The original query was in \
+English, so the reader expects an English-only article.
+
+Rules:
+- Translate EVERY Chinese character into English; the output must \
+contain no CJK characters at all.
+- Preserve Markdown structure EXACTLY: keep every heading level, \
+bullet, table, code block, and inline [ref_id] citation in its \
+original position.
+- Preserve numeric values, dates, named entities (person names, \
+company names, place names) verbatim; supply an English rendering in \
+parentheses for named entities on first mention if helpful.
+- Do NOT add new facts, claims, or citations beyond what the source \
+body contains.
+- Do NOT drop any paragraphs or bullet points.
+- Use clear, professional, scholarly English.
+
+Section title: {title}
+
+Section body:
+---
+{body}
+---
+
+Respond ONLY with JSON:
+{{
+  "content": "Translated Markdown body (NO heading)",
+  "citations": []
+}}
+"""
+
+
+_EXPAND_PROMPT = """\
+You wrote the following section of a research report. The body is shorter \
+than the editorial target of {low}-{high} words. Expand it IN-PLACE so the \
+result lands in that range.
+
+Rules:
+- PRESERVE every existing paragraph, sub-heading, inline [ref_id] citation, \
+table and mermaid block exactly where it is.
+- DEEPEN existing paragraphs with additional evidence, quantitative detail, \
+comparison, or caveats sourced from the evidence list below. Do NOT invent \
+facts and do NOT add new reference IDs outside the provided list.
+- You MAY add new analytical paragraphs between existing ones, but do NOT \
+restart the section, do NOT produce a second full draft, and do NOT repeat \
+passages already present.
+- Keep the same language as the current body (English).
+- Obey the same citation hygiene used in the body: no more than 3 stacked \
+[ref_id]s on a single claim.
+
+Section title: {title}
+Available reference IDs: {available_refs}
+Evidence excerpts:
+{sources_text}
+
+Current section body:
+---
+{body}
+---
+
+Respond ONLY with JSON of the same shape used originally:
+{{
+  "content": "Expanded Markdown body with citations (NO heading)...",
+  "citations": [
+    {{"reference_id": "ref_xxx", "text_span": "the cited claim", "context": "source excerpt"}}
+  ]
+}}
+"""
+
+
 @dataclass(frozen=True, slots=True)
 class SectionEvidenceBundle:
     """Evidence packet passed to section generation.
@@ -303,6 +455,11 @@ class ReportGenerator:
         # 5-7 sections; default 8 fires them all in one batch.  Lower this
         # if the LLM API has concurrency limits.
         section_concurrency: int = 8,
+        # Whether to spend one extra LLM call expanding an English section
+        # that falls below ``_SHORT_SECTION_WORD_THRESHOLD`` words.  Gated so
+        # benchmarks and latency-sensitive callers can opt out.  Never
+        # triggers for CJK queries regardless of this flag.
+        expand_short_sections: bool = True,
         **llm_kwargs: Any,
     ) -> None:
         self._llm = llm_adapter
@@ -317,6 +474,7 @@ class ReportGenerator:
             candidate_pool_size=max(max_section_sources + 2, max_section_sources * 2)
         )
         self._section_concurrency = section_concurrency
+        self._expand_short_sections = expand_short_sections
 
     async def generate(
         self,
@@ -673,7 +831,205 @@ class ReportGenerator:
         # ``_compute_section_sidecar_metrics`` and emitted as observability
         # only, so they do not leak HTML markers into the scored article.
         section.content = _consolidate_short_paragraphs(section.content)
+        # Last-mile junk-token scrubber: strips multiline JSON envelope
+        # leaks, broken fenced blocks dominated by ``ref_<hex>`` /
+        # ``sync`` / ``30s`` tokens, and orphan reference IDs that
+        # escaped the citation renumberer.  Deterministic, language-
+        # agnostic, and idempotent on clean prose so it is safe for
+        # both EN and ZH pipelines.
+        section.content = _scrub_generation_artifacts(section.content)
+        # EN-only language gate: if the query is English but the
+        # section body still carries more than
+        # ``_EN_SECTION_CJK_RATIO_MAX`` CJK characters, translate it
+        # to English in-place.  The prompt-level rule is advisory;
+        # this pass is the deterministic enforcement against
+        # CJK-dominant output that drags ``inst`` / ``comp`` on
+        # English queries.
+        if _query_is_english(query):
+            section = await self._maybe_translate_to_english(
+                section,
+                title=title,
+            )
+        # EN-only guard: if the section is visibly under-length for an English
+        # query, spend one extra LLM call to expand it in-place.  Never runs
+        # for CJK queries so the ZH leaderboard run is isolated from any
+        # variance this path introduces.
+        if self._expand_short_sections and _query_is_english(query):
+            section = await self._maybe_expand_short_section(
+                section,
+                title=title,
+                sources=sources,
+            )
         return section
+
+    async def _maybe_translate_to_english(
+        self,
+        section: ReportSection,
+        *,
+        title: str,
+    ) -> ReportSection:
+        """Translate a CJK-heavy section body into English in-place.
+
+        Only runs when the section body exceeds the EN section CJK
+        ratio threshold.  Returns the original section unchanged when
+        the translation LLM call fails or when the translated body
+        still contains more CJK than the original (defensive guard
+        against a misbehaving model).  The section's citation list is
+        preserved — only the Markdown body is replaced.
+        """
+
+        original_ratio = _cjk_char_ratio(section.content)
+        if original_ratio <= _EN_SECTION_CJK_RATIO_MAX:
+            return section
+        prompt = _TRANSLATE_PROMPT.format(
+            title=title,
+            body=section.content,
+        )
+        try:
+            resp = await self._llm.chat(
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.1,
+                max_tokens=self._section_max_tokens,
+                **self._llm_kwargs,
+            )
+        except Exception:
+            logger.warning(
+                "section_translation_failed",
+                extra={
+                    "title": title,
+                    "cjk_ratio": round(original_ratio, 3),
+                },
+            )
+            return section
+        translated = _parse_section(title, resp.content)
+        if not translated.content.strip():
+            return section
+        new_ratio = _cjk_char_ratio(translated.content)
+        # Guard: translation must materially reduce the CJK ratio.
+        # Otherwise the model returned the same content in a wrapper
+        # or refused to translate — fall back to the original body so
+        # downstream consumers never see a regression.
+        if new_ratio >= original_ratio:
+            logger.info(
+                "section_translation_rejected_no_progress",
+                extra={
+                    "title": title,
+                    "cjk_before": round(original_ratio, 3),
+                    "cjk_after": round(new_ratio, 3),
+                },
+            )
+            return section
+        logger.info(
+            "section_translation_applied",
+            extra={
+                "title": title,
+                "cjk_before": round(original_ratio, 3),
+                "cjk_after": round(new_ratio, 3),
+            },
+        )
+        section.content = translated.content
+        return section
+
+    async def _maybe_expand_short_section(
+        self,
+        section: ReportSection,
+        *,
+        title: str,
+        sources: list[SourceReference],
+    ) -> ReportSection:
+        """Expand an English section in-place when it falls below the word floor.
+
+        Returns the section unchanged when it is already long enough, when the
+        LLM expansion returns less content than the original (treated as a
+        failed expansion and ignored), or when the expansion result would
+        visibly regress citation coverage.
+        """
+
+        word_count = len(section.content.split())
+        if word_count >= _SHORT_SECTION_WORD_THRESHOLD:
+            return section
+        # Guard A: sections that already carry internal Markdown structure
+        # (## or ### subheadings) triggered a duplication failure mode
+        # where the LLM re-emitted the whole subheading tree verbatim
+        # underneath itself.  Skip expansion for anything with pre-existing
+        # structure and accept the short body.
+        if "\n## " in section.content or "\n### " in section.content:
+            return section
+        snip = self._snippet_max_chars
+        available_refs = [s.reference_id for s in sources]
+        sources_text = (
+            "\n".join(
+                f"  {s.reference_id} | {s.title} | {s.snippet[:snip]}"
+                for s in sources[: self._max_source_display]
+            )
+            or "(no sources)"
+        )
+        prompt = _EXPAND_PROMPT.format(
+            low=_EXPAND_TARGET_WORDS_LOW,
+            high=_EXPAND_TARGET_WORDS_HIGH,
+            title=title,
+            available_refs=", ".join(available_refs) or "(none)",
+            sources_text=sources_text,
+            body=section.content,
+        )
+        try:
+            resp = await self._llm.chat(
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.3,
+                max_tokens=self._section_max_tokens,
+                **self._llm_kwargs,
+            )
+        except Exception:
+            logger.warning(
+                "section_expansion_failed",
+                extra={"title": title, "original_word_count": word_count},
+            )
+            return section
+        expanded = _parse_section(title, resp.content)
+        expanded_words = len(expanded.content.split())
+        # Guard against regressions: expansion must actually grow the body
+        # and must not drop below the original content length.
+        if expanded_words <= word_count:
+            return section
+        # Guard B: refuse runaway expansions.  A 70% word inflation was
+        # observed to hurt insight/comp scores.  Cap growth at 1.5x the
+        # original body and fall back to the original when the LLM
+        # exceeds that envelope.
+        if expanded_words > word_count * _EXPAND_MAX_GROWTH_RATIO:
+            logger.info(
+                "section_expansion_rejected_overlong",
+                extra={
+                    "title": title,
+                    "original_word_count": word_count,
+                    "expanded_word_count": expanded_words,
+                    "growth_ratio": expanded_words / max(word_count, 1),
+                },
+            )
+            return section
+        # Guard C: reject expansions that introduce new ``##``/``###`` subheadings
+        # that were not present in the original body.  This catches a subtler
+        # variant of the duplication mode where the LLM preserves the original
+        # structure but also tacks on an extra subheading tree below.
+        orig_headings = _count_section_subheadings(section.content)
+        new_headings = _count_section_subheadings(expanded.content)
+        if new_headings > orig_headings:
+            logger.info(
+                "section_expansion_rejected_new_subheadings",
+                extra={
+                    "title": title,
+                    "original_subheadings": orig_headings,
+                    "expanded_subheadings": new_headings,
+                },
+            )
+            return section
+        expanded.content = _consolidate_short_paragraphs(expanded.content)
+        # Merge citations: prefer the expanded call's citation list but keep
+        # any original citations that the expanded pass dropped.
+        existing_refs = {c.reference_id for c in expanded.citations}
+        for citation in section.citations:
+            if citation.reference_id and citation.reference_id not in existing_refs:
+                expanded.citations.append(citation)
+        return expanded
 
     async def _clean_section_noise(
         self,
@@ -741,8 +1097,6 @@ class ReportGenerator:
             # paragraph and the escaped mermaid fences inside the JSON
             # string classified the whole paragraph as structural,
             # bypassing downstream paragraph-structure normalisation.
-            # Observed on EN5 qid=52 / qid=55: top prose paragraph was a
-            # 4.7KB JSON blob carrying 18 sentences that never got split.
             # Reuses the same envelope-repair helpers as ``_parse_section``
             # so both entry points benefit from the same logic.
             result = _strip_content_envelope(result)
@@ -891,8 +1245,7 @@ def _split_long_paragraph(text: str) -> list[str]:
 
     * Paragraphs with ``<= _SPLITTABLE_MAX_SENTENCES`` sentences are
       returned unchanged (single-element list). This keeps moderate
-      8-sentence paragraphs — the bulk of ZH case1 high-read article —
-      untouched.
+      8-sentence paragraphs untouched.
     * Above the threshold, text is sliced at every
       ``_SPLITTABLE_CHUNK_SENTENCES``-th terminator.
     * A trailing fragment shorter than 2 sentences is folded back into the
@@ -1529,6 +1882,250 @@ def _default_section_prompt_context() -> dict[str, str]:
         "next_section": "(none)",
         "related_questions": "(none)",
     }
+
+
+# Mermaid/diagram marker and repeating short-hash fragments that the
+# sub-agent emits when its diagram rendering loop enters a retry
+# storm.  A paragraph tripping both (a diagram marker *and* multiple
+# junk signals) is functionally un-readable and always hurts the
+# RACE ``read`` score.  See ``_looks_like_junk_paragraph`` for the
+# combined heuristic.
+_DIAGRAM_MARKER_RE = re.compile(
+    r"\b(?:graph\s+(?:TD|LR|BT|RL)|flowchart|sequenceDiagram|stateDiagram)",
+)
+_HASH_FRAGMENT_RE = re.compile(r"\b[a-f]\d{2}-b\d{4}\b|\b[a-f]\d{2}b\d{4,}\b")
+
+
+def _unwrap_envelope_leaks(text: str) -> str:
+    """Unwrap multiline ``{"content": "..."}`` leaks, preserving prose.
+
+    Locates each ``{\\n  "content": "...`` opener, pairs it with the
+    nearest trailing ``"}`` (optionally followed by a citations array)
+    or a fallback boundary (next Markdown heading / end of text), and
+    emits the inner prose with JSON string escapes un-escaped.  Both
+    closed and malformed envelopes are handled; only the JSON scaffold
+    is removed, and no content is ever deleted.
+
+    Idempotent on text that contains no envelopes.
+    """
+
+    result: list[str] = []
+    pos = 0
+    while True:
+        opener = _ENVELOPE_OPENER_RE.search(text, pos)
+        if opener is None:
+            result.append(text[pos:])
+            break
+        result.append(text[pos : opener.start()])
+        inner_start = opener.end()
+        tail = _ENVELOPE_TAIL_RE.search(text, inner_start)
+        if tail is not None:
+            inner = text[inner_start : tail.start()]
+            pos = tail.end()
+        else:
+            # No closing brace — envelope is truncated.  Recover the
+            # body until the next Markdown heading or end of text so
+            # the prose survives into the scored article.
+            boundary = re.search(r"\n#{1,6}\s", text[inner_start:])
+            if boundary is not None:
+                inner = text[inner_start : inner_start + boundary.start()]
+                pos = inner_start + boundary.start()
+            else:
+                inner = text[inner_start:]
+                pos = len(text)
+        result.append(_json_unescape(inner))
+    return "".join(result)
+
+
+def _json_unescape(text: str) -> str:
+    """Un-escape a JSON string fragment without requiring a full parse."""
+
+    try:
+        return json.loads(f'"{text}"')
+    except (json.JSONDecodeError, ValueError):
+        # Fall back to common escape sequences when the fragment
+        # contains unescaped control chars (which the writer often
+        # emits and ``json.loads`` rejects).
+        return (
+            text.replace("\\\\", "\x00BS\x00")
+            .replace('\\"', '"')
+            .replace("\\n", "\n")
+            .replace("\\t", "\t")
+            .replace("\x00BS\x00", "\\")
+        )
+
+
+def _looks_like_junk_paragraph(paragraph: str) -> bool:
+    """True when a paragraph is a diagram/sub-agent retry-storm residue.
+
+    Requires BOTH a diagram/code marker AND at least two independent
+    junk signals (``ref_<hex>`` / ``sync`` / ``30s`` / short-hash
+    fragment).  The dual-signal requirement protects clean English
+    prose that legitimately discusses "synchronous" systems or a
+    "30s interval" from being swept up.
+    """
+
+    if len(paragraph) < 80:
+        return False
+    if not _DIAGRAM_MARKER_RE.search(paragraph):
+        return False
+    signals = 0
+    if len(re.findall(r"ref_[a-fA-F0-9]{6,}", paragraph)) >= 1:
+        signals += 1
+    if len(re.findall(r"\bsync\b", paragraph)) >= 2:
+        signals += 1
+    if len(re.findall(r"\b30s\b", paragraph)) >= 2:
+        signals += 1
+    if len(_HASH_FRAGMENT_RE.findall(paragraph)) >= 2:
+        signals += 1
+    return signals >= 2
+
+
+def _scrub_generation_artifacts(content: str) -> str:
+    """Strip sub-agent / tool-layer junk tokens that outran upstream parsers.
+
+    Three failure modes escape the per-paragraph
+    ``_strip_content_envelope`` and the citation renumberer, and this
+    scrubber handles them as a deterministic last line of defence
+    before the section leaves the writer:
+
+    1. Multiline ``{"content": "..."}`` envelope leaked between
+       paragraphs.  The per-paragraph unwrap in
+       ``_consolidate_short_paragraphs`` only catches envelopes that
+       fit a single ``\\n\\n``-delimited block; multiline envelopes
+       survive and show up as literal JSON in the final Markdown.
+    2. Fenced code blocks (typically mermaid) whose body devolved into
+       repeated ``ref_<hex>`` / ``sync`` / ``30s`` tokens.  These are
+       runtime plumbing artifacts, never valid diagrams; the whole
+       block is dropped.
+    3. Orphan ``ref_<hex>`` fragments in prose outside a well-formed
+       ``[ref_<hex>]`` citation.  These never round-trip through the
+       citation renumberer and always surface as visible garbage.
+
+    Idempotent: calling on already-clean prose returns it unchanged
+    modulo blank-line collapse.
+    """
+
+    if not content:
+        return content
+    # Step 1: unwrap multiline JSON envelope leaks.  The envelope
+    # scaffold (``{\n  "content": "..." }``) is removed but the
+    # inner prose survives with JSON escapes un-escaped.  Pure
+    # deletion would strip legitimate prose when the envelope is
+    # malformed but still carries body content.
+    content = _unwrap_envelope_leaks(content)
+
+    # Step 2: wipe fenced blocks whose body is dominated by junk
+    # tokens.  Thresholds chosen so a legitimate mermaid or code
+    # sample with a single ``sync`` keyword or citation is retained.
+    def _maybe_wipe_fence(match: re.Match[str]) -> str:
+        body = match.group(1) or ""
+        ref_hits = len(re.findall(r"ref_[a-fA-F0-9]{6,}", body))
+        sync_hits = len(re.findall(r"\bsync\b", body))
+        retry_hits = len(re.findall(r"\b30s\b", body))
+        if ref_hits >= 2 or sync_hits >= 3 or retry_hits >= 2:
+            return ""
+        return match.group(0)
+
+    content = _FENCED_BLOCK_RE.sub(_maybe_wipe_fence, content)
+
+    # Step 2.5: drop *paragraph-level* junk that never got a code fence
+    # around it.  Upstream fence loss in the sub-agent occasionally
+    # leaves a "graph TD" stanza plus repeated ``ref_<hex>`` / ``30s``
+    # / ``sync`` fragments sitting in prose form, so the fenced-block
+    # scrub cannot reach them.  We require MULTIPLE independent
+    # signals so clean prose that happens to mention "synchronous"
+    # or "30 seconds" cannot trip this path.
+    cleaned_paragraphs: list[str] = []
+    for paragraph in content.split("\n\n"):
+        if _looks_like_junk_paragraph(paragraph):
+            continue
+        cleaned_paragraphs.append(paragraph)
+    content = "\n\n".join(cleaned_paragraphs)
+
+    # Step 3: scrub orphan ``ref_<hex>`` tokens while preserving valid
+    # bracketed citations.  Mask the valid tokens with a NUL-delimited
+    # placeholder so the orphan regex cannot swallow them, then
+    # restore after the scrub.
+    masked: list[str] = []
+
+    def _mask_valid(match: re.Match[str]) -> str:
+        masked.append(match.group(0))
+        return f"\x00VR{len(masked) - 1}\x00"
+
+    scratch = _VALID_REF_CITATION.sub(_mask_valid, content)
+    scratch = _ORPHAN_REF_RE.sub("", scratch)
+    for idx, token in enumerate(masked):
+        scratch = scratch.replace(f"\x00VR{idx}\x00", token)
+    content = scratch
+
+    # Step 4: collapse runs of blank lines created by the deletions
+    # and strip trailing per-line whitespace to keep the output tidy.
+    content = re.sub(r"\n{3,}", "\n\n", content)
+    content = "\n".join(line.rstrip() for line in content.splitlines())
+    return content.strip("\n")
+
+
+def _count_section_subheadings(content: str) -> int:
+    """Count Markdown subheadings (``##`` / ``###``) inside a section body.
+
+    Used by the short-section expansion guard (C): if the LLM's expanded body
+    contains MORE subheadings than the original, we assume it duplicated the
+    section structure and reject the expansion.  The leading ``\\n`` anchor
+    mirrors the Guard-A check so a body that opens with a heading (rare,
+    since sections are heading-less by convention) still matches.
+    """
+
+    return content.count("\n## ") + content.count("\n### ")
+
+
+def _cjk_char_ratio(text: str) -> float:
+    """Return the fraction of letters in ``text`` that are CJK ideographs.
+
+    Counts both CJK characters and ASCII letters; digits, punctuation,
+    and whitespace are ignored so structural markup does not bias the
+    ratio.  Returns ``0.0`` for empty or letter-free text.
+    """
+
+    cjk = 0
+    ascii_letters = 0
+    for ch in text:
+        cp = ord(ch)
+        if 0x4E00 <= cp <= 0x9FFF or 0x3400 <= cp <= 0x4DBF or 0xF900 <= cp <= 0xFAFF:
+            cjk += 1
+        elif ch.isascii() and ch.isalpha():
+            ascii_letters += 1
+    total = cjk + ascii_letters
+    if total == 0:
+        return 0.0
+    return cjk / total
+
+
+def _query_is_english(query: str) -> bool:
+    """Return True when ``query`` is predominantly English (i.e. not CJK).
+
+    Used to gate the English-only short-section expansion pass.  Counts only
+    letters and CJK ideographs so punctuation and digits do not bias the
+    ratio.  A query with a handful of CJK chars (e.g. a brand name) still
+    counts as English when ASCII letters dominate beyond
+    ``_EN_QUERY_ASCII_RATIO``.
+    """
+
+    ascii_letters = 0
+    cjk_chars = 0
+    for ch in query:
+        if ch.isascii() and ch.isalpha():
+            ascii_letters += 1
+        elif (
+            0x4E00 <= ord(ch) <= 0x9FFF
+            or 0x3400 <= ord(ch) <= 0x4DBF
+            or 0xF900 <= ord(ch) <= 0xFAFF
+        ):
+            cjk_chars += 1
+    total = ascii_letters + cjk_chars
+    if total == 0:
+        return False
+    return ascii_letters / total >= _EN_QUERY_ASCII_RATIO
 
 
 def _build_section_prompt_context(

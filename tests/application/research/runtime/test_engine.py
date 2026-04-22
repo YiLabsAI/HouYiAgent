@@ -126,9 +126,18 @@ _SEARCHER_RESPONSE = json.dumps(
 
 _QUERY_GEN_RESPONSE = json.dumps(["AI agent framework comparison", "best AI agent tools 2026"])
 _SUFFICIENCY_TRUE = json.dumps({"sufficient": True, "rationale": "Enough sources found"})
+# Padded above ``_SHORT_SECTION_WORD_THRESHOLD`` (350 words) so the engine
+# tests do not accidentally trigger the EN-only post-gen expansion pass.
 _SECTION_JSON = json.dumps(
     {
-        "content": "Section content with supported analysis [ref_001]. This section compares evidence, explains tradeoffs, and keeps enough substance for downstream validation and quality evaluation [ref_001].",
+        "content": (
+            "Section content with supported analysis [ref_001]. This section compares evidence, "
+            "explains tradeoffs, and keeps enough substance for downstream validation and quality "
+            "evaluation [ref_001]. "
+            + " ".join(
+                f"Expanded narrative sentence {i} with [ref_001] citation." for i in range(60)
+            )
+        ),
         "citations": [{"reference_id": "ref_001", "text_span": "content", "context": "ctx"}],
     }
 )
