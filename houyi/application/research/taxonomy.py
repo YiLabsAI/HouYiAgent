@@ -1,7 +1,7 @@
 """Shared taxonomy constants for research query and section classification.
 
 Consolidates keyword-hint tuples that were previously scattered across
-planner.py, search_query_planner.py, validation.py, and report.py.
+planner.py, search_query_planner.py, and report.py.
 All downstream modules import from here to avoid duplication and make
 the hint vocabulary maintainable in one place.
 

@@ -9,7 +9,7 @@ Three orchestration modes control the search phase:
   collaboration; agents share discoveries and adjust search strategies.
 
 Pipeline stages (serial): PlannerAgent → *search* →
-SourceAggregator → ConflictResolver → ValidationAgent → ReportGenerator →
+SourceAggregator → ConflictResolver → ReportGenerator → URLValidator →
 QualityEvaluator.
 """
 
@@ -74,7 +74,6 @@ from houyi.application.research.types import (
     SearchResult,
 )
 from houyi.application.research.url_validator import URLValidator
-from houyi.application.research.validation import ValidationAgent, ValidationReport
 from houyi.application.runtime.agent_team import AgentTeamManager
 from houyi.application.runtime.conflict import ConflictRecord, ConflictResolver
 from houyi.application.runtime.events import EventEmitter
@@ -152,12 +151,10 @@ class ResearchRuntime:
         )
         self._report_pipeline = ReportPipeline(
             reporter=ReportGenerator(llm_adapter, **llm_kwargs),
-            validator=ValidationAgent(llm_adapter, **llm_kwargs),
             evaluator=QualityEvaluator(llm_adapter, **llm_kwargs),
             url_validator=URLValidator(max_concurrent=5, timeout=10),
             conflict_resolver=ConflictResolver(llm=llm_adapter),
             intermediate_gen=IntermediateReportGenerator(llm_adapter, **llm_kwargs),
-            web_search=web_search,
             emit=self._emit,
         )
         self._research = ResearchCoordinator(
@@ -202,7 +199,6 @@ class ResearchRuntime:
         self._intermediate_ms: float = 0.0
 
         self._clarification: ClarificationResult | None = None
-        self._validation: ValidationReport | None = None
         self._memory_candidates: list[MemoryCandidate] = []
 
         self._status = ResearchStatus.PLANNING
@@ -260,7 +256,7 @@ class ResearchRuntime:
     # ------------------------------------------------------------------
 
     _PER_QUESTION_BUDGET_SECONDS = 120
-    # Report pipeline (conflicts + sections + validation + repair + quality) can exceed 10+ LLM
+    # Report pipeline (conflicts + sections + URL validation + quality) can exceed 10+ LLM
     # calls × 30–120s each on standard/deep; budget must not assume "search is the long pole".
     _REPORT_BUDGET_BY_DEPTH: dict[str, int] = {"quick": 600, "standard": 1200, "deep": 1500}
 
@@ -597,7 +593,7 @@ class ResearchRuntime:
             raise asyncio.CancelledError("Research runtime cancelled by user")
 
     async def _run_report(self) -> None:
-        """Delegate to ReportPipeline: conflicts → report → validation → repair → quality."""
+        """Delegate to ReportPipeline: conflicts → report → URL validation → quality."""
         assert self._plan is not None
         assert self._aggregated is not None
 
@@ -610,7 +606,6 @@ class ResearchRuntime:
         )
         self._report = result.report
         self._quality = result.quality
-        self._validation = result.validation
         self._conflicts = result.conflicts
         self._phase_timings_ms = result.phase_timings_ms
 

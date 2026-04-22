@@ -12,7 +12,6 @@ from houyi.application.research.types import (
     ResearchSettings,
     SearchResult,
 )
-from houyi.application.research.validation import ValidationReport
 from houyi.application.runtime.conflict import ConflictRecord
 
 
@@ -20,7 +19,6 @@ from houyi.application.runtime.conflict import ConflictRecord
 class SynthesisResult:
     report: ResearchReport
     quality: QualityScore | None
-    validation: ValidationReport | None
     conflicts: list[ConflictRecord]
     phase_timings_ms: dict[str, float]
 
@@ -48,7 +46,6 @@ class SynthesisCoordinator:
         return SynthesisResult(
             report=result.report,
             quality=result.quality,
-            validation=result.validation,
             conflicts=result.conflicts,
             phase_timings_ms=result.phase_timings_ms,
         )

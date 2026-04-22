@@ -495,8 +495,8 @@ class ReportGenerator:
         When *defer_summary* is True, the report is returned with an empty
         summary.  Call :meth:`complete_summary` later to fill it in.  This
         allows the caller to overlap summary generation with other work
-        (e.g. validation) since neither validation nor repair reads the
-        summary field.
+        (e.g. URL validation) since that stage does not read the summary
+        field.
 
         Returns:
             Tuple of (ResearchReport, metrics_dict) where metrics_dict contains

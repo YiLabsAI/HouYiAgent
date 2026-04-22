@@ -1,4 +1,4 @@
-"""Post-search report pipeline: conflicts → report → validation → repair → quality.
+"""Post-search report pipeline: conflicts → report → URL validation → quality.
 
 Extracted from ``ResearchRuntime`` to keep the runtime orchestrator lean.
 The pipeline is stateless — all mutable data flows in/out via parameters
@@ -23,38 +23,16 @@ from houyi.application.research.runtime.intermediate import (
 from houyi.application.research.types import (
     AggregatedSources,
     QualityScore,
-    ReportSection,
     ResearchPlan,
     ResearchReport,
     ResearchSettings,
     SearchResult,
-    SourceReference,
 )
 from houyi.application.research.url_validator import URLValidator
-from houyi.application.research.validation import (
-    SectionValidation,
-    ValidationAgent,
-    ValidationReport,
-)
 from houyi.application.runtime.conflict import AgentTaskResult, ConflictRecord, ConflictResolver
-from houyi.skills.web_search.service import WebSearchService
 
 logger = logging.getLogger(__name__)
-_REPAIR_SECTION_CONCURRENCY = 2
-_REPAIR_QUERY_CONCURRENCY = 2
-_ENABLE_PRE_REPAIR_QUALITY = True
-_MAX_REPAIR_SECTIONS = 2
 _INTERMEDIATE_TARGET_BY_DEPTH = {"standard": 3, "deep": 5}
-_RETENTION_RATIO_FLOOR = 0.55
-
-# Repair extra-source search budget per section.  2 queries x 3 results
-# balances coverage against latency; the hard timeout below prevents
-# runaway total repair time.
-_REPAIR_EXTRA_QUERY_LIMIT = 2
-_REPAIR_EXTRA_RESULTS_PER_QUERY = 3
-# Hard wall-clock budget (seconds) for the entire repair phase.  Prevents
-# runaway rewrites from dominating the pipeline.
-_REPAIR_PHASE_TIMEOUT_S = 120.0
 
 EmitFn = Callable[..., Awaitable[None]]
 
@@ -65,14 +43,13 @@ class ReportPipelineResult:
 
     report: ResearchReport
     quality: QualityScore | None = None
-    validation: ValidationReport | None = None
     conflicts: list[ConflictRecord] = field(default_factory=list)
     phase_timings_ms: dict[str, float] = field(default_factory=dict)
 
 
 class ReportPipeline:
     """Runs the post-search stages: conflict detection → report generation →
-    URL validation → section repair → quality evaluation.
+    URL validation → quality evaluation.
 
     Stateless: each ``run()`` call receives all required data and returns a
     ``ReportPipelineResult``.
@@ -82,23 +59,18 @@ class ReportPipeline:
         self,
         *,
         reporter: ReportGenerator,
-        validator: ValidationAgent,
         evaluator: QualityEvaluator,
         url_validator: URLValidator,
         conflict_resolver: ConflictResolver,
         intermediate_gen: IntermediateReportGenerator,
-        web_search: WebSearchService,
         emit: EmitFn,
     ) -> None:
         self._reporter = reporter
-        self._validator = validator
         self._evaluator = evaluator
         self._url_validator = url_validator
         self._conflict_resolver = conflict_resolver
         self._intermediate_gen = intermediate_gen
-        self._web_search = web_search
         self._emit = emit
-        self._repair_query_sem = asyncio.Semaphore(_REPAIR_QUERY_CONCURRENCY)
 
     async def _generate_pending_intermediates(
         self,
@@ -231,38 +203,20 @@ class ReportPipeline:
                 settings,
                 timings,
             )
-            completeness = _run_completeness_guard(report)
-            timings["completeness_issue_count"] = float(completeness.total_issues)
-            # Summary and validation read disjoint parts of the report:
-            # summary needs sections (done), validation needs sections (done),
-            # neither reads the other's output.  Run them concurrently.
+            # Summary and URL validation touch disjoint slices of the report
+            # (summary reads sections, URL check reads aggregated.sources);
+            # run them concurrently to shave the summary latency off the
+            # critical path.
             summary_coro = self._reporter.complete_summary(report)
-            validation_coro = self._run_validation_phase(
-                aggregated,
-                report,
-                plan,
-                settings,
-                timing_budget,
-                timings,
-                completeness,
-            )
-            summary_ms, validation = await asyncio.gather(summary_coro, validation_coro)
+            url_coro = self._execute_url_validation(aggregated, report)
+            summary_ms, url_elapsed = await asyncio.gather(summary_coro, url_coro)
             timings["report_summary_ms"] = summary_ms
-            repaired = await self._run_repair_phase(
-                validation,
-                report,
-                plan,
-                aggregated,
-                quality_enabled,
-                timing_budget,
-                timings,
-            )
+            timings["url_validate_ms"] = url_elapsed
             quality = None
             if quality_enabled:
                 quality = await self._run_final_quality_phase(
                     report,
                     aggregated,
-                    repaired,
                     timing_budget,
                     timings,
                 )
@@ -271,7 +225,6 @@ class ReportPipeline:
             return self._build_pipeline_result(
                 report,
                 quality,
-                validation,
                 conflicts,
                 depth_val,
                 timings,
@@ -322,129 +275,17 @@ class ReportPipeline:
         await _emit_report_sections(self._emit, report)
         return report, timing_budget
 
-    async def _run_validation_phase(
-        self,
-        aggregated: AggregatedSources,
-        report: ResearchReport,
-        plan: ResearchPlan,
-        settings: ResearchSettings,
-        timing_budget: dict[str, Any],
-        timings: dict[str, float],
-        completeness: ValidationReport,
-    ) -> ValidationReport | None:
-        validation_titles = timing_budget["validation_titles"] or set()
-        if settings.depth in ("standard", "deep"):
-            url_elapsed, validation_result = await asyncio.gather(
-                self._execute_url_validation(aggregated, report),
-                self._execute_validation(
-                    report,
-                    plan.query,
-                    plan=plan,
-                    section_titles=validation_titles or None,
-                    content_char_limit=timing_budget["validation_char_limit"],
-                ),
-            )
-            timings["url_validate_ms"] = url_elapsed
-            validation, validation_elapsed = validation_result
-            timings["validation_ms"] = validation_elapsed
-            return _merge_validation_reports(validation, completeness)
-        timings["url_validate_ms"] = await self._execute_url_validation(aggregated, report)
-        return completeness if completeness.sections else None
-
-    async def _run_repair_phase(
-        self,
-        validation: ValidationReport | None,
-        report: ResearchReport,
-        plan: ResearchPlan,
-        aggregated: AggregatedSources,
-        quality_enabled: bool,
-        timing_budget: dict[str, Any],
-        timings: dict[str, float],
-    ) -> bool:
-        if validation is None or validation.sections_needing_rewrite <= 0:
-            return False
-        await self._emit(
-            "research.validation_issues",
-            sections_flagged=validation.sections_needing_rewrite,
-            overall_score=validation.overall_score,
-        )
-        await self._run_pre_repair_quality(
-            report,
-            aggregated,
-            quality_enabled,
-            timing_budget,
-            timings,
-        )
-        t = time.perf_counter()
-        try:
-            repair_metrics = await asyncio.wait_for(
-                self._repair_weak_sections(
-                    validation,
-                    report,
-                    plan,
-                    aggregated,
-                    limit=timing_budget["repair_limit"],
-                ),
-                timeout=_REPAIR_PHASE_TIMEOUT_S,
-            )
-        except TimeoutError:
-            logger.warning(
-                "Repair phase exceeded %ss budget, skipping remaining repairs",
-                _REPAIR_PHASE_TIMEOUT_S,
-            )
-            repair_metrics = {
-                "repair_query_ms": 0.0,
-                "repair_extra_source_count": 0,
-                "repair_section_count": 0,
-            }
-        timings["repair_ms"] = (time.perf_counter() - t) * 1000.0
-        timings["repair_query_ms"] = repair_metrics["repair_query_ms"]
-        timings["repair_extra_source_count"] = float(repair_metrics["repair_extra_source_count"])
-        timings["repair_section_count"] = float(repair_metrics["repair_section_count"])
-        return True
-
-    async def _run_pre_repair_quality(
-        self,
-        report: ResearchReport,
-        aggregated: AggregatedSources,
-        quality_enabled: bool,
-        timing_budget: dict[str, Any],
-        timings: dict[str, float],
-    ) -> None:
-        if not quality_enabled:
-            timings["quality_pre_disabled"] = 1.0
-            return
-        should_run_pre_quality = (
-            _ENABLE_PRE_REPAIR_QUALITY and not timing_budget["skip_pre_quality"]
-        )
-        if should_run_pre_quality:
-            pre_quality, pre_quality_timings = await self._execute_quality_evaluation(
-                report,
-                aggregated,
-                phase_name="quality_evaluation_pre_repair",
-                timing_prefix="quality_pre_",
-                report_char_limit=timing_budget["quality_report_chars"],
-                fact_section_char_limit=timing_budget["quality_fact_section_chars"],
-                fact_source_char_limit=timing_budget["quality_fact_source_chars"],
-            )
-            if pre_quality:
-                timings.update(pre_quality_timings)
-            return
-        if _ENABLE_PRE_REPAIR_QUALITY:
-            timings["quality_pre_skipped"] = 1.0
-
     async def _run_final_quality_phase(
         self,
         report: ResearchReport,
         aggregated: AggregatedSources,
-        repaired: bool,
         timing_budget: dict[str, Any],
         timings: dict[str, float],
     ) -> QualityScore | None:
         quality, quality_timings = await self._execute_quality_evaluation(
             report,
             aggregated,
-            phase_name="quality_evaluation_post_repair" if repaired else "quality_evaluation",
+            phase_name="quality_evaluation",
             timing_prefix="quality_",
             report_char_limit=timing_budget["quality_report_chars"],
             fact_section_char_limit=timing_budget["quality_fact_section_chars"],
@@ -459,15 +300,12 @@ class ReportPipeline:
     def _build_pipeline_result(
         report: ResearchReport,
         quality: QualityScore | None,
-        validation: ValidationReport | None,
         conflicts: list[ConflictRecord],
         depth_val: str,
         timings: dict[str, float],
         t_run0: float,
     ) -> ReportPipelineResult:
-        return _build_pipeline_result(
-            report, quality, validation, conflicts, depth_val, timings, t_run0
-        )
+        return _build_pipeline_result(report, quality, conflicts, depth_val, timings, t_run0)
 
     async def _execute_url_validation(
         self,
@@ -476,47 +314,15 @@ class ReportPipeline:
     ) -> float:
         """Execute URL validation and return elapsed time in milliseconds.
 
-        This is a standalone execution unit that can run concurrently with
-        validation since it only reads from aggregated sources and mutates
-        report citations (no overlap with validation logic).
+        URL reachability is the only remaining validation in the pipeline
+        (the per-section content validator was removed on 2026-04-22).  It
+        reads from aggregated sources and mutates report citations only,
+        so it can safely run concurrently with summary completion.
         """
         await self._emit("research.pipeline_phase", phase="url_validation")
         t = time.perf_counter()
         await self._validate_urls(aggregated, report)
         return (time.perf_counter() - t) * 1000.0
-
-    async def _execute_validation(
-        self,
-        report: ResearchReport,
-        query: str,
-        *,
-        plan: ResearchPlan | None = None,
-        section_titles: set[str] | None = None,
-        content_char_limit: int | None = None,
-    ) -> tuple[ValidationReport | None, float]:
-        """Execute report validation and return (result, elapsed_ms).
-
-        Runs concurrently with URL validation when depth permits. Isolated
-        failure handling ensures a validation error does not cascade to
-        other pipeline stages.
-        """
-        try:
-            await self._emit("research.pipeline_phase", phase="validation")
-            t = time.perf_counter()
-            validation = await self._validator.validate(
-                report,
-                query,
-                plan=plan,
-                section_titles=section_titles,
-                content_char_limit=content_char_limit,
-            )
-            return validation, (time.perf_counter() - t) * 1000.0
-        except Exception:
-            logger.warning(
-                "Validation stage failed — skipping (report still usable)",
-                exc_info=True,
-            )
-            return None, 0.0
 
     async def _execute_quality_evaluation(
         self,
@@ -632,358 +438,10 @@ class ReportPipeline:
         except Exception:
             logger.warning("URL validation failed", exc_info=True)
 
-    async def _repair_weak_sections(
-        self,
-        validation: ValidationReport,
-        report: ResearchReport,
-        plan: ResearchPlan,
-        aggregated: AggregatedSources,
-        *,
-        limit: int = _MAX_REPAIR_SECTIONS,
-    ) -> dict[str, float | int]:
-        """Rewrite low-quality sections concurrently using bounded parallelism.
-
-        Strategy:
-        1. Collect all sections needing repair (read-only scan).
-        2. Spawn parallel rewrite tasks with a semaphore to protect LLM API.
-        3. Apply results atomically to avoid partial report state exposure.
-
-        Uses two semaphores:
-        - section_semaphore: caps concurrent section LLM rewrites
-        - query_semaphore: global budget for repair search queries across all sections
-        """
-        sections_to_repair = _collect_sections_to_repair(validation, report, plan, limit=limit)
-        if not sections_to_repair:
-            return {
-                "repair_query_ms": 0.0,
-                "repair_extra_source_count": 0,
-                "repair_section_count": 0,
-            }
-
-        section_semaphore = asyncio.Semaphore(_REPAIR_SECTION_CONCURRENCY)
-        tasks = [
-            self._rewrite_single_section(
-                index=index,
-                section_validation=section_validation,
-                outline_section=outline_section,
-                current_section=report.sections[index],
-                plan_query=plan.query,
-                aggregated=aggregated,
-                section_semaphore=section_semaphore,
-                query_semaphore=self._repair_query_sem,
-            )
-            for index, section_validation, outline_section in sections_to_repair
-        ]
-        repaired_sections = await asyncio.gather(*tasks)
-
-        repaired = 0
-        repair_query_ms = 0.0
-        repair_extra_source_count = 0
-        for item in repaired_sections:
-            if item is None:
-                continue
-            index, new_section, query_ms, extra_source_count = item
-            if 0 <= index < len(report.sections):
-                report.sections[index] = new_section
-                repaired += 1
-            repair_query_ms += query_ms
-            repair_extra_source_count += extra_source_count
-
-        if repaired:
-            await self._emit(
-                "research.sections_repaired",
-                repaired_count=repaired,
-            )
-        return {
-            "repair_query_ms": repair_query_ms,
-            "repair_extra_source_count": repair_extra_source_count,
-            "repair_section_count": len(sections_to_repair),
-        }
-
-    async def _rewrite_single_section(
-        self,
-        *,
-        index: int,
-        section_validation: Any,
-        outline_section: Any,
-        current_section: ReportSection,
-        plan_query: str,
-        aggregated: AggregatedSources,
-        section_semaphore: asyncio.Semaphore,
-        query_semaphore: asyncio.Semaphore,
-    ) -> tuple[int, Any, float, int] | None:
-        """Rewrite one section under semaphore guard.
-
-        Acquires the section_semaphore before calling the LLM to enforce the
-        concurrency limit. The query_semaphore is passed down for best-effort
-        repair search to enforce global query budget across all sections.
-        Returns (index, new_section) on success, None on failure so the caller
-        can apply results atomically without partial mutations.
-        """
-        try:
-            (
-                repair_sources,
-                repair_bundle,
-                query_ms,
-                extra_source_count,
-            ) = await self._gather_repair_sources(
-                section_validation,
-                outline_section,
-                aggregated,
-                query_semaphore,
-            )
-            async with section_semaphore:
-                new_section = await _generate_repair_section(
-                    self._reporter,
-                    plan_query=plan_query,
-                    outline_section=outline_section,
-                    repair_sources=repair_sources,
-                    repair_bundle=repair_bundle,
-                )
-            if not _passes_retention_guard(current_section, new_section):
-                logger.info(
-                    "Retention guard kept original section title=%s",
-                    current_section.title,
-                )
-                return None
-            return index, new_section, query_ms, extra_source_count
-        except Exception:
-            logger.warning("Repair failed for section %s", section_validation.title, exc_info=True)
-            return None
-
-    async def _gather_repair_sources(
-        self,
-        section_validation: Any,
-        outline_section: Any,
-        aggregated: AggregatedSources,
-        query_semaphore: asyncio.Semaphore,
-    ) -> tuple[list[SourceReference], Any | None, float, int]:
-        """Assemble source material for a section rewrite.
-
-        We intentionally reuse the same section-targeted ranking strategy as
-        first-pass report generation. Benchmark regressions showed that repair
-        quality becomes unstable when we hand the LLM a blunt "top 20" global
-        source bag: latency rises, prompt focus drops, and post-repair score can
-        even regress. Targeted evidence is both faster and easier to repair well.
-        """
-        repair_sources = list(aggregated.sources)
-        repair_query_ms = 0.0
-        repair_extra_source_count = 0
-        if (
-            hasattr(section_validation, "suggested_queries")
-            and section_validation.suggested_queries
-        ):
-            extra, repair_query_ms = await _search_extra_sources_for_repair(
-                section_validation.suggested_queries,
-                self._web_search,
-                query_semaphore=query_semaphore,
-                fallback_semaphore=self._repair_query_sem,
-            )
-            if extra:
-                repair_sources.extend(extra)
-                repair_extra_source_count = len(extra)
-        bundle_builder = getattr(self._reporter, "build_section_evidence_bundle", None)
-        if bundle_builder is not None:
-            bundle_result = bundle_builder(
-                outline_section.related_question_ids,
-                AggregatedSources(
-                    sources=repair_sources,
-                    grouped_by_question=aggregated.grouped_by_question,
-                    coverage_by_question=aggregated.coverage_by_question,
-                    deduplicated_count=aggregated.deduplicated_count,
-                ),
-                section_title=outline_section.title,
-                objective=outline_section.objective,
-                coverage_contract=outline_section.coverage_contract,
-            )
-            bundle = _coerce_section_bundle_result(bundle_result)
-            if bundle is not None:
-                return (
-                    list(bundle.selected_sources),
-                    bundle,
-                    repair_query_ms,
-                    repair_extra_source_count,
-                )
-        selector = getattr(self._reporter, "select_section_sources", None)
-        if selector is None:
-            return repair_sources[:20], None, repair_query_ms, repair_extra_source_count
-        selected = selector(
-            outline_section.related_question_ids,
-            AggregatedSources(
-                sources=repair_sources,
-                grouped_by_question=aggregated.grouped_by_question,
-                coverage_by_question=aggregated.coverage_by_question,
-                deduplicated_count=aggregated.deduplicated_count,
-            ),
-            section_title=outline_section.title,
-            objective=outline_section.objective,
-            coverage_contract=outline_section.coverage_contract,
-        )
-        if isinstance(selected, tuple) and len(selected) >= 2:
-            return list(selected[0]), None, repair_query_ms, repair_extra_source_count
-        return (
-            list(selected) if selected else repair_sources[:20],
-            None,
-            repair_query_ms,
-            repair_extra_source_count,
-        )
-
-
-async def _search_extra_sources_for_repair(
-    queries: list[str],
-    web_search: WebSearchService,
-    *,
-    query_semaphore: asyncio.Semaphore | None = None,
-    fallback_semaphore: asyncio.Semaphore | None = None,
-) -> tuple[list[SourceReference], float]:
-    """Fetch additional sources for repair via web search.
-
-    Bounded to _REPAIR_EXTRA_QUERY_LIMIT queries and
-    _REPAIR_EXTRA_RESULTS_PER_QUERY results per query to keep latency
-    predictable. Failures are logged but do not block the repair
-    (best-effort enrichment).
-    """
-    bounded_queries = queries[:_REPAIR_EXTRA_QUERY_LIMIT]
-    if not bounded_queries:
-        return [], 0.0
-
-    semaphore = query_semaphore if query_semaphore is not None else fallback_semaphore
-    t0 = time.perf_counter()
-
-    async def _search_one(query: str) -> list[SourceReference]:
-        try:
-            if semaphore is not None:
-                async with semaphore:
-                    response = await web_search.search(
-                        query,
-                        max_results=_REPAIR_EXTRA_RESULTS_PER_QUERY,
-                        include_content=True,
-                    )
-            else:
-                response = await web_search.search(
-                    query,
-                    max_results=_REPAIR_EXTRA_RESULTS_PER_QUERY,
-                    include_content=True,
-                )
-            return [
-                SourceReference(
-                    url=result.url,
-                    title=result.title,
-                    snippet=result.snippet,
-                    source_type="web",
-                    reliability_score=0.5,
-                )
-                for result in response.results
-            ]
-        except Exception:
-            logger.warning("Re-search failed for query: %s", query, exc_info=True)
-            return []
-
-    extra_groups = await asyncio.gather(*[_search_one(query) for query in bounded_queries])
-    return [source for group in extra_groups for source in group], (
-        time.perf_counter() - t0
-    ) * 1000.0
-
-
-def _collect_sections_to_repair(
-    validation: ValidationReport,
-    report: ResearchReport,
-    plan: ResearchPlan,
-    *,
-    limit: int = _MAX_REPAIR_SECTIONS,
-) -> list[tuple[int, Any, Any]]:
-    """Scan validation results and return (index, validation, outline) tuples."""
-
-    sections_to_repair: list[tuple[int, Any, Any]] = []
-    for section_validation in validation.sections:
-        if not section_validation.needs_rewrite:
-            continue
-        report_index = _find_report_section_index(report, section_validation.title)
-        if report_index is None:
-            continue
-        outline_section = _find_outline_section(plan, section_validation.title)
-        if outline_section is None:
-            continue
-        sections_to_repair.append((report_index, section_validation, outline_section))
-    sections_to_repair.sort(key=lambda item: _repair_priority_key(item[1]))
-    return sections_to_repair[: max(limit, 1)]
-
-
-def _repair_priority_key(section_validation: Any) -> tuple[int, int, int, str]:
-    quality_score = int(getattr(section_validation, "quality_score", 100) or 100)
-    issues = list(getattr(section_validation, "issues", []) or [])
-    has_citations = bool(getattr(section_validation, "has_citations", False))
-    suggested_queries = list(getattr(section_validation, "suggested_queries", []) or [])
-    severity_bonus = 0
-    if not has_citations:
-        severity_bonus += 3
-    if suggested_queries:
-        severity_bonus += 1
-    return (
-        quality_score,
-        -(len(issues) + severity_bonus),
-        0 if suggested_queries else 1,
-        str(getattr(section_validation, "title", "")),
-    )
-
-
-def _find_report_section_index(report: ResearchReport, title: str) -> int | None:
-    for index, section in enumerate(report.sections):
-        if section.title == title:
-            return index
-    return None
-
-
-def _find_outline_section(plan: ResearchPlan, title: str) -> Any | None:
-    for section in plan.outline:
-        if section.title == title:
-            return section
-    return None
-
-
-def _coerce_section_bundle_result(result: Any) -> Any | None:
-    if hasattr(result, "selected_sources"):
-        return result
-    if isinstance(result, tuple) and result:
-        first = result[0]
-        if hasattr(first, "selected_sources"):
-            return first
-    return None
-
-
-async def _generate_repair_section(
-    reporter: Any,
-    *,
-    plan_query: str,
-    outline_section: Any,
-    repair_sources: list[SourceReference],
-    repair_bundle: Any | None,
-) -> ReportSection:
-    try:
-        return await reporter._generate_section(
-            plan_query,
-            outline_section.title,
-            outline_section.objective,
-            repair_sources,
-            intermediate_context="",
-            evidence_bundle=repair_bundle,
-        )
-    except TypeError as exc:
-        if "unexpected keyword argument 'evidence_bundle'" not in str(exc):
-            raise
-        return await reporter._generate_section(
-            plan_query,
-            outline_section.title,
-            outline_section.objective,
-            repair_sources,
-            intermediate_context="",
-        )
-
 
 def _build_pipeline_result(
     report: ResearchReport,
     quality: QualityScore | None,
-    validation: ValidationReport | None,
     conflicts: list[ConflictRecord],
     depth_val: str,
     timings: dict[str, float],
@@ -999,7 +457,6 @@ def _build_pipeline_result(
     return ReportPipelineResult(
         report=report,
         quality=quality,
-        validation=validation,
         conflicts=conflicts,
         phase_timings_ms=rounded_timings,
     )
@@ -1024,9 +481,6 @@ def _record_budget_timings(
 ) -> dict[str, Any]:
     section_input_metrics = gen_timings.get("section_input_metrics", [])
     timing_budget = _timing_budget(section_input_metrics, settings)
-    validation_titles = timing_budget["validation_titles"] or set()
-    timings["validation_target_sections"] = float(len(validation_titles))
-    timings["repair_budget_sections"] = float(timing_budget["repair_limit"])
     timings["quality_budget_mode"] = 1.0 if timing_budget["quality_compact"] else 0.0
     return timing_budget
 
@@ -1069,103 +523,15 @@ def _timing_budget(
         ),
         reverse=True,
     )
-    depth_val = settings.depth.value if hasattr(settings.depth, "value") else str(settings.depth)
     dense = any(
         int(item.get("relevant_source_count", 0) or 0) >= 24
         or int(item.get("intermediate_context_chars", 0) or 0) >= 1200
         for item in ranked
     )
-    if depth_val == "deep":
-        validation_limit = 5 if dense else len(ranked)
-    else:
-        validation_limit = 3 if dense else min(len(ranked), 4)
-    validation_titles = {
-        str(item.get("title", ""))
-        for item in ranked[:validation_limit]
-        if str(item.get("title", ""))
-    }
     quality_compact = dense or len(ranked) >= 5
     return {
-        "validation_titles": validation_titles or None,
-        "validation_char_limit": 2200 if quality_compact else None,
-        "repair_limit": 1 if dense and depth_val != "deep" else _MAX_REPAIR_SECTIONS,
-        "skip_pre_quality": dense,
         "quality_compact": quality_compact,
         "quality_report_chars": 5500 if quality_compact else None,
         "quality_fact_section_chars": 2200 if quality_compact else None,
         "quality_fact_source_chars": 1400 if quality_compact else None,
     }
-
-
-def _run_completeness_guard(report: ResearchReport) -> ValidationReport:
-    sections: list[SectionValidation] = []
-    for section in report.sections:
-        issues: list[str] = []
-        content = section.content.strip()
-        if not content or len(content) < 80:
-            issues.append("section is too short to support a final answer")
-        if not section.citations:
-            issues.append("section has no citations")
-        lowered = content.lower()
-        if any(token in lowered for token in ("tbd", "todo", "lorem ipsum", "coming soon")):
-            issues.append("section still contains placeholder text")
-        if not issues:
-            continue
-        sections.append(
-            SectionValidation(
-                section_id=section.section_id,
-                title=section.title,
-                quality_score=25,
-                has_citations=bool(section.citations),
-                issues=issues,
-                needs_rewrite=True,
-                reasoning="Lightweight completeness guard detected a hard report failure.",
-            )
-        )
-    return ValidationReport(
-        sections=sections,
-        overall_score=0.0 if sections else 100.0,
-        sections_needing_rewrite=len(sections),
-        total_issues=sum(len(section.issues) for section in sections),
-    )
-
-
-def _merge_validation_reports(
-    primary: ValidationReport | None,
-    supplemental: ValidationReport,
-) -> ValidationReport | None:
-    if primary is None:
-        return supplemental if supplemental.sections else None
-    if not supplemental.sections:
-        return primary
-
-    merged_by_title = {section.title: section for section in primary.sections}
-    for section in supplemental.sections:
-        existing = merged_by_title.get(section.title)
-        if existing is None:
-            merged_by_title[section.title] = section
-            continue
-        existing.issues = list(dict.fromkeys([*existing.issues, *section.issues]))
-        existing.needs_rewrite = existing.needs_rewrite or section.needs_rewrite
-        existing.has_citations = existing.has_citations and section.has_citations
-        existing.quality_score = min(existing.quality_score, section.quality_score)
-        if section.reasoning and section.reasoning not in existing.reasoning:
-            existing.reasoning = "; ".join(
-                part for part in [existing.reasoning, section.reasoning] if part
-            )
-
-    merged_sections = list(merged_by_title.values())
-    return ValidationReport(
-        sections=merged_sections,
-        overall_score=primary.overall_score,
-        sections_needing_rewrite=sum(1 for section in merged_sections if section.needs_rewrite),
-        total_issues=sum(len(section.issues) for section in merged_sections),
-    )
-
-
-def _passes_retention_guard(previous: ReportSection, rewritten: ReportSection) -> bool:
-    previous_len = len(previous.content.strip())
-    rewritten_len = len(rewritten.content.strip())
-    return not (
-        previous_len >= 160 and rewritten_len < int(previous_len * _RETENTION_RATIO_FLOOR)
-    ) and not (previous.citations and not rewritten.citations)

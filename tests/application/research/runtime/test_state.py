@@ -11,7 +11,6 @@ class TestResearchRunState:
         assert state.aggregated_sources is None
         assert state.report is None
         assert state.quality_score is None
-        assert state.validation_report is None
         assert state.memory_candidates == []
         assert state.error is None
         assert state.event_sequence == 0

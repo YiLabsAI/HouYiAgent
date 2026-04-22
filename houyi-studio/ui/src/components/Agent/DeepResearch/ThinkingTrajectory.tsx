@@ -191,8 +191,6 @@ const pipelineLabel = (evt: SSEEvent): string => {
     return `Intermediate report: ${(evt.payload.question_id as string) || ''}`;
   if (evt.event_type === 'research.conflict_detected')
     return `Detected ${String((evt.payload.count as number) || 1)} potential conflicts`;
-  if (evt.event_type === 'research.validation_issues')
-    return `Validation: ${(evt.payload.sections_flagged as number) || 0} sections flagged`;
   if (evt.event_type === 'research.quality_evaluated') return 'Quality evaluation complete';
   if (evt.event_type === 'research.report_section')
     return `Writing: ${((evt.payload.chunk as Record<string, unknown>)?.title as string) || 'section'}`;

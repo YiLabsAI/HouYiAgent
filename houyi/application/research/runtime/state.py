@@ -11,7 +11,6 @@ from houyi.application.research.types import (
     ResearchReport,
     SearchResult,
 )
-from houyi.application.research.validation import ValidationReport
 from houyi.application.runtime.conflict import ConflictRecord
 
 
@@ -24,7 +23,6 @@ class ResearchRunState:
     aggregated_sources: AggregatedSources | None = None
     report: ResearchReport | None = None
     quality_score: QualityScore | None = None
-    validation_report: ValidationReport | None = None
     memory_candidates: list[MemoryCandidate] = field(default_factory=list)
     error: str | None = None
     event_sequence: int = 0
