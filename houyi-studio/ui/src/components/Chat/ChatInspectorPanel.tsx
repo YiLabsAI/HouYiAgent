@@ -650,11 +650,15 @@ export const ChatInspectorPanel: React.FC<ChatInspectorPanelProps> = ({
                   <Row label="Snapshot" value={selectedCompaction.backup.backup_id} />
                 </>
               ) : null}
-              <Row label="Summary" value={selectedCompactionRecord.summary} />
               <Row
-                label="Removed"
-                value={`${formatInt(selectedCompaction.diff.removed_message_ids.length)} message(s)`}
-                description="Messages present in the snapshot source set that are no longer present in the current conversation."
+                label="Summary"
+                value={selectedCompactionRecord.summary}
+                description="LLM-generated replacement text for the compacted messages. Stored in conversation metadata (not a real message); future requests receive this text instead of the folded-away originals."
+              />
+              <Row
+                label="Compacted"
+                value={`${formatInt(selectedCompactionRecord.metrics.messages_compacted)} message(s)`}
+                description="Messages folded into the summary by this compaction."
               />
               <Row
                 label="Added later"
@@ -668,7 +672,7 @@ export const ChatInspectorPanel: React.FC<ChatInspectorPanelProps> = ({
                 >
                   <div className="flex items-center justify-between gap-3">
                     <div className="min-w-0">
-                      <div className="text-[11px] text-gray-200">Removed preview</div>
+                      <div className="text-[11px] text-gray-200">Compacted preview</div>
                       <div className="text-[10px] text-gray-500">
                         {formatInt(selectedCompaction.diff.source_message_previews?.length ?? 0)} preview item(s)
                       </div>
@@ -690,12 +694,12 @@ export const ChatInspectorPanel: React.FC<ChatInspectorPanelProps> = ({
                     {expandedDiffSections.removed ? (
                       <PreviewList
                         items={selectedCompaction.diff.source_message_previews ?? []}
-                        emptyLabel="No removed message previews available."
+                        emptyLabel="No compacted message previews available."
                       />
                     ) : (
                       <CollapsedPreviewList
                         items={selectedCompaction.diff.source_message_previews ?? []}
-                        emptyLabel="No removed message previews available."
+                        emptyLabel="No compacted message previews available."
                       />
                     )}
                   </div>

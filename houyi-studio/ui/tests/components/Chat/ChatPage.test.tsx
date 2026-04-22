@@ -1102,7 +1102,7 @@ describe('ChatPage', () => {
     expect(within(detailsPanel).getByText('The request hit budget limits before this block could be included.')).toBeInTheDocument();
     expect(within(detailsPanel).getByText('Excluded by planning boundary')).toBeInTheDocument();
     expect(within(detailsPanel).getByText('This block was outside the active planning boundary for the current request.')).toBeInTheDocument();
-    expect(within(detailsPanel).getByText('Removed preview')).toBeInTheDocument();
+    expect(within(detailsPanel).getByText('Compacted preview')).toBeInTheDocument();
     expect(within(detailsPanel).getByText('1 more preview item(s)')).toBeInTheDocument();
     expect(within(detailsPanel).getByText(/Full snapshot content is preserved in backup/i)).toBeInTheDocument();
     expect(within(detailsPanel).getByText('Active pins')).toBeInTheDocument();
