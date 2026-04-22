@@ -653,7 +653,7 @@ export const ChatInspectorPanel: React.FC<ChatInspectorPanelProps> = ({
               <Row
                 label="Summary"
                 value={selectedCompactionRecord.summary}
-                description="LLM-generated replacement text for the compacted messages. Stored in conversation metadata (not a real message); future requests receive this text instead of the folded-away originals."
+                description="LLM-generated replacement text for the compacted messages. Stored in conversation metadata (not a real message)."
               />
               <Row
                 label="Compacted"
