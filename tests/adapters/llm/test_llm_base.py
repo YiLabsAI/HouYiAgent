@@ -36,14 +36,14 @@ def test_llm_message_creation():
     assert msg.tool_calls is None
 
 
-def test_llm_message_with_name():
+def test_message_with_name():
     """Test LLMMessage with name."""
     msg = LLMMessage(role=MessageRole.ASSISTANT, content="Response", name="assistant_1")
 
     assert msg.name == "assistant_1"
 
 
-def test_llm_message_with_tool_calls():
+def test_message_with_tool_calls():
     """Test LLMMessage with tool calls."""
     msg = LLMMessage(
         role=MessageRole.ASSISTANT,

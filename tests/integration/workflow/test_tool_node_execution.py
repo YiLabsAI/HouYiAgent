@@ -64,7 +64,7 @@ class TestToolNodeExecution:
         assert result.output["result"] == 8.0
 
     @pytest.mark.asyncio
-    async def test_tool_node_with_input_from_previous_node(self) -> None:
+    async def test_with_input_from_previous(self) -> None:
         """Test tool node receiving input from previous node."""
 
         class Input(BaseModel):

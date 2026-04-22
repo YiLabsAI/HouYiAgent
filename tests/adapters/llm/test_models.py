@@ -62,7 +62,7 @@ class TestProviderIdentifiers:
     def test_all_unique(self):
         assert len(set(self.ALL_PROVIDERS)) == len(self.ALL_PROVIDERS)
 
-    def test_display_names_cover_all_providers(self):
+    def test_display_names_cover_providers(self):
         for p in self.ALL_PROVIDERS:
             assert p in PROVIDER_DISPLAY_NAMES, f"Missing display name for '{p}'"
             assert isinstance(PROVIDER_DISPLAY_NAMES[p], str)
@@ -122,5 +122,5 @@ class TestTokenEstimationRatios:
     def test_cjk_less_than_english(self):
         assert CHARS_PER_TOKEN_CJK < CHARS_PER_TOKEN_ENGLISH
 
-    def test_blended_between_cjk_and_english(self):
+    def test_blended_between_cjk_english(self):
         assert CHARS_PER_TOKEN_CJK <= CHARS_PER_TOKEN_BLENDED <= CHARS_PER_TOKEN_ENGLISH

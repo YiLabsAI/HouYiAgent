@@ -51,10 +51,10 @@ class TestRetryHelpers:
             delay = mock_sleep.call_args[0][0]
             assert 0 <= delay <= 5.0  # capped at 5.0
 
-    def test_parse_retry_after_seconds_integer(self):
+    def test_parse_retry_after_integer(self):
         assert parse_retry_after_seconds("3") == 3.0
 
-    def test_parse_retry_after_seconds_http_date(self):
+    def test_parse_retry_after_date(self):
         future = datetime.now(UTC) + timedelta(seconds=5)
         value = future.strftime("%a, %d %b %Y %H:%M:%S GMT")
         parsed = parse_retry_after_seconds(value)
@@ -77,7 +77,7 @@ class TestRetryHelpers:
 
 
 class TestRetryController:
-    def test_status_retry_respects_retry_after(self):
+    def test_status_respects_retry_after(self):
         controller = RetryController(
             RetryPolicy(total_retries=3, status_retries=3, backoff_base=0.1, backoff_cap=1.0)
         )

@@ -114,7 +114,7 @@ class TestSimpleSkillIntegration:
     """Integration tests for the complete SimpleSkill execution flow."""
 
     @pytest.mark.asyncio
-    async def test_full_flow_with_all_components(self) -> None:
+    async def test_full_flow_all_components(self) -> None:
         """Test complete execution flow with policy, consent, hooks, and metrics."""
         hooks_manager = SkillHooksManager()
 
@@ -440,7 +440,7 @@ class TestPreprocessorIntegration:
         assert "preprocessor-output-42" in all_content
 
     @pytest.mark.asyncio
-    async def test_preprocessor_failure_is_non_fatal(self) -> None:
+    async def test_preprocessor_failure_non_fatal(self) -> None:
         """A failing preprocessor does not abort the run."""
         from houyi.domain.skill.preprocessor import PreprocessorSpec, PreprocessorType
 
@@ -471,7 +471,7 @@ class TestPreprocessorIntegration:
         assert response is not None
 
     @pytest.mark.asyncio
-    async def test_multiple_preprocessors_inject_in_order(self) -> None:
+    async def test_preprocessors_inject_in_order(self) -> None:
         """Multiple preprocessors inject in declaration order."""
         from houyi.domain.skill.preprocessor import PreprocessorSpec, PreprocessorType
 

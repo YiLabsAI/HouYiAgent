@@ -78,7 +78,7 @@ class ScenarioAdapter:
         ("serper", "SERPER_API_KEY", True, None),
     ],
 )
-async def test_llm_tool_scenario_weather_and_web_search(
+async def test_scenario_weather_and_web(
     provider: str,
     env_key: str | None,
     requires_key: bool,

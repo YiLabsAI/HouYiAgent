@@ -34,7 +34,7 @@ class TestRuntimeContract:
         assert rc.entry == "my_tool"
         assert rc.adapter is None
 
-    def test_valid_script_mode_with_adapter(self):
+    def test_script_mode_with_adapter(self):
         rc = RuntimeContract(
             mode=RuntimeMode.SCRIPT,
             adapter="houyi.skills.planning.adapter:execute",
@@ -66,16 +66,16 @@ class TestRuntimeContract:
         rc = RuntimeContract.from_dict({})
         assert rc.mode == RuntimeMode.TOOL
 
-    def test_from_dict_none_returns_none(self):
+    def test_none_returns_none(self):
         assert RuntimeContract.from_dict(None) is None
 
-    def test_from_dict_invalid_mode_falls_back(self):
+    def test_invalid_mode_falls_back(self):
         rc = RuntimeContract.from_dict({"mode": "unknown_mode"})
         assert rc is not None
         assert rc.mode == RuntimeMode.TOOL
         assert "unknown_mode" in rc.extra.get("original_mode", "")
 
-    def test_from_dict_preserves_unknown_fields(self):
+    def test_preserves_unknown_fields(self):
         data = {"mode": "tool", "custom_field": "value123"}
         rc = RuntimeContract.from_dict(data)
         assert rc.extra["custom_field"] == "value123"
@@ -150,7 +150,7 @@ class TestSkillSpecRuntimeParsing:
         assert skill.runtime_contract.mode == RuntimeMode.TOOL
         assert skill.runtime_contract.entry == "my_tool"
 
-    def test_runtime_script_mode_with_adapter(self, tmp_path):
+    def test_parsed_script_with_adapter(self, tmp_path):
         fm = textwrap.dedent("""\
             name: test
             description: A test
@@ -166,7 +166,7 @@ class TestSkillSpecRuntimeParsing:
         assert rc.adapter == "houyi.skills.test.adapter:execute"
         assert rc.hooks_root == "skills/test"
 
-    def test_runtime_invalid_dict_degrades_gracefully(self, tmp_path):
+    def test_invalid_dict_degrades(self, tmp_path):
         fm = textwrap.dedent("""\
             name: test
             description: A test
@@ -184,7 +184,7 @@ class TestSkillSpecRuntimeParsing:
         skill = SkillSpec.from_file(path)
         assert skill.runtime_contract is None
 
-    def test_runtime_preserved_in_extra_frontmatter(self, tmp_path):
+    def test_runtime_not_in_extra(self, tmp_path):
         """runtime dict should NOT leak into extra_frontmatter."""
         fm = textwrap.dedent("""\
             name: test
@@ -279,7 +279,7 @@ class TestSkillSpecRuntimeStatus:
         )
         assert skill.runtime_status == RuntimeStatus.READY
 
-    def test_unavailable_no_executor_no_schema(self):
+    def test_unavailable_no_executor(self):
         from pydantic import BaseModel
 
         class E(BaseModel):
@@ -288,7 +288,7 @@ class TestSkillSpecRuntimeStatus:
         skill = SkillSpec(name="t", description="d", input_schema=E, output_schema=E)
         assert skill.runtime_status == RuntimeStatus.UNAVAILABLE
 
-    def test_degraded_has_schema_no_executor(self):
+    def test_degraded_schema_no_executor(self):
         from pydantic import BaseModel
 
         class InputModel(BaseModel):

@@ -126,7 +126,7 @@ def _make_request(
 
 class TestToolCallPreparationService:
     @pytest.mark.asyncio
-    async def test_prepare_builds_prepared_tool_call_from_resolved_inputs(self) -> None:
+    async def test_prepare_builds_from_resolved(self) -> None:
         skill = _make_skill("echo", _ValueInput)
         runner = _FakeRunner()
         service = _ToolCallPreparationService(runner)
@@ -160,7 +160,7 @@ class TestToolCallPreparationService:
         assert runner._execution_service.cache_key_calls == [("echo", {"value": 1}, skill)]
 
     @pytest.mark.asyncio
-    async def test_prepare_returns_policy_rejection_without_invoking_hook_service(self) -> None:
+    async def test_prepare_returns_policy_rejection(self) -> None:
         rejection = (
             0,
             {"tool_name": "blocked"},
@@ -185,7 +185,7 @@ class TestToolCallPreparationService:
         assert runner._execution_service.cache_key_calls == []
 
     @pytest.mark.asyncio
-    async def test_prepare_uses_hook_service_outputs_for_final_payload(self) -> None:
+    async def test_prepare_uses_hook_outputs(self) -> None:
         skill = _make_skill("tool1")
         replacement_skill = _make_skill("tool2")
         runner = _FakeRunner()
@@ -219,7 +219,7 @@ class TestToolCallPreparationService:
         ]
 
     @pytest.mark.asyncio
-    async def test_prepare_resolves_placeholders_and_coerces_args_before_policy_and_hooks(
+    async def test_prepare_resolves_and_coerces(
         self,
     ) -> None:
         def _coerce_registered_echo(
@@ -259,7 +259,7 @@ class TestToolCallPreparationService:
             _REGISTRY.pop("registered_echo", None)
 
     @pytest.mark.asyncio
-    async def test_resolve_tool_call_inputs_parses_arguments_when_parsed_args_missing(self) -> None:
+    async def test_resolve_parses_when_missing(self) -> None:
         skill = _make_skill("echo", _ValueInput)
         service = _ToolCallPreparationService(_FakeRunner())
 

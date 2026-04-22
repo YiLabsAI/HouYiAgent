@@ -38,7 +38,7 @@ class TestIngestState:
         assert _ingest_state["chunks_created"] == 0
         assert _ingest_state["errors"] == []
 
-    def test_get_ingest_state_returns_copy(self) -> None:
+    def test_state_returns_copy(self) -> None:
         """Test get_ingest_state returns a copy."""
         from houyi.rag.skills.kb_ingest.hooks import (
             _ingest_state,
@@ -59,7 +59,7 @@ class TestPreIngestHook:
     """Tests for pre_ingest_hook."""
 
     @pytest.mark.asyncio
-    async def test_pre_ingest_hook_index_write(self) -> None:
+    async def test_pre_index_write(self) -> None:
         """Test pre_ingest_hook with index file write."""
         from houyi.rag.skills.kb_ingest.hooks import pre_ingest_hook
 
@@ -75,7 +75,7 @@ class TestPreIngestHook:
         assert "Writing index" in result.output
 
     @pytest.mark.asyncio
-    async def test_pre_ingest_hook_no_file_path(self) -> None:
+    async def test_pre_no_file_path(self) -> None:
         """Test pre_ingest_hook with no file path."""
         from houyi.rag.skills.kb_ingest.hooks import pre_ingest_hook
 
@@ -86,7 +86,7 @@ class TestPreIngestHook:
         assert result.success is True
 
     @pytest.mark.asyncio
-    async def test_pre_ingest_hook_regular_file(self) -> None:
+    async def test_pre_regular_file(self) -> None:
         """Test pre_ingest_hook with regular file."""
         from houyi.rag.skills.kb_ingest.hooks import pre_ingest_hook
 
@@ -104,7 +104,7 @@ class TestPostIngestHook:
     """Tests for post_ingest_hook."""
 
     @pytest.mark.asyncio
-    async def test_post_ingest_hook_read_success(self) -> None:
+    async def test_post_read_success(self) -> None:
         """Test post_ingest_hook with read result."""
         from houyi.rag.skills.kb_ingest.hooks import (
             _ingest_state,
@@ -126,7 +126,7 @@ class TestPostIngestHook:
         assert "Progress" in result.output
 
     @pytest.mark.asyncio
-    async def test_post_ingest_hook_no_result(self) -> None:
+    async def test_post_no_result(self) -> None:
         """Test post_ingest_hook with no result."""
         from houyi.rag.skills.kb_ingest.hooks import post_ingest_hook, reset_ingest_state
 
@@ -139,7 +139,7 @@ class TestPostIngestHook:
         assert result.success is True
 
     @pytest.mark.asyncio
-    async def test_post_ingest_hook_other_tool(self) -> None:
+    async def test_post_other_tool(self) -> None:
         """Test post_ingest_hook with other tool."""
         from houyi.rag.skills.kb_ingest.hooks import (
             _ingest_state,

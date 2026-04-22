@@ -19,7 +19,7 @@ from houyi.rag.indexed.search_backend import (
 
 
 @pytest.mark.asyncio
-async def test_ensure_embedder_returns_existing_instance() -> None:
+async def test_embedder_returns_existing() -> None:
     embedder = object()
     resolved = await ensure_embedder(
         embedder=embedder,
@@ -29,14 +29,14 @@ async def test_ensure_embedder_returns_existing_instance() -> None:
 
 
 @pytest.mark.asyncio
-async def test_ensure_sparse_index_creates_index() -> None:
+async def test_sparse_creates_index() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         index = await ensure_sparse_index(sparse_index=None, index_dir=tmpdir)
         assert index is not None
 
 
 @pytest.mark.asyncio
-async def test_ensure_vector_index_creates_index() -> None:
+async def test_vector_creates_index() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         index = await ensure_vector_index(
             vector_index=None,
@@ -47,7 +47,7 @@ async def test_ensure_vector_index_creates_index() -> None:
 
 
 @pytest.mark.asyncio
-async def test_ensure_graph_store_creates_store() -> None:
+async def test_graph_creates_store() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         store = await ensure_graph_store(
             graph_store=None,
@@ -59,7 +59,7 @@ async def test_ensure_graph_store_creates_store() -> None:
 
 
 @pytest.mark.asyncio
-async def test_vector_search_uses_embedder_and_index() -> None:
+async def test_vector_uses_embedder_index() -> None:
     embedder = MagicMock()
     embedder.embed = AsyncMock(return_value=[0.1, 0.2])
     vector_index = MagicMock()
@@ -82,7 +82,7 @@ async def test_vector_search_uses_embedder_and_index() -> None:
 
 
 @pytest.mark.asyncio
-async def test_sparse_and_graph_search_delegate_to_backend() -> None:
+async def test_sparse_graph_delegate() -> None:
     sparse_index = MagicMock()
     sparse_index.search = AsyncMock(return_value=["sparse"])
     graph_store = MagicMock()

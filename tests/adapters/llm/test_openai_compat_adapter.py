@@ -725,7 +725,7 @@ async def test_stream_request_skipsempty(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_stream_request_httpx_reads_sse(monkeypatch) -> None:
+async def test_stream_request_reads_sse(monkeypatch) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     monkeypatch.setenv("OPENAI_BASE_URL", "https://example.test")
     fake_openai = _build_openai_module(_FakeOpenAIResponse("ok", "test-model"))
@@ -804,11 +804,11 @@ async def test_openai_compat_adapter_chat(monkeypatch) -> None:
 async def test_parses_embedded_tool_calls(monkeypatch) -> None:
     reasoning_content = (
         "[tool call]\n\n"
-        "<｜DSML｜function_calls>\n"
-        '<｜DSML｜invoke name="houyi_web_search">\n'
-        '<｜DSML｜parameter name="query" string="true">MiniMax tool marker</｜DSML｜parameter>\n'
-        "</｜DSML｜invoke>\n"
-        "</｜DSML｜function_calls>"
+        "<\uff5cDSML\uff5cfunction_calls>\n"
+        '<\uff5cDSML\uff5cinvoke name="houyi_web_search">\n'
+        '<\uff5cDSML\uff5cparameter name="query" string="true">MiniMax tool marker</\uff5cDSML\uff5cparameter>\n'
+        "</\uff5cDSML\uff5cinvoke>\n"
+        "</\uff5cDSML\uff5cfunction_calls>"
     )
     response = _FakeReasoningOpenAIResponse(
         content="",

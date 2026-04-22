@@ -25,7 +25,7 @@ def _make_plan(*, node_ids: list[str], edges: list[tuple[str, str]], entry_node_
     )
 
 
-def test_get_execution_order_prefers_entry_node_and_is_deterministic() -> None:
+def test_order_prefers_entry_deterministic() -> None:
     plan = _make_plan(
         node_ids=["b", "a", "c"],
         edges=[("a", "b"), ("a", "c")],
@@ -41,7 +41,7 @@ def test_get_execution_order_prefers_entry_node_and_is_deterministic() -> None:
 
 
 @pytest.mark.asyncio
-async def test_plan_execution_loop_completes_in_order_and_invokes_checkpoint_callback() -> None:
+async def test_loop_completes_with_checkpoint() -> None:
     plan = _make_plan(
         node_ids=["n1", "n2", "n3"],
         edges=[("n1", "n2"), ("n2", "n3")],
@@ -103,7 +103,7 @@ async def test_plan_execution_loop_completes_in_order_and_invokes_checkpoint_cal
 
 
 @pytest.mark.asyncio
-async def test_plan_execution_loop_handles_pause_then_resume() -> None:
+async def test_loop_handles_pause_resume() -> None:
     plan = _make_plan(
         node_ids=["n1"],
         edges=[],
@@ -166,7 +166,7 @@ async def test_plan_execution_loop_handles_pause_then_resume() -> None:
 
 
 @pytest.mark.asyncio
-async def test_plan_execution_loop_branching_fork_join_orders_join_after_branches() -> None:
+async def test_loop_branching_orders_join() -> None:
     plan = _make_plan(
         node_ids=["n1", "n2", "n3", "n4"],
         edges=[("n1", "n2"), ("n1", "n3"), ("n2", "n4"), ("n3", "n4")],
@@ -227,7 +227,7 @@ async def test_plan_execution_loop_branching_fork_join_orders_join_after_branche
 
 
 @pytest.mark.asyncio
-async def test_plan_execution_loop_failure_sets_failed_and_still_notifies_end() -> None:
+async def test_loop_failure_notifies_end() -> None:
     plan = _make_plan(
         node_ids=["n1", "n2"],
         edges=[("n1", "n2")],
@@ -292,7 +292,7 @@ async def test_plan_execution_loop_failure_sets_failed_and_still_notifies_end() 
 
 
 @pytest.mark.asyncio
-async def test_stops_without_marking_completed_when_aborted() -> None:
+async def test_aborted_not_marked_completed() -> None:
     plan = _make_plan(
         node_ids=["n1", "n2", "n3"],
         edges=[("n1", "n2"), ("n2", "n3")],
@@ -351,7 +351,7 @@ async def test_stops_without_marking_completed_when_aborted() -> None:
 
 
 @pytest.mark.asyncio
-async def test_exits_without_executing_when_aborted_while_paused() -> None:
+async def test_exits_when_aborted_paused() -> None:
     plan = _make_plan(
         node_ids=["n1"],
         edges=[],
@@ -410,7 +410,7 @@ async def test_exits_without_executing_when_aborted_while_paused() -> None:
 
 
 @pytest.mark.asyncio
-async def test_treats_skipped_nodes_as_executed() -> None:
+async def test_skipped_nodes_treated_executed() -> None:
     plan = _make_plan(
         node_ids=["n1", "n2"],
         edges=[("n1", "n2")],
@@ -469,7 +469,7 @@ async def test_treats_skipped_nodes_as_executed() -> None:
 
 
 @pytest.mark.asyncio
-async def test_does_not_execute_or_mark_completed_when_aborted_before_start() -> None:
+async def test_aborted_before_start() -> None:
     plan = _make_plan(
         node_ids=["n1"],
         edges=[],
@@ -531,7 +531,7 @@ async def test_does_not_execute_or_mark_completed_when_aborted_before_start() ->
 
 
 @pytest.mark.asyncio
-async def test_converges_to_aborted_without_completed_at_on_cancelled_error() -> None:
+async def test_aborted_on_cancel() -> None:
     plan = _make_plan(
         node_ids=["n1"],
         edges=[],
@@ -590,7 +590,7 @@ async def test_converges_to_aborted_without_completed_at_on_cancelled_error() ->
 
 
 @pytest.mark.asyncio
-async def test_executes_newly_added_node_after_dynamic_plan_update() -> None:
+async def test_executes_newly_added_node() -> None:
     base_plan = _make_plan(
         node_ids=["n1", "n2"],
         edges=[("n1", "n2")],
@@ -654,7 +654,7 @@ async def test_executes_newly_added_node_after_dynamic_plan_update() -> None:
     assert plans_returned
 
 
-def test_orders_cycle_and_disconnected_nodes_deterministically() -> None:
+def test_orders_cycle_and_disconnected() -> None:
     plan = _make_plan(
         node_ids=["a", "b", "c", "d"],
         edges=[("a", "b"), ("b", "a")],
@@ -718,7 +718,7 @@ class _DummyBackend:
 
 
 @pytest.mark.asyncio
-async def test_execution_lifecycle_start_pause_resume_abort() -> None:
+async def test_lifecycle_start_pause_abort() -> None:
     plan = _make_plan(
         node_ids=["n1"],
         edges=[],

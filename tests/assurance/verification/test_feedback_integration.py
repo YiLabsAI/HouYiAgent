@@ -92,7 +92,7 @@ class TestFeedbackIntegration:
         assert "Attempt 1" in prompt
 
     @pytest.mark.asyncio
-    async def test_feedback_context_cleared_between_tasks(self):
+    async def test_context_cleared_between_tasks(self):
         """Test that feedback context is cleared for new tasks."""
         engine = NeuroSymbolicEngine(
             config=VerificationConfig(

@@ -64,7 +64,7 @@ class TestFullCompatibility:
         assert result.missing_capabilities == []
         assert result.warnings == []
 
-    def test_consent_required_with_interactive_host(self, negotiator: CapabilityNegotiator):
+    def test_consent_with_interactive(self, negotiator: CapabilityNegotiator):
         """Consent-requiring skill should work with interactive consent model."""
         reqs = ExtensionRequirements(requires_consent=True)
         result = negotiator.check_compatibility(reqs)
@@ -74,7 +74,7 @@ class TestFullCompatibility:
 class TestDegradedCompatibility:
     """Extension works but with warnings (non-blocking)."""
 
-    def test_evaluation_preferred_but_not_critical(self):
+    def test_evaluation_preferred_not_critical(self):
         """Evaluation preference generates warning when host lacks eval, not failure."""
         host = HostCapabilities(evaluation_support=False)
         neg = CapabilityNegotiator(host)
@@ -97,7 +97,7 @@ class TestDegradedCompatibility:
 class TestIncompatible:
     """Extension cannot run on this host."""
 
-    def test_mcp_only_skill_on_host_without_mcp(self):
+    def test_mcp_on_bare_host(self):
         """A skill requiring MCP execution on a host without MCP support."""
         host = HostCapabilities(
             execution_forms=[ExecutionForm.IN_PROCESS],
@@ -111,7 +111,7 @@ class TestIncompatible:
         assert len(result.missing_capabilities) >= 1
         assert any("execution" in m.lower() for m in result.missing_capabilities)
 
-    def test_consent_required_with_no_consent_host(self):
+    def test_consent_without_consent_host(self):
         """A consent-requiring skill on a host with consent=none."""
         host = HostCapabilities(consent_model=ConsentModel.NONE)
         neg = CapabilityNegotiator(host)
@@ -156,7 +156,7 @@ class TestClaudeSkillEnginesField:
         result = negotiator.check_compatibility(reqs)
         assert result.compatible is True
 
-    def test_claude_mcp_tool_incompatible_without_mcp(self):
+    def test_claude_mcp_without_mcp(self):
         """A Claude MCP tool requires MCP execution form."""
         host = HostCapabilities(
             execution_forms=[ExecutionForm.IN_PROCESS, ExecutionForm.SUBPROCESS],
@@ -170,7 +170,7 @@ class TestClaudeSkillEnginesField:
         result = neg.check_compatibility(reqs)
         assert result.compatible is False
 
-    def test_claude_mcp_tool_compatible_with_mcp(self):
+    def test_claude_mcp_with_mcp(self):
         """A Claude MCP tool works when host supports MCP."""
         host = HostCapabilities(
             execution_forms=[ExecutionForm.IN_PROCESS, ExecutionForm.MCP],
@@ -184,7 +184,7 @@ class TestClaudeSkillEnginesField:
         result = neg.check_compatibility(reqs)
         assert result.compatible is True
 
-    def test_mixed_execution_forms_partial_match(self, negotiator: CapabilityNegotiator):
+    def test_mixed_forms_partial_match(self, negotiator: CapabilityNegotiator):
         """Skill requiring either in-process OR subprocess (any match suffices)."""
         reqs = ExtensionRequirements(
             required_execution_forms=[ExecutionForm.IN_PROCESS],

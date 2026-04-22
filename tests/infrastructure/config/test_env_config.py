@@ -48,7 +48,7 @@ class TestEnvConfigDefaults:
     def teardown_method(self):
         EnvConfig._reset()
 
-    def test_siliconflow_api_key_none_by_default(self):
+    def test_api_key_none_default(self):
         env_clean = {k: v for k, v in os.environ.items() if k != "SILICONFLOW_API_KEY"}
         with patch.dict(os.environ, env_clean, clear=True):
             EnvConfig._reset()
@@ -62,7 +62,7 @@ class TestEnvConfigDefaults:
             cfg = EnvConfig.get()
             assert cfg.siliconflow_base_url == "https://api.siliconflow.cn/v1"
 
-    def test_default_llm_provider_is_siliconflow(self):
+    def test_provider_defaults_siliconflow(self):
         env_clean = {k: v for k, v in os.environ.items() if k != "DEFAULT_LLM_PROVIDER"}
         with patch.dict(os.environ, env_clean, clear=True):
             EnvConfig._reset()
@@ -95,7 +95,7 @@ class TestEnvConfigDefaults:
             assert cfg.embedding_provider == "local"
             assert cfg.embedding_model == "BAAI/bge-small-en-v1.5"
 
-    def test_google_api_key_none_by_default(self):
+    def test_google_key_none_default(self):
         env_clean = {k: v for k, v in os.environ.items() if k != "GOOGLE_API_KEY"}
         with patch.dict(os.environ, env_clean, clear=True):
             EnvConfig._reset()
@@ -131,7 +131,7 @@ class TestEnvConfigOverrides:
             assert cfg.siliconflow_model == "Qwen/Qwen3-32B"
             assert cfg.deepseek_model == "Qwen/Qwen3-32B"
 
-    def test_siliconflow_model_beats_legacy_aliases(self):
+    def test_model_beats_legacy_aliases(self):
         with patch.dict(
             os.environ,
             {
@@ -145,7 +145,7 @@ class TestEnvConfigOverrides:
             cfg = EnvConfig.get()
             assert cfg.siliconflow_model == "deepseek-ai/DeepSeek-V3.2"
 
-    def test_default_siliconflow_model_uses_default_model(self):
+    def test_default_uses_default_model(self):
         with patch.dict(os.environ, {}, clear=True):
             EnvConfig._reset()
             cfg = EnvConfig.get()
@@ -221,7 +221,7 @@ class TestEnvConfigReload:
     def teardown_method(self):
         EnvConfig._reset()
 
-    def test_reload_picks_up_new_values(self):
+    def test_reload_picks_new_values(self):
         cfg = EnvConfig.get()
 
         with patch.dict(os.environ, {"RAG_KNOWLEDGE_DIR": "/new/path/"}):
@@ -249,7 +249,7 @@ class TestEnvConfigSummary:
             assert s["siliconflow_api_key"].startswith("sk-a")
             assert s["siliconflow_api_key"].endswith("3456")
 
-    def test_summary_masks_google_api_key(self):
+    def test_summary_masks_google_key(self):
         with patch.dict(os.environ, {"GOOGLE_API_KEY": "AIzaSyDabcdef123456"}):
             EnvConfig._reset()
             cfg = EnvConfig.get()
@@ -257,7 +257,7 @@ class TestEnvConfigSummary:
             assert "abcdef" not in s["google_api_key"]
             assert s["google_api_key"].startswith("AIza")
 
-    def test_summary_shows_not_set_for_missing(self):
+    def test_summary_not_set_missing(self):
         env_clean = {k: v for k, v in os.environ.items() if k != "SILICONFLOW_API_KEY"}
         with patch.dict(os.environ, env_clean, clear=True):
             EnvConfig._reset()

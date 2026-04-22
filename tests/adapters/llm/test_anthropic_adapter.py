@@ -19,7 +19,7 @@ def _build_adapter() -> AnthropicAdapter:
 
 
 class TestAnthropicAdapterHelpers:
-    def test_split_system_message_keeps_last_system_and_filters_it_out(self):
+    def test_split_keeps_last_system(self):
         adapter = _build_adapter()
 
         system_message, filtered_messages = adapter._split_system_message(
@@ -37,7 +37,7 @@ class TestAnthropicAdapterHelpers:
             {"role": "assistant", "content": "hi"},
         ]
 
-    def test_build_anthropic_params_defaults_max_tokens_and_converts_tools(self):
+    def test_build_params_converts_tools(self):
         adapter = _build_adapter()
 
         params = adapter._build_anthropic_params(
@@ -71,7 +71,7 @@ class TestAnthropicAdapterHelpers:
         ]
         assert params["top_p"] == 0.9
 
-    def test_convert_tools_to_anthropic_skips_non_function_entries(self):
+    def test_convert_skips_non_function(self):
         adapter = _build_adapter()
 
         tools = adapter._convert_tools_to_anthropic(
@@ -83,7 +83,7 @@ class TestAnthropicAdapterHelpers:
 
         assert tools == [{"name": "search", "description": "", "input_schema": {}}]
 
-    def test_build_anthropic_params_sets_system_when_present(self):
+    def test_build_params_with_system(self):
         adapter = _build_adapter()
 
         params = adapter._build_anthropic_params(
@@ -100,7 +100,7 @@ class TestAnthropicAdapterHelpers:
         assert params["system"] == "be concise"
         assert params["messages"] == [{"role": "user", "content": "hello"}]
 
-    def test_init_raises_import_error_when_anthropic_package_missing(self):
+    def test_init_without_package(self):
         original_import = builtins.__import__
 
         def _fake_import(name, globals=None, locals=None, fromlist=(), level=0):
@@ -115,7 +115,7 @@ class TestAnthropicAdapterHelpers:
 
 class TestAnthropicAdapterChat:
     @pytest.mark.asyncio
-    async def test_chat_passes_built_params_and_returns_normalized_response(self):
+    async def test_chat_returns_normalized(self):
         adapter = _build_adapter()
 
         usage = types.SimpleNamespace(input_tokens=3, output_tokens=4)
@@ -143,7 +143,7 @@ class TestAnthropicAdapterChat:
 
 class TestAnthropicAdapterStreaming:
     @pytest.mark.asyncio
-    async def test_stream_chat_yields_text_and_records_usage(self):
+    async def test_stream_yields_text_usage(self):
         adapter = _build_adapter()
 
         usage = types.SimpleNamespace(input_tokens=4, output_tokens=6)

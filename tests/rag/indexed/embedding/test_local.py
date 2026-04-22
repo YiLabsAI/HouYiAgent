@@ -30,9 +30,7 @@ class FakeTextEmbedding:
 
 
 class TestLocalEmbedder:
-    async def test_embed_loads_encoder_once_and_embeds_text(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_loads_encoder_once_embeds(self, monkeypatch: pytest.MonkeyPatch) -> None:
         created: list[FakeTextEmbedding] = []
 
         def build_encoder(*, model_name: str) -> FakeTextEmbedding:
@@ -74,9 +72,7 @@ class TestLocalEmbedder:
         assert created[0].calls == [["a", "bb"]]
         assert progress_calls == [(2, 2, 2)]
 
-    def test_ensure_encoder_raises_when_fastembed_missing(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_raises_without_fastembed(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delitem(sys.modules, "fastembed", raising=False)
         real_import = __import__
 

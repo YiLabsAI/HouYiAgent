@@ -107,7 +107,7 @@ class TestAgentArun:
         mock.assert_awaited_once_with("d")
 
     @pytest.mark.asyncio
-    async def test_arun_llm_only_routes_tool_loop(self) -> None:
+    async def test_arun_llm_only_loop(self) -> None:
         agent = Agent(role="r", llm=MagicMock())
         with patch.object(agent, "_arun_tool_loop", new_callable=AsyncMock) as mock:
             mock.return_value = "ok"

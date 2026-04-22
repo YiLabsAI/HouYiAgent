@@ -334,7 +334,7 @@ class TestObservabilityQuery:
         assert llm_spans[0].span_type == SpanType.LLM
         assert llm_spans[0].model == "gpt-4"
 
-    def test_get_llm_spans_by_model(self, query, sample_trace):
+    def test_llm_spans_by_model(self, query, sample_trace):
         """Test getting LLM spans filtered by model."""
         # Filter by existing model
         spans = query.get_llm_spans(trace_id=sample_trace, model="gpt-4")
@@ -352,7 +352,7 @@ class TestObservabilityQuery:
         assert tool_spans[0].span_type == SpanType.TOOL
         assert tool_spans[0].tool_name == "web_search"
 
-    def test_get_tool_spans_by_name(self, query, sample_trace):
+    def test_tool_spans_by_name(self, query, sample_trace):
         """Test getting tool spans filtered by name."""
         spans = query.get_tool_spans(trace_id=sample_trace, tool_name="web_search")
         assert len(spans) == 1
@@ -366,7 +366,7 @@ class TestObservabilityQuery:
 
         assert len(node_spans) == 3  # node_1, node_2, node_3
 
-    def test_get_node_spans_by_id(self, query, sample_trace):
+    def test_node_spans_by_id(self, query, sample_trace):
         """Test getting node spans by node ID."""
         spans = query.get_node_spans(sample_trace, node_id="llm_node")
 

@@ -93,7 +93,7 @@ class FakeExecutor:
 
 class TestToolCallRunnerIntegration:
     @pytest.mark.asyncio
-    async def test_full_flow_with_policy_consent_hooks_and_metrics(self) -> None:
+    async def test_full_flow_policy_consent(self) -> None:
         hooks_manager = SkillHooksManager()
         policy_enforcer = PolicyEnforcer()
         policy = InvocationPolicy(
@@ -179,7 +179,7 @@ class TestToolCallRunnerIntegration:
         assert metrics.latency.samples >= 1
 
     @pytest.mark.asyncio
-    async def test_policy_blocked_call_stays_visible_in_trace_and_skips_execution(self) -> None:
+    async def test_policy_blocked_visible_trace(self) -> None:
         policy_enforcer = PolicyEnforcer()
         policy = InvocationPolicy(
             model_auto_invoke=ModelAutoInvoke.DENY,
@@ -227,7 +227,7 @@ class TestToolCallRunnerIntegration:
         assert "denies model auto-invocation" in tool_trace[0].get("block_reason", "")
 
     @pytest.mark.asyncio
-    async def test_session_and_tool_hooks_fire_in_order_during_runner_execution(self) -> None:
+    async def test_hooks_fire_in_order(self) -> None:
         events: list[str] = []
 
         async def on_session_start(_ctx: Any) -> dict[str, Any]:
@@ -303,7 +303,7 @@ class TestToolCallRunnerIntegration:
 
 class TestPolicyConsentMetricsIntegration:
     @pytest.mark.asyncio
-    async def test_policy_allow_flow_records_metrics(self) -> None:
+    async def test_allow_flow_records_metrics(self) -> None:
         policy_enforcer = PolicyEnforcer()
         policy = InvocationPolicy(
             model_auto_invoke=ModelAutoInvoke.ALLOW,
@@ -356,7 +356,7 @@ class TestPolicyConsentMetricsIntegration:
         assert metrics.reliability.total_count >= 1
 
     @pytest.mark.asyncio
-    async def test_policy_deny_flow_marks_trace_blocked(self) -> None:
+    async def test_deny_flow_marks_blocked(self) -> None:
         policy_enforcer = PolicyEnforcer()
         policy = InvocationPolicy(
             model_auto_invoke=ModelAutoInvoke.DENY,
@@ -402,7 +402,7 @@ class TestPolicyConsentMetricsIntegration:
         assert len(trace) == 1
         assert trace[0]["policy_blocked"] is True
 
-    def test_permissions_with_write_access_require_consent(self) -> None:
+    def test_write_access_needs_consent(self) -> None:
         perms = Permissions.from_dict(
             {
                 "filesystem": {"read": True, "write": True, "paths": ["./data/**"]},
@@ -413,7 +413,7 @@ class TestPolicyConsentMetricsIntegration:
         descriptions = perms.describe()
         assert any("Write" in description for description in descriptions)
 
-    def test_read_only_permissions_do_not_require_consent(self) -> None:
+    def test_read_only_no_consent(self) -> None:
         perms = Permissions.from_dict(
             {
                 "filesystem": {"read": True, "write": False},
@@ -425,7 +425,7 @@ class TestPolicyConsentMetricsIntegration:
 
 class TestHooksLifecycleIntegration:
     @pytest.mark.asyncio
-    async def test_hook_exceptions_do_not_abort_runner_execution(self) -> None:
+    async def test_hook_exception_not_abort(self) -> None:
         async def failing_hook(_ctx: Any) -> dict[str, Any]:
             raise RuntimeError("hook explosion")
 
@@ -462,7 +462,7 @@ class TestHooksLifecycleIntegration:
 
 class TestToolCallRunnerErrorPaths:
     @pytest.mark.asyncio
-    async def test_unregistered_skill_call_still_records_trace_entry(self) -> None:
+    async def test_unregistered_records_trace(self) -> None:
         adapter = FakeAdapter(
             [
                 FakeResponse(
@@ -497,7 +497,7 @@ class TestToolCallRunnerErrorPaths:
         assert trace[0]["tool_name"] == "ghost-skill"
 
     @pytest.mark.asyncio
-    async def test_executor_exception_is_captured_in_trace(self) -> None:
+    async def test_executor_exception_in_trace(self) -> None:
         class FailingExecutor:
             max_retries = 1
             timeout = 5.0
@@ -542,7 +542,7 @@ class TestToolCallRunnerErrorPaths:
         assert trace[0].get("error") or trace[0].get("status") in ("error", "failed", None)
 
     @pytest.mark.asyncio
-    async def test_policy_blocked_skill_is_not_executed(self) -> None:
+    async def test_policy_blocked_not_executed(self) -> None:
         policy_enforcer = PolicyEnforcer()
         policy = InvocationPolicy(
             model_auto_invoke=ModelAutoInvoke.DENY,
@@ -591,7 +591,7 @@ class TestToolCallRunnerErrorPaths:
 
 class TestConsentIntegration:
     @pytest.mark.asyncio
-    async def test_allow_with_consent_blocks_without_consent_manager(self) -> None:
+    async def test_consent_blocks_without_manager(self) -> None:
         policy_enforcer = PolicyEnforcer()
         policy = InvocationPolicy(
             model_auto_invoke=ModelAutoInvoke.ALLOW_WITH_CONSENT,
@@ -638,7 +638,7 @@ class TestConsentIntegration:
         assert executor.executed == []
 
     @pytest.mark.asyncio
-    async def test_allow_with_consent_executes_when_handler_grants(self) -> None:
+    async def test_consent_executes_when_granted(self) -> None:
         policy_enforcer = PolicyEnforcer()
         policy = InvocationPolicy(
             model_auto_invoke=ModelAutoInvoke.ALLOW_WITH_CONSENT,
@@ -692,7 +692,7 @@ class TestConsentIntegration:
         assert executor.executed == ["consent-ok"]
 
     @pytest.mark.asyncio
-    async def test_allow_with_consent_blocks_when_handler_denies(self) -> None:
+    async def test_consent_blocks_when_denied(self) -> None:
         policy_enforcer = PolicyEnforcer()
         policy = InvocationPolicy(
             model_auto_invoke=ModelAutoInvoke.ALLOW_WITH_CONSENT,
@@ -745,7 +745,7 @@ class TestConsentIntegration:
         assert executor.executed == []
 
     @pytest.mark.asyncio
-    async def test_non_interactive_consent_blocks_execution(self) -> None:
+    async def test_non_interactive_blocks(self) -> None:
         policy_enforcer = PolicyEnforcer()
         policy = InvocationPolicy(
             model_auto_invoke=ModelAutoInvoke.ALLOW_WITH_CONSENT,
@@ -796,7 +796,7 @@ class TestConsentIntegration:
 
 class TestUnloadThenCallIntegration:
     @pytest.mark.asyncio
-    async def test_unloaded_skill_call_still_returns_trace_entry(self) -> None:
+    async def test_unloaded_returns_trace(self) -> None:
         registry = SkillRegistry()
 
         from houyi.skills.weather import get_weather
@@ -841,7 +841,7 @@ class TestUnloadThenCallIntegration:
         assert trace[0]["tool_name"] == "get_weather"
 
     @pytest.mark.asyncio
-    async def test_registry_get_returns_none_after_unload(self) -> None:
+    async def test_get_none_after_unload(self) -> None:
         registry = SkillRegistry()
 
         from houyi.skills.weather import get_date

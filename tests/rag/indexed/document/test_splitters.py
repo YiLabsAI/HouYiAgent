@@ -139,7 +139,7 @@ class TestDocumentSplitters:
         for word in ["complete", "original", "content", "preserved"]:
             assert word in combined
 
-    def test_max_chunk_chars_is_safe(self) -> None:
+    def test_max_chunk_chars_safe(self) -> None:
         expected_max_tokens = MAX_CHUNK_CHARS / 4
 
         assert expected_max_tokens <= 2048, (

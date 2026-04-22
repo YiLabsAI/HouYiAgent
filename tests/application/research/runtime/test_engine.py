@@ -898,7 +898,7 @@ class TestBoundaryAndInteraction:
         assert plan.query == "AI agent frameworks 2025 comparison"
         assert session.status == ResearchStatus.PLAN_READY
 
-    async def test_clear_standard_query_skips_replan(self):
+    async def test_clear_query_skips_replan(self):
         first_plan = _plan_with_clarification(
             _PLAN_JSON,
             json.dumps(

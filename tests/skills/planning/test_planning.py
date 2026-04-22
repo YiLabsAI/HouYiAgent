@@ -323,7 +323,7 @@ class TestPlanningSkill:
             assert "Missing required field for update: subtask_index" in result["message"]
 
     @pytest.mark.asyncio
-    async def test_update_rejects_invalid_subtask_index(self):
+    async def test_rejects_invalid_subtask(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             tmpdir = Path(tmpdir)
             skill = PlanningSkill(workspace=tmpdir)

@@ -38,7 +38,7 @@ class TestAnalyzeState:
         assert _analyze_state["indexes_checked"] == 0
         assert _analyze_state["issues_found"] == []
 
-    def test_get_analyze_state_returns_copy(self) -> None:
+    def test_state_returns_copy(self) -> None:
         """Test get_analyze_state returns a copy."""
         from houyi.rag.skills.kb_analyze.hooks import (
             _analyze_state,
@@ -72,7 +72,7 @@ class TestPreAnalyzeHook:
         assert "Scanning" in result.output
 
     @pytest.mark.asyncio
-    async def test_pre_analyze_hook_other_tool(self) -> None:
+    async def test_pre_other_tool(self) -> None:
         """Test pre_analyze_hook with other tool."""
         from houyi.rag.skills.kb_analyze.hooks import pre_analyze_hook
 
@@ -87,7 +87,7 @@ class TestPostAnalyzeHook:
     """Tests for post_analyze_hook."""
 
     @pytest.mark.asyncio
-    async def test_post_analyze_hook_glob_list_result(self) -> None:
+    async def test_post_glob_list(self) -> None:
         """Test post_analyze_hook with glob list result."""
         from houyi.rag.skills.kb_analyze.hooks import (
             _analyze_state,
@@ -109,7 +109,7 @@ class TestPostAnalyzeHook:
         assert "Scanned 3 files" in result.output
 
     @pytest.mark.asyncio
-    async def test_post_analyze_hook_glob_dict_result(self) -> None:
+    async def test_post_glob_dict(self) -> None:
         """Test post_analyze_hook with glob dict result."""
         from houyi.rag.skills.kb_analyze.hooks import (
             _analyze_state,
@@ -130,7 +130,7 @@ class TestPostAnalyzeHook:
         assert _analyze_state["files_scanned"] == 2
 
     @pytest.mark.asyncio
-    async def test_post_analyze_hook_no_result(self) -> None:
+    async def test_post_no_result(self) -> None:
         """Test post_analyze_hook with no result."""
         from houyi.rag.skills.kb_analyze.hooks import post_analyze_hook, reset_analyze_state
 
@@ -143,7 +143,7 @@ class TestPostAnalyzeHook:
         assert result.success is True
 
     @pytest.mark.asyncio
-    async def test_post_analyze_hook_other_tool(self) -> None:
+    async def test_post_other_tool(self) -> None:
         """Test post_analyze_hook with other tool."""
         from houyi.rag.skills.kb_analyze.hooks import (
             _analyze_state,

@@ -23,7 +23,7 @@ class FakeAsyncOpenAI:
 
 
 class TestAPIEmbedder:
-    async def test_embed_openai_uses_async_client(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_openai_uses_async_client(self, monkeypatch: pytest.MonkeyPatch) -> None:
         fake_client = FakeAsyncOpenAI([[0.1, 0.2, 0.3]])
         monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(AsyncOpenAI=lambda: fake_client))
 
@@ -33,9 +33,7 @@ class TestAPIEmbedder:
         assert result == [0.1, 0.2, 0.3]
         assert fake_client.calls == [("text-embedding-3-small", "hello")]
 
-    async def test_embed_anthropic_reuses_openai_compatible_path(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_anthropic_reuses_openai(self, monkeypatch: pytest.MonkeyPatch) -> None:
         fake_client = FakeAsyncOpenAI([[0.4, 0.5, 0.6]])
         monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(AsyncOpenAI=lambda: fake_client))
 
@@ -45,9 +43,7 @@ class TestAPIEmbedder:
         assert result == [0.4, 0.5, 0.6]
         assert fake_client.calls == [("anthropic-embed", "hello")]
 
-    async def test_embed_batch_openai_reports_progress(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_batch_openai_progress(self, monkeypatch: pytest.MonkeyPatch) -> None:
         fake_client = FakeAsyncOpenAI([[1.0], [2.0]])
         monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(AsyncOpenAI=lambda: fake_client))
         progress_calls: list[tuple[int, int, int]] = []
@@ -64,9 +60,7 @@ class TestAPIEmbedder:
         assert fake_client.calls == [("batch-model", ["a", "b"])]
         assert progress_calls == [(2, 2, 2)]
 
-    async def test_embed_batch_non_openai_falls_back_to_base_batch(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_batch_non_openai_fallback(self, monkeypatch: pytest.MonkeyPatch) -> None:
         fake_client = FakeAsyncOpenAI([[0.7], [0.8]])
         monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(AsyncOpenAI=lambda: fake_client))
         progress_calls: list[tuple[int, int, int]] = []
@@ -83,9 +77,7 @@ class TestAPIEmbedder:
         assert fake_client.calls == [("fallback-model", "a"), ("fallback-model", "b")]
         assert progress_calls == [(1, 2, 1), (2, 2, 1)]
 
-    async def test_embed_raises_when_openai_dependency_missing(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_raises_without_openai(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delitem(sys.modules, "openai", raising=False)
         real_import = __import__
 
@@ -100,9 +92,7 @@ class TestAPIEmbedder:
         with pytest.raises(ImportError, match="openai package required for API embedding"):
             await embedder.embed("hello")
 
-    async def test_embed_batch_raises_when_openai_dependency_missing(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_batch_raises_without_openai(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delitem(sys.modules, "openai", raising=False)
         real_import = __import__
 

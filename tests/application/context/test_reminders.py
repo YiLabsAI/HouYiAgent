@@ -59,7 +59,7 @@ class TestReminderManagement:
 
 
 class TestInject:
-    def test_injects_before_last_user_message(self):
+    def test_before_last_user_message(self):
         inj = ReminderInjector()
         inj.add("r1", "Remember this!")
         messages = [

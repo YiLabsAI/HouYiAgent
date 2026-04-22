@@ -265,7 +265,7 @@ class TestSkillRegistryPolicyIntegration:
 class TestCreateDefaultRegistry:
     """Test create_default_registry function."""
 
-    def test_creates_registry_with_default_hooks_manager(self) -> None:
+    def test_with_default_hooks_manager(self) -> None:
         """Test that default registry has hooks manager."""
         registry = create_default_registry()
 
@@ -280,7 +280,7 @@ class TestDefaultSkillRegistry:
         assert DEFAULT_SKILL_REGISTRY is not None
         assert isinstance(DEFAULT_SKILL_REGISTRY, SkillRegistry)
 
-    def test_default_registry_has_hooks_manager(self) -> None:
+    def test_default_has_hooks_manager(self) -> None:
         """Test that default registry has hooks manager."""
         assert DEFAULT_SKILL_REGISTRY._hooks_manager is not None
 
@@ -304,7 +304,7 @@ class TestProviderNamespace:
         s2 = self._make_skill("weather")
         assert s2.qualified_name == "weather"
 
-    def test_same_name_different_provider_coexist(self) -> None:
+    def test_diff_provider_coexist(self) -> None:
         registry = SkillRegistry()
         s1 = self._make_skill("weather", "houyi")
         s2 = self._make_skill("weather", "openclaw")
@@ -317,7 +317,7 @@ class TestProviderNamespace:
         # Plain name returns the first-registered
         assert registry.get("weather") is s1
 
-    def test_same_name_same_provider_raises(self) -> None:
+    def test_same_provider_raises(self) -> None:
         registry = SkillRegistry()
         s1 = self._make_skill("weather", "houyi")
         s2 = self._make_skill("weather", "houyi")

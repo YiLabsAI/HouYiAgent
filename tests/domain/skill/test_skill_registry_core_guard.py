@@ -44,14 +44,14 @@ class TestCoreToolRegistration:
         registry.register(skill)
         assert registry.get("web_search") is skill
 
-    def test_register_non_core_tool_succeeds(self) -> None:
+    def test_register_non_core(self) -> None:
         """A normal (non-core) skill registers without issues."""
         registry = SkillRegistry()
         skill = _skill("helper_tool")
         registry.register(skill)
         assert registry.get("helper_tool") is skill
 
-    def test_external_tool_conflicts_core_gets_renamed(self) -> None:
+    def test_conflict_gets_renamed(self) -> None:
         """External tool with same name as core tool is auto-renamed to ext__<name>."""
         registry = SkillRegistry()
         core = _skill("web_search", is_core=True, description="Core search")
@@ -67,7 +67,7 @@ class TestCoreToolRegistration:
         assert renamed.name == "ext__web_search"
         assert renamed.description == "External search"
 
-    def test_renamed_ext_tool_name_attribute_updated(self) -> None:
+    def test_renamed_attribute_updated(self) -> None:
         """After rename, the ext__ skill object has name = 'ext__<original>'."""
         registry = SkillRegistry()
         registry.register(_skill("search", is_core=True))
@@ -77,7 +77,7 @@ class TestCoreToolRegistration:
         assert renamed is not None
         assert renamed.name == "ext__search"
 
-    def test_no_conflict_external_tool_registered_normally(self) -> None:
+    def test_no_conflict_registered(self) -> None:
         """External tool with no name conflict is registered without ext__ prefix."""
         registry = SkillRegistry()
         registry.register(_skill("web_search", is_core=True))
@@ -86,7 +86,7 @@ class TestCoreToolRegistration:
         assert registry.get("file_reader") is ext
         assert registry.get("ext__file_reader") is None
 
-    def test_overwrite_true_on_core_tool_raises(self) -> None:
+    def test_overwrite_core_raises(self) -> None:
         """overwrite=True targeting a core tool must raise CoreToolProtectionError."""
         registry = SkillRegistry()
         registry.register(_skill("web_search", is_core=True))
@@ -94,7 +94,7 @@ class TestCoreToolRegistration:
         with pytest.raises(CoreToolProtectionError):
             registry.register(replacement, overwrite=True)
 
-    def test_overwrite_true_on_non_core_succeeds(self) -> None:
+    def test_overwrite_non_core(self) -> None:
         """overwrite=True on a non-core tool should succeed as before."""
         registry = SkillRegistry()
         registry.register(_skill("helper"))
@@ -102,14 +102,14 @@ class TestCoreToolRegistration:
         registry.register(replacement, overwrite=True)
         assert registry.get("helper") is replacement
 
-    def test_two_core_tools_same_name_raises_value_error(self) -> None:
+    def test_two_cores_same_name(self) -> None:
         """Two core tools with the same name is a Host code error → ValueError."""
         registry = SkillRegistry()
         registry.register(_skill("web_search", is_core=True))
         with pytest.raises(ValueError):
             registry.register(_skill("web_search", is_core=True))
 
-    def test_as_tool_schemas_core_tools_first(self) -> None:
+    def test_schemas_core_tools_first(self) -> None:
         """as_tool_schemas() must return core tools before non-core tools."""
         registry = SkillRegistry()
         registry.register(_skill("zzz_external"))  # non-core, registered first
@@ -123,7 +123,7 @@ class TestCoreToolRegistration:
             f"non-core 'zzz_external' (idx {ext_idx})"
         )
 
-    def test_ext_tool_schema_has_third_party_prefix(self) -> None:
+    def test_ext_schema_third_party(self) -> None:
         """After rename to ext__, the tool schema has [THIRD-PARTY EXTENSION] prefix."""
         registry = SkillRegistry()
         registry.register(_skill("search", is_core=True))
@@ -132,7 +132,7 @@ class TestCoreToolRegistration:
         ext_schema = next(s for s in schemas if s["function"]["name"] == "ext__search")
         assert ext_schema["function"]["description"].startswith("[THIRD-PARTY EXTENSION]")
 
-    def test_core_tool_schema_has_core_prefix(self) -> None:
+    def test_core_schema_core_prefix(self) -> None:
         """Core tool schema has [CORE OFFICIAL TOOL] prefix in description."""
         registry = SkillRegistry()
         registry.register(_skill("search", is_core=True, description="Search the web"))

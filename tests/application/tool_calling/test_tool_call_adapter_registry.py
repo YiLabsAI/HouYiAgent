@@ -49,7 +49,7 @@ def _build_request(adapter_name: str) -> ToolCallAdapterRequest:
 
 
 @pytest.mark.asyncio
-async def test_tool_call_adapter_registry_uses_hook(monkeypatch) -> None:
+async def test_registry_uses_hook(monkeypatch) -> None:
     """Registry should prefer hook adapters and wrap normalized adapter."""
 
     adapter = DummyAdapter()
@@ -75,7 +75,7 @@ async def test_tool_call_adapter_registry_uses_hook(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_tool_call_adapter_registry_fallback() -> None:
+async def test_registry_fallback() -> None:
     """Registry should fall back to factory when hooks return None."""
 
     adapter = DummyAdapter()

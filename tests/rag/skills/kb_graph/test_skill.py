@@ -73,7 +73,7 @@ class TestModels:
         assert output.paths == []
         assert output.confidence == 0.0
 
-    def test_kb_graph_output_with_data(self) -> None:
+    def test_output_with_data(self) -> None:
         """Test KBGraphOutput with data."""
         output = KBGraphOutput(
             entities=[Entity(id="e1", name="Alice")],

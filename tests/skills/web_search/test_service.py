@@ -47,7 +47,7 @@ class _Provider:
         return self._results
 
 
-def test_from_env_invalid_falls_back():
+def test_from_env_invalid_fallback():
     """from_env should degrade unsupported providers to a supported fallback."""
 
     monkeypatch = pytest.MonkeyPatch()

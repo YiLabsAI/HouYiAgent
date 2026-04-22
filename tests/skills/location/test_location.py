@@ -18,7 +18,7 @@ def test_split_city_country_code() -> None:
     assert code == "CN"
 
 
-def test_split_non_iso_suffix_kept() -> None:
+def test_non_iso_suffix_kept() -> None:
     city, code = location_skill._split_city_country_code("beijing, China")
     assert city == "beijing, China"
     assert code is None

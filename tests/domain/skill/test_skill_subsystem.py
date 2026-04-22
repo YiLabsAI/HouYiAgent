@@ -46,7 +46,7 @@ class TestSmokeFullCycle:
     """
 
     @pytest.mark.smoke
-    def test_skill_md_to_registry_to_tool_schema(self, tmp_path: Path) -> None:
+    def test_md_to_registry_schema(self, tmp_path: Path) -> None:
         """Full cycle: write SKILL.md → load → register → get schema → verify."""
         skill_dir = tmp_path / "my-skill"
         skill_dir.mkdir()
@@ -182,7 +182,7 @@ class TestSmokeFullCycle:
 class TestInvocationPolicyEdgeCases:
     """Edge case tests for invocation policy governance."""
 
-    def test_side_effect_defaults_to_consent_required(self) -> None:
+    def test_side_effect_defaults_consent(self) -> None:
         """Spec: For sideEffect != none, modelAutoInvoke SHOULD default to consent."""
         for se in [SideEffect.FILESYSTEM, SideEffect.NETWORK, SideEffect.EXEC, SideEffect.MIXED]:
             policy = InvocationPolicy.default_for_side_effect(se)
@@ -210,7 +210,7 @@ class TestInvocationPolicyEdgeCases:
         assert enforcer.get_policy("other-skill").model_auto_invoke == ModelAutoInvoke.DENY
         assert enforcer.get_policy("my-skill").model_auto_invoke == ModelAutoInvoke.ALLOW
 
-    def test_user_invocation_bypasses_model_policy(self) -> None:
+    def test_user_bypasses_model_policy(self) -> None:
         enforcer = PolicyEnforcer()
         policy = InvocationPolicy(model_auto_invoke=ModelAutoInvoke.DENY, user_invocable=True)
         enforcer.register_skill_policy("user-only", policy)
@@ -222,7 +222,7 @@ class TestInvocationPolicyEdgeCases:
         decision_user = enforcer.check_invocation("user-only", is_model_initiated=False)
         assert decision_user.allowed is True
 
-    def test_consent_requirement_with_prior_consent(self) -> None:
+    def test_consent_with_prior_consent(self) -> None:
         enforcer = PolicyEnforcer()
         policy = InvocationPolicy(
             model_auto_invoke=ModelAutoInvoke.ALLOW_WITH_CONSENT,
@@ -252,7 +252,7 @@ class TestInvocationPolicyEdgeCases:
         assert decision_user.allowed is False
         assert "not user-invocable" in (decision_user.reason or "")
 
-    def test_permissions_require_consent_for_sensitive_ops(self) -> None:
+    def test_consent_for_sensitive_ops(self) -> None:
         from houyi.domain.skill.policy import ExecPerm, FilesystemPerm, NetworkPerm
 
         assert Permissions(filesystem=FilesystemPerm(read=True)).requires_consent() is False
@@ -297,7 +297,7 @@ class TestInvocationPolicyEdgeCases:
         assert restored.user_invocable == original.user_invocable
         assert restored.side_effect == original.side_effect
 
-    def test_policy_from_dict_with_snake_case(self) -> None:
+    def test_policy_from_snake_case(self) -> None:
         camel = {"modelAutoInvoke": "deny", "userInvocable": False, "sideEffect": "exec"}
         assert InvocationPolicy.from_dict(camel).model_auto_invoke == ModelAutoInvoke.DENY
 
@@ -305,7 +305,7 @@ class TestInvocationPolicyEdgeCases:
         assert InvocationPolicy.from_dict(snake).model_auto_invoke == ModelAutoInvoke.DENY
 
     @pytest.mark.asyncio
-    async def test_consent_with_allow_policy_skips_prompt(self) -> None:
+    async def test_consent_allow_skips_prompt(self) -> None:
         enforcer = PolicyEnforcer()
         policy = InvocationPolicy(
             model_auto_invoke=ModelAutoInvoke.ALLOW,
@@ -394,7 +394,7 @@ class TestHooksLifecycle:
 class TestSkillServiceIntegration:
     """Integration: SkillService for Console UI backend."""
 
-    def test_skill_service_list_and_detail(self) -> None:
+    def test_service_list_and_detail(self) -> None:
         registry = SkillRegistry()
 
         skill = SkillSpec(
@@ -424,7 +424,7 @@ class TestSkillServiceIntegration:
         schema = detail.to_tool_schema()
         assert schema["function"]["name"] == "svc-test"
 
-    def test_skill_service_dry_run_validation(self) -> None:
+    def test_service_dry_run_validation(self) -> None:
         enforcer = PolicyEnforcer()
         policy = InvocationPolicy(
             model_auto_invoke=ModelAutoInvoke.DENY, side_effect=SideEffect.EXEC

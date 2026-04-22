@@ -15,7 +15,7 @@ class _Skill:
 
 
 class TestToolCallMessages:
-    def test_apply_fast_path_tool_choice_disabled_keeps(self) -> None:
+    def test_tool_choice_disabled_keeps(self) -> None:
         assert apply_fast_path_tool_choice(fast_path_enabled=False, tool_choice=None) is None
         assert apply_fast_path_tool_choice(fast_path_enabled=False, tool_choice="auto") == "auto"
         assert (
@@ -23,11 +23,11 @@ class TestToolCallMessages:
             == "required"
         )
 
-    def test_apply_fast_path_tool_choice_enabled_sets_required_for_none_or_auto(self) -> None:
+    def test_choice_required_for_auto(self) -> None:
         assert apply_fast_path_tool_choice(fast_path_enabled=True, tool_choice=None) == "required"
         assert apply_fast_path_tool_choice(fast_path_enabled=True, tool_choice="auto") == "required"
 
-    def test_apply_fast_path_tool_choice_enabled_keeps_explicit_choice(self) -> None:
+    def test_tool_choice_keeps_explicit(self) -> None:
         assert (
             apply_fast_path_tool_choice(fast_path_enabled=True, tool_choice="required")
             == "required"
@@ -36,16 +36,16 @@ class TestToolCallMessages:
             fast_path_enabled=True, tool_choice={"type": "function"}
         ) == {"type": "function"}
 
-    def test_build_fast_path_prompt_prefers_tool_names(self) -> None:
+    def test_prompt_prefers_tool_names(self) -> None:
         prompt = build_fast_path_prompt(tool_names=["a", "b"], skills=[_Skill("x")])  # type: ignore[arg-type]
         assert "Call each tool exactly once" in prompt
         assert "a, b" in prompt
 
-    def test_build_fast_path_prompt_falls_back_to_skills(self) -> None:
+    def test_prompt_falls_back_skills(self) -> None:
         prompt = build_fast_path_prompt(tool_names=[], skills=[_Skill("x"), _Skill("y")])  # type: ignore[arg-type]
         assert "x, y" in prompt
 
-    def test_build_tool_call_messages_basic(self) -> None:
+    def test_build_messages_basic(self) -> None:
         result = build_tool_call_messages(
             system_prompt="sys",
             user_prompt=None,
@@ -61,7 +61,7 @@ class TestToolCallMessages:
             {"role": "user", "content": "p"},
         ]
 
-    def test_build_tool_call_messages_fast_path_adds_prompt_and_sets_choice(self) -> None:
+    def test_fast_path_adds_prompt(self) -> None:
         result = build_tool_call_messages(
             system_prompt=None,
             user_prompt="u",

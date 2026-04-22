@@ -4,11 +4,11 @@ from houyi import Skill, SkillSpec, __version__, tool
 
 
 class TestHouyiPublicApi:
-    def test_root_exports_version_and_skill_alias(self) -> None:
+    def test_exports_version_skill_alias(self) -> None:
         assert __version__ == "0.3.0"
         assert Skill is SkillSpec
 
-    def test_tool_decorator_empty_input_schema(self) -> None:
+    def test_decorator_empty_schema(self) -> None:
         @tool
         def ping() -> str:
             """Ping tool."""
@@ -21,7 +21,7 @@ class TestHouyiPublicApi:
         assert ping.output_schema.__name__ == "PingOutput"
         assert ping._original_func() == "pong"
 
-    def test_tool_decorator_preserves_defaults_and_schema_names(self) -> None:
+    def test_decorator_preserves_defaults(self) -> None:
         @tool
         def search_web(query: str, limit: int = 5) -> list[str]:
             """Search the web."""

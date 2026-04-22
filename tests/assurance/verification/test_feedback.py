@@ -50,7 +50,7 @@ class TestFeedbackProtocol:
         assert "Missing semicolon" in prompt
         assert "Please regenerate" in prompt
 
-    def test_to_llm_prompt_with_suggestion(self):
+    def test_prompt_with_suggestion(self):
         """Test prompt with fix suggestion."""
         feedback = FeedbackProtocol(
             error_type="sql_injection",
@@ -63,7 +63,7 @@ class TestFeedbackProtocol:
         assert "Suggestion" in prompt
         assert "parameterized queries" in prompt
 
-    def test_to_llm_prompt_with_constraint(self):
+    def test_prompt_with_constraint(self):
         """Test prompt with violated constraint."""
         feedback = FeedbackProtocol(
             error_type="type_mismatch",
@@ -76,7 +76,7 @@ class TestFeedbackProtocol:
         assert "Violated Constraint" in prompt
         assert "output must be integer" in prompt
 
-    def test_to_llm_prompt_with_history(self):
+    def test_prompt_with_history(self):
         """Test prompt includes previous attempts."""
         feedback = FeedbackProtocol(
             error_type="sql_syntax",
@@ -96,7 +96,7 @@ class TestFeedbackProtocol:
         assert "2." in prompt
         assert "3." in prompt
 
-    def test_to_llm_prompt_truncates_long_attempts(self):
+    def test_prompt_truncates_long(self):
         """Test that long attempts are truncated."""
         long_attempt = "SELECT " + "x, " * 100 + "FROM table"
         feedback = FeedbackProtocol(

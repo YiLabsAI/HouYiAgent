@@ -72,7 +72,7 @@ class TestSkillExecutor:
         assert result["total"] == 6
 
     @pytest.mark.asyncio
-    async def test_execute_preserves_extra_output_fields(self) -> None:
+    async def test_preserves_extra_output_fields(self) -> None:
         class Input(BaseModel):
             x: int
             y: int
@@ -533,7 +533,7 @@ class TestSkillExecutorRetrySpans:
         assert len(collected) == 0
 
     @pytest.mark.asyncio
-    async def test_retry_spans_without_trace_context(self) -> None:
+    async def test_retry_without_trace_context(self) -> None:
         """Retry spans are skipped when no TraceContext is active."""
 
         class Input(BaseModel):

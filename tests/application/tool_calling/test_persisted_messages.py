@@ -56,7 +56,7 @@ class TestCollectPersistedToolMessagePayloads:
             "duration_ms": 22,
         }
 
-    def test_payload_prefers_trace_raw_result_for_persisted_ui(self):
+    def test_payload_prefers_trace_raw(self):
         messages = collect_persisted_tool_message_payloads(
             intermediate_messages=[
                 {

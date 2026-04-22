@@ -129,7 +129,7 @@ class TestVoteResolve:
         resolution = await resolver.resolve(conflict)
         assert resolution.winner == "cited"
 
-    async def test_equal_score_defaults_to_a(self):
+    async def test_equal_score_defaults_first(self):
         resolver = ConflictResolver()
         conflict = ConflictRecord(
             agent_a_id="a",
@@ -217,7 +217,7 @@ class TestLLMResolve:
         assert resolution.method == "llm_arbitration"
         assert resolution.confidence == 0.4
 
-    async def test_llm_failure_falls_back_to_voting(self):
+    async def test_failure_falls_back_voting(self):
         resolver = ConflictResolver(llm_adapter=_FailingLLM())
         conflict = ConflictRecord(
             agent_a_id="a",

@@ -57,7 +57,7 @@ No frontmatter here.
         # Empty YAML returns None
         assert result is None
 
-    def test_parse_frontmatter_with_complex_types(self) -> None:
+    def test_frontmatter_complex_types(self) -> None:
         """Test parsing frontmatter with lists and nested objects."""
         content = """---
 name: complex-skill
@@ -510,7 +510,7 @@ class TestParseHooksConfig:
         assert len(hooks) == 1
         assert hooks[0].hook_type == HookType.HANDLER  # Default fallback
 
-    def test_parse_single_hook_not_list(self) -> None:
+    def test_single_hook_not_list(self) -> None:
         """Test parsing single hook (not in list)."""
         config = {
             "Stop": {
@@ -524,7 +524,7 @@ class TestParseHooksConfig:
         assert len(hooks) == 1
         assert hooks[0].event == HookEvent.STOP
 
-    def test_parse_nested_hooks_claude_format(self) -> None:
+    def test_nested_hooks_claude(self) -> None:
         """Test parsing Claude's nested hooks format."""
         config = {
             "PreToolUse": [
@@ -563,7 +563,7 @@ class TestParseHooksConfig:
         assert HookEvent.POST_TOOL_USE in events
         assert HookEvent.STOP in events
 
-    def test_parse_non_dict_hook_config(self) -> None:
+    def test_non_dict_hook_config(self) -> None:
         """Test handling non-dict items in hook list."""
         config = {
             "PreToolUse": [
@@ -657,7 +657,7 @@ Body description.
         assert result["name"] == "frontmatter-name"
         assert result["description"] == "Frontmatter description"
 
-    def test_parse_body_fills_missing_frontmatter(self) -> None:
+    def test_body_fills_missing(self) -> None:
         """Test that body values fill in missing frontmatter fields."""
         content = """---
 version: "1.0.0"

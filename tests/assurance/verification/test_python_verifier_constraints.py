@@ -51,7 +51,7 @@ class TestPythonVerifierConstraints:
         assert result.passed is True or result.error_type != "constraint_violation"
 
     @pytest.mark.asyncio
-    async def test_python_syntax_error_before_constraints(self):
+    async def test_syntax_error_before_constraints(self):
         """Test that syntax errors are caught before constraint checking."""
         verifier = PythonVerifier(use_constraint_solver=True)
 
@@ -70,7 +70,7 @@ class TestPythonVerifierConstraints:
         assert result.error_type == "python_syntax"
 
     @pytest.mark.asyncio
-    async def test_python_unsafe_import_before_constraints(self):
+    async def test_unsafe_import_before_constraints(self):
         """Test that unsafe import checks happen before constraints."""
         verifier = PythonVerifier(use_constraint_solver=True)
 
@@ -134,7 +134,7 @@ class TestPythonVerifierConstraints:
         assert constraints[1].name == "type_check"
 
     @pytest.mark.asyncio
-    async def test_build_constraints_handles_invalid_specs(self):
+    async def test_handles_invalid_specs(self):
         """Test that invalid constraint specs are handled gracefully."""
         verifier = PythonVerifier(use_constraint_solver=True)
 

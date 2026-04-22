@@ -43,7 +43,7 @@ class FailingAnswerGenerator:
         raise RuntimeError("boom")
 
 
-def test_process_retrieval_results_success_and_timeout() -> None:
+def test_process_success_and_timeout() -> None:
     task_results = [
         RetrievalTaskResult(
             strategy=RetrievalStrategy.VECTOR,
@@ -78,7 +78,7 @@ def test_process_retrieval_results_success_and_timeout() -> None:
     assert len(all_results) == 1
 
 
-def test_process_retrieval_results_clears_results_when_fallback_disabled() -> None:
+def test_clears_without_fallback() -> None:
     task_results = [
         RetrievalTaskResult(
             strategy=RetrievalStrategy.BM25,
@@ -105,7 +105,7 @@ def test_process_retrieval_results_clears_results_when_fallback_disabled() -> No
 
 
 @pytest.mark.asyncio
-async def test_apply_crag_updates_metadata_and_filters_results() -> None:
+async def test_crag_updates_filters() -> None:
     results = [SearchResult(chunk_id="c1", content="Python", score=0.9)]
     validator_result = SimpleNamespace(
         quality=_Quality("correct"),
@@ -129,7 +129,7 @@ async def test_apply_crag_updates_metadata_and_filters_results() -> None:
     assert metadata["crag_confidence"] == 0.8
 
 
-def test_adjust_confidence_caps_by_crag_and_timeout() -> None:
+def test_adjust_caps_crag_timeout() -> None:
     assert adjust_confidence(confidence=0.9, crag_quality="incorrect", retrieval_metadata={}) == 0.3
     assert adjust_confidence(confidence=0.9, crag_quality="ambiguous", retrieval_metadata={}) == 0.6
     assert (
@@ -140,7 +140,7 @@ def test_adjust_confidence_caps_by_crag_and_timeout() -> None:
     )
 
 
-def test_collect_sources_limits_and_filters_empty() -> None:
+def test_collect_limits_filters_empty() -> None:
     results = [
         SearchResult(
             chunk_id=f"c{i}",
@@ -162,7 +162,7 @@ async def test_generate_answer_empty_results() -> None:
 
 
 @pytest.mark.asyncio
-async def test_generate_answer_uses_generator_when_available() -> None:
+async def test_generate_uses_generator() -> None:
     results = [SearchResult(chunk_id="c1", content="Python", score=0.9)]
     answer, confidence = await generate_answer(
         answer_generator=FakeAnswerGenerator("Generated", 0.8),
@@ -174,7 +174,7 @@ async def test_generate_answer_uses_generator_when_available() -> None:
 
 
 @pytest.mark.asyncio
-async def test_generate_answer_falls_back_to_simple_builder() -> None:
+async def test_generate_falls_back_simple() -> None:
     results = [SearchResult(chunk_id="c1", content="Python", score=0.9)]
     answer, confidence = await generate_answer(
         answer_generator=FailingAnswerGenerator(),

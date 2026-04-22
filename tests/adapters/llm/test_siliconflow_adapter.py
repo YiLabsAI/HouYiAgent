@@ -392,7 +392,7 @@ class TestSiliconFlowAdapterHttpxPath:
             },
         ]
 
-    def test_prepare_r1_empty_tool_message(self):
+    def test_r1_empty_tool_message(self):
         adapter = SiliconFlowAdapter(
             api_key="test-key",
             base_url="https://example.invalid/v1",
@@ -651,7 +651,7 @@ class TestSiliconFlowChatRequestSanitization:
             }
         ]
 
-    def test_prepare_r1_multi_tool_turn(self):
+    def test_r1_multi_tool_turn(self):
         adapter = SiliconFlowAdapter(
             api_key="test-key",
             base_url="https://example.invalid/v1",
@@ -1134,7 +1134,7 @@ class TestSiliconFlowAdapterHelpers:
         mock_debug.assert_called()
         assert "SiliconFlow DeepSeek prepared payload summary" in mock_debug.call_args.args[0]
 
-    def test_prepare_request_drops_required_for_kimi(self):
+    def test_prepare_drops_required_kimi(self):
         adapter = SiliconFlowAdapter(
             api_key="test-key",
             base_url="https://example.invalid/v1",
@@ -1166,7 +1166,7 @@ class TestSiliconFlowAdapterHelpers:
         assert prepared.tool_choice is None
 
     @pytest.mark.asyncio
-    async def test_sdk_create_logs_deepseek_final_kwargs_summary(self):
+    async def test_sdk_logs_deepseek_summary(self):
         adapter = SiliconFlowAdapter(
             api_key="test-key",
             base_url="https://example.invalid/v1",
@@ -1337,7 +1337,7 @@ class TestSiliconFlowAdapterHelpers:
         assert kwargs["extra_body"] == {"thinking_budget": 256}
         assert kwargs["top_p"] == 0.8
 
-    def test_encode_stream_request_for_httpx(self):
+    def test_encode_stream_for_httpx(self):
         adapter = SiliconFlowAdapter(
             api_key="test-key",
             base_url="https://example.invalid/v1",
@@ -1881,7 +1881,7 @@ class TestSiliconFlowAdapterHttpxStreamHelpers:
         assert attempts == 2
         assert chunks == ["OK"]
 
-    def test_parse_httpx_sse_non_dict(self):
+    def test_parse_sse_non_dict(self):
         adapter = SiliconFlowAdapter(
             api_key="test-key",
             base_url="https://example.invalid/v1",
@@ -1909,7 +1909,7 @@ class TestSiliconFlowAdapterHttpxStreamHelpers:
 
 
 class TestSiliconFlowAdapterAdditionalCoverage:
-    def test_parse_httpx_chat_response_raises(self):
+    def test_parse_response_raises(self):
         adapter = SiliconFlowAdapter(
             api_key="test-key",
             base_url="https://example.invalid/v1",
@@ -1926,7 +1926,7 @@ class TestSiliconFlowAdapterAdditionalCoverage:
             adapter._parse_httpx_response(response)
 
     @pytest.mark.asyncio
-    async def test_chat_request_httpx_parses_token_wrapped_toolcall(self):
+    async def test_parses_token_wrapped_toolcall(self):
         adapter = SiliconFlowAdapter(
             api_key="test-key",
             base_url="https://example.invalid/v1",
@@ -1977,7 +1977,7 @@ class TestSiliconFlowAdapterAdditionalCoverage:
         }
 
     @pytest.mark.asyncio
-    async def test_chat_request_httpx_parses_multiple_xml_toolcalls(self):
+    async def test_parses_multiple_xml_toolcalls(self):
         adapter = SiliconFlowAdapter(
             api_key="test-key",
             base_url="https://example.invalid/v1",
@@ -2030,7 +2030,7 @@ class TestSiliconFlowAdapterAdditionalCoverage:
         }
 
     @pytest.mark.asyncio
-    async def test_chat_request_httpx_parses_bracket_toolcall(self):
+    async def test_parses_bracket_toolcall(self):
         adapter = SiliconFlowAdapter(
             api_key="test-key",
             base_url="https://example.invalid/v1",
@@ -2082,7 +2082,7 @@ class TestSiliconFlowAdapterAdditionalCoverage:
         }
 
     @pytest.mark.asyncio
-    async def test_chat_request_httpx_parses_bare_bracket_toolcall(self):
+    async def test_parses_bare_bracket_toolcall(self):
         adapter = SiliconFlowAdapter(
             api_key="test-key",
             base_url="https://example.invalid/v1",
@@ -2110,7 +2110,7 @@ class TestSiliconFlowAdapterAdditionalCoverage:
         assert result.tool_calls[0]["function"]["arguments"] == {}
 
     @pytest.mark.asyncio
-    async def test_chat_request_httpx_ignores_bracket_tool_result_envelope(self):
+    async def test_ignores_bracket_result_envelope(self):
         adapter = SiliconFlowAdapter(
             api_key="test-key",
             base_url="https://example.invalid/v1",
@@ -2226,7 +2226,7 @@ class TestSiliconFlowAdapterAdditionalCoverage:
         assert content_inc == 0
         assert reasoning_inc == 0
 
-    def test_httpx_stream_uses_message_fallbacks(self):
+    def test_stream_uses_message_fallbacks(self):
         adapter = SiliconFlowAdapter(
             api_key="test-key",
             base_url="https://example.invalid/v1",

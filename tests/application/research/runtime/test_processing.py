@@ -90,7 +90,7 @@ class TestSearchOutput:
         assert result.rounds[0].queries == ["query two"]
         assert result.coverage_score == 1.0
 
-    def test_falls_back_on_invalid_json(self):
+    def test_falls_back_invalid_json(self):
         question = _Question("q3", priority=1.0, expected_sources=3)
         output = "x" * 700
 

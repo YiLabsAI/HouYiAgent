@@ -156,7 +156,7 @@ class TestContextRendererFullPlan:
         msgs = renderer.render(plan)
         assert msgs == []
 
-    def test_full_plan_all_block_types(self, renderer):
+    def test_plan_all_block_types(self, renderer):
         """Render plan with every block type to verify complete coverage."""
         plan = ContextPlan(
             blocks=[

@@ -127,7 +127,7 @@ class TestHeadRequest:
         assert result.reachable is True
         assert result.status_code == 200
 
-    async def test_head_request_fallback_to_get(self):
+    async def test_head_falls_back_get(self):
         from unittest.mock import MagicMock
 
         validator = URLValidator()

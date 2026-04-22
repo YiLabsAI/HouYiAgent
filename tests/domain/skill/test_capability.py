@@ -124,7 +124,7 @@ class TestCapabilityNegotiator:
         assert not result.compatible
         assert any("version" in m.lower() for m in result.missing_capabilities)
 
-    def test_check_compatibility_execution_form_mismatch(self):
+    def test_execution_form_mismatch(self):
         caps = HostCapabilities(execution_forms=[ExecutionForm.IN_PROCESS])
         negotiator = CapabilityNegotiator(caps)
 
@@ -134,7 +134,7 @@ class TestCapabilityNegotiator:
         assert not result.compatible
         assert any("execution" in m.lower() for m in result.missing_capabilities)
 
-    def test_check_compatibility_hook_events_mismatch(self):
+    def test_hook_events_mismatch(self):
         caps = HostCapabilities(hook_events=["PreToolUse"])
         negotiator = CapabilityNegotiator(caps)
 
@@ -144,7 +144,7 @@ class TestCapabilityNegotiator:
         assert not result.compatible
         assert any("hook events" in m.lower() for m in result.missing_capabilities)
 
-    def test_check_compatibility_hook_handlers_mismatch(self):
+    def test_hook_handlers_mismatch(self):
         caps = HostCapabilities(hook_handlers=[HookHandler.COMMAND])
         negotiator = CapabilityNegotiator(caps)
 
@@ -205,7 +205,7 @@ class TestDefaultHouyiCapabilities:
         assert DEFAULT_HOUYI_CAPABILITIES is not None
         assert DEFAULT_HOUYI_CAPABILITIES.host_name == "houyi"
 
-    def test_default_supports_all_execution_forms(self):
+    def test_supports_all_forms(self):
         assert ExecutionForm.IN_PROCESS in DEFAULT_HOUYI_CAPABILITIES.execution_forms
         assert ExecutionForm.SUBPROCESS in DEFAULT_HOUYI_CAPABILITIES.execution_forms
         assert ExecutionForm.MCP in DEFAULT_HOUYI_CAPABILITIES.execution_forms

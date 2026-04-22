@@ -299,7 +299,7 @@ class TestSkillManifest:
         assert manifest.matches_activation_event(ActivationEventType.ON_COMMAND, "any")
         assert manifest.matches_activation_event(ActivationEventType.ON_STARTUP)
 
-    def test_matches_activation_event_on_command(self):
+    def test_matches_on_command(self):
         manifest = SkillManifest(
             id="houyi.test",
             version="1.0.0",
@@ -312,7 +312,7 @@ class TestSkillManifest:
         assert manifest.matches_activation_event(ActivationEventType.ON_COMMAND, "plan.create")
         assert not manifest.matches_activation_event(ActivationEventType.ON_COMMAND, "other")
 
-    def test_matches_activation_event_on_filesystem(self):
+    def test_matches_on_filesystem(self):
         manifest = SkillManifest(
             id="houyi.test",
             version="1.0.0",

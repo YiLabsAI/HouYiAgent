@@ -204,7 +204,7 @@ class TestReportGenerator:
         assert "accuracy" in content
         assert "latency" in content
 
-    def test_generate_json_preserves_all_fields(self, tmp_path):
+    def test_generate_preserves_all_fields(self, tmp_path):
         """Test JSON report preserves all result fields."""
         results = [
             EvaluationResult(

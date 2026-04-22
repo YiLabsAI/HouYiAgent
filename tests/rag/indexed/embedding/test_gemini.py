@@ -15,7 +15,7 @@ from houyi.rag.indexed.embedding import gemini as _gemini_mod
 
 
 class TestGeminiEmbedderConfig:
-    def test_default_batch_size_is_2(self):
+    def test_default_batch_size(self):
         from houyi.rag.indexed.embedding.gemini import GeminiEmbedder
 
         assert GeminiEmbedder.DEFAULT_BATCH_SIZE == 2, (
@@ -37,7 +37,7 @@ class TestGeminiEmbedderConfig:
             "MAX_RETRIES should be at least 3 for robust retry logic"
         )
 
-    def test_custom_batch_size_and_delay(self):
+    def test_custom_batch_and_delay(self):
         from houyi.rag.indexed.embedding.gemini import GeminiEmbedder
 
         embedder = GeminiEmbedder(
@@ -63,7 +63,7 @@ class TestGeminiEmbedderAuth:
                 with patch.object(_gemini_mod.GeminiEmbedder, "_ensure_client"):
                     embedder._ensure_client()
 
-    def test_error_message_mentions_both_auth_methods(self):
+    def test_error_mentions_both_auths(self):
         from houyi.rag.indexed.embedding.gemini import GeminiEmbedder
 
         embedder = GeminiEmbedder(model="text-embedding-004", dimension=768)
@@ -87,7 +87,7 @@ class TestGeminiEmbedderAuth:
                 embedder._ensure_client()
 
     @pytest.mark.asyncio
-    async def test_embed_batch_respects_batch_size(self):
+    async def test_batch_respects_size(self):
         from houyi.rag.indexed.embedding.gemini import GeminiEmbedder
 
         embedder = GeminiEmbedder(
@@ -155,7 +155,7 @@ class TestGeminiEmbedderAuth:
         assert progress_calls[1] == (4, 4, 2)
 
     @pytest.mark.asyncio
-    async def test_adaptive_delay_on_rate_limit(self):
+    async def test_adaptive_delay_rate_limit(self):
         from houyi.rag.indexed.embedding.gemini import GeminiEmbedder
 
         embedder = GeminiEmbedder(

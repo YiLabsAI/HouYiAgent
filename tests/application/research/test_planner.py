@@ -48,7 +48,7 @@ class TestPlannerMetadata:
         section = OutlineSection(title="Overview", objective="Survey")
         assert section.section_archetype == "overview_and_synthesis"
 
-    def test_build_plan_reads_query_type(self):
+    def test_plan_reads_query_type(self):
         plan = _build_plan(
             "test query",
             {

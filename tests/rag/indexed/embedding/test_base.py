@@ -21,7 +21,7 @@ class SuperCallingEmbedder(BaseEmbedder):
 
 
 class TestBaseEmbedder:
-    async def test_embed_batch_runs_sequentially_and_reports_progress(self) -> None:
+    async def test_batch_runs_sequential_progress(self) -> None:
         embedder = DummyEmbedder()
         progress_calls: list[tuple[int, int, int]] = []
 
@@ -42,14 +42,14 @@ class TestBaseEmbedder:
 
         assert isinstance(embedder, Embedder)
 
-    async def test_embedder_protocol_default_methods_raise_not_implemented(self) -> None:
+    async def test_protocol_raises_not_implemented(self) -> None:
         with pytest.raises(NotImplementedError):
             await Embedder.embed(object(), "hello")
 
         with pytest.raises(NotImplementedError):
             await Embedder.embed_batch(object(), ["hello"])
 
-    async def test_base_embedder_abstract_super_path_raises_not_implemented(self) -> None:
+    async def test_abstract_super_raises(self) -> None:
         embedder = SuperCallingEmbedder(dimension=1)
 
         with pytest.raises(NotImplementedError):

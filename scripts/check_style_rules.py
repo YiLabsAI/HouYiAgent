@@ -25,30 +25,26 @@ Checks (in order)
    and B3-106 in ``docs/design/deep-research-acceptance.md``.
 2. **ERROR** — test function names must stay short. Any ``def test_<name>``
    under ``tests/`` fails when ``<name>`` (the portion AFTER the leading
-   ``test_``) contains more than 4 literal underscore characters. The check
+   ``test_``) contains more than 3 literal underscore characters. The check
    counts underscores in the captured tail only; the ``test_`` prefix itself
    is never included.
 
-   ``agent.md`` §Test Function Naming uses three layers; this gate maps onto
-   them as follows (examples use ``<name>`` = ``alpha_beta_...``):
+   Mapping onto ``agent.md`` §Test Function Naming (examples use
+   ``<name>`` = ``alpha_beta_...``):
 
-   - ``test_alpha_beta_gamma`` — 3 tail segments, 2 underscores: **preferred**.
-   - ``test_alpha_beta_gamma_delta`` — 4 tail segments, 3 underscores: still
-     passes. This is the boundary of what reviewers should accept as normal.
-   - ``test_alpha_beta_gamma_delta_epsilon`` — 5 tail segments, 4 underscores:
-     agent.md flags this as a smell, but the gate currently still PASSES
-     it because the existing test corpus carries a large legacy backlog
-     in this band. The hard cap will tighten to 3 underscores once a
-     dedicated rename pass clears the backlog.
-   - ``test_alpha_beta_gamma_delta_epsilon_zeta`` — 6 tail segments,
-     5 underscores: FAILS (the hard cap today).
+   - ``test_alpha_beta`` — 2 tail segments, 1 underscore: **preferred**.
+   - ``test_alpha_beta_gamma`` — 3 tail segments, 2 underscores: preferred.
+   - ``test_alpha_beta_gamma_delta`` — 4 tail segments, 3 underscores: at the
+     hard cap. Passes, but reviewers should try to trim further.
+   - ``test_alpha_beta_gamma_delta_epsilon`` — 5 tail segments,
+     4 underscores: **FAILS**. Shorten the name or push scenario detail
+     into a test class or docstring.
 
    A **WARN** also fires when the captured tail length exceeds 35 characters
-   (soft preference) or 45 characters (hard limit per ``agent.md``). Both
-   thresholds are advisory today for the same legacy-backlog reason; they
-   surface borderline names without blocking commits on files that happen
-   to touch grandfathered neighbours, and will be promoted to ERROR in
-   the same follow-up that tightens the underscore cap.
+   (soft preference) or 45 characters (hard limit per ``agent.md``). The
+   45-char ceiling is also a hard expectation; it is kept as WARN rather
+   than ERROR so borderline names surface without blocking otherwise clean
+   commits. Treat any WARN as a rename opportunity in the same patch.
 3. **WARN**  — files that embed 5+ ``\\uXXXX`` CJK escapes but carry no ASCII
    ``#`` comment anywhere in the file emit a warning so reviewers remember to
    add a short pinyin or English gloss.
@@ -83,7 +79,7 @@ _ASCII_COMMENT_RE = re.compile(r"^\s*#\s")
 # ``-h`` / ``--help`` either directly (shell ``"-h"`` branches) or via argparse.
 _HELP_SUPPORT_RE = re.compile(r'--help|"-h"|"\-\-help"|argparse|ArgumentParser|add_help')
 
-_MAX_TEST_UNDERSCORES = 4
+_MAX_TEST_UNDERSCORES = 3
 # Character-length limits for the captured tail of a test function name
 # (everything after the leading ``test_``).  Matches ``agent.md`` §Test
 # Function Naming: names should normally fit ~35 chars, and 45 is the hard

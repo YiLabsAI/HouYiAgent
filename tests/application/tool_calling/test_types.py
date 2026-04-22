@@ -61,7 +61,7 @@ class _BaseAdapter:
 
 class TestToolCallCore:
     @pytest.mark.asyncio
-    async def test_assemble_no_tool_trace_uses_initial_response(self) -> None:
+    async def test_no_trace_uses_initial(self) -> None:
         base_adapter = _BaseAdapter()
         execution = _Execution(metadata={})
         node_exec = _NodeExec()
@@ -99,7 +99,7 @@ class TestToolCallCore:
         assert base_adapter.calls == []
 
     @pytest.mark.asyncio
-    async def test_assemble_tool_trace_cache_hit_skips_chat(self) -> None:
+    async def test_cache_hit_skips_chat(self) -> None:
         base_adapter = _BaseAdapter()
         execution = _Execution(metadata={})
         node_exec = _NodeExec()
@@ -161,7 +161,7 @@ class TestToolCallCore:
 
 class TestExecutionSerialization:
     @pytest.mark.asyncio
-    async def test_to_wire_data_serializes_nested_tool_call_payload(self) -> None:
+    async def test_wire_data_nested_payload(self) -> None:
         result = await assemble_tool_call_output(
             session_id="s1",
             execution=_Execution(metadata={}),
@@ -197,7 +197,7 @@ class TestExecutionSerialization:
         assert payload["tool_calls"][0]["result"]["raw"] == {"ok": True}
 
     @pytest.mark.asyncio
-    async def test_assemble_tool_trace_cache_miss_calls_chat_and_stores(self) -> None:
+    async def test_trace_cache_miss_stores(self) -> None:
         base_adapter = _BaseAdapter()
         execution = _Execution(metadata={})
         node_exec = _NodeExec()
@@ -247,7 +247,7 @@ class TestExecutionSerialization:
         assert cache_key in llm_cache
 
     @pytest.mark.asyncio
-    async def test_normalize_tool_trace_collects_errors(self) -> None:
+    async def test_normalize_collects_errors(self) -> None:
         base_adapter = _BaseAdapter()
         execution = _Execution(metadata={})
         node_exec = _NodeExec()
@@ -314,7 +314,7 @@ class TestNormalizeToolTrace:
         assert calls[1].parallel_group_id == "round_1"
         assert errors == []
 
-    def test_parallel_group_id_none_for_sequential(self) -> None:
+    def test_group_id_none_sequential(self) -> None:
         from houyi.application.tool_calling.tool_call_output import _normalize_tool_trace
 
         raw_trace = [
@@ -328,7 +328,7 @@ class TestNormalizeToolTrace:
         calls, _ = _normalize_tool_trace(raw_trace)
         assert calls[0].parallel_group_id is None
 
-    def test_error_entry_still_carries_parallel_group_id(self) -> None:
+    def test_error_carries_group_id(self) -> None:
         from houyi.application.tool_calling.tool_call_output import _normalize_tool_trace
 
         raw_trace = [
@@ -350,7 +350,7 @@ class TestAssembleOutputMetadata:
     """Tests for trace_id and usage metadata in assemble_tool_call_output."""
 
     @pytest.mark.asyncio
-    async def test_trace_id_from_execution_id(self) -> None:
+    async def test_trace_id_from_execution(self) -> None:
         """trace_id should come from execution.execution_id."""
         base_adapter = _BaseAdapter()
         execution = _Execution(metadata={}, execution_id="trace_abc")
@@ -430,7 +430,7 @@ class TestAssembleOutputMetadata:
         }
 
     @pytest.mark.asyncio
-    async def test_usage_from_response_metadata_fallback(self) -> None:
+    async def test_usage_from_metadata(self) -> None:
         """usage should be extracted from response.metadata when usage attr is None."""
         usage = {"prompt_tokens": 20, "completion_tokens": 10, "total_tokens": 30}
         resp = _Response(content="done", metadata={"usage": usage})
@@ -462,7 +462,7 @@ class TestAssembleOutputMetadata:
         assert result.output_payload.metadata.get("usage") == usage
 
     @pytest.mark.asyncio
-    async def test_no_trace_id_when_execution_id_empty(self) -> None:
+    async def test_no_trace_empty_execution(self) -> None:
         result = await assemble_tool_call_output(
             session_id="s1",
             execution=_Execution(metadata={}, execution_id=""),

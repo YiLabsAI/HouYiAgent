@@ -99,7 +99,7 @@ class TestCollectionOverhead:
             f"{self.MAX_OVERHEAD_PERCENT}% of {self.MIN_NODE_LATENCY_MS}ms min node latency"
         )
 
-    def test_span_creation_cost_under_500us(self) -> None:
+    def test_span_cost_under_500us(self) -> None:
         """Span pair (root+child) creation must be < 500μs."""
         _measure_span_overhead_absolute(100)
         avg_us = _measure_span_overhead_absolute(5000)
@@ -107,7 +107,7 @@ class TestCollectionOverhead:
         print(f"\n  Span pair (root+child) avg: {avg_us:.1f} μs")
         assert avg_us < 500, f"Span creation too slow: {avg_us:.1f} μs"
 
-    def test_context_propagation_overhead_is_negligible(self) -> None:
+    def test_propagation_overhead_negligible(self) -> None:
         """TraceContext push/current/pop should be microsecond-level.
 
         This is a micro-benchmark and is sensitive to CPU scheduling and Python

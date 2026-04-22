@@ -39,7 +39,7 @@ class TestToolCallOrchestrator:
             == {}
         )
 
-    def test_build_chat_kwargs_includes_values(self) -> None:
+    def test_build_kwargs_includes_values(self) -> None:
         assert build_chat_kwargs(
             max_tokens=123,
             temperature=0.4,
@@ -54,7 +54,7 @@ class TestToolCallOrchestrator:
             "prompt_cache_key": "cache_key",
         }
 
-    def test_choose_tool_cache_fresh_disables_when_not_allowed(self) -> None:
+    def test_fresh_disables_when_denied(self) -> None:
         execution = _Execution(metadata={"replay_mode": "fresh"})
         tool_cache = {"k": {"raw": 1}}
         assert (
@@ -66,7 +66,7 @@ class TestToolCallOrchestrator:
             is None
         )
 
-    def test_choose_tool_cache_fresh_keeps_when_allowed(self) -> None:
+    def test_fresh_keeps_when_allowed(self) -> None:
         execution = _Execution(metadata={"replay_mode": "fresh"})
         tool_cache = {"k": {"raw": 1}}
         assert (
@@ -78,7 +78,7 @@ class TestToolCallOrchestrator:
             == tool_cache
         )
 
-    def test_choose_tool_cache_non_fresh_keeps(self) -> None:
+    def test_non_fresh_keeps(self) -> None:
         execution = _Execution(metadata={"replay_mode": "deterministic"})
         tool_cache = {"k": {"raw": 1}}
         assert (
@@ -90,11 +90,11 @@ class TestToolCallOrchestrator:
             == tool_cache
         )
 
-    async def test_wrap_tool_choice_none_returns_same_adapter(self) -> None:
+    async def test_wrap_none_returns_same(self) -> None:
         adapter = _InnerAdapter()
         assert wrap_tool_choice(adapter=adapter, tool_choice=None) is adapter
 
-    async def test_wrap_tool_choice_sets_tool_choice_in_chat(self) -> None:
+    async def test_wrap_sets_choice_chat(self) -> None:
         adapter = _InnerAdapter()
         wrapped = wrap_tool_choice(adapter=adapter, tool_choice="required")
         await wrapped.chat([{"role": "user", "content": "hi"}], tools=[{"name": "t"}])

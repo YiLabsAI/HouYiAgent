@@ -196,7 +196,7 @@ async def test_empty_plan():
 
 
 @pytest.mark.asyncio
-async def test_exposes_compat_and_structured_fields():
+async def test_exposes_compat_structured():
     """Test executor result supports legacy and structured fields together."""
     executor = LocalExecutor()
 

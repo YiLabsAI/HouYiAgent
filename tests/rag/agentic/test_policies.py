@@ -38,7 +38,7 @@ class TestAgenticPolicies:
         assert "what" not in keywords
         assert "is" not in keywords
 
-    def test_extract_keywords_simple_filters_short(self) -> None:
+    def test_extract_filters_short(self) -> None:
         keywords = extract_keywords_simple("A B C test")
 
         assert "test" in keywords
@@ -50,7 +50,7 @@ class TestAgenticPolicies:
         assert not should_terminate(results, SearchRoundType.BROAD)
         assert should_terminate(results, SearchRoundType.FOCUSED)
 
-    def test_should_terminate_not_enough_results(self) -> None:
+    def test_not_enough_results(self) -> None:
         results = [SearchResult(chunk_id="c1", content="test", score=0.8)]
         assert not should_terminate(results, SearchRoundType.FOCUSED)
 

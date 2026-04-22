@@ -26,13 +26,13 @@ class TestAssertionEvaluate:
 
         assert assertion.evaluate({"value": -5}) is False
 
-    def test_evaluate_with_string_expression_true(self):
+    def test_string_expression_true(self):
         """Test evaluate with string expression returning True."""
         assertion = AssertionSpec(name="cost_check", condition="cost < 1.0")
 
         assert assertion.evaluate({"cost": 0.5}) is True
 
-    def test_evaluate_with_string_expression_false(self):
+    def test_string_expression_false(self):
         """Test evaluate with string expression returning False."""
         assertion = AssertionSpec(name="cost_check", condition="cost < 1.0")
 

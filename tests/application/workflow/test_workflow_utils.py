@@ -11,13 +11,13 @@ from houyi.application.workflow.workflow_utils import (
 from houyi.interface.protocol.ir import EdgeIR, NodeIR, PlanIR
 
 
-def test_sanitize_workflow_name_keeps_safe_chars_and_normalizes_spaces() -> None:
+def test_sanitize_keeps_safe_normalizes() -> None:
     assert sanitize_workflow_name("My Workflow 01") == "My_Workflow_01"
     assert sanitize_workflow_name("  weird@@name!!  ") == "weirdname"
     assert sanitize_workflow_name("a-b_c") == "a-b_c"
 
 
-def test_workflow_dict_roundtrip_preserves_plan_and_strips_metadata_fields() -> None:
+def test_dict_roundtrip_preserves_plan() -> None:
     plan = PlanIR(
         plan_id="plan_1",
         version=1,

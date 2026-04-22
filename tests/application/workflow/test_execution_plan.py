@@ -110,7 +110,7 @@ class TestExecutionPlanCreation:
 class TestExecutionPlanNodeAccess:
     """Test ExecutionPlan node access."""
 
-    def test_execution_plan_node_by_index(self):
+    def test_plan_node_by_index(self):
         """Test accessing nodes by index."""
         nodes = []
         for i in range(3):
@@ -153,7 +153,7 @@ class TestExecutionPlanNodeAccess:
 class TestExecutionPlanComplexScenarios:
     """Test ExecutionPlan complex scenarios."""
 
-    def test_execution_plan_with_verify_nodes(self):
+    def test_plan_with_verify_nodes(self):
         """Test ExecutionPlan with VERIFY nodes."""
         llm_node = IRNode(
             node_id="llm",
@@ -174,7 +174,7 @@ class TestExecutionPlanComplexScenarios:
 
         assert plan.nodes[1].node_type == NodeType.VERIFY
 
-    def test_execution_plan_mixed_node_types(self):
+    def test_plan_mixed_node_types(self):
         """Test ExecutionPlan with mixed node types."""
         nodes = [
             IRNode(

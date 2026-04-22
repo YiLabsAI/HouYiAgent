@@ -133,7 +133,7 @@ def test_get_pending_requests_empty(review_queue):
     assert len(pending) == 0
 
 
-def test_get_pending_requests_filters_non_pending(review_queue, sample_request):
+def test_pending_filters_non_pending(review_queue, sample_request):
     """Test that get_pending_requests filters out non-pending requests."""
     # Add approved request
     sample_request.status = "approved"

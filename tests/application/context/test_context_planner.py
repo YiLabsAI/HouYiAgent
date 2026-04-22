@@ -191,7 +191,7 @@ class TestContextPlannerUsage:
             ContextBlockType.RECENT,
         ]
 
-    def test_drops_recent_for_current_turn(self):
+    def test_drops_recent_current_turn(self):
         est = TokenEstimator(context_window_override=120, output_reserve=20)
         planner = ContextPlanner(token_estimator=est, system_instructions="Sys")
         current_turn = {"role": "user", "content": "current " + ("x" * 400)}

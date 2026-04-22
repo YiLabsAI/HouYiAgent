@@ -66,7 +66,7 @@ def _build_adapter_with_client(create_mock: AsyncMock) -> OpenAIAdapter:
 
 class TestOpenAIAdapterRetry:
     @pytest.mark.asyncio
-    async def test_chat_retries_on_retryable_status(self):
+    async def test_chat_retries_on_retryable(self):
         create_mock = AsyncMock(
             side_effect=[
                 _FakeAPIError("rate limited", status_code=429, headers={"Retry-After": "0"}),
@@ -82,7 +82,7 @@ class TestOpenAIAdapterRetry:
         assert create_mock.await_count == 2
 
     @pytest.mark.asyncio
-    async def test_chat_does_not_retry_non_retryable_status(self):
+    async def test_chat_skips_non_retryable(self):
         create_mock = AsyncMock(side_effect=_FakeAPIError("bad request", status_code=400))
         adapter = _build_adapter_with_client(create_mock)
 
@@ -92,7 +92,7 @@ class TestOpenAIAdapterRetry:
         assert create_mock.await_count == 1
 
     @pytest.mark.asyncio
-    async def test_stream_retries_before_first_chunk(self):
+    async def test_stream_retries_before_first(self):
         async def good_stream():
             yield _make_stream_chunk("ok")
 
@@ -108,7 +108,7 @@ class TestOpenAIAdapterRetry:
         assert create_mock.await_count == 2
 
     @pytest.mark.asyncio
-    async def test_stream_does_not_retry_after_emitting_chunks(self):
+    async def test_stream_skips_after_chunks(self):
         async def bad_stream():
             yield _make_stream_chunk("part")
             raise _FakeAPIError("stream interrupted")
@@ -125,19 +125,19 @@ class TestOpenAIAdapterRetry:
 
 
 class TestOpenAIAdapterHelpers:
-    def test_extract_status_code_prefers_direct_status_code(self):
+    def test_extract_prefers_direct(self):
         exc = _FakeAPIError("rate limited", status_code=429)
         assert OpenAIAdapter._extract_status_code(exc) == 429
 
-    def test_extract_status_code_falls_back_to_response_status(self):
+    def test_extract_falls_back_response(self):
         exc = Exception("transport")
         exc.response = _FakeResponse(503)  # type: ignore[attr-defined]
         assert OpenAIAdapter._extract_status_code(exc) == 503
 
-    def test_extract_status_code_returns_none_without_status(self):
+    def test_extract_none_without_status(self):
         assert OpenAIAdapter._extract_status_code(Exception("boom")) is None
 
-    def test_build_stream_chunk_with_tool_call_delta_sets_finish_reason(self):
+    def test_build_chunk_sets_finish(self):
         adapter = _build_adapter_with_client(AsyncMock())
 
         function = types.SimpleNamespace(name="search", arguments='{"query":"hi"}')
@@ -158,14 +158,14 @@ class TestOpenAIAdapterHelpers:
         ]
         assert adapter.last_finish_reason == "tool_calls"
 
-    def test_build_stream_chunk_returns_none_when_delta_has_no_content_or_tool_calls(self):
+    def test_build_chunk_empty_delta(self):
         adapter = _build_adapter_with_client(AsyncMock())
         delta = types.SimpleNamespace(content=None, tool_calls=None)
         choice = types.SimpleNamespace(delta=delta, finish_reason=None)
 
         assert adapter._build_stream_chunk(choice) is None
 
-    def test_update_stream_usage_records_prompt_completion_and_total(self):
+    def test_update_usage_records_totals(self):
         adapter = _build_adapter_with_client(AsyncMock())
         usage = types.SimpleNamespace(
             prompt_tokens=5,
@@ -188,7 +188,7 @@ class TestOpenAIAdapterHelpers:
             "prompt_cache_hit_tokens": 2,
         }
 
-    def test_build_chat_params_includes_stream_options_tools_and_extra_kwargs(self):
+    def test_build_params_with_kwargs(self):
         adapter = _build_adapter_with_client(AsyncMock())
 
         params = adapter._build_chat_params(

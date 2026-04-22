@@ -78,7 +78,7 @@ def test_evaluate_marks_pin_violation():
     assert record.metrics.pin_violation_count == 1
 
 
-def test_evaluate_uses_full_entity_coverage():
+def test_evaluate_full_entity_coverage():
     evaluator = CompactionEvaluator(
         TokenEstimator(context_window_override=10000, output_reserve=2000)
     )

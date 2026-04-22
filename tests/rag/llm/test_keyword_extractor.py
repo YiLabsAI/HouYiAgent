@@ -60,7 +60,7 @@ class TestKeywordExtractor:
         assert len(result) > 1
 
     @pytest.mark.asyncio
-    async def test_expand_keywords_embedded_array_response(self) -> None:
+    async def test_expand_embedded_array(self) -> None:
         adapter = FakeAdapter(['Suggested terms: ["vector search", "embeddings"]'])
         extractor = KeywordExtractor(adapter)
 

@@ -35,7 +35,7 @@ class TestSearchState:
         assert _search_state["matches_found"] == 0
         assert _search_state["sources_collected"] == []
 
-    def test_get_search_state_returns_copy(self) -> None:
+    def test_state_returns_copy(self) -> None:
         from houyi.rag.skills.kb_search.hooks import (
             _search_state,
             get_search_state,
@@ -115,7 +115,7 @@ class TestPreSearchHook:
         assert "**/*.md" in result.output
 
     @pytest.mark.asyncio
-    async def test_pre_search_hook_uses_env_knowledge_dir(self) -> None:
+    async def test_pre_uses_env_knowledge(self) -> None:
         from houyi.rag.skills.kb_search.hooks import (
             _search_state,
             pre_search_hook,
@@ -135,7 +135,7 @@ class TestPreSearchHook:
             assert _search_state["knowledge_dir"] == "/env/knowledge"
 
     @pytest.mark.asyncio
-    async def test_pre_search_hook_default_knowledge_dir(self) -> None:
+    async def test_pre_default_knowledge_dir(self) -> None:
         from houyi.infrastructure.config import env
         from houyi.rag.skills.kb_search.hooks import (
             _search_state,
@@ -157,7 +157,7 @@ class TestPreSearchHook:
             assert _search_state["knowledge_dir"] == env.rag_knowledge_dir
 
     @pytest.mark.asyncio
-    async def test_pre_search_hook_no_args(self) -> None:
+    async def test_pre_no_args(self) -> None:
         from houyi.rag.skills.kb_search.hooks import pre_search_hook, reset_search_state
 
         reset_search_state()
@@ -169,7 +169,7 @@ class TestPreSearchHook:
         assert result.success is True
 
     @pytest.mark.asyncio
-    async def test_pre_search_hook_unknown_tool(self) -> None:
+    async def test_pre_unknown_tool(self) -> None:
         from houyi.rag.skills.kb_search.hooks import pre_search_hook, reset_search_state
 
         reset_search_state()
@@ -183,7 +183,7 @@ class TestPreSearchHook:
 
 class TestPostSearchHook:
     @pytest.mark.asyncio
-    async def test_post_search_hook_grep_with_matches(self) -> None:
+    async def test_post_grep_with_matches(self) -> None:
         from houyi.rag.skills.kb_search.hooks import (
             _search_state,
             post_search_hook,
@@ -210,7 +210,7 @@ class TestPostSearchHook:
         assert "Progress" in result.output
 
     @pytest.mark.asyncio
-    async def test_post_search_hook_grep_no_matches(self) -> None:
+    async def test_post_grep_no_matches(self) -> None:
         from houyi.rag.skills.kb_search.hooks import (
             _search_state,
             post_search_hook,
@@ -230,7 +230,7 @@ class TestPostSearchHook:
         assert _search_state["matches_found"] == 0
 
     @pytest.mark.asyncio
-    async def test_post_search_hook_read_with_content(self) -> None:
+    async def test_post_read_with_content(self) -> None:
         from houyi.rag.skills.kb_search.hooks import (
             _search_state,
             post_search_hook,
@@ -250,7 +250,7 @@ class TestPostSearchHook:
         assert _search_state["files_searched"] == 1
 
     @pytest.mark.asyncio
-    async def test_post_search_hook_limits_sources(self) -> None:
+    async def test_post_limits_sources(self) -> None:
         from houyi.rag.skills.kb_search.hooks import (
             _search_state,
             post_search_hook,
@@ -274,7 +274,7 @@ class TestPostSearchHook:
         assert _search_state["matches_found"] == 10
 
     @pytest.mark.asyncio
-    async def test_post_search_hook_no_result(self) -> None:
+    async def test_post_no_result(self) -> None:
         from houyi.rag.skills.kb_search.hooks import post_search_hook, reset_search_state
 
         reset_search_state()
@@ -349,7 +349,7 @@ class TestStopHook:
         assert _search_state["matches_found"] == 0
 
     @pytest.mark.asyncio
-    async def test_stop_hook_many_sources_truncates(self) -> None:
+    async def test_stop_many_sources_truncates(self) -> None:
         from houyi.rag.skills.kb_search.hooks import (
             _search_state,
             reset_search_state,

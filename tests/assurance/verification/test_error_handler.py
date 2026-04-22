@@ -140,7 +140,7 @@ async def test_handle_error_auto_fix(error_handler):
 
 
 @pytest.mark.asyncio
-async def test_handle_error_auto_fix_failed(error_handler):
+async def test_auto_fix_failed(error_handler):
     """Test handling auto-fixable error when fix fails."""
     verifier = SQLVerifier()
     error = VerificationResult(
@@ -184,7 +184,7 @@ def test_classify_error_fail(error_handler):
     assert classification == "fail"
 
 
-def test_should_escalate_non_auto_fixable(error_handler):
+def test_escalate_non_auto_fixable(error_handler):
     """Test escalation for non-auto-fixable errors."""
     error = VerificationResult(
         rule_id="test",
@@ -197,7 +197,7 @@ def test_should_escalate_non_auto_fixable(error_handler):
     assert should_escalate is True
 
 
-def test_should_not_escalate_auto_fixable(error_handler):
+def test_no_escalate_auto_fixable(error_handler):
     """Test no escalation for auto-fixable errors under retry limit."""
     error = VerificationResult(
         rule_id="test",
@@ -211,7 +211,7 @@ def test_should_not_escalate_auto_fixable(error_handler):
 
 
 @pytest.mark.asyncio
-async def test_handle_error_escalate_non_fixable(error_handler):
+async def test_escalate_non_fixable(error_handler):
     """Test handling non-fixable error that should escalate."""
     verifier = SQLVerifier()
     error = VerificationResult(

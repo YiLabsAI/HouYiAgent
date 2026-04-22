@@ -131,7 +131,7 @@ class TestSpan:
         assert span_dict["attributes"]["key"] == "value"
         assert len(span_dict["events"]) == 1
 
-    def test_span_with_custom_trace_id(self):
+    def test_span_custom_trace_id(self):
         """Test Span with custom trace_id."""
         custom_trace_id = "custom_trace_123"
         span = Span(name="test", trace_id=custom_trace_id)
@@ -165,7 +165,7 @@ class TestSpan:
         final_duration = span.duration
         assert final_duration >= duration
 
-    def test_span_set_status_with_description(self):
+    def test_set_status_with_description(self):
         """Test setting span status with description."""
         span = Span(name="test")
         span.set_status("error", "Something went wrong")
@@ -334,7 +334,7 @@ class TestExporters:
         # Batch should have 2 spans
         assert len(exporter.span_batch) == 2
 
-    def test_jaeger_convert_to_otlp_includes_core_fields(self):
+    def test_jaeger_otlp_core_fields(self):
         """Test OTLP conversion preserves identifiers and attributes."""
         exporter = JaegerExporter(endpoint="http://localhost:4318", service_name="test_service")
         span = Span(name="child")
@@ -349,7 +349,7 @@ class TestExporters:
         assert otlp["status"]["code"] == 1
         assert {item["key"] for item in otlp["attributes"]} == {"mode"}
 
-    def test_jaeger_flush_clears_batch_on_url_error(self, monkeypatch):
+    def test_jaeger_flush_url_error(self, monkeypatch):
         """Test Jaeger flush clears the batch even when upload fails."""
         exporter = JaegerExporter(endpoint="http://localhost:4318", service_name="test_service")
         span = Span(name="child")
@@ -382,7 +382,7 @@ class TestExporters:
         assert exporter.env == "staging"
         assert exporter.service_name == "test_service"
 
-    def test_datadog_convert_to_datadog_flattens_children(self):
+    def test_datadog_flattens_children(self):
         """Test Datadog conversion flattens child spans into a single trace list."""
         parent = Span(name="parent")
         child = Span(name="child", parent=parent)
@@ -399,7 +399,7 @@ class TestExporters:
         assert trace[1]["name"] == "child"
         assert trace[1]["meta"]["cache_hit"] == "True"
 
-    def test_datadog_flush_clears_batch_on_generic_error(self, monkeypatch):
+    def test_datadog_flush_on_error(self, monkeypatch):
         """Test Datadog flush clears batched traces after request failure."""
         exporter = DatadogExporter(agent_url="http://localhost:8126", service_name="test_service")
         span = Span(name="child")
@@ -415,7 +415,7 @@ class TestExporters:
 
         assert exporter.trace_batch == []
 
-    def test_storage_exporter_persists_span_schema(self):
+    def test_storage_persists_schema(self):
         """Test StorageExporter serializes and saves spans to storage."""
         storage = Mock()
         exporter = StorageExporter(storage=storage)
@@ -429,7 +429,7 @@ class TestExporters:
         assert saved_span.name == "stored"
         assert saved_span.trace_id == span.trace_id
 
-    def test_storage_exporter_lazy_loads_storage(self):
+    def test_storage_lazy_loads(self):
         """Test StorageExporter uses provided storage property lazily."""
         storage = Mock()
         exporter = StorageExporter(storage=storage)

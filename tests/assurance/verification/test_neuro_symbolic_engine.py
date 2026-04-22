@@ -47,7 +47,7 @@ async def test_generate_and_verify_success(engine, sql_verifier, sql_rule):
 
 
 @pytest.mark.asyncio
-async def test_generate_and_verify_auto_fix(engine, sql_verifier, sql_rule):
+async def test_verify_auto_fix(engine, sql_verifier, sql_rule):
     """Test auto-fix during verification."""
     call_count = 0
 
@@ -80,7 +80,7 @@ async def test_generate_and_verify_disabled(sql_verifier, sql_rule):
 
 
 @pytest.mark.asyncio
-async def test_generate_and_verify_audit_mode(sql_verifier, sql_rule):
+async def test_verify_audit_mode(sql_verifier, sql_rule):
     """Test audit mode - log but don't block."""
     config = VerificationConfig.audit()
     engine = NeuroSymbolicEngine(config=config)
@@ -95,7 +95,7 @@ async def test_generate_and_verify_audit_mode(sql_verifier, sql_rule):
 
 
 @pytest.mark.asyncio
-async def test_generate_and_verify_strict_mode(sql_verifier, sql_rule):
+async def test_verify_strict_mode(sql_verifier, sql_rule):
     """Test strict mode - fail immediately."""
     config = VerificationConfig.strict()
     engine = NeuroSymbolicEngine(config=config)
@@ -215,7 +215,7 @@ async def test_metrics_integration(sql_verifier, sql_rule):
 
 
 @pytest.mark.asyncio
-async def test_generate_and_verify_task_id(engine, sql_verifier, sql_rule):
+async def test_verify_task_id(engine, sql_verifier, sql_rule):
     """Test with custom task_id."""
 
     async def generator(feedback_context):
@@ -229,7 +229,7 @@ async def test_generate_and_verify_task_id(engine, sql_verifier, sql_rule):
 
 
 @pytest.mark.asyncio
-async def test_lenient_mode_with_auto_fix(sql_verifier, sql_rule):
+async def test_lenient_with_auto_fix(sql_verifier, sql_rule):
     """Test lenient mode enables auto-fix."""
     config = VerificationConfig.lenient()
     engine = NeuroSymbolicEngine(config=config)
@@ -267,7 +267,7 @@ def test_metrics_all_passed():
 
 
 @pytest.mark.asyncio
-async def test_generate_and_verify_generator_exception(engine, sql_verifier, sql_rule):
+async def test_verify_generator_exception(engine, sql_verifier, sql_rule):
     """Test handling generator exceptions."""
 
     async def generator():

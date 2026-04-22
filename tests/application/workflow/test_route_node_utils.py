@@ -4,7 +4,7 @@ from houyi.application.workflow.route_node_utils import evaluate_route
 
 
 class TestEvaluateRouteRules:
-    def test_rules_first_match_by_bool_when(self):
+    def test_rules_first_bool_when(self):
         config = {
             "route_rules": [
                 {"label": "a", "when": False, "then": {"disable_nodes": ["n1"]}},
@@ -22,7 +22,7 @@ class TestEvaluateRouteRules:
         assert trace[0]["matched"] is False
         assert trace[1]["matched"] is True
 
-    def test_rules_match_by_key_lookup(self):
+    def test_rules_by_key_lookup(self):
         config = {
             "route_rules": [
                 {"label": "k", "when": "flag", "disable_nodes": ["a"]},
@@ -38,7 +38,7 @@ class TestEvaluateRouteRules:
         assert matched_rule == {"index": 0, "label": "k"}
         assert trace[0]["reason"] == "key"
 
-    def test_rules_no_match_falls_back_to_legacy(self):
+    def test_rules_falls_back_legacy(self):
         config = {
             "route_rules": [
                 {"label": "k", "when": "flag", "disable_nodes": ["a"]},
@@ -58,7 +58,7 @@ class TestEvaluateRouteRules:
 
 
 class TestEvaluateRouteLegacy:
-    def test_legacy_condition_prefers_condition_over_verified(self):
+    def test_legacy_prefers_condition(self):
         config = {"disable_nodes_on_true": ["a"], "disable_nodes_on_false": ["b"]}
         route_mode, condition, target_ids, matched_rule, trace = evaluate_route(
             config=config, inputs={"condition": 1, "verified": False}
@@ -70,7 +70,7 @@ class TestEvaluateRouteLegacy:
         assert matched_rule is None
         assert trace == []
 
-    def test_legacy_condition_uses_verified_when_condition_missing(self):
+    def test_legacy_uses_verified(self):
         config = {"disable_nodes_on_true": ["a"], "disable_nodes_on_false": ["b"]}
         route_mode, condition, target_ids, matched_rule, trace = evaluate_route(
             config=config, inputs={"verified": "non-empty"}

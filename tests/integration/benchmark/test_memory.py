@@ -202,7 +202,7 @@ class TestEmbeddingSearchPerf:
         yield backend, emb
         backend.close()
 
-    def test_emb_search_p95_under_50ms(self, backend_emb_1k):
+    def test_search_p95_under_50ms(self, backend_emb_1k):
         backend, emb = backend_emb_1k
         import asyncio
 

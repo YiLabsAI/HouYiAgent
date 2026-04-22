@@ -104,7 +104,7 @@ class TestTokenEstimatorCounting:
         count = est.count_messages([])
         assert count == 3  # base overhead only
 
-    def test_count_message_multimodal_text_parts(self):
+    def test_count_multimodal_text(self):
         est = TokenEstimator()
         msg = {
             "role": "user",

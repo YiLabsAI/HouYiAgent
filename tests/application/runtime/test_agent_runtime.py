@@ -162,7 +162,7 @@ class TestAgent:
 
         assert agent.spec.policies["memory"] is False
 
-    def test_agent_run_uses_canonical_workflow_executor(self):
+    def test_run_uses_canonical_executor(self):
         """Test Agent.run remains wired to the canonical workflow executor path."""
 
         class Input(BaseModel):

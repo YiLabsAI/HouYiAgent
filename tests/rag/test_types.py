@@ -170,7 +170,7 @@ class TestQualitySummary:
         assert qs.confidence_level == "unknown"
         assert qs.suggestion is None
 
-    def test_quality_summary_from_scores_high(self) -> None:
+    def test_from_scores_high(self) -> None:
         """Test QualitySummary.from_scores with high scores."""
         scores = [0.9, 0.85, 0.8, 0.75, 0.7]
         qs = QualitySummary.from_scores(scores)
@@ -183,7 +183,7 @@ class TestQualitySummary:
         assert qs.above_threshold_count == 5
         assert qs.total_count == 5
 
-    def test_quality_summary_from_scores_medium(self) -> None:
+    def test_from_scores_medium(self) -> None:
         """Test QualitySummary.from_scores with medium scores."""
         scores = [0.7, 0.6, 0.5, 0.4, 0.3]
         qs = QualitySummary.from_scores(scores)
@@ -194,7 +194,7 @@ class TestQualitySummary:
         assert qs.relevance == "medium"
         assert qs.above_threshold_count == 2
 
-    def test_quality_summary_from_scores_low(self) -> None:
+    def test_from_scores_low(self) -> None:
         """Test QualitySummary.from_scores with low scores."""
         scores = [0.3, 0.2, 0.1, 0.15, 0.25]
         qs = QualitySummary.from_scores(scores)
@@ -204,7 +204,7 @@ class TestQualitySummary:
         assert qs.above_threshold_count == 0
         assert qs.suggestion is not None  # Should have improvement suggestion
 
-    def test_quality_summary_from_empty_scores(self) -> None:
+    def test_from_empty_scores(self) -> None:
         """Test QualitySummary.from_scores with empty list."""
         qs = QualitySummary.from_scores([])
         assert qs.total_count == 0
@@ -239,7 +239,7 @@ class TestRetrievalResultWithQuality:
         assert result.quality.avg_score == pytest.approx(0.7)
         assert result.quality.relevance == "high"
 
-    def test_retrieval_result_quality_none_by_default(self) -> None:
+    def test_quality_none_by_default(self) -> None:
         """Test RetrievalResult quality is None by default."""
         result = RetrievalResult(answer="Test")
         assert result.quality is None

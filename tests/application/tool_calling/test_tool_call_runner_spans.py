@@ -135,7 +135,7 @@ class TestToolCallRunnerSpans:
         assert root.end_time is not None
 
     @pytest.mark.asyncio
-    async def test_llm_call_span_per_round(self) -> None:
+    async def test_llm_span_per_round(self) -> None:
         """Each LLM adapter.chat() round should create a child LLM span."""
         skill = _make_skill("echo")
         tm = TraceManager(enabled=True, exporters=[])
@@ -175,7 +175,7 @@ class TestToolCallRunnerSpans:
             assert s.status == "ok"
 
     @pytest.mark.asyncio
-    async def test_tool_execute_span_per_tool_call(self) -> None:
+    async def test_tool_span_per_call(self) -> None:
         """Each tool execution should create a child TOOL span."""
         skill = _make_skill("echo")
         tm = TraceManager(enabled=True, exporters=[])
@@ -213,7 +213,7 @@ class TestToolCallRunnerSpans:
         assert tool_spans[0].end_time is not None
 
     @pytest.mark.asyncio
-    async def test_tool_span_carries_parallel_group_id(self) -> None:
+    async def test_span_carries_group_id(self) -> None:
         """Parallel tool spans should carry group_id attribute."""
         skills = [_make_skill(f"t{i}") for i in range(3)]
         tool_calls = [
@@ -241,7 +241,7 @@ class TestToolCallRunnerSpans:
             assert ts.group_id == "round_1"
 
     @pytest.mark.asyncio
-    async def test_tool_error_sets_span_status_error(self) -> None:
+    async def test_error_sets_span_error(self) -> None:
         """Failed tool execution should set TOOL span status to error."""
         skill = _make_skill("fail_tool")
         tm = TraceManager(enabled=True, exporters=[])
@@ -276,7 +276,7 @@ class TestToolCallRunnerSpans:
         assert tool_spans[0].status == "error"
 
     @pytest.mark.asyncio
-    async def test_execution_span_status_ok_on_success(self) -> None:
+    async def test_execution_status_on_success(self) -> None:
         """Root execution span should be 'ok' when loop succeeds."""
         tm = TraceManager(enabled=True, exporters=[])
         runner = ToolCallRunner(trace_manager=tm)
@@ -331,7 +331,7 @@ class TestToolCallRunnerSpans:
         assert len(trace_ids) == 1, f"Expected single trace_id, got {trace_ids}"
 
     @pytest.mark.asyncio
-    async def test_llm_span_records_model_attribute(self) -> None:
+    async def test_llm_span_records_model(self) -> None:
         """LLM spans should record the adapter model name."""
         tm = TraceManager(enabled=True, exporters=[])
         runner = ToolCallRunner(trace_manager=tm)
@@ -352,7 +352,7 @@ class TestToolCallRunnerSpans:
         assert llm_spans[0].model == "fake-model"
 
     @pytest.mark.asyncio
-    async def test_no_spans_when_trace_manager_is_none(self) -> None:
+    async def test_no_spans_without_manager(self) -> None:
         """When trace_manager is None, run() should not create any spans."""
         runner = ToolCallRunner(trace_manager=None)
         adapter = _FakeAdapter([_FakeResponse(content="done", tool_calls=[])])
@@ -369,7 +369,7 @@ class TestToolCallRunnerSpans:
         assert response.content == "done"
 
     @pytest.mark.asyncio
-    async def test_tool_span_attributes_include_tool_call_id(self) -> None:
+    async def test_span_includes_call_id(self) -> None:
         """TOOL spans should include tool_call_id in attributes."""
         skill = _make_skill("echo")
         tm = TraceManager(enabled=True, exporters=[])
@@ -404,7 +404,7 @@ class TestToolCallRunnerSpans:
         assert tool_spans[0].attributes.get("tool.call_id") == "call_abc123"
 
     @pytest.mark.asyncio
-    async def test_llm_cache_hit_sets_span_cache_hit(self) -> None:
+    async def test_cache_hit_sets_attr(self) -> None:
         """When LLM cache is hit, the LLM span should have cache_hit=True."""
         tm = TraceManager(enabled=True, exporters=[])
         runner = ToolCallRunner(trace_manager=tm)

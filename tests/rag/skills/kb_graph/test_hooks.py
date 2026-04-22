@@ -38,7 +38,7 @@ class TestGraphState:
         assert _graph_state["relations_found"] == 0
         assert _graph_state["hops_traversed"] == 0
 
-    def test_get_graph_state_returns_copy(self) -> None:
+    def test_state_returns_copy(self) -> None:
         """Test get_graph_state returns a copy."""
         from houyi.rag.skills.kb_graph.hooks import (
             _graph_state,
@@ -75,7 +75,7 @@ class TestPreGraphHook:
         assert "entity:Person" in result.output
 
     @pytest.mark.asyncio
-    async def test_pre_graph_hook_grep_no_pattern(self) -> None:
+    async def test_pre_grep_no_pattern(self) -> None:
         """Test pre_graph_hook with grep but no pattern."""
         from houyi.rag.skills.kb_graph.hooks import pre_graph_hook
 
@@ -86,7 +86,7 @@ class TestPreGraphHook:
         assert result.success is True
 
     @pytest.mark.asyncio
-    async def test_pre_graph_hook_other_tool(self) -> None:
+    async def test_pre_other_tool(self) -> None:
         """Test pre_graph_hook with other tool."""
         from houyi.rag.skills.kb_graph.hooks import pre_graph_hook
 
@@ -101,7 +101,7 @@ class TestPostGraphHook:
     """Tests for post_graph_hook."""
 
     @pytest.mark.asyncio
-    async def test_post_graph_hook_with_entities(self) -> None:
+    async def test_post_with_entities(self) -> None:
         """Test post_graph_hook with entity results."""
         from houyi.rag.skills.kb_graph.hooks import (
             _graph_state,
@@ -127,7 +127,7 @@ class TestPostGraphHook:
         assert "1 relations" in result.output
 
     @pytest.mark.asyncio
-    async def test_post_graph_hook_no_entities(self) -> None:
+    async def test_post_no_entities(self) -> None:
         """Test post_graph_hook with no entities."""
         from houyi.rag.skills.kb_graph.hooks import (
             _graph_state,
@@ -145,7 +145,7 @@ class TestPostGraphHook:
         assert _graph_state["entities_found"] == 0
 
     @pytest.mark.asyncio
-    async def test_post_graph_hook_non_dict_result(self) -> None:
+    async def test_post_non_dict(self) -> None:
         """Test post_graph_hook with non-dict result."""
         from houyi.rag.skills.kb_graph.hooks import post_graph_hook, reset_graph_state
 

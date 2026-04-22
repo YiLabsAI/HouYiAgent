@@ -151,7 +151,7 @@ class TestSkillExport:
         assert "# test_skill" in content
         assert "A test skill" in content
 
-    def test_export_skill_md_with_metadata(self, tmp_path):
+    def test_md_with_metadata(self, tmp_path):
         """Test exporting skill with metadata."""
         from pydantic import BaseModel
 
@@ -181,7 +181,7 @@ class TestSkillExport:
         assert "Python" in content
         assert "runtime" in content.lower()
 
-    def test_export_skill_md_with_examples(self, tmp_path):
+    def test_md_with_examples(self, tmp_path):
         """Test exporting skill with examples."""
         from pydantic import BaseModel
 
@@ -687,7 +687,7 @@ class AdvancedTestSkillSpecToolSchema:
         assert schema["function"]["description"] == "Search function"
         assert "parameters" in schema["function"]
 
-    def test_to_tool_schema_with_optional_fields(self):
+    def test_schema_with_optional(self):
         class Input(BaseModel):
             query: str
             limit: int = 10
@@ -712,7 +712,7 @@ class AdvancedTestSkillSpecToolSchema:
         assert "parameters" in schema["function"]
         assert schema["function"]["name"] == "search"
 
-    def test_to_tool_schema_complex_types(self):
+    def test_schema_complex_types(self):
         class Address(BaseModel):
             street: str
             city: str

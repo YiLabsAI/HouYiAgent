@@ -12,7 +12,7 @@ from houyi.infrastructure.observability import (
 class TestTraceContext:
     """Tests for TraceContext class."""
 
-    def test_current_returns_none_when_empty(self):
+    def test_current_none_when_empty(self):
         """Test that current() returns None when no span is active."""
         assert TraceContext.current() is None
 
@@ -85,7 +85,7 @@ class TestTraceContext:
             assert child.trace_id == parent.trace_id
             assert child.parent_id == parent.span_id
 
-    def test_create_child_without_parent_returns_none(self):
+    def test_child_without_parent_none(self):
         """Test create_child returns None when no parent span."""
         assert TraceContext.current() is None
         child = TraceContext.create_child("orphan")
@@ -121,7 +121,7 @@ class TestConvenienceFunctions:
 class TestSpanHierarchy:
     """Tests for span hierarchy with TraceContext."""
 
-    def test_child_span_inherits_trace_id(self):
+    def test_child_inherits_trace_id(self):
         """Test that child spans inherit trace_id from parent."""
         root = Span(name="root", span_type=SpanType.EXECUTION)
 
@@ -159,7 +159,7 @@ class TestSpanHierarchy:
         assert len(node2.children) == 1
         assert node2.children[0] is tool
 
-    def test_span_to_dict_includes_children(self):
+    def test_to_dict_includes_children(self):
         """Test that to_dict includes nested children."""
         root = Span(name="execution", span_type=SpanType.EXECUTION)
         node = Span(name="node", parent=root, span_type=SpanType.NODE)

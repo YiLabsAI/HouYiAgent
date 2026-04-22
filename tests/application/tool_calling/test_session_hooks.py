@@ -140,7 +140,7 @@ class TestSessionStartHook:
     """Tests for the SessionStart hook at the beginning of run()."""
 
     @pytest.mark.asyncio
-    async def test_session_start_fires_on_entry(self) -> None:
+    async def test_fires_on_entry(self) -> None:
         """SessionStart should fire even when the LLM returns no tool calls."""
         fired: list[str] = []
 
@@ -167,7 +167,7 @@ class TestSessionStartHook:
         assert "session_start" in fired
 
     @pytest.mark.asyncio
-    async def test_session_start_receives_correct_args(self) -> None:
+    async def test_receives_correct_args(self) -> None:
         """SessionStart context should include max_rounds, tool_count, skill_count."""
         received_args: dict[str, Any] = {}
 
@@ -202,7 +202,7 @@ class TestSessionStartHook:
         assert received_args["skill_count"] == 2
 
     @pytest.mark.asyncio
-    async def test_session_start_exception_is_non_fatal(self) -> None:
+    async def test_exception_non_fatal(self) -> None:
         """SessionStart hook exception should not abort the run."""
 
         async def broken_hook(ctx: Any) -> dict[str, Any]:
@@ -226,7 +226,7 @@ class TestSessionStartHook:
         assert response.content == "still works"
 
     @pytest.mark.asyncio
-    async def test_no_session_start_when_hooks_manager_is_none(self) -> None:
+    async def test_no_start_without_manager(self) -> None:
         """No error when skill_hooks_manager is None."""
         runner = ToolCallRunner(skill_hooks_manager=None)
         adapter = FakeAdapter([FakeResponse(content="ok")])
@@ -252,7 +252,7 @@ class TestStopHook:
     """Tests for the Stop hook before every return in run()."""
 
     @pytest.mark.asyncio
-    async def test_stop_fires_on_no_tool_calls(self) -> None:
+    async def test_fires_no_tool_calls(self) -> None:
         """Stop hook fires when LLM returns no tool calls (early return)."""
         stop_count = 0
 
@@ -279,7 +279,7 @@ class TestStopHook:
         assert stop_count == 1
 
     @pytest.mark.asyncio
-    async def test_stop_fires_on_max_rounds(self) -> None:
+    async def test_fires_on_max_rounds(self) -> None:
         """Stop hook fires when max_rounds is exhausted."""
         stop_count = 0
 
@@ -312,7 +312,7 @@ class TestStopHook:
         assert stop_count == 1
 
     @pytest.mark.asyncio
-    async def test_stop_receives_tool_trace_length(self) -> None:
+    async def test_receives_trace_length(self) -> None:
         """Stop hook context should include tool_trace_length."""
         received_args: dict[str, Any] = {}
 
@@ -343,7 +343,7 @@ class TestStopHook:
         assert received_args["tool_trace_length"] >= 1
 
     @pytest.mark.asyncio
-    async def test_stop_exception_is_non_fatal(self) -> None:
+    async def test_stop_exception_non_fatal(self) -> None:
         """Stop hook exception should not affect the returned result."""
 
         async def broken_stop(ctx: Any) -> dict[str, Any]:
@@ -367,7 +367,7 @@ class TestStopHook:
         assert response.content == "works"
 
     @pytest.mark.asyncio
-    async def test_stop_trigger_hook_exception_is_non_fatal(self) -> None:
+    async def test_trigger_exception_non_fatal(self) -> None:
         """Even if trigger_hook itself raises (not handler), result is returned."""
         from unittest.mock import AsyncMock, MagicMock
 
@@ -390,14 +390,14 @@ class TestStopHook:
         assert response.content == "survived"
 
     @pytest.mark.asyncio
-    async def test_no_stop_when_hooks_manager_is_none(self) -> None:
+    async def test_no_stop_without_manager(self) -> None:
         """_trigger_stop_hook early-returns when hooks manager is None."""
         runner = ToolCallRunner(skill_hooks_manager=None)
         # Should not raise
         await runner._trigger_stop_hook([{"tool": "test"}])
 
     @pytest.mark.asyncio
-    async def test_both_session_start_and_stop_fire(self) -> None:
+    async def test_start_and_stop_fire(self) -> None:
         """SessionStart fires first, Stop fires last."""
         events: list[str] = []
 
@@ -428,7 +428,7 @@ class TestStopHook:
         assert events == ["start", "stop"]
 
     @pytest.mark.asyncio
-    async def test_stop_fires_exactly_once_with_tool_calls(self) -> None:
+    async def test_fires_once_with_calls(self) -> None:
         """Regardless of how many rounds, Stop fires exactly once."""
         stop_count = 0
 
@@ -461,7 +461,7 @@ class TestStopHook:
         assert stop_count == 1
 
     @pytest.mark.asyncio
-    async def test_stop_fires_on_first_round_no_tools(self) -> None:
+    async def test_stop_fires_first_round(self) -> None:
         """Stop hook fires when LLM immediately returns without tool calls."""
         stop_args: dict[str, Any] = {}
 
@@ -487,7 +487,7 @@ class TestStopHook:
         assert stop_args["tool_trace_length"] == 0
 
     @pytest.mark.asyncio
-    async def test_session_start_trigger_hook_exception_is_non_fatal(self) -> None:
+    async def test_start_trigger_non_fatal(self) -> None:
         """Even if trigger_hook itself raises (not the handler), run proceeds."""
         from unittest.mock import AsyncMock, MagicMock
 
@@ -509,7 +509,7 @@ class TestStopHook:
         assert response.content == "survived"
 
     @pytest.mark.asyncio
-    async def test_session_start_fires_before_any_llm_call(self) -> None:
+    async def test_start_fires_before_llm(self) -> None:
         """SessionStart fires before the first adapter.chat() call."""
         order: list[str] = []
 

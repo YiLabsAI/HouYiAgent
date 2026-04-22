@@ -31,7 +31,7 @@ class TestFilterRelevant:
         filtered = _filter_relevant(sources, "Python programming", "Learn Python")
         assert len(filtered) == 2
 
-    def test_returns_all_if_filter_empties(self):
+    def test_returns_all_empty_filter(self):
         sources = [_src("Completely unrelated", "Nothing matches")]
         filtered = _filter_relevant(sources, "quantum physics", "quantum computing")
         assert len(filtered) == 1

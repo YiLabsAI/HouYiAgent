@@ -101,7 +101,7 @@ class TestAgenticMode:
             assert result.metadata.get("rounds_executed") == 0
 
     @pytest.mark.asyncio
-    async def test_search_caps_rounds_at_5(self, temp_knowledge_dir: str) -> None:
+    async def test_search_caps_rounds(self, temp_knowledge_dir: str) -> None:
         config = AgenticConfig(max_rounds=10)
         mode = AgenticMode(config=config, knowledge_dir=temp_knowledge_dir)
 
@@ -110,7 +110,7 @@ class TestAgenticMode:
         assert result.metadata["rounds_executed"] <= 5
 
     @pytest.mark.asyncio
-    async def test_execute_round_verify_files_searched(
+    async def test_round_verifies_files(
         self,
         temp_knowledge_dir: str,
     ) -> None:
@@ -148,7 +148,7 @@ class TestAgenticMode:
         assert round_result.files_searched == 2
 
     @pytest.mark.asyncio
-    async def test_execute_round_cross_ref_no_entities(
+    async def test_round_cross_ref_empty(
         self,
         temp_knowledge_dir: str,
     ) -> None:

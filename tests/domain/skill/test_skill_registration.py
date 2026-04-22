@@ -193,7 +193,7 @@ class TestSkillLifecycle:
 
 
 class TestFullSkillInventory:
-    def test_13_skills_register_and_validate(self, registry: SkillRegistry):
+    def test_skills_register_and_validate(self, registry: SkillRegistry):
         from houyi.rag.skills.kb_analyze import kb_analyze_skill
         from houyi.rag.skills.kb_graph import kb_graph_skill
         from houyi.rag.skills.kb_ingest import kb_ingest_skill

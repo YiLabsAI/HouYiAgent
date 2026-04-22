@@ -23,7 +23,7 @@ from houyi.application.tool_calling.tool_call_adapter_hooks import (
 from houyi.testkit.fake_adapter import FakeToolCallAdapter
 
 
-def test_resolve_tool_call_adapter_fake() -> None:
+def test_resolve_fake_adapter() -> None:
     """Resolve should return fake adapter when adapter_name matches."""
 
     context = ToolCallAdapterContext(
@@ -39,7 +39,7 @@ def test_resolve_tool_call_adapter_fake() -> None:
 
 
 @pytest.mark.asyncio
-async def test_fake_tool_call_adapter_parallel_calls() -> None:
+async def test_fake_adapter_parallel_calls() -> None:
     """FakeToolCallAdapter should emit parallel tool calls when enabled."""
 
     adapter = FakeToolCallAdapter(["get_date", "get_weather"], now=datetime(2024, 1, 1))
@@ -51,7 +51,7 @@ async def test_fake_tool_call_adapter_parallel_calls() -> None:
 
 
 @pytest.mark.asyncio
-async def test_fake_tool_call_adapter_complete_sequence() -> None:
+async def test_fake_adapter_complete_sequence() -> None:
     """FakeToolCallAdapter should return final response after sequence ends."""
 
     adapter = FakeToolCallAdapter(["get_date"], now=datetime(2024, 1, 1))
@@ -60,7 +60,7 @@ async def test_fake_tool_call_adapter_complete_sequence() -> None:
     assert response.content == "Done."
 
 
-def test_resolve_tool_call_adapter_handles_hook_error() -> None:
+def test_resolve_handles_hook_error() -> None:
     """Resolve should ignore hook errors and continue."""
 
     original_hooks = list(_ADAPTER_HOOKS)
@@ -84,7 +84,7 @@ def test_resolve_tool_call_adapter_handles_hook_error() -> None:
         _ADAPTER_HOOKS[:] = original_hooks
 
 
-def test_resolve_delegates_to_factory_for_known_provider() -> None:
+def test_resolve_delegates_to_factory() -> None:
     """Non-fake adapter_name should delegate to LLMAdapterFactory.create()."""
 
     sentinel = MagicMock(name="FactoryAdapter")
@@ -106,7 +106,7 @@ def test_resolve_delegates_to_factory_for_known_provider() -> None:
         assert adapter is sentinel
 
 
-def test_resolve_returns_none_for_real() -> None:
+def test_resolve_none_for_real() -> None:
     """adapter_name='real' should return None (caller provides its own adapter)."""
 
     context = ToolCallAdapterContext(
@@ -121,7 +121,7 @@ def test_resolve_returns_none_for_real() -> None:
     assert adapter is None
 
 
-def test_resolve_returns_none_when_factory_fails() -> None:
+def test_resolve_none_factory_fail() -> None:
     """If the factory raises, resolve should return None gracefully."""
 
     with patch.object(

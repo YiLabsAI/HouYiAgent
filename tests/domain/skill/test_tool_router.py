@@ -85,7 +85,7 @@ class TestFilterTools:
         names = {t["function"]["name"] for t in filtered}
         assert names == {"tool_a", "tool_b", "tool_c"}
 
-    def test_unrestricted_skill_allows_all_when_mixed(self):
+    def test_unrestricted_allows_mixed(self):
         router = ToolRouter(
             skills=[
                 _make_skill("restricted", allowed_tools=["allowed_tool"]),
@@ -100,7 +100,7 @@ class TestFilterTools:
         router = ToolRouter(skills=[_make_skill("s1", allowed_tools=["x"])])
         assert router.filter_tools([]) == []
 
-    def test_tool_without_name_passes_through(self):
+    def test_without_name_passes_through(self):
         router = ToolRouter(skills=[_make_skill("s1", allowed_tools=["x"])])
         # A tool dict with no extractable name should pass through for debugging
         tools = [{"type": "no_function_key"}, _make_tool("x")]
@@ -153,7 +153,7 @@ class TestCheck:
         assert result.allowed is False
         assert result.matched_skill == "s1"
 
-    def test_policy_allow_with_consent_no_consent(self):
+    def test_allow_consent_without_consent(self):
         enforcer = PolicyEnforcer()
         enforcer.register_skill_policy(
             "s1",
@@ -167,7 +167,7 @@ class TestCheck:
         assert result.allowed is False
         assert result.requires_consent is True
 
-    def test_policy_allow_with_consent_given(self):
+    def test_allow_consent_with_given(self):
         enforcer = PolicyEnforcer()
         enforcer.register_skill_policy(
             "s1",
@@ -180,7 +180,7 @@ class TestCheck:
         result = router.check("tool_a", is_model_initiated=True, user_consent_given=True)
         assert result.allowed is True
 
-    def test_user_initiated_bypasses_model_policy(self):
+    def test_user_initiated_bypasses_policy(self):
         enforcer = PolicyEnforcer()
         enforcer.register_skill_policy(
             "s1",

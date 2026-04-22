@@ -60,7 +60,7 @@ class TestInternalSkillMdLoading:
             pytest.skip(f"Skill file not found: {path}")
         return SkillSpec.from_file(str(path))
 
-    def test_all_skill_md_files_load_without_error(self) -> None:
+    def test_all_md_files_load(self) -> None:
         """Smoke test: every internal SKILL.md loads without exception."""
         for skill_file in self.SKILL_MD_FILES:
             spec = self._load_skill(skill_file)
@@ -107,7 +107,7 @@ class TestInternalSkillMdLoading:
         assert spec.permissions.filesystem.read is True
         assert spec.permissions.filesystem.write is False
 
-    def test_kb_ingest_skill_has_write_permission(self) -> None:
+    def test_kb_ingest_write_permission(self) -> None:
         """Verify kb-ingest has filesystem write permission."""
         spec = self._load_skill("houyi/rag/skills/kb_ingest/SKILL.md")
 
@@ -118,7 +118,7 @@ class TestInternalSkillMdLoading:
         assert spec.permissions.filesystem.write is True
         assert spec.invocation_policy.side_effect == SideEffect.FILESYSTEM
 
-    def test_weather_skill_has_network_policy(self) -> None:
+    def test_weather_network_policy(self) -> None:
         """Verify weather SKILL.md declares network side-effect."""
         spec = self._load_skill("houyi/skills/weather/SKILL.md")
 
@@ -128,7 +128,7 @@ class TestInternalSkillMdLoading:
         assert spec.permissions is not None
         assert spec.permissions.network.enabled is True
 
-    def test_location_skill_has_network_policy(self) -> None:
+    def test_location_network_policy(self) -> None:
         """Verify location SKILL.md declares network side-effect."""
         spec = self._load_skill("houyi/skills/location/SKILL.md")
 
@@ -304,7 +304,7 @@ class TestExternalClaudeSkillCompatibility:
         assert len(spec.hooks) == 2
         assert "Read" in spec.allowed_tools
 
-    def test_skill_with_disable_model_invocation(self, tmp_path: Path) -> None:
+    def test_with_disable_model_invocation(self, tmp_path: Path) -> None:
         """Test Claude standard: disable-model-invocation field."""
         content = """\
         ---
@@ -321,7 +321,7 @@ class TestExternalClaudeSkillCompatibility:
         assert isinstance(spec.invocation_policy, InvocationPolicy)
         assert spec.invocation_policy.model_auto_invoke == ModelAutoInvoke.DENY
 
-    def test_skill_with_unknown_frontmatter_fields_preserved(self, tmp_path: Path) -> None:
+    def test_unknown_fields_preserved(self, tmp_path: Path) -> None:
         """Test that unknown frontmatter fields are preserved in extra_frontmatter."""
         content = """\
         ---
@@ -346,7 +346,7 @@ class TestExternalClaudeSkillCompatibility:
         assert "tags" in spec.extra_frontmatter
         assert "custom_field" in spec.extra_frontmatter
 
-    def test_skill_with_full_permissions_and_policy(self, tmp_path: Path) -> None:
+    def test_full_permissions_and_policy(self, tmp_path: Path) -> None:
         """Test parsing a skill with comprehensive permissions and policy."""
         content = """\
         ---
@@ -498,7 +498,7 @@ class TestSkillRegistryIntegration:
         names = registry.list_names()
         assert "planning-with-files" in names
 
-    def test_skill_to_tool_schema_includes_name_and_description(self, tmp_path: Path) -> None:
+    def test_schema_includes_name_desc(self, tmp_path: Path) -> None:
         """Verify loaded skills produce valid OpenAI tool schemas."""
         skill_md = tmp_path / "SKILL.md"
         skill_md.write_text(
@@ -578,7 +578,7 @@ class TestEdgeCases:
         assert "First line" in spec.description
         assert "Third line" in spec.description
 
-    def test_invalid_policy_value_handled_gracefully(self, tmp_path: Path) -> None:
+    def test_invalid_policy_handled(self, tmp_path: Path) -> None:
         """Test that invalid policy values fall back to raw dict (no crash)."""
         content = textwrap.dedent("""\
         ---

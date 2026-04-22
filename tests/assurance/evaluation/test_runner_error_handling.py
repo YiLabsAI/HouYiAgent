@@ -8,7 +8,7 @@ from houyi.assurance.evaluation.runner import evaluate
 
 
 class TestRunnerErrorHandling:
-    def test_evaluate_with_empty_test_cases(self):
+    def test_evaluate_empty_test_cases(self):
         class Input(BaseModel):
             x: int
 

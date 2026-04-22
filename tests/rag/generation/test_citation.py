@@ -25,7 +25,7 @@ class TestCitationGenerator:
         assert result.citations[1].id == 2
         assert "References:" in result.references
 
-    def test_generate_citations_inherits_relevance_from_results(self) -> None:
+    def test_inherits_relevance_from_results(self) -> None:
         generator = CitationGenerator()
         sources = [
             Source(file_path="/path/to/doc1.md", snippet="alpha beta gamma"),
@@ -49,7 +49,7 @@ class TestCitationGenerator:
         assert cited.citations[0].relevance == 0.9
         assert cited.citations[1].relevance == 0.4
 
-    def test_generate_citations_adds_inline_markers_from_snippet_overlap(self) -> None:
+    def test_adds_markers_from_overlap(self) -> None:
         generator = CitationGenerator()
         sources = [
             Source(

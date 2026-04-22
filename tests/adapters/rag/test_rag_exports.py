@@ -6,7 +6,7 @@ from houyi.rag import RetrievalStrategy as LegacyRetrievalStrategy
 from houyi.rag import search as legacy_search
 
 
-def test_rag_adapter_exports_alias_legacy_symbols() -> None:
+def test_exports_alias_legacy() -> None:
     assert RAG is LegacyRAG
     assert RAGConfig is LegacyRAGConfig
     assert RAGMode is LegacyRAGMode

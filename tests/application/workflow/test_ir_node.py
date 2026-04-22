@@ -96,7 +96,7 @@ class TestIRNodeReadiness:
         assert node.is_ready(set())
         assert node.is_ready({"any", "deps"})
 
-    def test_is_ready_with_satisfied_dependencies(self):
+    def test_ready_with_satisfied_deps(self):
         """Test node is ready when dependencies are satisfied."""
         node = IRNode(
             node_id="node1",
@@ -109,7 +109,7 @@ class TestIRNodeReadiness:
         assert node.is_ready({"dep1", "dep2"})
         assert node.is_ready({"dep1", "dep2", "extra"})
 
-    def test_is_ready_with_unsatisfied_dependencies(self):
+    def test_ready_with_unsatisfied_deps(self):
         """Test node is not ready when dependencies are not satisfied."""
         node = IRNode(
             node_id="node1",
@@ -154,7 +154,7 @@ class TestIRNodeInputResolution:
         assert inputs["task"] == "static_value"
         assert inputs["param"] == "another"
 
-    def test_get_input_values_from_context(self):
+    def test_input_values_from_context(self):
         """Test input resolution from context."""
         node = IRNode(
             node_id="node1",
@@ -184,7 +184,7 @@ class TestIRNodeInputResolution:
         assert inputs["static"] == "value"
         assert inputs["another"] == "resolved2"
 
-    def test_get_input_values_missing_context(self):
+    def test_input_values_missing_context(self):
         """Test input resolution with missing context."""
         node = IRNode(
             node_id="node1",
@@ -198,7 +198,7 @@ class TestIRNodeInputResolution:
         # Should return the reference as-is if not in context
         assert inputs["task"] == "$missing.value"
 
-    def test_get_input_values_empty_inputs(self):
+    def test_input_values_empty_inputs(self):
         """Test input resolution with empty inputs."""
         node = IRNode(
             node_id="node1", node_type=NodeType.LLM, inputs={}, outputs={"result": "$output"}

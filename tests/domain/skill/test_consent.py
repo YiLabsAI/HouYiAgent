@@ -138,7 +138,7 @@ class TestInMemoryConsentStore:
         loaded = store.load("test_skill", ConsentType.PERMISSION_GRANT)
         assert loaded is None
 
-    def test_not_saved_if_not_remember(self):
+    def test_not_saved_without_remember(self):
         store = InMemoryConsentStore()
         request = ConsentRequest(
             consent_type=ConsentType.PERMISSION_GRANT,
@@ -531,7 +531,7 @@ class TestFileConsentStore:
             assert loaded is not None
             assert loaded.result == ConsentResult.REMEMBERED
 
-    def test_expired_consent_removed_from_file(self):
+    def test_expired_removed_from_file(self):
         """Test that expired consent is removed from file on load."""
         with tempfile.TemporaryDirectory() as tmpdir:
             store_path = Path(tmpdir) / "consent.json"
@@ -760,7 +760,7 @@ class TestPolicyBasedConsentHandlerExtended:
 class TestConsentRequestDescribe:
     """Test ConsentRequest.describe() method variations."""
 
-    def test_describe_permission_with_empty_permissions(self):
+    def test_describe_with_empty_perms(self):
         """Test describe for permission grant with no specific permissions."""
         request = ConsentRequest(
             consent_type=ConsentType.PERMISSION_GRANT,
@@ -771,7 +771,7 @@ class TestConsentRequestDescribe:
         assert "test_skill" in description
         assert "No specific permissions" in description
 
-    def test_describe_invoke_confirm_no_policy(self):
+    def test_describe_invoke_no_policy(self):
         """Test describe for invoke confirm without policy."""
         request = ConsentRequest(
             consent_type=ConsentType.INVOKE_CONFIRM,

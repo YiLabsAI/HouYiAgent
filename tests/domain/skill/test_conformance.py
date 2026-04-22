@@ -68,7 +68,7 @@ class TestManifestIdentity:
                 name="x", input_schema=EmptyInput, output_schema=SimpleOutput, description=None
             )  # type: ignore[call-arg]
 
-    def test_skill_spec_has_version_field(self) -> None:
+    def test_spec_has_version(self) -> None:
         """version SHOULD be supported."""
         spec = SkillSpec(
             name="test",
@@ -79,7 +79,7 @@ class TestManifestIdentity:
         )
         assert spec.version == "1.0.0"
 
-    def test_skill_spec_has_author_field(self) -> None:
+    def test_spec_has_author(self) -> None:
         """author SHOULD be supported."""
         spec = SkillSpec(
             name="test",
@@ -109,24 +109,24 @@ class TestManifestPermissions:
         assert perms.exec.enabled is False
         assert "API_KEY" in perms.secrets
 
-    def test_permissions_requires_consent_for_write(self) -> None:
+    def test_consent_for_write(self) -> None:
         """Write permissions MUST trigger consent."""
         perms = Permissions.from_dict({"filesystem": {"write": True}})
         assert perms.requires_consent() is True
 
-    def test_permissions_requires_consent_for_network(self) -> None:
+    def test_consent_for_network(self) -> None:
         perms = Permissions.from_dict({"network": {"enabled": True}})
         assert perms.requires_consent() is True
 
-    def test_permissions_requires_consent_for_exec(self) -> None:
+    def test_consent_for_exec(self) -> None:
         perms = Permissions.from_dict({"exec": {"enabled": True}})
         assert perms.requires_consent() is True
 
-    def test_permissions_requires_consent_for_secrets(self) -> None:
+    def test_consent_for_secrets(self) -> None:
         perms = Permissions.from_dict({"secrets": ["KEY"]})
         assert perms.requires_consent() is True
 
-    def test_read_only_does_not_require_consent(self) -> None:
+    def test_read_only_no_consent(self) -> None:
         perms = Permissions.from_dict({"filesystem": {"read": True}})
         assert perms.requires_consent() is False
 
@@ -150,7 +150,7 @@ class TestManifestPermissions:
 class TestToolDefinition:
     """§4.1: Tool MUST define name, description, inputSchema; outputSchema is recommended."""
 
-    def test_tool_schema_has_required_fields(self) -> None:
+    def test_schema_required_fields(self) -> None:
         spec = SkillSpec(
             name="calc.add",
             description="Add two numbers",
@@ -248,7 +248,7 @@ class TestInvocationPolicy:
         policy = InvocationPolicy(model_auto_invoke=ModelAutoInvoke.DENY)
         assert policy.allows_model_invoke() is False
 
-    def test_model_auto_invoke_allow_with_consent(self) -> None:
+    def test_auto_invoke_allow_consent(self) -> None:
         policy = InvocationPolicy(model_auto_invoke=ModelAutoInvoke.ALLOW_WITH_CONSENT)
         assert policy.allows_model_invoke() is True
         assert policy.should_prompt_consent() is True
@@ -261,7 +261,7 @@ class TestInvocationPolicy:
             ModelAutoInvoke.ALLOW_WITH_CONSENT,
         )
 
-    def test_side_effect_none_allows_auto(self) -> None:
+    def test_side_effect_none_allows(self) -> None:
         policy = InvocationPolicy.default_for_side_effect(SideEffect.NONE)
         assert policy.model_auto_invoke == ModelAutoInvoke.ALLOW
 

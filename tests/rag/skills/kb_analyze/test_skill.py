@@ -62,7 +62,7 @@ class TestExecuteKBAnalyze:
     """Tests for execute_kb_analyze function."""
 
     @pytest.mark.asyncio
-    async def test_analyze_existing_dir_with_files(self, write_knowledge_files) -> None:
+    async def test_existing_dir_with_files(self, write_knowledge_files) -> None:
         """Test analyzing existing directory with files."""
         kb_dir = write_knowledge_files(
             {

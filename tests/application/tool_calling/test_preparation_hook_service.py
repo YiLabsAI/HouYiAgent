@@ -49,7 +49,7 @@ def _make_skill(name: str) -> SkillSpec:
 
 class TestToolCallPreparationHookService:
     @pytest.mark.asyncio
-    async def test_apply_before_tool_hooks_can_patch_args(self) -> None:
+    async def test_before_hooks_patch_args(self) -> None:
         class _PatchArgsHook:
             async def before_tool_call(self, tool_call: dict[str, Any]) -> dict[str, Any]:
                 return {"args": {"patched": tool_call["args"]["value"] + 1}}
@@ -73,7 +73,7 @@ class TestToolCallPreparationHookService:
         assert hook_context["tool_call_id"] == "call_patch"
 
     @pytest.mark.asyncio
-    async def test_apply_before_tool_hooks_records_attempted_replacement_when_not_allowed(
+    async def test_before_hooks_records_attempt(
         self,
     ) -> None:
         class _ReplaceHook:
@@ -99,7 +99,7 @@ class TestToolCallPreparationHookService:
         assert hook_context["skill"] is skill
 
     @pytest.mark.asyncio
-    async def test_apply_before_tool_hooks_can_replace_tool_when_allowed(self) -> None:
+    async def test_before_hooks_replace_tool(self) -> None:
         class _ReplaceHook:
             async def before_tool_call(self, tool_call: dict[str, Any]) -> dict[str, Any]:
                 _ = tool_call
@@ -123,7 +123,7 @@ class TestToolCallPreparationHookService:
         assert hook_context["skill"] is original_skill
 
     @pytest.mark.asyncio
-    async def test_apply_before_tool_hooks_ignores_non_dict_hook_updates(self) -> None:
+    async def test_before_ignores_non_dict(self) -> None:
         class _NoopHook:
             async def before_tool_call(self, tool_call: dict[str, Any]) -> list[str]:
                 _ = tool_call
@@ -146,7 +146,7 @@ class TestToolCallPreparationHookService:
         assert hook_context["args"] == {"x": 1}
 
     @pytest.mark.asyncio
-    async def test_trigger_pre_tool_use_hook_returns_output_and_passes_context(self) -> None:
+    async def test_trigger_passes_context(self) -> None:
         seen: list[dict[str, Any]] = []
 
         async def on_pre_tool_use(ctx: Any) -> dict[str, Any]:
@@ -185,7 +185,7 @@ class TestToolCallPreparationHookService:
         assert seen == [{"tool_name": "hooked", "tool_args": {}, "skill_name": "hooked"}]
 
     @pytest.mark.asyncio
-    async def test_trigger_pre_tool_use_hook_returns_none_without_manager(self) -> None:
+    async def test_trigger_none_without_manager(self) -> None:
         service = _ToolCallPreparationHookService(_FakeRunner(skill_hooks_manager=None))
 
         output = await service.trigger_pre_tool_use_hook("hooked", {"x": 1}, _make_skill("hooked"))

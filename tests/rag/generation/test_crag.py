@@ -124,7 +124,7 @@ class TestCRAGValidator:
         mock_adapter.chat.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_validate_with_llm_ignores_out_of_range_indices(self) -> None:
+    async def test_validate_ignores_range(self) -> None:
         mock_adapter = MagicMock()
         mock_response = MagicMock()
         mock_response.content = '{"quality": "correct", "confidence": 0.9, "relevant_indices": [0, 9], "reasoning": "Only first result exists", "suggested_queries": []}'
@@ -142,7 +142,7 @@ class TestCRAGValidator:
         assert result.relevant_results[0].file_path == "/doc1.md"
 
     @pytest.mark.asyncio
-    async def test_validate_with_llm_fallback_on_error(self) -> None:
+    async def test_validate_fallback_on_error(self) -> None:
         mock_adapter = MagicMock()
         mock_adapter.chat = AsyncMock(side_effect=Exception("API error"))
 
@@ -183,7 +183,7 @@ class TestCRAGValidator:
         assert "what is test query" in queries
 
     @pytest.mark.asyncio
-    async def test_refine_query_llm_error_fallback(self) -> None:
+    async def test_refine_on_error_fallback(self) -> None:
         mock_adapter = MagicMock()
         mock_adapter.chat = AsyncMock(side_effect=Exception("API error"))
 

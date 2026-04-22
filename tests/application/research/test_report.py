@@ -984,7 +984,7 @@ class TestSidecarMetrics:
         assert m["sidecar_archetype_compliant"] == 1
         assert "compared" in m["sidecar_archetype_keywords_matched"]
 
-    def test_archetype_compliance_false_for_mismatch(self):
+    def test_archetype_mismatch_false(self):
         content = (
             "This section provides a general overview of the landscape "
             "and summarizes the main findings from the research [ref_001]."
@@ -1415,7 +1415,7 @@ class TestScrubArtifacts:
         assert "Intro paragraph." in out
         assert "Closing paragraph." in out
 
-    def test_keeps_prose_with_sync_keyword(self):
+    def test_keeps_sync_keyword_prose(self):
         # Clean prose that mentions "synchronous" or "30 seconds" must
         # not trip the paragraph-level junk filter; it requires both a
         # diagram marker and multiple independent junk signals.

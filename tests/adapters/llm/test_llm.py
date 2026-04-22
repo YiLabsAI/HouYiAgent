@@ -309,7 +309,7 @@ class TestLLMResponse:
             "timeout_seconds": 30,
         }
 
-    def test_raw_bracket_tool_result_envelope_is_not_toolcall(self) -> None:
+    def test_bracket_envelope_not_toolcall(self) -> None:
         response = LLMResponse.from_raw_dict(
             {
                 "model": "deepseek-ai/DeepSeek-V3.2",
@@ -336,13 +336,13 @@ class TestLLMResponse:
         mock_response.choices[0].message.content = ""
         mock_response.choices[0].message.reasoning_content = (
             "[tool call]\n\n"
-            "<｜DSML｜function_calls>\n"
-            '<｜DSML｜invoke name="houyi_web_search">\n'
-            '<｜DSML｜parameter name="query" string="true">Articles authored by Von Gosling on InfoQ in 2025</｜DSML｜parameter>\n'
-            '<｜DSML｜parameter name="search_engine" string="true">bing</｜DSML｜parameter>\n'
-            '<｜DSML｜parameter name="max_results" string="false">10</｜DSML｜parameter>\n'
-            "</｜DSML｜invoke>\n"
-            "</｜DSML｜function_calls>"
+            "<\uff5cDSML\uff5cfunction_calls>\n"
+            '<\uff5cDSML\uff5cinvoke name="houyi_web_search">\n'
+            '<\uff5cDSML\uff5cparameter name="query" string="true">Articles authored by Von Gosling on InfoQ in 2025</\uff5cDSML\uff5cparameter>\n'
+            '<\uff5cDSML\uff5cparameter name="search_engine" string="true">bing</\uff5cDSML\uff5cparameter>\n'
+            '<\uff5cDSML\uff5cparameter name="max_results" string="false">10</\uff5cDSML\uff5cparameter>\n'
+            "</\uff5cDSML\uff5cinvoke>\n"
+            "</\uff5cDSML\uff5cfunction_calls>"
         )
         mock_response.choices[0].message.tool_calls = None
         mock_response.choices[0].finish_reason = "stop"

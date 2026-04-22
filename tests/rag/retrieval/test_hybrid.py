@@ -127,7 +127,7 @@ class TestHybridRetrieverRRFFusion:
         assert fused[0].chunk_id == "c1"
         assert len(fused) == 3
 
-    def test_rrf_fusion_respects_top_k(self) -> None:
+    def test_rrf_respects_top_k(self) -> None:
         """Test RRF fusion respects top_k limit."""
         retriever = HybridRetriever()
 
@@ -140,7 +140,7 @@ class TestHybridRetrieverRRFFusion:
 
         assert len(fused) == 3
 
-    def test_rrf_fusion_uses_content_hash_for_empty_chunk_id(self) -> None:
+    def test_rrf_hash_empty_id(self) -> None:
         """Test RRF fusion uses content hash when chunk_id is empty."""
         retriever = HybridRetriever()
 
@@ -196,7 +196,7 @@ class TestHybridRetrieverWeightedFusion:
         assert fused[0].chunk_id == "c1"
         assert fused[0].score == 0.6
 
-    def test_weighted_fusion_combines_same_result(self) -> None:
+    def test_weighted_combines_same(self) -> None:
         """Test weighted fusion combines scores for same result."""
         config = HybridRetrieverConfig(
             fusion_method="weighted",
@@ -221,7 +221,7 @@ class TestHybridRetrieverWeightedFusion:
         assert len(fused) == 1
         assert fused[0].score == 1.0
 
-    def test_weighted_fusion_unknown_strategy_uses_default_weight(self) -> None:
+    def test_weighted_unknown_default(self) -> None:
         """Test weighted fusion uses default weight for unknown strategy."""
         retriever = HybridRetriever()
 
@@ -242,7 +242,7 @@ class TestHybridRetrieverRetrieve:
     """Tests for retrieve method."""
 
     @pytest.mark.asyncio
-    async def test_retrieve_with_protocol_shaped_collaborators(self) -> None:
+    async def test_retrieve_with_protocol_shaped(self) -> None:
         """Test retrieve works with protocol-shaped collaborators instead of indexed concretes."""
 
         class FakeVectorBackend:
@@ -463,7 +463,7 @@ class TestCreateHybridRetriever:
             assert retriever._embedder is mock_embedder
             assert retriever._graph_store is None
 
-    def test_create_hybrid_retriever_with_graph(self) -> None:
+    def test_create_with_graph(self) -> None:
         """Test creating hybrid retriever with graph enabled."""
         with tempfile.TemporaryDirectory() as tmpdir:
             from houyi.rag.retrieval import create_hybrid_retriever

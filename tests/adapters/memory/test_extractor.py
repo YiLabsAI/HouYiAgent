@@ -67,7 +67,7 @@ class TestLLMExtraction:
         assert MemoryType.PREFERENCE in types
         assert MemoryType.CONSTRAINT in types
 
-    async def test_empty_when_no_user_messages(self):
+    async def test_empty_no_user_messages(self):
         llm = _make_llm_mock([])
         ext = MemoryCandidateExtractor(llm_adapter=llm)
         cands = await ext.extract([{"role": "assistant", "content": "Hello"}])
@@ -111,7 +111,7 @@ class TestLLMExtraction:
         cands = await ext.extract([{"role": "user", "content": "test"}])
         assert cands == []
 
-    async def test_falls_back_to_rules_on_llm_error(self):
+    async def test_falls_back_llm_error(self):
         mock = AsyncMock()
         mock.chat.side_effect = RuntimeError("LLM down")
         ext = MemoryCandidateExtractor(llm_adapter=mock)
@@ -123,7 +123,7 @@ class TestLLMExtraction:
         assert len(cands) >= 1
         assert cands[0].memory_type == MemoryType.FACT
 
-    async def test_llm_prompt_uses_low_temperature(self):
+    async def test_prompt_low_temperature(self):
         llm = _make_llm_mock([])
         ext = MemoryCandidateExtractor(llm_adapter=llm)
         await ext.extract([{"role": "user", "content": "test"}])
@@ -131,7 +131,7 @@ class TestLLMExtraction:
         call_kwargs = llm.chat.call_args
         assert call_kwargs.kwargs.get("temperature") == 0.1
 
-    async def test_unknown_type_defaults_to_fact(self):
+    async def test_unknown_type_defaults_fact(self):
         llm = _make_llm_mock(
             [
                 {"content": "Something", "type": "unknown_type", "confidence": 0.8},

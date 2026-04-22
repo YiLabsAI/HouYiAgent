@@ -68,7 +68,7 @@ class _ServiceWithoutUseCache:
 
 
 @pytest.mark.asyncio
-async def test_build_web_search_skill_executes(monkeypatch) -> None:
+async def test_build_skill_executes(monkeypatch) -> None:
     """build_web_search_skill should bind executor and return normalized output."""
 
     service = _Service()
@@ -90,7 +90,7 @@ async def test_build_web_search_skill_executes(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_build_web_search_skill_browse_mode(monkeypatch) -> None:
+async def test_build_skill_browse_mode(monkeypatch) -> None:
     """browse mode should enable content extraction."""
 
     service = _Service()
@@ -108,7 +108,7 @@ async def test_build_web_search_skill_browse_mode(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_build_web_search_skill_provider_override(monkeypatch) -> None:
+async def test_build_skill_provider_override(monkeypatch) -> None:
     """provider override should flow into service factory."""
 
     service = _Service()
@@ -125,7 +125,7 @@ async def test_build_web_search_skill_provider_override(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_build_web_search_skill_use_cache_false(monkeypatch) -> None:
+async def test_skill_use_cache_false(monkeypatch) -> None:
     service = _Service()
 
     def _from_env(provider: str | None = None) -> _Service:
@@ -142,7 +142,7 @@ async def test_build_web_search_skill_use_cache_false(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_build_web_search_skill_without_use_cache_param(monkeypatch) -> None:
+async def test_skill_without_cache_param(monkeypatch) -> None:
     service = _ServiceWithoutUseCache()
 
     def _from_env(provider: str | None = None) -> _ServiceWithoutUseCache:

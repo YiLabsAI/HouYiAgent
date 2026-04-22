@@ -298,7 +298,7 @@ class TestFileContentStore:
 class TestGlobalContentStore:
     """Tests for global content store functions."""
 
-    def test_get_set_reset_content_store(self, temp_dir):
+    def test_get_set_reset_store(self, temp_dir):
         """Test global content store management."""
         reset_content_store()
 

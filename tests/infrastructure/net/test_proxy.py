@@ -36,7 +36,7 @@ class TestDetectProxy:
         ):
             assert detect_proxy() == "http://127.0.0.1:1087"
 
-    def test_returns_none_when_no_proxy(self, monkeypatch) -> None:
+    def test_returns_none_no_proxy(self, monkeypatch) -> None:
         monkeypatch.delenv(ENV_PROXY_URL, raising=False)
         with patch.object(proxy_module, "getproxies", return_value={}):
             assert detect_proxy() is None

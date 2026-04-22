@@ -7,11 +7,11 @@ from houyi.domain.skill.spec import SkillSpec
 
 
 class TestSkillErrorHandling:
-    def test_skill_from_file_not_found(self):
+    def test_from_file_not_found(self):
         with pytest.raises(FileNotFoundError):
             SkillSpec.from_file("nonexistent_file.md")
 
-    def test_skill_from_file_invalid_path(self):
+    def test_from_file_invalid_path(self):
         with pytest.raises(FileNotFoundError):
             SkillSpec.from_file("/invalid/path/skill.md")
 
@@ -29,7 +29,7 @@ class TestSkillErrorHandling:
                 output_schema=Output,
             )
 
-    def test_skill_executor_with_invalid_input(self):
+    def test_executor_invalid_input(self):
         class Input(BaseModel):
             x: int
 

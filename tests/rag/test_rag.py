@@ -171,7 +171,7 @@ class TestRAGFacade:
         assert result.answer
         assert fake_adapter._index > 0
 
-    def test_service_with_llm_model_config(self) -> None:
+    def test_with_llm_model_config(self) -> None:
         service = RAG(mode="indexed", llm_model="gpt-4")
         assert service.config.llm_model == "gpt-4"
 
@@ -206,7 +206,7 @@ class TestRAGIndex:
 
 class TestRAGLazyRuntimeCreation:
     @pytest.mark.asyncio
-    async def test_ensure_agentic_mode_caches_created_runtime(self) -> None:
+    async def test_agentic_caches_runtime(self) -> None:
         rag = RAG(mode="agentic", knowledge_dir="/tmp/test-agentic")
         created = object()
         calls = 0
@@ -225,7 +225,7 @@ class TestRAGLazyRuntimeCreation:
         assert rag._agentic_mode is created
 
     @pytest.mark.asyncio
-    async def test_ensure_indexed_mode_caches_created_runtime(self) -> None:
+    async def test_indexed_caches_runtime(self) -> None:
         rag = RAG(mode="indexed", knowledge_dir="/tmp/test-indexed")
         created = object()
         calls = 0
@@ -243,7 +243,7 @@ class TestRAGLazyRuntimeCreation:
         assert calls == 1
         assert rag._indexed_mode is created
 
-    def test_create_indexed_mode_uses_config_owned_index_dir(self) -> None:
+    def test_indexed_uses_config_dir(self) -> None:
         config = RAGConfig(mode=RAGMode.INDEXED, knowledge_dir="/kb", index_dir="/indexes/custom")
         rag = RAG(config=config)
 

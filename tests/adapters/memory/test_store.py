@@ -53,7 +53,7 @@ class TestCoreApi:
 class TestTypedFields:
     """Typed memory fields (memory_type, tags, provenance, embedding)."""
 
-    def test_put_with_type_and_tags(self):
+    def test_put_with_type_tags(self):
         store = MemoryStore()
         r = store.put(
             "lang",
@@ -128,7 +128,7 @@ class TestListByType:
         assert len(profiles) == 2
         assert all(r.memory_type == MemoryType.PROFILE for r in profiles)
 
-    def test_filters_by_type_and_scope(self):
+    def test_filters_by_type_scope(self):
         store = MemoryStore()
         store.put("a", "v1", scope=MemoryScope.USER, memory_type=MemoryType.FACT)
         store.put("b", "v2", scope=MemoryScope.SESSION, memory_type=MemoryType.FACT)
@@ -166,7 +166,7 @@ class TestContextTextEnriched:
         assert "[profile]" in text
         assert "name: Alice" in text
 
-    def test_fact_type_has_no_prefix(self):
+    def test_fact_type_no_prefix(self):
         store = MemoryStore()
         store.put("sky", "blue", memory_type=MemoryType.FACT)
         text = store.as_context_text(MemoryScope.SESSION)

@@ -79,7 +79,7 @@ class TestContextualizer:
         assert len(results) == 2
         assert all(isinstance(r, ContextualizedChunk) for r in results)
 
-    def test_generate_context_heuristic_with_metadata(self) -> None:
+    def test_heuristic_with_metadata(self) -> None:
         """Test heuristic context generation with metadata."""
         contextualizer = Contextualizer()
 
@@ -145,7 +145,7 @@ class TestContextualizerIntegration:
     """Tests for Contextualizer integration with IndexedMode."""
 
     @pytest.mark.asyncio
-    async def test_indexed_mode_initializes_contextualizer_with_llm(self) -> None:
+    async def test_mode_inits_with_llm(self) -> None:
         """Test that IndexedMode initializes Contextualizer when LLM is provided."""
         from typing import Any
 
@@ -171,7 +171,7 @@ class TestContextualizerIntegration:
         assert mode._contextualizer is not None
 
     @pytest.mark.asyncio
-    async def test_indexed_mode_skips_contextualizer_without_llm(self) -> None:
+    async def test_mode_skips_without_llm(self) -> None:
         """Test that IndexedMode has no Contextualizer without LLM."""
         from houyi.rag.config import EmbeddingConfig, GraphConfig, IndexedConfig
         from houyi.rag.indexed.mode import IndexedMode
@@ -188,7 +188,7 @@ class TestContextualizerIntegration:
         assert mode._contextualizer is None
 
     @pytest.mark.asyncio
-    async def test_rag_config_contextual_retrieval_field(self) -> None:
+    async def test_config_contextual_field(self) -> None:
         """Test that RAGConfig has contextual_retrieval field."""
         from houyi.rag.config import RAGConfig
 
@@ -201,7 +201,7 @@ class TestContextualizerIntegration:
         assert config_with_cr.contextual_retrieval is True
 
     @pytest.mark.asyncio
-    async def test_rag_index_passes_contextual_retrieval(self) -> None:
+    async def test_index_passes_contextual(self) -> None:
         """Test that RAG.index() passes contextual_retrieval to ingest."""
         import tempfile
         from pathlib import Path

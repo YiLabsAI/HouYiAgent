@@ -63,7 +63,7 @@ class TestTraceManager:
             with tm.start_span("child") as child:
                 assert child.name == "child"
 
-    def test_trace_manager_when_disabled_no_spans(self):
+    def test_disabled_no_spans(self):
         """Test that disabled trace manager doesn't create spans."""
         tm = TraceManager(enabled=False)
 

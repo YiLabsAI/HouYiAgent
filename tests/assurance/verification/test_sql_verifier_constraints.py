@@ -51,7 +51,7 @@ class TestSQLVerifierConstraints:
         assert result.passed is True or result.error_type != "constraint_violation"
 
     @pytest.mark.asyncio
-    async def test_sql_syntax_error_before_constraints(self):
+    async def test_syntax_error_before_constraints(self):
         """Test that syntax errors are caught before constraint checking."""
         verifier = SQLVerifier(use_constraint_solver=True)
 
@@ -135,7 +135,7 @@ class TestSQLVerifierConstraints:
         assert constraints[1].name == "id_positive"
 
     @pytest.mark.asyncio
-    async def test_build_constraints_handles_invalid_specs(self):
+    async def test_handles_invalid_specs(self):
         """Test that invalid constraint specs are handled gracefully."""
         verifier = SQLVerifier(use_constraint_solver=True)
 

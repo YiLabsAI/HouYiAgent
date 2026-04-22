@@ -21,7 +21,7 @@ from houyi.rag.types import SearchResult, Source
 class TestStreamEvent:
     """Tests for StreamEvent."""
 
-    def test_stream_event_to_sse_string(self) -> None:
+    def test_to_sse_string(self) -> None:
         """Test SSE formatting with string data."""
         event = StreamEvent(
             event_type=StreamEventType.CHUNK,
@@ -31,7 +31,7 @@ class TestStreamEvent:
         assert "event: chunk" in sse
         assert "data: Hello world" in sse
 
-    def test_stream_event_to_sse_dict(self) -> None:
+    def test_to_sse_dict(self) -> None:
         """Test SSE formatting with dict data."""
         event = StreamEvent(
             event_type=StreamEventType.START,

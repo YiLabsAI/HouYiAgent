@@ -169,7 +169,7 @@ class TestSafeJsonHardening:
     def test_empty_content_returns(self):
         assert _safe_json("") == {}
 
-    def test_parses_json_from_unclosed_codefence(self):
+    def test_parses_unclosed_codefence(self):
         payload = '```json\n{"citation_accuracy": 66.6, "effective_citations": 3}\n'
         data = _safe_json(payload)
         assert data["citation_accuracy"] == 66.6

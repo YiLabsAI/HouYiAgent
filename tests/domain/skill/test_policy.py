@@ -64,7 +64,7 @@ class TestPermissions:
         perms = Permissions(secrets=["API_KEY"])
         assert perms.requires_consent()
 
-    def test_no_consent_for_read_only(self):
+    def test_no_consent_read_only(self):
         perms = Permissions(filesystem=FilesystemPerm(read=True))
         assert not perms.requires_consent()
 
@@ -80,7 +80,7 @@ class TestPermissions:
         assert any("Network access" in d for d in descriptions)
         assert any("Access secrets" in d for d in descriptions)
 
-    def test_to_dict_and_from_dict(self):
+    def test_perms_dict_roundtrip(self):
         perms = Permissions(
             filesystem=FilesystemPerm(read=True, write=True, paths=["./data"]),
             network=NetworkPerm(enabled=True, domains=["api.example.com"]),
@@ -107,15 +107,15 @@ class TestInvocationPolicy:
         assert policy.user_invocable is True
         assert policy.side_effect == SideEffect.NONE
 
-    def test_default_for_side_effect_none(self):
+    def test_default_side_effect_none(self):
         policy = InvocationPolicy.default_for_side_effect(SideEffect.NONE)
         assert policy.model_auto_invoke == ModelAutoInvoke.ALLOW
 
-    def test_default_for_side_effect_filesystem(self):
+    def test_default_side_effect_fs(self):
         policy = InvocationPolicy.default_for_side_effect(SideEffect.FILESYSTEM)
         assert policy.model_auto_invoke == ModelAutoInvoke.ALLOW_WITH_CONSENT
 
-    def test_default_for_side_effect_network(self):
+    def test_default_side_effect_network(self):
         policy = InvocationPolicy.default_for_side_effect(SideEffect.NETWORK)
         assert policy.model_auto_invoke == ModelAutoInvoke.ALLOW_WITH_CONSENT
 
@@ -136,7 +136,7 @@ class TestInvocationPolicy:
         policy = InvocationPolicy(model_auto_invoke=ModelAutoInvoke.DENY)
         assert not policy.allows_model_invoke()
 
-    def test_to_dict_and_from_dict(self):
+    def test_policy_dict_roundtrip(self):
         policy = InvocationPolicy(
             model_auto_invoke=ModelAutoInvoke.ALLOW_WITH_CONSENT,
             user_invocable=False,
@@ -214,7 +214,7 @@ class TestPolicyEnforcer:
         assert not decision.requires_consent
         assert "denies model auto-invocation" in (decision.reason or "")
 
-    def test_check_model_invocation_requires_consent(self):
+    def test_model_invocation_needs_consent(self):
         enforcer = PolicyEnforcer()
         policy = InvocationPolicy(model_auto_invoke=ModelAutoInvoke.ALLOW_WITH_CONSENT)
         enforcer.register_skill_policy("consent_skill", policy)

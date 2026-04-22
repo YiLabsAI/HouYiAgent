@@ -37,7 +37,7 @@ def _build_skill(name: str, mode: ExecutionMode) -> SkillSpec:
     )
 
 
-def test_tool_provider_registry_internal_first() -> None:
+def test_registry_internal_first() -> None:
     """Registry should prioritize internal/remote tools."""
 
     skills = [
@@ -49,7 +49,7 @@ def test_tool_provider_registry_internal_first() -> None:
     assert [skill.name for skill in selected] == ["b"]
 
 
-def test_tool_provider_registry_fallback_all() -> None:
+def test_registry_fallback_all() -> None:
     """Registry should return all skills when no internal match exists."""
 
     skills = [_build_skill("b", ExecutionMode.PLUGIN)]
@@ -58,7 +58,7 @@ def test_tool_provider_registry_fallback_all() -> None:
     assert [skill.name for skill in selected] == ["b"]
 
 
-def test_tool_provider_registry_select_tool_names() -> None:
+def test_registry_select_names() -> None:
     """Registry should filter by tool names."""
 
     skills = [

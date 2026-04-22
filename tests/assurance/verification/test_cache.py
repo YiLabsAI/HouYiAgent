@@ -140,7 +140,7 @@ class TestLRUCache:
         assert cache.get("key3") == "value3"
         assert cache.get("key4") == "value4"
 
-    def test_lru_cache_access_updates_order(self):
+    def test_access_updates_order(self):
         """Test that accessing an entry updates its position."""
         cache = LRUCache(max_size=3)
 

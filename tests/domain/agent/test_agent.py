@@ -53,7 +53,7 @@ class TestAgentSpec:
         assert isinstance(prompt, str)
         assert len(prompt) > 0
 
-    def test_to_system_prompt_with_custom_prompt(self):
+    def test_prompt_with_custom(self):
         """Test to_system_prompt() with custom system prompt."""
         custom_prompt = "You are a helpful AI assistant."
         agent = AgentSpec(role="assistant", system_prompt=custom_prompt)
@@ -62,7 +62,7 @@ class TestAgentSpec:
 
         assert prompt == custom_prompt
 
-    def test_to_system_prompt_with_skills(self):
+    def test_prompt_with_skills(self):
         """Test to_system_prompt() includes skills."""
 
         class Input(BaseModel):
@@ -128,7 +128,7 @@ class TestAgentSpec:
         assert schemas[0]["type"] == "function"
         assert schemas[0]["function"]["name"] == "search"
 
-    def test_get_tool_schemas_multiple_skills(self):
+    def test_schemas_multiple_skills(self):
         """Test get_tool_schemas() with multiple skills."""
 
         class Input(BaseModel):

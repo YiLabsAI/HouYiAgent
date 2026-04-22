@@ -89,7 +89,7 @@ class TestTeamExecution:
 
         assert len(team.tasks) == 0
 
-    def test_team_task_with_expected_output(self):
+    def test_task_with_expected_output(self):
         """Test team task with expected output."""
         agent = Agent(role="Worker")
         task = Task(description="Generate report", expected_output="Report content", agent=agent)
@@ -98,7 +98,7 @@ class TestTeamExecution:
 
         assert team.tasks[0].expected_output == "Report content"
 
-    def test_team_multiple_agents_single_task(self):
+    def test_multiple_agents_one_task(self):
         """Test team with multiple agents but single task."""
         agent1 = Agent(role="Agent 1")
         agent2 = Agent(role="Agent 2")

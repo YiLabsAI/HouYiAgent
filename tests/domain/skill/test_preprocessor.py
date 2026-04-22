@@ -57,7 +57,7 @@ class TestPreprocessorSpec:
         assert spec.timeout == 30.0
         assert spec.inject_as == "system"
 
-    def test_from_dict_unknown_type_fallback(self):
+    def test_unknown_type_fallback(self):
         spec = PreprocessorSpec.from_dict({"type": "unknown_type"})
         assert spec.type == PreprocessorType.COMMAND
 
@@ -240,7 +240,7 @@ class TestPreprocessorInject:
         new_messages = PreprocessorPipeline.inject(messages, results)
         assert new_messages == messages
 
-    def test_inject_does_not_mutate_original(self):
+    def test_inject_not_mutates_original(self):
         messages = [{"role": "user", "content": "Hello"}]
         original_len = len(messages)
         results = [

@@ -16,7 +16,7 @@ class TestBuild:
         result = ToolResultBuilder.build({"error": "boom"})
         assert result["is_error"] is True
 
-    def test_non_dict_wraps_as_result(self):
+    def test_non_dict_wraps_result(self):
         result = ToolResultBuilder.build("hello")
         assert result["raw"] == {"result": "hello"}
 

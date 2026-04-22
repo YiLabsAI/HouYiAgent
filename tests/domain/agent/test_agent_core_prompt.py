@@ -38,7 +38,7 @@ def _skill(name: str, is_core: bool = False, description: str = "test desc") -> 
 class TestAgentSpecSystemPrompt:
     """Tests for to_system_prompt() with core tool guardrail injection."""
 
-    def test_no_core_skills_no_guardrail(self) -> None:
+    def test_no_core_no_guardrail(self) -> None:
         """No TOOL ROUTING POLICY in prompt when no is_core skill is present."""
         spec = AgentSpec(
             role="Researcher",
@@ -56,7 +56,7 @@ class TestAgentSpecSystemPrompt:
         prompt = spec.to_system_prompt()
         assert "TOOL ROUTING POLICY" in prompt
 
-    def test_guardrail_mentions_core_tool_name(self) -> None:
+    def test_guardrail_mentions_core(self) -> None:
         """The guardrail section lists the core tool name."""
         spec = AgentSpec(
             role="Analyst",
@@ -65,7 +65,7 @@ class TestAgentSpecSystemPrompt:
         prompt = spec.to_system_prompt()
         assert "rag_search" in prompt
 
-    def test_guardrail_mentions_prefer_core_over_extension(self) -> None:
+    def test_guardrail_prefer_over_ext(self) -> None:
         """Guardrail text instructs LLM to prefer [CORE OFFICIAL TOOL]."""
         spec = AgentSpec(
             role="Agent",
@@ -75,7 +75,7 @@ class TestAgentSpecSystemPrompt:
         assert "[CORE OFFICIAL TOOL]" in prompt
         assert "[THIRD-PARTY EXTENSION]" in prompt
 
-    def test_custom_system_prompt_not_overridden(self) -> None:
+    def test_custom_prompt_not_overridden(self) -> None:
         """If system_prompt is explicitly set, to_system_prompt() returns it unchanged."""
         custom = "Custom prompt here."
         spec = AgentSpec(
@@ -93,7 +93,7 @@ class TestAgentSpecSystemPrompt:
         prompt = spec.to_system_prompt()
         assert "TOOL ROUTING POLICY" not in prompt
 
-    def test_multiple_core_tools_all_listed(self) -> None:
+    def test_multiple_core_listed(self) -> None:
         """All core tool names appear in the guardrail."""
         spec = AgentSpec(
             role="Agent",
@@ -126,7 +126,7 @@ class TestAgentSpecGetToolSchemas:
         ext_idx = names.index("zzz_ext")
         assert core_idx < ext_idx
 
-    def test_multiple_core_tools_stable_order(self) -> None:
+    def test_multiple_core_stable_order(self) -> None:
         """Multiple core tools maintain stable relative order."""
         spec = AgentSpec(
             role="Agent",
@@ -141,7 +141,7 @@ class TestAgentSpecGetToolSchemas:
         assert names.index("ext_tool") > names.index("core_a")
         assert names.index("ext_tool") > names.index("core_b")
 
-    def test_no_core_tools_order_unchanged(self) -> None:
+    def test_no_core_order_unchanged(self) -> None:
         """Without core tools, order is insertion order (no reordering)."""
         spec = AgentSpec(
             role="Agent",
@@ -151,7 +151,7 @@ class TestAgentSpecGetToolSchemas:
         names = [s["function"]["name"] for s in schemas]
         assert names == ["first", "second", "third"]
 
-    def test_core_tool_schema_has_core_prefix(self) -> None:
+    def test_core_schema_has_prefix(self) -> None:
         """Core tool schema description has [CORE OFFICIAL TOOL] prefix."""
         spec = AgentSpec(
             role="Agent",
@@ -160,7 +160,7 @@ class TestAgentSpecGetToolSchemas:
         schemas = spec.get_tool_schemas()
         assert schemas[0]["function"]["description"].startswith("[CORE OFFICIAL TOOL]")
 
-    def test_ext_tool_schema_has_third_party_prefix(self) -> None:
+    def test_ext_schema_third_party(self) -> None:
         """ext__ tool schema description has [THIRD-PARTY EXTENSION] prefix."""
         spec = AgentSpec(
             role="Agent",

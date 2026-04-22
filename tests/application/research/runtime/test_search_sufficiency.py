@@ -89,7 +89,7 @@ class TestSufficiencyEvaluator:
         assert decision.reason_code == "no_sources"
         assert llm._call_count == 0
 
-    async def test_llm_called_when_guardrail_passes(self):
+    async def test_calls_llm_on_guardrail(self):
         llm = MockLLM(responses=[json.dumps({"sufficient": True, "rationale": "enough"})])
         evaluator = SufficiencyEvaluator(llm=llm, llm_kwargs={})
         sources = [

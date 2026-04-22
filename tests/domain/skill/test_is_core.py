@@ -29,22 +29,22 @@ def _make_skill(name: str = "test_skill", is_core: bool = False) -> SkillSpec:
 class TestIsCoreField:
     """Tests for the is_core field on SkillSpec."""
 
-    def test_is_core_defaults_to_false(self) -> None:
+    def test_is_core_defaults_false(self) -> None:
         """is_core must default to False for all skills."""
         skill = _make_skill()
         assert skill.is_core is False
 
-    def test_is_core_can_be_set_true_internally(self) -> None:
+    def test_is_core_set_internally(self) -> None:
         """Host internal code can explicitly set is_core=True."""
         skill = _make_skill(is_core=True)
         assert skill.is_core is True
 
-    def test_is_core_false_explicitly(self) -> None:
+    def test_is_core_false_explicit(self) -> None:
         """Explicit is_core=False is accepted."""
         skill = _make_skill(is_core=False)
         assert skill.is_core is False
 
-    def test_from_file_ignores_is_core_true(self, tmp_path: Path) -> None:
+    def test_from_file_ignores_core(self, tmp_path: Path) -> None:
         """SKILL.md with is_core: true must be forced to False by from_file()."""
         skill_md = tmp_path / "SKILL.md"
         skill_md.write_text(
@@ -62,7 +62,7 @@ class TestIsCoreField:
         skill = SkillSpec.from_file(str(skill_md))
         assert skill.is_core is False, "from_file() must sanitize is_core to False"
 
-    def test_from_file_without_is_core_defaults_false(self, tmp_path: Path) -> None:
+    def test_from_file_without_core(self, tmp_path: Path) -> None:
         """SKILL.md without is_core field → is_core defaults to False."""
         skill_md = tmp_path / "SKILL.md"
         skill_md.write_text(
@@ -79,7 +79,7 @@ class TestIsCoreField:
         skill = SkillSpec.from_file(str(skill_md))
         assert skill.is_core is False
 
-    def test_field_validator_coerces_string_true_to_false_from_file(self, tmp_path: Path) -> None:
+    def test_coerces_string_true_false(self, tmp_path: Path) -> None:
         """Even if SKILL.md contains is_core as a string 'true', it becomes False."""
         skill_md = tmp_path / "SKILL.md"
         skill_md.write_text(
@@ -97,7 +97,7 @@ class TestIsCoreField:
         skill = SkillSpec.from_file(str(skill_md))
         assert skill.is_core is False
 
-    def test_is_core_true_tool_schema_has_core_prefix(self) -> None:
+    def test_core_schema_with_prefix(self) -> None:
         """Core skill to_tool_schema() must prefix description with [CORE OFFICIAL TOOL]."""
         skill = _make_skill(is_core=True)
         schema = skill.to_tool_schema()
@@ -107,7 +107,7 @@ class TestIsCoreField:
         )
         assert "A test skill" in desc
 
-    def test_is_core_false_tool_schema_no_prefix(self) -> None:
+    def test_non_core_schema_bare(self) -> None:
         """Non-core, non-ext__ skill has no special prefix in to_tool_schema()."""
         skill = _make_skill(is_core=False)
         schema = skill.to_tool_schema()
@@ -115,7 +115,7 @@ class TestIsCoreField:
         assert not desc.startswith("[CORE"), f"Unexpected prefix in: {desc!r}"
         assert not desc.startswith("[THIRD"), f"Unexpected prefix in: {desc!r}"
 
-    def test_ext_prefix_skill_has_third_party_annotation(self) -> None:
+    def test_ext_prefix_third_party(self) -> None:
         """Skills named ext__<x> must get [THIRD-PARTY EXTENSION] prefix in to_tool_schema()."""
         skill = SkillSpec(
             name="ext__web_search",
@@ -130,7 +130,7 @@ class TestIsCoreField:
         )
         assert "Prefer [CORE OFFICIAL TOOL]" in desc
 
-    def test_original_description_unchanged_after_to_tool_schema(self) -> None:
+    def test_description_unchanged(self) -> None:
         """to_tool_schema() must NOT mutate skill.description (render-only annotation)."""
         skill = _make_skill(is_core=True)
         original_desc = skill.description
@@ -151,7 +151,7 @@ class TestIsCoreField:
         _ = skill.to_tool_schema()
         assert skill.description == original_desc
 
-    def test_core_skill_tool_schema_name_unchanged(self) -> None:
+    def test_core_schema_name_unchanged(self) -> None:
         """Core skill name in to_tool_schema() must be unchanged (no prefix on name)."""
         skill = _make_skill(name="web_search", is_core=True)
         schema = skill.to_tool_schema()
@@ -159,7 +159,7 @@ class TestIsCoreField:
 
 
 class TestCoreConflictRegisteredName:
-    def test_returns_ext_name_on_core_conflict(self, tmp_path: Path) -> None:
+    def test_returns_ext_on_conflict(self, tmp_path: Path) -> None:
         registry = SkillRegistry()
         registry.register(_make_skill(name="planning-with-files", is_core=True), overwrite=True)
 

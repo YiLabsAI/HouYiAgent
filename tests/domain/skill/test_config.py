@@ -147,7 +147,7 @@ class TestSkillConfig:
             assert config.consent.cache_ttl_seconds == 3600.0
             assert config.metrics.enabled is True
 
-    def test_from_env_with_custom_values(self) -> None:
+    def test_from_env_custom_values(self) -> None:
         """Test loading from environment with custom values."""
         env_vars = {
             "HOUYI_HOOK_TIMEOUT": "60",
@@ -194,49 +194,49 @@ class TestSkillConfig:
 class TestEnvHelpers:
     """Tests for environment variable helper functions."""
 
-    def test_get_float_env_with_value(self) -> None:
+    def test_float_env_value(self) -> None:
         """Test getting float from environment."""
         with patch.dict(os.environ, {"TEST_FLOAT": "42.5"}):
             assert _get_float_env("TEST_FLOAT", 0.0) == 42.5
 
-    def test_get_float_env_with_default(self) -> None:
+    def test_float_env_default(self) -> None:
         """Test getting float with default value."""
         with patch.dict(os.environ, {}, clear=True):
             assert _get_float_env("TEST_FLOAT", 10.5) == 10.5
 
-    def test_get_float_env_with_invalid(self) -> None:
+    def test_float_env_invalid(self) -> None:
         """Test getting float with invalid value returns default."""
         with patch.dict(os.environ, {"TEST_FLOAT": "not_a_number"}):
             assert _get_float_env("TEST_FLOAT", 5.0) == 5.0
 
-    def test_get_int_env_with_value(self) -> None:
+    def test_int_env_value(self) -> None:
         """Test getting int from environment."""
         with patch.dict(os.environ, {"TEST_INT": "42"}):
             assert _get_int_env("TEST_INT", 0) == 42
 
-    def test_get_int_env_with_default(self) -> None:
+    def test_int_env_default(self) -> None:
         """Test getting int with default value."""
         with patch.dict(os.environ, {}, clear=True):
             assert _get_int_env("TEST_INT", 10) == 10
 
-    def test_get_int_env_with_invalid(self) -> None:
+    def test_int_env_invalid(self) -> None:
         """Test getting int with invalid value returns default."""
         with patch.dict(os.environ, {"TEST_INT": "not_a_number"}):
             assert _get_int_env("TEST_INT", 5) == 5
 
-    def test_get_bool_env_true_values(self) -> None:
+    def test_bool_env_true_values(self) -> None:
         """Test getting bool with various true values."""
         for value in ["1", "true", "TRUE", "yes", "YES", "on", "ON"]:
             with patch.dict(os.environ, {"TEST_BOOL": value}):
                 assert _get_bool_env("TEST_BOOL", False) is True
 
-    def test_get_bool_env_false_values(self) -> None:
+    def test_bool_env_false_values(self) -> None:
         """Test getting bool with various false values."""
         for value in ["0", "false", "FALSE", "no", "NO", "off", "OFF", ""]:
             with patch.dict(os.environ, {"TEST_BOOL": value}):
                 assert _get_bool_env("TEST_BOOL", True) is False
 
-    def test_get_bool_env_with_default(self) -> None:
+    def test_bool_env_default(self) -> None:
         """Test getting bool with default value."""
         with patch.dict(os.environ, {}, clear=True):
             assert _get_bool_env("TEST_BOOL", True) is True
@@ -246,13 +246,13 @@ class TestEnvHelpers:
 class TestGlobalConfig:
     """Tests for global configuration functions."""
 
-    def test_get_skill_config_returns_default(self) -> None:
+    def test_returns_default_instance(self) -> None:
         """Test that get_skill_config returns the default instance."""
         config = get_skill_config()
         assert isinstance(config, SkillConfig)
         assert config is DEFAULT_SKILL_CONFIG
 
-    def test_load_skill_config_from_env_updates_global(self) -> None:
+    def test_load_updates_global(self) -> None:
         """Test that load_skill_config_from_env updates the global default."""
         with patch.dict(os.environ, {"HOUYI_HOOK_TIMEOUT": "99"}, clear=True):
             config = load_skill_config_from_env()

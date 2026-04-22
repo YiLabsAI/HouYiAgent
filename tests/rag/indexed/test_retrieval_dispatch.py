@@ -48,7 +48,7 @@ async def test_create_task_bm25_strategy() -> None:
     assert await task == ["bm25"]
 
 
-def test_create_task_skips_graph_when_disabled() -> None:
+def test_skips_graph_when_disabled() -> None:
     context = _build_context(graph_enabled=False)
 
     task = create_retrieval_task(

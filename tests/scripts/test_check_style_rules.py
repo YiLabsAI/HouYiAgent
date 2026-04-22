@@ -33,25 +33,25 @@ def _run(style_rules, path: Path, text: str):
 
 class TestUnderscoreSegmentGate:
     def test_underscores_at_limit(self, style_rules):
-        src = "def test_alpha_beta_gamma_delta_epsilon():\n    pass\n"
+        src = "def test_alpha_beta_gamma_delta():\n    pass\n"
         errs, warns = _run(style_rules, Path("tests/x/test_mod.py"), src)
         assert errs == []
         assert warns == []
 
     def test_underscores_over_limit(self, style_rules):
-        src = "def test_alpha_beta_gamma_delta_epsilon_zeta():\n    pass\n"
+        src = "def test_alpha_beta_gamma_delta_epsilon():\n    pass\n"
         errs, _ = _run(style_rules, Path("tests/x/test_mod.py"), src)
         assert len(errs) == 1
         assert "underscore segments" in errs[0]
-        assert "limit 4" in errs[0]
+        assert "limit 3" in errs[0]
 
     def test_async_def(self, style_rules):
-        src = "async def test_a_b_c_d_e_f():\n    pass\n"
+        src = "async def test_a_b_c_d_e():\n    pass\n"
         errs, _ = _run(style_rules, Path("tests/x/test_mod.py"), src)
         assert len(errs) == 1
 
     def test_non_test_path(self, style_rules):
-        src = "def test_a_b_c_d_e_f():\n    pass\n"
+        src = "def test_a_b_c_d_e():\n    pass\n"
         errs, _ = _run(style_rules, Path("houyi/foo.py"), src)
         assert errs == []
 

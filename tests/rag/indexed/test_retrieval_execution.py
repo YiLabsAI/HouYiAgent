@@ -21,7 +21,7 @@ async def _return_values(values: list[str]) -> list[str]:
     return values
 
 
-def test_build_retrieval_plan_filters_none_tasks() -> None:
+def test_plan_filters_none_tasks() -> None:
     task_payload = object()
 
     tasks, task_info = build_retrieval_plan(
@@ -36,7 +36,7 @@ def test_build_retrieval_plan_filters_none_tasks() -> None:
 
 
 @pytest.mark.asyncio
-async def test_execute_sequential_retrieval_success_timeout_and_failure() -> None:
+async def test_sequential_success_timeout_fail() -> None:
     async def slow() -> list[str]:
         await asyncio.sleep(0.01)
         return ["late"]
@@ -61,7 +61,7 @@ async def test_execute_sequential_retrieval_success_timeout_and_failure() -> Non
 
 
 @pytest.mark.asyncio
-async def test_execute_parallel_retrieval_no_tasks() -> None:
+async def test_parallel_no_tasks() -> None:
     results = await execute_parallel_retrieval(
         RetrievalExecutionRequest(
             strategies=[],
@@ -73,7 +73,7 @@ async def test_execute_parallel_retrieval_no_tasks() -> None:
     assert results == []
 
 
-def test_collect_parallel_results_success_and_failure() -> None:
+def test_collect_success_and_failure() -> None:
     async def ok() -> list[str]:
         return ["ok"]
 
@@ -101,7 +101,7 @@ def test_collect_parallel_results_success_and_failure() -> None:
     assert {result.success for result in results} == {True, False}
 
 
-def test_append_timeout_and_failed_results() -> None:
+def test_append_timeout_failed() -> None:
     results: list[RetrievalTaskResult] = []
     task_info = [(RetrievalStrategy.BM25, "bm25"), (RetrievalStrategy.GRAPH, "graph")]
 

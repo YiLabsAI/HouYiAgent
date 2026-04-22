@@ -42,7 +42,7 @@ class TestDocumentLoaders:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("suffix", SUPPORTED_DOCUMENT_SUFFIXES)
-    async def test_supported_suffix_dispatches_to_expected_loader(
+    async def test_suffix_dispatches_loader(
         self,
         tmp_path: Path,
         suffix: str,
@@ -208,7 +208,7 @@ class TestDocumentLoaders:
         assert doc.metadata["sheets"] == 1
 
     @pytest.mark.asyncio
-    async def test_load_excel_without_pandas_returns_none(self, tmp_path: Path) -> None:
+    async def test_excel_without_pandas(self, tmp_path: Path) -> None:
         path = tmp_path / "table.xlsx"
         path.write_bytes(b"not-a-real-excel-file")
 
@@ -226,7 +226,7 @@ class TestDocumentLoaders:
         assert doc is None
 
     @pytest.mark.asyncio
-    async def test_load_doc_without_antiword_returns_none(self, tmp_path: Path) -> None:
+    async def test_doc_without_antiword(self, tmp_path: Path) -> None:
         path = tmp_path / "legacy.doc"
         path.write_bytes(b"dummy-doc")
 

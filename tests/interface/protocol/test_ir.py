@@ -251,7 +251,7 @@ class TestCheckpointIR:
 class TestIRConverter:
     """Test bidirectional IR conversion."""
 
-    def test_execution_plan_to_plan_ir(self) -> None:
+    def test_execution_to_plan_ir(self) -> None:
         """Test converting ExecutionPlan to PlanIR."""
         exec_plan = ExecutionPlan(
             plan_id="plan1",
@@ -285,7 +285,7 @@ class TestIRConverter:
         assert edge.source_node_id == "node1"
         assert edge.target_node_id == "node2"
 
-    def test_plan_ir_to_execution_plan(self) -> None:
+    def test_plan_ir_to_execution(self) -> None:
         """Test converting PlanIR to ExecutionPlan."""
         plan_ir = PlanIR(
             plan_id="plan1",
@@ -406,13 +406,13 @@ class TestToolCallTraceIR:
         )
         assert ir.parallel_group_id == "round_1"
 
-    def test_parallel_group_id_default_none(self) -> None:
+    def test_group_id_default_none(self) -> None:
         from houyi.interface.protocol.ir.tooling_ir import ToolCallTraceIR
 
         ir = ToolCallTraceIR(tool_name="search")
         assert ir.parallel_group_id is None
 
-    def test_serialization_includes_parallel_group_id(self) -> None:
+    def test_serialization_with_group_id(self) -> None:
         from houyi.interface.protocol.ir.tooling_ir import ToolCallTraceIR
 
         ir = ToolCallTraceIR(

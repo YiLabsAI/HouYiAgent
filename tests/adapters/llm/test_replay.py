@@ -15,27 +15,27 @@ from houyi.adapters.llm.replay import (
 from houyi.interface.protocol.ir.checkpoint_ir import LLMCallLog
 
 
-def test_is_deterministic_replay_requires_dict_and_flag() -> None:
+def test_deterministic_requires_flag() -> None:
     assert is_deterministic_replay(execution_metadata=None) is False
     assert is_deterministic_replay(execution_metadata={"replay_mode": "best_effort"}) is False
     assert is_deterministic_replay(execution_metadata={"replay_mode": "deterministic"}) is True
 
 
-def test_build_prompt_cache_key_requires_prompt_cache_key() -> None:
+def test_build_cache_key() -> None:
     assert build_prompt_cache_key(model="test-model", prompt_cache_key=None) is None
     assert build_prompt_cache_key(model="test-model", prompt_cache_key="") is None
     assert build_prompt_cache_key(model="test-model", prompt_cache_key="p1") == "test-model:p1"
     assert build_prompt_cache_key(model=None, prompt_cache_key="p1") == ":p1"
 
 
-def test_get_cached_response_requires_cache_key() -> None:
+def test_get_cached_requires_key() -> None:
     llm_cache = {"test-model:p1": "cached response"}
     assert get_cached_response(llm_cache=llm_cache, cache_key=None) is None
     assert get_cached_response(llm_cache=llm_cache, cache_key="missing") is None
     assert get_cached_response(llm_cache=llm_cache, cache_key="test-model:p1") == "cached response"
 
 
-def test_record_llm_call_appends_log_and_generates_call_id() -> None:
+def test_record_appends_and_ids() -> None:
     llm_call_logs: dict[str, list[LLMCallLog]] = {}
 
     first = record_llm_call(
@@ -62,7 +62,7 @@ def test_record_llm_call_appends_log_and_generates_call_id() -> None:
     assert first.metadata == {"source": "test"}
 
 
-def test_decide_replay_returns_recorded_llm_text_when_deterministic() -> None:
+def test_decide_returns_recorded_text() -> None:
     llm_call_logs = {
         "exec_1": [
             LLMCallLog(
@@ -92,7 +92,7 @@ def test_decide_replay_returns_recorded_llm_text_when_deterministic() -> None:
     assert decision.tool_output is None
 
 
-def test_decide_replay_returns_recorded_tool_output_when_deterministic() -> None:
+def test_decide_returns_recorded_tool() -> None:
     llm_call_logs = {
         "exec_1": [
             LLMCallLog(
@@ -128,7 +128,7 @@ def test_decide_replay_returns_recorded_tool_output_when_deterministic() -> None
     assert decision.tool_output.get("tool_calls")
 
 
-def test_decide_replay_returns_cached_llm_text_when_cache_hit() -> None:
+def test_decide_cached_on_hit() -> None:
     decision = decide_replay(
         execution_metadata={},
         llm_call_logs={},
@@ -144,7 +144,7 @@ def test_decide_replay_returns_cached_llm_text_when_cache_hit() -> None:
     assert decision.cache_key == "test-model:p1"
 
 
-def test_decide_replay_returns_none_when_no_sources_available() -> None:
+def test_decide_none_without_sources() -> None:
     decision = decide_replay(
         execution_metadata={},
         llm_call_logs={},
@@ -160,7 +160,7 @@ def test_decide_replay_returns_none_when_no_sources_available() -> None:
     assert decision.tool_output is None
 
 
-def test_get_recorded_llm_response_skips_tool_call_entries() -> None:
+def test_get_recorded_skips_tool() -> None:
     llm_call_logs = {
         "exec_1": [
             LLMCallLog(
@@ -194,7 +194,7 @@ def test_get_recorded_llm_response_skips_tool_call_entries() -> None:
     )
 
 
-def test_get_recorded_tool_call_output_reconstructs_messages_from_prompt_and_response() -> None:
+def test_reconstructs_from_response() -> None:
     llm_call_logs = {
         "exec_1": [
             LLMCallLog(
@@ -249,7 +249,7 @@ def test_get_recorded_tool_call_output_reconstructs_messages_from_prompt_and_res
     ]
 
 
-def test_get_recorded_tool_call_output_builds_user_message_for_string_prompt() -> None:
+def test_builds_user_from_string() -> None:
     llm_call_logs = {
         "exec_1": [
             LLMCallLog(
