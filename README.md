@@ -246,10 +246,6 @@ Each is a production-grade application that exercises every layer of the SDK. St
 
 We welcome contributions! See our [Contributing Guide](./CONTRIBUTING.md).
 
-```bash
-make check          # lint + type check + unit tests
-make test-e2e       # integration tests with real LLM
-```
 
 ## 🏛 Standards & Acknowledgments
 
