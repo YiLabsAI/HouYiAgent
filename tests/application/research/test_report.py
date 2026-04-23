@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 
 from houyi.application.research.report import (
     ReportGenerator,
@@ -13,7 +14,10 @@ from houyi.application.research.report import (
     _compute_section_sidecar_metrics,
     _consolidate_short_paragraphs,
     _count_sentences,
+    _deduplicate_paragraphs,
+    _deduplicate_subheadings,
     _detect_noisy_paragraphs,
+    _extract_translated_title,
     _query_is_english,
 )
 from houyi.application.research.types import (
@@ -28,9 +32,6 @@ from houyi.application.research.types import (
 
 from .conftest import MockLLM
 
-# Content is intentionally padded above ``_SHORT_SECTION_WORD_THRESHOLD``
-# (350 words) so legacy tests do not accidentally trigger the EN-only
-# post-generation expansion pass added in the short-section guard.
 _SECTION_JSON = json.dumps(
     {
         "content": (
@@ -1538,9 +1539,15 @@ class TestLanguageGate:
                 ],
             }
         )
-        translated = json.dumps({"content": self._english_translation(), "citations": []})
+        translated = json.dumps(
+            {
+                "title": "Sovereign Fund Allocation",
+                "content": self._english_translation(),
+                "citations": [],
+            }
+        )
         llm = MockLLM(responses=[initial, translated])
-        gen = ReportGenerator(llm, expand_short_sections=False)
+        gen = ReportGenerator(llm)
         section = await gen._generate_section(
             query="Researching how the world's wealthiest governments invest.",
             title="Sovereign Fund Allocation",
@@ -1564,7 +1571,7 @@ class TestLanguageGate:
             }
         )
         llm = MockLLM(responses=[english])
-        gen = ReportGenerator(llm, expand_short_sections=False)
+        gen = ReportGenerator(llm)
         section = await gen._generate_section(
             query="How do sovereign funds allocate capital?",
             title="Allocation",
@@ -1578,7 +1585,7 @@ class TestLanguageGate:
         # CJK query: the gate must not fire, even for a CJK body.
         body = json.dumps({"content": self._cjk_body(), "citations": []})
         llm = MockLLM(responses=[body])
-        gen = ReportGenerator(llm, expand_short_sections=False)
+        gen = ReportGenerator(llm)
         # ZH: zhuquan caifu jijin touzi qushi.
         section = await gen._generate_section(
             query=(
@@ -1596,7 +1603,7 @@ class TestLanguageGate:
         initial = json.dumps({"content": self._cjk_body(), "citations": []})
         still_cjk = json.dumps({"content": self._cjk_body(), "citations": []})
         llm = MockLLM(responses=[initial, still_cjk])
-        gen = ReportGenerator(llm, expand_short_sections=False)
+        gen = ReportGenerator(llm)
         section = await gen._generate_section(
             query="How do sovereign funds allocate capital?",
             title="Allocation",
@@ -1608,240 +1615,166 @@ class TestLanguageGate:
         assert _cjk_char_ratio(section.content) > 0.5
 
 
-class TestShortSectionExpand:
-    """EN-only post-gen expansion pass."""
+class TestDeduplicateSubheadings:
+    """Post-generation guard that collapses duplicated ``### Subheading`` trees."""
 
-    def _source(self) -> SourceReference:
-        return SourceReference(
-            reference_id="ref_001",
-            url="https://a.com",
-            title="Source A",
-            snippet="concentration data 50-80 percent across 5-10 names",
+    def test_single_pass(self):
+        content = (
+            "### Alpha\nAlpha body content [ref_001].\n\n### Beta\nBeta body content [ref_002].\n"
         )
+        assert _deduplicate_subheadings(content) == content
 
-    def _short_en_body(self) -> str:
-        # ~120 words: below the 220-word threshold so expansion triggers, but
-        # large enough that Guard B (1.5x growth cap) permits a realistic
-        # expanded draft rather than falsely rejecting a modest rewrite.
-        return " ".join(
-            [
-                f"Sentence {i} about Buffett's shift from Graham cigar-butt "
-                f"style to quality [ref_001]."
-                for i in range(12)
-            ]
+    def test_verbatim_repeat(self):
+        content = (
+            "### Alpha\nAlpha body content [ref_001].\n\n### Alpha\nAlpha body content [ref_001].\n"
         )
+        out = _deduplicate_subheadings(content)
+        assert out.count("### Alpha") == 1
+        assert "Alpha body content [ref_001]." in out
 
-    def _expanded_en_body(self) -> str:
-        # Short body is ~144 words (12 sentences x 12 words); this expansion
-        # lands at ~200 words (20 sentences x 10 words) — about 1.39x — safely
-        # under Guard B's 1.5x cap.
-        return " ".join(
-            [
-                f"Sentence {i} deepens the analysis with quantitative evidence [ref_001]."
-                for i in range(20)
-            ]
+    def test_prefix_truncation(self):
+        content = (
+            "### Alpha\n"
+            "Full version goes far beyond the preamble here [ref_001].\n\n"
+            "### Alpha\n"
+            "Full version goes far\n"
         )
+        out = _deduplicate_subheadings(content)
+        assert out.count("### Alpha") == 1
+        # The longer body (pass 1) survives; truncated pass 2 is dropped.
+        assert "far beyond the preamble" in out
 
-    async def test_expands_en_section(self):
-        short = json.dumps(
-            {
-                "content": self._short_en_body(),
-                "citations": [
-                    {"reference_id": "ref_001", "text_span": "quality", "context": "shift"}
-                ],
-            }
-        )
-        expanded = json.dumps(
-            {
-                "content": self._expanded_en_body(),
-                "citations": [
-                    {
-                        "reference_id": "ref_001",
-                        "text_span": "analysis",
-                        "context": "deep",
-                    }
-                ],
-            }
-        )
-        llm = MockLLM(responses=[short, expanded])
-        gen = ReportGenerator(llm)
-        section = await gen._generate_section(
-            query="How did Buffett evolve from Graham to quality investing?",
-            title="Buffett Evolution",
-            objective="Trace the shift from cigar-butt to quality-business investing.",
-            sources=[self._source()],
-        )
-        # Expanded body contains the new marker phrase and dropped the old one.
-        assert "deepens the analysis" in section.content
-        # Must make a second LLM call beyond the initial section + any noise rewrite.
-        assert llm._call_count >= 2
+    def test_empty_first_pass(self):
+        # Empty first pass is the Q51 "### Critical Analysis and Evidentiary
+        # Limitations" pattern: title-only opener followed by a fully-written
+        # second occurrence.  The longer body (pass 2) must survive.
+        content = "### Alpha\n\n### Alpha\nReal analysis content goes here [ref_001].\n"
+        out = _deduplicate_subheadings(content)
+        assert out.count("### Alpha") == 1
+        assert "Real analysis content" in out
 
-    async def test_skips_cjk_query(self):
-        short = json.dumps(
-            {
-                "content": self._short_en_body(),
-                "citations": [],
-            }
+    def test_keeps_distinct_bodies(self):
+        # When two chunks share a title, the longer body wins.  This test
+        # confirms the "longest wins" tie-breaker keeps the richer content
+        # instead of the shorter redraft.
+        content = (
+            "### Alpha\n"
+            "Short original body.\n\n"
+            "### Alpha\n"
+            "Much longer redraft body with extra narrative depth here.\n"
         )
-        llm = MockLLM(responses=[short])
-        gen = ReportGenerator(llm)
-        # ZH: bafeite ruhe cong gelieamu zouxiang zhiliang touzi (Buffett-quality-investing query).
-        section = await gen._generate_section(
-            query=(
-                "\u5df4\u83f2\u7279\u5982\u4f55\u4ece\u683c\u96f7\u5384"
-                "\u59c6\u8d70\u5411\u8d28\u91cf\u6295\u8d44\uff1f"
-            ),
-            title="Buffett Evolution",
-            objective="Trace the shift from cigar-butt to quality-business investing.",
-            sources=[self._source()],
-        )
-        # Only the initial section call should have fired for a CJK query.
-        assert llm._call_count == 1
-        assert section.content.startswith("Sentence 0 about Buffett")
+        out = _deduplicate_subheadings(content)
+        assert out.count("### Alpha") == 1
+        assert "longer redraft" in out
+        assert "Short original" not in out
 
-    async def test_skips_long_body(self):
-        long_body = " ".join(
-            [f"Sentence {i} provides evidence and context [ref_001]." for i in range(60)]
+    def test_cjk_titles(self):
+        # CJK: zhonguo jiuge jiuceng moxing (Chinese 9-tier model).  The
+        # dedup rule is language-agnostic so ZH duplicate titles are
+        # collapsed identically.
+        cjk_title = "### \u4e2d\u56fd\u4e5d\u9636\u5c42\u6a21\u578b\n"
+        content = (
+            cjk_title + "First CJK body content.\n\n" + cjk_title + "First CJK body content.\n"
         )
-        long_json = json.dumps({"content": long_body, "citations": []})
-        llm = MockLLM(responses=[long_json])
-        gen = ReportGenerator(llm)
-        await gen._generate_section(
-            query="How did Buffett evolve from Graham to quality investing?",
-            title="Buffett Evolution",
-            objective="Trace the shift from cigar-butt to quality-business investing.",
-            sources=[self._source()],
-        )
-        # Long initial body must not trigger a second LLM call.
-        assert llm._call_count == 1
+        out = _deduplicate_subheadings(content)
+        assert out.count(cjk_title.strip()) == 1
 
-    async def test_flag_skips_expand(self):
-        short = json.dumps(
-            {
-                "content": self._short_en_body(),
-                "citations": [],
-            }
-        )
-        llm = MockLLM(responses=[short])
-        gen = ReportGenerator(llm, expand_short_sections=False)
-        await gen._generate_section(
-            query="How did Buffett evolve from Graham to quality investing?",
-            title="Buffett Evolution",
-            objective="Trace the shift from cigar-butt to quality-business investing.",
-            sources=[self._source()],
-        )
-        assert llm._call_count == 1
+    def test_no_h3(self):
+        content = "## Section heading\n\nJust a paragraph without any ### sub-tree.\n"
+        assert _deduplicate_subheadings(content) == content
 
-    async def test_skips_structured_section(self):
-        # Guard A: section body already carries internal ``###`` subheadings,
-        # which triggered a duplication failure mode where the LLM re-emitted
-        # the whole subheading tree verbatim underneath itself.
-        structured = json.dumps(
-            {
-                "content": (
-                    "Opening paragraph on the shift [ref_001].\n\n"
-                    "### The Cigar-Butt Foundation\n\n"
-                    "Graham era analysis [ref_001].\n\n"
-                    "### The Munger Catalyst\n\n"
-                    "Quality turn analysis [ref_001]."
-                ),
-                "citations": [{"reference_id": "ref_001", "text_span": "shift", "context": ""}],
-            }
+    def test_preserves_narrative_order(self):
+        # Q51 regression: when the longest-body winner for some titles
+        # lives in pass 2 and others in pass 1, the emitted order must
+        # still reflect each title's FIRST appearance so the narrative
+        # flow stays Food -> Clothing -> Comparative -> Critical rather
+        # than being rearranged by winner position.
+        content = (
+            "### Food\n"
+            "Food pass 1 body, much longer text here to win.\n\n"
+            "### Clothing\n"
+            "Clothing pass 1 body, short.\n\n"
+            "### Comparative\n"
+            "Comparative pass 1 body, medium length text block.\n\n"
+            "### Food\n"
+            "Food pass 2 shorter body.\n\n"
+            "### Clothing\n"
+            "Clothing pass 2 body that is noticeably longer than the pass 1.\n\n"
+            "### Comparative\n"
+            "Short.\n"
         )
-        llm = MockLLM(responses=[structured])
-        gen = ReportGenerator(llm)
-        section = await gen._generate_section(
-            query="How did Buffett evolve from Graham to quality investing?",
-            title="Buffett Evolution",
-            objective="Trace the shift from cigar-butt to quality-business investing.",
-            sources=[self._source()],
-        )
-        # Guard A must fire: no second LLM call, structured body preserved.
-        assert llm._call_count == 1
-        assert "### The Cigar-Butt Foundation" in section.content
-        assert "### The Munger Catalyst" in section.content
+        out = _deduplicate_subheadings(content)
+        ordered_titles = re.findall(r"^### .+$", out, re.MULTILINE)
+        assert ordered_titles == ["### Food", "### Clothing", "### Comparative"]
+        # Food kept from pass 1 (longer); Clothing kept from pass 2 (longer).
+        assert "Food pass 1 body" in out
+        assert "Clothing pass 2 body" in out
 
-    async def test_rejects_overlong_expand(self):
-        # Guard B: expansion grew >1.5x, must be discarded.
-        short = json.dumps(
-            {
-                "content": self._short_en_body(),
-                "citations": [],
-            }
-        )
-        # 40 sentences x ~10 words = ~400 words.  _short_en_body is ~120 words,
-        # so ratio ~3.3x, well above the 1.5x cap.
-        overlong = json.dumps(
-            {
-                "content": " ".join(
-                    [
-                        f"Sentence {i} overgrown with excessive padded verbose detail [ref_001]."
-                        for i in range(40)
-                    ]
-                ),
-                "citations": [],
-            }
-        )
-        llm = MockLLM(responses=[short, overlong])
-        gen = ReportGenerator(llm)
-        section = await gen._generate_section(
-            query="How did Buffett evolve from Graham to quality investing?",
-            title="Buffett Evolution",
-            objective="Trace the shift from cigar-butt to quality-business investing.",
-            sources=[self._source()],
-        )
-        # LLM was called for expansion, but the result was rejected.
-        assert llm._call_count == 2
-        # Original short body preserved; padded prose must not leak in.
-        assert "overgrown" not in section.content
-        assert "Sentence 0 about Buffett" in section.content
 
-    async def test_rejects_new_subheadings(self):
-        # Guard C: expansion introduced ``###`` subheadings not present in the
-        # original flat body; treat as a duplication-style artifact and drop.
-        short = json.dumps(
-            {
-                "content": self._short_en_body(),
-                "citations": [],
-            }
-        )
-        expanded_with_headings = json.dumps(
-            {
-                "content": (
-                    self._expanded_en_body() + "\n\n### Extra Structure Injected\n\nMore [ref_001]."
-                ),
-                "citations": [],
-            }
-        )
-        llm = MockLLM(responses=[short, expanded_with_headings])
-        gen = ReportGenerator(llm)
-        section = await gen._generate_section(
-            query="How did Buffett evolve from Graham to quality investing?",
-            title="Buffett Evolution",
-            objective="Trace the shift from cigar-butt to quality-business investing.",
-            sources=[self._source()],
-        )
-        assert llm._call_count == 2
-        assert "Extra Structure Injected" not in section.content
-        # Original short body preserved.
-        assert "Sentence 0 about Buffett" in section.content
+class TestDeduplicateParagraphs:
+    """Paragraph-granularity companion to the subheading dedup pass."""
 
-    async def test_ignores_regression(self):
-        short = json.dumps(
-            {
-                "content": self._short_en_body(),
-                "citations": [],
-            }
-        )
-        regression = json.dumps({"content": "Tiny.", "citations": []})
-        llm = MockLLM(responses=[short, regression])
-        gen = ReportGenerator(llm)
-        section = await gen._generate_section(
-            query="How did Buffett evolve from Graham to quality investing?",
-            title="Buffett Evolution",
-            objective="Trace the shift from cigar-butt to quality-business investing.",
-            sources=[self._source()],
-        )
-        # Regression must be ignored; original short body preserved.
-        assert "Sentence 0 about Buffett" in section.content
-        assert "Tiny" not in section.content
+    _LONG_A = (
+        "The elderly segment's consumption landscape is defined by a structural "
+        "pivot away from goods toward services, documented across multiple "
+        "sources and summarised quantitatively in the table that follows."
+    )
+    _LONG_B = (
+        "Meanwhile, retail demand for age-friendly housing retrofits has "
+        "outpaced general housing growth by a significant margin throughout "
+        "the 2020-2024 window, and is expected to widen further."
+    )
+
+    def test_noop_on_unique(self):
+        content = self._LONG_A + "\n\n" + self._LONG_B
+        assert _deduplicate_paragraphs(content) == content
+
+    def test_drops_verbatim_repeat(self):
+        content = self._LONG_A + "\n\n### Subheading\n\nSub body.\n\n" + self._LONG_A
+        out = _deduplicate_paragraphs(content)
+        assert out.count(self._LONG_A) == 1
+        # Structural heading preserved so the section keeps its layout.
+        assert "### Subheading" in out
+
+    def test_short_repeats_kept(self):
+        # Short paragraphs (<150 chars) can legitimately recur; the min
+        # length filter must keep both copies instead of collapsing them.
+        short = "Short topic sentence kept verbatim."
+        content = short + "\n\n" + self._LONG_B + "\n\n" + short
+        out = _deduplicate_paragraphs(content)
+        assert out.count(short) == 2
+
+    def test_structural_blocks_preserved(self):
+        # Table rows / code fences / list items are structural and must
+        # survive even if they repeat textually across the section.
+        table_row = "| col A | col B |"
+        content = self._LONG_A + "\n\n" + table_row + "\n\n" + table_row + "\n\n" + self._LONG_A
+        out = _deduplicate_paragraphs(content)
+        assert out.count(table_row) == 2
+        assert out.count(self._LONG_A) == 1
+
+
+class TestExtractTranslatedTitle:
+    """JSON-response title extractor used by the translate post-pass."""
+
+    def test_happy_path(self):
+        raw = '{"title": "Demographic Shifts", "content": "body"}'
+        assert _extract_translated_title(raw, fallback="fb") == "Demographic Shifts"
+
+    def test_fallback_on_missing(self):
+        raw = '{"content": "body"}'
+        assert _extract_translated_title(raw, fallback="fb") == "fb"
+
+    def test_fallback_on_cjk(self):
+        # Translated title must be CJK-free; fallback otherwise.
+        raw = '{"title": "\u4e2d\u6587\u6807\u9898", "content": "body"}'
+        assert _extract_translated_title(raw, fallback="fb") == "fb"
+
+    def test_fallback_on_unparseable(self):
+        assert _extract_translated_title("not json", fallback="fb") == "fb"
+
+    def test_fenced_code_wrapper(self):
+        # The translate prompt asks for plain JSON, but some models return
+        # it inside a ```json fence.  Mirror _parse_section's fence strip.
+        raw = '```json\n{"title": "Wrapped", "content": "body"}\n```'
+        assert _extract_translated_title(raw, fallback="fb") == "Wrapped"

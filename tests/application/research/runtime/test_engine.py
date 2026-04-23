@@ -307,6 +307,99 @@ class TestConfirmPlan:
         with pytest.raises(ResearchStateError, match="no sub-questions"):
             await session.confirm_plan()
 
+    async def test_confirm_soft_accepts_shortage(self, caplog):
+        """Sub-question floor shortage should warn + proceed, not crash.
+
+        Regression for the houyi-studio ``Planner returned fewer than 5
+        sub-questions`` crash when the LLM occasionally returns a short plan
+        on deep mode despite the 2-retry loop inside
+        ``ResearchPlanner.generate_plan_draft``.  The confirm flow must stay
+        alive so the user can still execute the (degraded) plan.
+        """
+        import logging
+
+        from houyi.application.research.types import (
+            OutlineSection,
+            ResearchSettings,
+            SubQuestion,
+        )
+
+        llm = MockLLM()
+        ws = make_mock_web_search()
+        session = ResearchRuntime(
+            llm_adapter=llm,
+            web_search=ws,
+            settings=ResearchSettings(depth="deep"),
+        )
+        # deep floor is 5; craft a 3-question plan that the validator flags.
+        session._plan = ResearchPlan(
+            query="test",
+            settings=ResearchSettings(depth="deep"),
+            sub_questions=[
+                SubQuestion(question_id="a", question="a?"),
+                SubQuestion(question_id="b", question="b?"),
+                SubQuestion(question_id="c", question="c?"),
+            ],
+            outline=[OutlineSection(title="S", objective="o")],
+        )
+
+        with caplog.at_level(logging.WARNING, logger="houyi.application.research.runtime.planning"):
+            plan = await session.confirm_plan()
+
+        assert plan.status == PlanStatus.CONFIRMED
+        # New operator-readable warning: names depth, actual count, expected floor.
+        assert any(
+            "only 3 sub-questions" in rec.message
+            and "'deep' mode" in rec.message
+            and "minimum expected: 5" in rec.message
+            for rec in caplog.records
+        )
+
+    async def test_execute_soft_accepts_shortage(self):
+        """execute() must mirror confirm()'s soft-accept of sub-question shortage.
+
+        Regression: the original fix only covered ``PlanningCoordinator.confirm``
+        but ``ResearchRuntime.execute`` re-validated and re-raised, so the
+        houyi-studio crash still surfaced from ``launch_run`` after a plan was
+        soft-confirmed.  Asserts that execute() does not raise
+        ``fewer than N sub-questions``; any downstream failure is acceptable
+        because it means the validation gate was passed.
+        """
+        from houyi.application.research.types import (
+            OutlineSection,
+            ResearchSettings,
+            SubQuestion,
+        )
+
+        llm = MockLLM()
+        ws = make_mock_web_search()
+        session = ResearchRuntime(
+            llm_adapter=llm,
+            web_search=ws,
+            settings=ResearchSettings(depth="deep"),
+        )
+        session._plan = ResearchPlan(
+            query="test",
+            status=PlanStatus.CONFIRMED,
+            settings=ResearchSettings(depth="deep"),
+            sub_questions=[
+                SubQuestion(question_id="a", question="a?"),
+                SubQuestion(question_id="b", question="b?"),
+                SubQuestion(question_id="c", question="c?"),
+            ],
+            outline=[OutlineSection(title="S", objective="o")],
+        )
+
+        # Short-circuit the rest of execute() with a distinctive sentinel so
+        # the test focuses on the validation gate, not downstream behavior.
+        async def _sentinel() -> None:
+            raise RuntimeError("__past_validation_gate__")
+
+        session._run_search = _sentinel  # type: ignore[assignment]
+
+        with pytest.raises(RuntimeError, match="__past_validation_gate__"):
+            await session.execute()
+
 
 class TestExecute:
     async def test_full_lifecycle_direct(self):

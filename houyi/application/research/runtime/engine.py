@@ -53,6 +53,7 @@ from houyi.application.research.runtime.intermediate import (
 from houyi.application.research.runtime.planning import (
     PlanningCoordinator,
     PlanningRequest,
+    is_soft_plan_validation_error,
 )
 from houyi.application.research.runtime.processing import process_agent_search_output
 from houyi.application.research.runtime.report_pipeline import ReportPipeline
@@ -312,7 +313,10 @@ class ResearchRuntime:
         if self._plan.status not in (PlanStatus.CONFIRMED, PlanStatus.DRAFT):
             raise ResearchStateError(f"Plan status {self._plan.status.value} cannot be executed")
         validation_error = validate_research_plan(self._plan)
-        if validation_error is not None:
+        if validation_error is not None and not is_soft_plan_validation_error(validation_error):
+            # Sub-question floor shortage is soft (confirm() already warned);
+            # only non-soft errors (no sub-questions, blank question, missing
+            # outline) still crash execute().
             raise ResearchStateError(validation_error)
 
         self._plan.status = PlanStatus.EXECUTING

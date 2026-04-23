@@ -269,25 +269,9 @@ Respond with plain text (no JSON).
 """
 
 
-# Post-generation English-only expansion.  EN reports underperform ZH on the
-# ``read`` / ``comp`` leaderboard dimensions mainly because sections come in
-# too short.  Prompt-level length rules triggered a ZH draft-duplication
-# failure mode, so we instead run a deterministic post-check: if the EN
-# section body falls below _SHORT_SECTION_WORD_THRESHOLD words, we issue one
-# additional LLM call asking the model to expand the already-produced text
-# in-place.  The expand prompt never asks for a rewrite, so it cannot
-# trigger the observed "write twice" behavior.
-_SHORT_SECTION_WORD_THRESHOLD = 350
-_EXPAND_TARGET_WORDS_LOW = 500
-_EXPAND_TARGET_WORDS_HIGH = 700
-# Hard cap on post-expansion growth: if the LLM returns more than this
-# multiple of the original body length, discard the expansion and keep the
-# original section.  Observed runaway expansions inflate bodies by 70%+
-# while losing insight/comp, so we refuse to ship them.
-_EXPAND_MAX_GROWTH_RATIO = 1.5
-# Minimum ASCII-to-CJK token ratio for the query to be treated as English
-# for expansion purposes.  A few CJK chars in an otherwise English query
-# (e.g. a brand name) should not suppress the expansion.
+# Minimum ASCII-to-CJK letter ratio for the query to be treated as English.
+# A few CJK chars in an otherwise English query (e.g. a brand name) should
+# not flip the classifier.  Gates the EN-only translate post-pass.
 _EN_QUERY_ASCII_RATIO = 0.8
 
 # Sub-agent retries and tool-layer plumbing occasionally leak raw
@@ -347,7 +331,7 @@ English, so the reader expects an English-only article.
 
 Rules:
 - Translate EVERY Chinese character into English; the output must \
-contain no CJK characters at all.
+contain no CJK characters at all, in BOTH the title and the body.
 - Preserve Markdown structure EXACTLY: keep every heading level, \
 bullet, table, code block, and inline [ref_id] citation in its \
 original position.
@@ -359,7 +343,7 @@ body contains.
 - Do NOT drop any paragraphs or bullet points.
 - Use clear, professional, scholarly English.
 
-Section title: {title}
+Section title (translate into English): {title}
 
 Section body:
 ---
@@ -368,46 +352,9 @@ Section body:
 
 Respond ONLY with JSON:
 {{
+  "title": "Translated section title (no CJK characters)",
   "content": "Translated Markdown body (NO heading)",
   "citations": []
-}}
-"""
-
-
-_EXPAND_PROMPT = """\
-You wrote the following section of a research report. The body is shorter \
-than the editorial target of {low}-{high} words. Expand it IN-PLACE so the \
-result lands in that range.
-
-Rules:
-- PRESERVE every existing paragraph, sub-heading, inline [ref_id] citation, \
-table and mermaid block exactly where it is.
-- DEEPEN existing paragraphs with additional evidence, quantitative detail, \
-comparison, or caveats sourced from the evidence list below. Do NOT invent \
-facts and do NOT add new reference IDs outside the provided list.
-- You MAY add new analytical paragraphs between existing ones, but do NOT \
-restart the section, do NOT produce a second full draft, and do NOT repeat \
-passages already present.
-- Keep the same language as the current body (English).
-- Obey the same citation hygiene used in the body: no more than 3 stacked \
-[ref_id]s on a single claim.
-
-Section title: {title}
-Available reference IDs: {available_refs}
-Evidence excerpts:
-{sources_text}
-
-Current section body:
----
-{body}
----
-
-Respond ONLY with JSON of the same shape used originally:
-{{
-  "content": "Expanded Markdown body with citations (NO heading)...",
-  "citations": [
-    {{"reference_id": "ref_xxx", "text_span": "the cited claim", "context": "source excerpt"}}
-  ]
 }}
 """
 
@@ -455,11 +402,6 @@ class ReportGenerator:
         # 5-7 sections; default 8 fires them all in one batch.  Lower this
         # if the LLM API has concurrency limits.
         section_concurrency: int = 8,
-        # Whether to spend one extra LLM call expanding an English section
-        # that falls below ``_SHORT_SECTION_WORD_THRESHOLD`` words.  Gated so
-        # benchmarks and latency-sensitive callers can opt out.  Never
-        # triggers for CJK queries regardless of this flag.
-        expand_short_sections: bool = True,
         **llm_kwargs: Any,
     ) -> None:
         self._llm = llm_adapter
@@ -474,7 +416,6 @@ class ReportGenerator:
             candidate_pool_size=max(max_section_sources + 2, max_section_sources * 2)
         )
         self._section_concurrency = section_concurrency
-        self._expand_short_sections = expand_short_sections
 
     async def generate(
         self,
@@ -831,6 +772,22 @@ class ReportGenerator:
         # ``_compute_section_sidecar_metrics`` and emitted as observability
         # only, so they do not leak HTML markers into the scored article.
         section.content = _consolidate_short_paragraphs(section.content)
+        # Duplicate-subheading defense: the section writer occasionally emits
+        # the full ``### Subheading`` tree twice inside a single response
+        # (pass 2 is a verbatim copy or prefix truncation of pass 1 — zero
+        # unique information).  The scrubber below cannot see this because
+        # duplicate subheadings are structurally valid Markdown; this pass
+        # is the language-agnostic cut that keeps article length honest
+        # without touching the writer prompt.
+        section.content = _deduplicate_subheadings(section.content)
+        # Paragraph-granularity companion to subheading dedup: after the
+        # pass-2 ``### Subheading`` tree is cut, the transition paragraph
+        # that originally bridged pass 1 → pass 2 stays attached to the
+        # last pass-1 chunk and duplicates the section's opening
+        # paragraph.  Drop those ≥150-char verbatim paragraph repeats so
+        # the article does not carry a structurally clean but
+        # prose-duplicated body into RACE scoring.
+        section.content = _deduplicate_paragraphs(section.content)
         # Last-mile junk-token scrubber: strips multiline JSON envelope
         # leaks, broken fenced blocks dominated by ``ref_<hex>`` /
         # ``sync`` / ``30s`` tokens, and orphan reference IDs that
@@ -850,16 +807,6 @@ class ReportGenerator:
                 section,
                 title=title,
             )
-        # EN-only guard: if the section is visibly under-length for an English
-        # query, spend one extra LLM call to expand it in-place.  Never runs
-        # for CJK queries so the ZH leaderboard run is isolated from any
-        # variance this path introduces.
-        if self._expand_short_sections and _query_is_english(query):
-            section = await self._maybe_expand_short_section(
-                section,
-                title=title,
-                sources=sources,
-            )
         return section
 
     async def _maybe_translate_to_english(
@@ -868,18 +815,27 @@ class ReportGenerator:
         *,
         title: str,
     ) -> ReportSection:
-        """Translate a CJK-heavy section body into English in-place.
+        """Translate a CJK-heavy section into English in-place.
 
-        Only runs when the section body exceeds the EN section CJK
-        ratio threshold.  Returns the original section unchanged when
-        the translation LLM call fails or when the translated body
-        still contains more CJK than the original (defensive guard
-        against a misbehaving model).  The section's citation list is
-        preserved — only the Markdown body is replaced.
+        Runs when either the section body or the section title carries
+        CJK characters on an English query.  Body triggers on the
+        ``_EN_SECTION_CJK_RATIO_MAX`` threshold; title triggers whenever
+        any CJK character is present (titles are short enough that a
+        single CJK char is a regression against the leaderboard heading
+        rendering).  Both the body and the title are translated by the
+        same LLM call so the final ``## <title>`` heading and body stay
+        language-consistent.
+
+        Returns the original section unchanged when the translation LLM
+        call fails or when the translated body still contains more CJK
+        than the original (defensive guard against a misbehaving
+        model).  The section's citation list is preserved — only the
+        Markdown body and title are replaced.
         """
 
         original_ratio = _cjk_char_ratio(section.content)
-        if original_ratio <= _EN_SECTION_CJK_RATIO_MAX:
+        title_has_cjk = _cjk_char_ratio(title) > 0.0
+        if original_ratio <= _EN_SECTION_CJK_RATIO_MAX and not title_has_cjk:
             return section
         prompt = _TRANSLATE_PROMPT.format(
             title=title,
@@ -901,15 +857,18 @@ class ReportGenerator:
                 },
             )
             return section
-        translated = _parse_section(title, resp.content)
+        translated_title = _extract_translated_title(resp.content, fallback=title)
+        translated = _parse_section(translated_title, resp.content)
         if not translated.content.strip():
             return section
         new_ratio = _cjk_char_ratio(translated.content)
-        # Guard: translation must materially reduce the CJK ratio.
-        # Otherwise the model returned the same content in a wrapper
-        # or refused to translate — fall back to the original body so
-        # downstream consumers never see a regression.
-        if new_ratio >= original_ratio:
+        # Guard: body translation must materially reduce the CJK ratio
+        # when the body was the trigger.  When only the title carries
+        # CJK we still accept the pass so long as the body did not
+        # regress.  Without this split, a short EN body with a CJK
+        # title could not be translated.
+        body_regressed = new_ratio >= original_ratio and original_ratio > _EN_SECTION_CJK_RATIO_MAX
+        if body_regressed:
             logger.info(
                 "section_translation_rejected_no_progress",
                 extra={
@@ -923,113 +882,14 @@ class ReportGenerator:
             "section_translation_applied",
             extra={
                 "title": title,
+                "translated_title": translated_title,
                 "cjk_before": round(original_ratio, 3),
                 "cjk_after": round(new_ratio, 3),
             },
         )
         section.content = translated.content
+        section.title = translated.title
         return section
-
-    async def _maybe_expand_short_section(
-        self,
-        section: ReportSection,
-        *,
-        title: str,
-        sources: list[SourceReference],
-    ) -> ReportSection:
-        """Expand an English section in-place when it falls below the word floor.
-
-        Returns the section unchanged when it is already long enough, when the
-        LLM expansion returns less content than the original (treated as a
-        failed expansion and ignored), or when the expansion result would
-        visibly regress citation coverage.
-        """
-
-        word_count = len(section.content.split())
-        if word_count >= _SHORT_SECTION_WORD_THRESHOLD:
-            return section
-        # Guard A: sections that already carry internal Markdown structure
-        # (## or ### subheadings) triggered a duplication failure mode
-        # where the LLM re-emitted the whole subheading tree verbatim
-        # underneath itself.  Skip expansion for anything with pre-existing
-        # structure and accept the short body.
-        if "\n## " in section.content or "\n### " in section.content:
-            return section
-        snip = self._snippet_max_chars
-        available_refs = [s.reference_id for s in sources]
-        sources_text = (
-            "\n".join(
-                f"  {s.reference_id} | {s.title} | {s.snippet[:snip]}"
-                for s in sources[: self._max_source_display]
-            )
-            or "(no sources)"
-        )
-        prompt = _EXPAND_PROMPT.format(
-            low=_EXPAND_TARGET_WORDS_LOW,
-            high=_EXPAND_TARGET_WORDS_HIGH,
-            title=title,
-            available_refs=", ".join(available_refs) or "(none)",
-            sources_text=sources_text,
-            body=section.content,
-        )
-        try:
-            resp = await self._llm.chat(
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.3,
-                max_tokens=self._section_max_tokens,
-                **self._llm_kwargs,
-            )
-        except Exception:
-            logger.warning(
-                "section_expansion_failed",
-                extra={"title": title, "original_word_count": word_count},
-            )
-            return section
-        expanded = _parse_section(title, resp.content)
-        expanded_words = len(expanded.content.split())
-        # Guard against regressions: expansion must actually grow the body
-        # and must not drop below the original content length.
-        if expanded_words <= word_count:
-            return section
-        # Guard B: refuse runaway expansions.  A 70% word inflation was
-        # observed to hurt insight/comp scores.  Cap growth at 1.5x the
-        # original body and fall back to the original when the LLM
-        # exceeds that envelope.
-        if expanded_words > word_count * _EXPAND_MAX_GROWTH_RATIO:
-            logger.info(
-                "section_expansion_rejected_overlong",
-                extra={
-                    "title": title,
-                    "original_word_count": word_count,
-                    "expanded_word_count": expanded_words,
-                    "growth_ratio": expanded_words / max(word_count, 1),
-                },
-            )
-            return section
-        # Guard C: reject expansions that introduce new ``##``/``###`` subheadings
-        # that were not present in the original body.  This catches a subtler
-        # variant of the duplication mode where the LLM preserves the original
-        # structure but also tacks on an extra subheading tree below.
-        orig_headings = _count_section_subheadings(section.content)
-        new_headings = _count_section_subheadings(expanded.content)
-        if new_headings > orig_headings:
-            logger.info(
-                "section_expansion_rejected_new_subheadings",
-                extra={
-                    "title": title,
-                    "original_subheadings": orig_headings,
-                    "expanded_subheadings": new_headings,
-                },
-            )
-            return section
-        expanded.content = _consolidate_short_paragraphs(expanded.content)
-        # Merge citations: prefer the expanded call's citation list but keep
-        # any original citations that the expanded pass dropped.
-        existing_refs = {c.reference_id for c in expanded.citations}
-        for citation in section.citations:
-            if citation.reference_id and citation.reference_id not in existing_refs:
-                expanded.citations.append(citation)
-        return expanded
 
     async def _clean_section_noise(
         self,
@@ -1359,6 +1219,138 @@ def _consolidate_short_paragraphs(content: str) -> str:
             _flush()
     _flush()
     return "\n\n".join(merged)
+
+
+def _deduplicate_subheadings(content: str) -> str:
+    """Collapse duplicate ``### Subheading`` blocks in a single section body.
+
+    The section writer occasionally emits the full ``### Subheading`` tree
+    twice inside one LLM response.  Empirical inspection of the
+    ``bench2-en5-20260422b-head`` articles across five EN queries shows
+    pass-2 bodies are either byte-for-byte identical to pass-1 (similarity
+    1.000), strictly truncated prefixes of pass-1 (similarity 0.2-0.7 but
+    prefix-contained), or overlapping second-drafts that share opening
+    sentences.  In every observed pair, pass-2 contributed no unique facts
+    beyond pass-1 (or vice-versa).
+
+    Dedup rule: whenever two ``### Subheading`` chunks in the same
+    section body share the same heading text, keep the chunk with the
+    longest body and drop the others.  This is the minimum information
+    loss policy: empty / prefix-truncated / near-copy pass-2 bodies all
+    lose to the richer pass-1; pass-2 that genuinely extends the
+    subsection wins over an empty / short pass-1 (the Q51 "empty-pass-1
+    full-pass-2" pattern).  When both chunks have identical body length,
+    the earlier one wins deterministically.
+
+    Operates on section-level content only — callers pass a single
+    section body, so there is no cross-section leakage.
+    Language-agnostic: works on both EN and ZH subheading titles.
+    Returns the original string unchanged whenever no duplicates are
+    detected, so this pass is a guaranteed no-op on clean bodies (ZH
+    case1 baseline is bit-for-bit unchanged).
+    """
+
+    if "### " not in content:
+        return content
+    # Split on ``### `` at the start of a line.  Keep the prefix preceding
+    # the first subheading intact; each later chunk is ``### title\n<body>``.
+    parts = re.split(r"(?m)(?=^### )", content)
+    if len(parts) < 2:
+        return content
+    head = parts[0]
+    # Inventory every chunk keyed by normalised title.  For duplicates,
+    # track the index of the chunk with the longest body so the final
+    # pass can keep exactly that one.
+    chunks = parts[1:]
+    bodies: list[str] = []
+    titles: list[str] = []
+    for chunk in chunks:
+        newline = chunk.find("\n")
+        title = chunk if newline < 0 else chunk[:newline]
+        body = "" if newline < 0 else chunk[newline + 1 :].strip()
+        titles.append(title.strip())
+        bodies.append(body)
+    # Map each title to the index of its longest-body chunk.  Earlier
+    # duplicates win on ties so the output is deterministic across runs.
+    best_idx_by_title: dict[str, int] = {}
+    for idx, title_key in enumerate(titles):
+        if title_key not in best_idx_by_title:
+            best_idx_by_title[title_key] = idx
+            continue
+        if len(bodies[idx]) > len(bodies[best_idx_by_title[title_key]]):
+            best_idx_by_title[title_key] = idx
+    # Emit the surviving chunks in the order each title FIRST appeared.
+    # This preserves the writer's narrative ordering even when the
+    # longest-body winner lives in pass 2.  Without this anchor the
+    # observed Q51 "Food / Clothing / Comparative / Critical" sequence
+    # got reordered to "Comparative / Critical / Food / Clothing"
+    # because pass-2 Food/Clothing copies were one character longer
+    # and their late positions leaked into the final order.
+    first_seen_order: list[str] = []
+    first_seen_set: set[str] = set()
+    for title_key in titles:
+        if title_key in first_seen_set:
+            continue
+        first_seen_set.add(title_key)
+        first_seen_order.append(title_key)
+    if len(first_seen_order) == len(chunks):
+        return content
+    kept = [chunks[best_idx_by_title[t]] for t in first_seen_order]
+    return head + "".join(kept)
+
+
+# Minimum paragraph length (characters) considered for duplicate removal.
+# Short paragraphs (bullet fragments, one-line captions, table rows) can
+# legitimately recur in prose and are skipped so the dedup pass does not
+# collapse intentionally repeated topic sentences or short list items.
+_PARAGRAPH_DUP_MIN_CHARS = 150
+
+
+def _deduplicate_paragraphs(content: str) -> str:
+    """Remove paragraphs that appear verbatim more than once in one section.
+
+    After ``_deduplicate_subheadings`` drops pass-2 ``### Subheading``
+    chunks, the transition paragraph that originally sat between pass 1
+    and pass 2 remains attached to the tail of the last pass-1 chunk.
+    In the bench2 20260422b-head articles this transition paragraph is
+    identical to the section's opening paragraph (observed across Q51 /
+    Q52 / Q53 / Q55), so the opener shows up twice in the final body.
+
+    This pass is the paragraph-granularity companion to the
+    subheading-level dedup: identify paragraphs that are at least
+    ``_PARAGRAPH_DUP_MIN_CHARS`` characters long and appear verbatim
+    more than once inside a single section body; keep only the first
+    occurrence.  The minimum length filter avoids collapsing legitimate
+    short repetitions (e.g. list item anchors, table cell fragments).
+
+    Structural blocks (headings, fenced code, tables) are never dropped
+    because ``_is_structural_paragraph`` reports them as structural and
+    they skip the duplicate check.
+    """
+
+    if "\n\n" not in content:
+        return content
+    paragraphs = content.split("\n\n")
+    seen: set[str] = set()
+    kept: list[str] = []
+    dropped_any = False
+    for para in paragraphs:
+        stripped = para.strip()
+        # Structural blocks always pass through untouched so the output
+        # keeps every heading, list, table, and fenced code block in
+        # place.  Short prose fragments are exempt from the dup check
+        # because short repeats are frequently legitimate.
+        if _is_structural_paragraph(para) or len(stripped) < _PARAGRAPH_DUP_MIN_CHARS:
+            kept.append(para)
+            continue
+        if stripped in seen:
+            dropped_any = True
+            continue
+        seen.add(stripped)
+        kept.append(para)
+    if not dropped_any:
+        return content
+    return "\n\n".join(kept)
 
 
 def _analyse_visualization_gaps(content: str) -> dict[str, bool]:
@@ -2066,19 +2058,6 @@ def _scrub_generation_artifacts(content: str) -> str:
     return content.strip("\n")
 
 
-def _count_section_subheadings(content: str) -> int:
-    """Count Markdown subheadings (``##`` / ``###``) inside a section body.
-
-    Used by the short-section expansion guard (C): if the LLM's expanded body
-    contains MORE subheadings than the original, we assume it duplicated the
-    section structure and reject the expansion.  The leading ``\\n`` anchor
-    mirrors the Guard-A check so a body that opens with a heading (rare,
-    since sections are heading-less by convention) still matches.
-    """
-
-    return content.count("\n## ") + content.count("\n### ")
-
-
 def _cjk_char_ratio(text: str) -> float:
     """Return the fraction of letters in ``text`` that are CJK ideographs.
 
@@ -2104,11 +2083,11 @@ def _cjk_char_ratio(text: str) -> float:
 def _query_is_english(query: str) -> bool:
     """Return True when ``query`` is predominantly English (i.e. not CJK).
 
-    Used to gate the English-only short-section expansion pass.  Counts only
-    letters and CJK ideographs so punctuation and digits do not bias the
-    ratio.  A query with a handful of CJK chars (e.g. a brand name) still
-    counts as English when ASCII letters dominate beyond
-    ``_EN_QUERY_ASCII_RATIO``.
+    Used to gate English-only post-processing (the translate pass).
+    Counts only letters and CJK ideographs so punctuation and digits do
+    not bias the ratio.  A query with a handful of CJK chars (e.g. a
+    brand name) still counts as English when ASCII letters dominate
+    beyond ``_EN_QUERY_ASCII_RATIO``.
     """
 
     ascii_letters = 0
@@ -2463,6 +2442,45 @@ def _parse_section(title: str, content: str) -> ReportSection:
     if repaired is not None:
         return ReportSection(title=title, content=_normalize_section_body(repaired, title))
     return ReportSection(title=title, content=_normalize_section_body(text, title))
+
+
+def _extract_translated_title(raw_response: str, *, fallback: str) -> str:
+    """Return the translated section title from a translate LLM JSON response.
+
+    The translate prompt asks the model to return ``{"title": "...",
+    "content": "..."}``.  ``_parse_section`` only consumes the
+    ``content`` field, so we extract the optional ``title`` field here
+    to feed back into the caller's ``ReportSection.title``.
+
+    Falls back to ``fallback`` whenever the response is unparseable, the
+    ``title`` field is missing / blank, or the translated title still
+    carries CJK characters (defensive guard against a misbehaving model).
+    The fallback keeps the caller safe: a failed title translation never
+    regresses the rendered heading below its pre-translation state.
+    """
+
+    text = raw_response.strip()
+    if text.startswith("```"):
+        # Strip fenced code block wrapper, mirroring ``_parse_section``.
+        first_nl = text.find("\n")
+        last_fence = text.rfind("```")
+        if first_nl >= 0 and last_fence > first_nl:
+            text = text[first_nl + 1 : last_fence].strip()
+    data = _try_parse_json(text)
+    if not data:
+        return fallback
+    title = data.get("title")
+    if not isinstance(title, str):
+        return fallback
+    title = title.strip()
+    if not title:
+        return fallback
+    # Reject any title that still has CJK characters — the translation
+    # gate exists precisely to drive CJK out of headings.  Keep the
+    # original title rather than ship a regression.
+    if _cjk_char_ratio(title) > 0.0:
+        return fallback
+    return title
 
 
 def _normalize_section_body(body: str, title: str) -> str:

@@ -18,19 +18,19 @@ const DEPTH_CARDS: Array<{
     value: 'quick',
     title: 'Quick',
     subtitle: 'Fast answer, lighter validation',
-    meta: '~2-3 sub-questions',
+    meta: '~1-3 sub-questions',
   },
   {
     value: 'standard',
     title: 'Standard',
     subtitle: 'Balanced speed and coverage',
-    meta: '~4-6 sub-questions',
+    meta: '~3-5 sub-questions',
   },
   {
     value: 'deep',
     title: 'Deep',
     subtitle: 'Broad exploration with strict checks',
-    meta: '~6-9 sub-questions',
+    meta: '~5-8 sub-questions',
   },
 ];
 
