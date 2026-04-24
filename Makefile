@@ -142,7 +142,7 @@ test-sdk-unit:
 
 test-server-unit:
 	@uv run python -c "import houyi_studio" 2>/dev/null || (echo '📦 Installing studio server...' && uv pip install -e houyi-studio/server --quiet)
-	uv run pytest houyi-studio/server/tests/ --ignore=houyi-studio/server/tests/integration -v
+	uv run pytest houyi-studio/server/tests/ --ignore=houyi-studio/server/tests/integration -v -n auto
 
 test-unit:
 	@$(MAKE) test-sdk-unit
