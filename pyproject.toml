@@ -59,6 +59,7 @@ websearch-tavily = [
 
 websearch-readability = [
     "readability-lxml>=0.8.1",
+    "lxml>=6.1.0",
     "beautifulsoup4>=4.11.0",
     "markdownify>=0.14.0",
 ]
