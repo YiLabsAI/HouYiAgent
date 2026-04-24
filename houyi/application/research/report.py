@@ -18,6 +18,12 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from houyi.adapters.llm.base import LLMAdapter
+from houyi.application.research.report_postprocess import (
+    SectionPostProcessContext,
+    _rewrite_noisy_paragraph_impl,
+    clean_noise_step,
+    postprocess_section,
+)
 from houyi.application.research.taxonomy import (
     ARCHETYPE_COMPLIANCE_KEYWORDS,
     COUNTER_EVIDENCE_MARKERS,
@@ -757,139 +763,21 @@ class ReportGenerator:
             **self._llm_kwargs,
         )
         section = _parse_section(title, resp.content)
-        # Post-generation noise detection pass.  Rewrites only noisy paragraphs
-        # to keep latency bounded (~1 LLM call per noisy paragraph, typically 0-1).
-        available_refs = [s.reference_id for s in sources]
-        section.content = await self._clean_section_noise(
-            section.content,
+        # Post-generation fix-up chain lives in ``report_postprocess``:
+        # a single flat pipeline covers noise rewrite, paragraph layout,
+        # duplicate subheading / paragraph dedup, writer-leak scrubbing,
+        # and the query-language gate.  The order there is load-bearing;
+        # see the module docstring for the rationale.
+        ctx = SectionPostProcessContext(
+            query=query,
             title=title,
             objective=objective,
-            available_refs=available_refs,
+            available_refs=[s.reference_id for s in sources],
+            llm=self._llm,
+            llm_kwargs=self._llm_kwargs,
+            section_max_tokens=self._section_max_tokens,
         )
-        # Structural postprocess: the only content-mutating guard is the
-        # paragraph consolidator (human-visible layout repair). Critical and
-        # visualization signals are computed later by
-        # ``_compute_section_sidecar_metrics`` and emitted as observability
-        # only, so they do not leak HTML markers into the scored article.
-        section.content = _consolidate_short_paragraphs(section.content)
-        # Duplicate-subheading defense: the section writer occasionally emits
-        # the full ``### Subheading`` tree twice inside a single response
-        # (pass 2 is a verbatim copy or prefix truncation of pass 1 — zero
-        # unique information).  The scrubber below cannot see this because
-        # duplicate subheadings are structurally valid Markdown; this pass
-        # is the language-agnostic cut that keeps article length honest
-        # without touching the writer prompt.
-        section.content = _deduplicate_subheadings(section.content)
-        # Paragraph-granularity companion to subheading dedup: after the
-        # pass-2 ``### Subheading`` tree is cut, the transition paragraph
-        # that originally bridged pass 1 → pass 2 stays attached to the
-        # last pass-1 chunk and duplicates the section's opening
-        # paragraph.  Drop those ≥150-char verbatim paragraph repeats so
-        # the article does not carry a structurally clean but
-        # prose-duplicated body into RACE scoring.
-        section.content = _deduplicate_paragraphs(section.content)
-        # Last-mile junk-token scrubber: strips multiline JSON envelope
-        # leaks, broken fenced blocks dominated by ``ref_<hex>`` /
-        # ``sync`` / ``30s`` tokens, and orphan reference IDs that
-        # escaped the citation renumberer.  Deterministic, language-
-        # agnostic, and idempotent on clean prose so it is safe for
-        # both EN and ZH pipelines.
-        section.content = _scrub_generation_artifacts(section.content)
-        # EN-only language gate: if the query is English but the
-        # section body still carries more than
-        # ``_EN_SECTION_CJK_RATIO_MAX`` CJK characters, translate it
-        # to English in-place.  The prompt-level rule is advisory;
-        # this pass is the deterministic enforcement against
-        # CJK-dominant output that drags ``inst`` / ``comp`` on
-        # English queries.
-        if _query_is_english(query):
-            section = await self._maybe_translate_to_english(
-                section,
-                title=title,
-            )
-        return section
-
-    async def _maybe_translate_to_english(
-        self,
-        section: ReportSection,
-        *,
-        title: str,
-    ) -> ReportSection:
-        """Translate a CJK-heavy section into English in-place.
-
-        Runs when either the section body or the section title carries
-        CJK characters on an English query.  Body triggers on the
-        ``_EN_SECTION_CJK_RATIO_MAX`` threshold; title triggers whenever
-        any CJK character is present (titles are short enough that a
-        single CJK char is a regression against the leaderboard heading
-        rendering).  Both the body and the title are translated by the
-        same LLM call so the final ``## <title>`` heading and body stay
-        language-consistent.
-
-        Returns the original section unchanged when the translation LLM
-        call fails or when the translated body still contains more CJK
-        than the original (defensive guard against a misbehaving
-        model).  The section's citation list is preserved — only the
-        Markdown body and title are replaced.
-        """
-
-        original_ratio = _cjk_char_ratio(section.content)
-        title_has_cjk = _cjk_char_ratio(title) > 0.0
-        if original_ratio <= _EN_SECTION_CJK_RATIO_MAX and not title_has_cjk:
-            return section
-        prompt = _TRANSLATE_PROMPT.format(
-            title=title,
-            body=section.content,
-        )
-        try:
-            resp = await self._llm.chat(
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.1,
-                max_tokens=self._section_max_tokens,
-                **self._llm_kwargs,
-            )
-        except Exception:
-            logger.warning(
-                "section_translation_failed",
-                extra={
-                    "title": title,
-                    "cjk_ratio": round(original_ratio, 3),
-                },
-            )
-            return section
-        translated_title = _extract_translated_title(resp.content, fallback=title)
-        translated = _parse_section(translated_title, resp.content)
-        if not translated.content.strip():
-            return section
-        new_ratio = _cjk_char_ratio(translated.content)
-        # Guard: body translation must materially reduce the CJK ratio
-        # when the body was the trigger.  When only the title carries
-        # CJK we still accept the pass so long as the body did not
-        # regress.  Without this split, a short EN body with a CJK
-        # title could not be translated.
-        body_regressed = new_ratio >= original_ratio and original_ratio > _EN_SECTION_CJK_RATIO_MAX
-        if body_regressed:
-            logger.info(
-                "section_translation_rejected_no_progress",
-                extra={
-                    "title": title,
-                    "cjk_before": round(original_ratio, 3),
-                    "cjk_after": round(new_ratio, 3),
-                },
-            )
-            return section
-        logger.info(
-            "section_translation_applied",
-            extra={
-                "title": title,
-                "translated_title": translated_title,
-                "cjk_before": round(original_ratio, 3),
-                "cjk_after": round(new_ratio, 3),
-            },
-        )
-        section.content = translated.content
-        section.title = translated.title
-        return section
+        return await postprocess_section(section, ctx)
 
     async def _clean_section_noise(
         self,
@@ -899,33 +787,26 @@ class ReportGenerator:
         objective: str,
         available_refs: list[str],
     ) -> str:
-        """Detect and micro-rewrite noisy paragraphs in generated section content.
+        """Test-compat shim delegating to the post-processing pipeline.
 
-        Detection uses regex/heuristic (zero LLM cost).  Only flagged paragraphs
-        trigger a targeted LLM rewrite call, keeping the latency bounded.
+        The real orchestration lives in
+        :func:`houyi.application.research.report_postprocess.clean_noise_step`.
+        A ``ReportSection`` is constructed purely to satisfy the step
+        signature; callers keep passing raw content strings.
         """
-        paragraphs = content.split("\n\n")
-        if not paragraphs:
-            return content
-        noisy_indices = _detect_noisy_paragraphs(paragraphs)
-        if not noisy_indices:
-            return content
-        ref_str = ", ".join(available_refs[:20])
-        for idx in noisy_indices:
-            rewritten = await self._rewrite_noisy_paragraph(
-                paragraphs[idx],
-                title=title,
-                objective=objective,
-                available_refs=ref_str,
-            )
-            paragraphs[idx] = rewritten
-        # Drop paragraphs that were entirely noise (rewritten to empty).
-        joined = "\n\n".join(p for p in paragraphs if p.strip())
-        # LLM rewrites occasionally re-emit comma-grouped ``[ref_a, ref_b]``
-        # citations that bypass the write-path normalization pipeline.
-        # Re-apply the citation-group normalization here so no call site can
-        # skip it accidentally by wiring directly to _clean_section_noise.
-        return _normalize_citation_groups(joined)
+
+        section = ReportSection(title=title, content=content, citations=[])
+        ctx = SectionPostProcessContext(
+            query="",
+            title=title,
+            objective=objective,
+            available_refs=list(available_refs),
+            llm=self._llm,
+            llm_kwargs=self._llm_kwargs,
+            section_max_tokens=self._section_max_tokens,
+        )
+        result = await clean_noise_step(section, ctx)
+        return result.content
 
     async def _rewrite_noisy_paragraph(
         self,
@@ -935,37 +816,16 @@ class ReportGenerator:
         objective: str,
         available_refs: str,
     ) -> str:
-        """Targeted LLM rewrite for a single noisy paragraph."""
-        prompt = _NOISE_REWRITE_PROMPT.format(
+        """Test-compat shim delegating to the post-processing pipeline."""
+
+        return await _rewrite_noisy_paragraph_impl(
+            paragraph,
             title=title,
             objective=objective,
             available_refs=available_refs,
-            paragraph=paragraph,
+            llm=self._llm,
+            llm_kwargs=self._llm_kwargs,
         )
-        try:
-            resp = await self._llm.chat(
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.2,
-                max_tokens=512,
-                **self._llm_kwargs,
-            )
-            result = resp.content.strip()
-            if result.lower() in ("(empty)", ""):
-                return ""
-            # Strip ``{"content": "..."}`` envelopes the rewrite LLM
-            # occasionally emits. Without this the wrapper leaked into the
-            # paragraph and the escaped mermaid fences inside the JSON
-            # string classified the whole paragraph as structural,
-            # bypassing downstream paragraph-structure normalisation.
-            # Reuses the same envelope-repair helpers as ``_parse_section``
-            # so both entry points benefit from the same logic.
-            result = _strip_content_envelope(result)
-            # Normalize comma-grouped citations at the earliest point so
-            # every downstream consumer sees atomic ``[ref_x]`` tokens.
-            return _normalize_citation_groups(result)
-        except Exception:
-            logger.warning("Noise rewrite failed for section '%s'", title, exc_info=True)
-            return paragraph
 
     async def _generate_summary(
         self,
@@ -1304,6 +1164,92 @@ def _deduplicate_subheadings(content: str) -> str:
 # legitimately recur in prose and are skipped so the dedup pass does not
 # collapse intentionally repeated topic sentences or short list items.
 _PARAGRAPH_DUP_MIN_CHARS = 150
+
+
+# ---------------------------------------------------------------------------
+# Empty / dangling ``### Subheading`` prune.
+#
+# The writer occasionally emits a ``### Subheading`` whose body is either
+# completely empty or a single "here comes a list" intro sentence ending
+# in a colon, then yields the section without producing the promised
+# content.  Observed live on user session ``rr_d79ddb66a58c`` section 4
+# (two empty ``###`` blocks) and section 5 (two empty plus one 29-char
+# dangling-colon block whose body summarises the analysis and ends in
+# a fullwidth CJK colon ``U+FF1A`` promising an unwritten list).
+#
+# Such orphan headings damage six of the sixteen RACE criteria at once
+# (information depth, data support, analysis depth, logical reasoning,
+# clear structure, complete coverage), so the prune is both cheap and
+# high-leverage.  Logic is deterministic, language-agnostic, and a
+# no-op on clean bodies.
+# ---------------------------------------------------------------------------
+# Prose below this threshold counts as "near-empty" when paired with a
+# dangling-colon ending.  Chosen so the real short but substantive bodies
+# observed in the ZH 52.55 baseline (smallest healthy body was 171 chars)
+# never cross into the drop path.
+_PRUNE_MIN_SUBSTANTIVE_CHARS = 40
+# Absolute empty-body threshold.  Five chars lets "  \n  " style
+# whitespace counts / stray punctuation count as empty without
+# accidentally dropping a three-word sentence.
+_PRUNE_EMPTY_BODY_THRESHOLD = 5
+# Trailing colon (ASCII or CJK fullwidth) followed by optional trailing
+# whitespace marks the dangling-intro shape: the body promises a list
+# but the writer never emitted one.
+_DANGLING_COLON_RE = re.compile(r"[\uff1a:]\s*\Z")
+# ``[ref_<hex>]`` tokens are stripped before measuring prose length so
+# a body that is nothing but citations counts as empty.
+_PRUNE_CITATION_TOKEN_RE = re.compile(r"\[ref_[a-fA-F0-9]+\]")
+# Body counts as structural (= substantive regardless of prose length)
+# when any line looks like a table row, code fence, bullet / numbered
+# list item, or blockquote.  Keeps bodies that are just a compact table
+# from being mistaken for an empty heading.
+_PRUNE_STRUCTURAL_HINT_RE = re.compile(r"(?m)^\s*(?:\||```|[-*+]\s|\d+\.\s|>\s)")
+
+
+def _prune_empty_subheadings(content: str) -> str:
+    """Drop ``### Subheading`` blocks whose body is empty or a dangling intro.
+
+    Operates on a single section body.  A block is pruned when:
+
+    1. The body is empty or near-empty (``< _PRUNE_EMPTY_BODY_THRESHOLD``
+       characters after stripping whitespace and ``[ref_xxx]`` tokens),
+       or
+    2. The body is short (``< _PRUNE_MIN_SUBSTANTIVE_CHARS`` after the
+       same strip) AND ends with a colon — the writer promised a list
+       under this heading but never produced one.
+
+    Structural bodies (tables, fenced code blocks, lists, blockquotes)
+    are always kept because the structural content itself is substantive
+    even when the surrounding prose is short.  Returns the input
+    unchanged when nothing is pruned so this pass is a guaranteed no-op
+    on clean ZH / EN bodies.
+    """
+
+    if "### " not in content:
+        return content
+    parts = re.split(r"(?m)(?=^### )", content)
+    if len(parts) < 2:
+        return content
+    head = parts[0]
+    kept: list[str] = []
+    dropped_any = False
+    for chunk in parts[1:]:
+        newline = chunk.find("\n")
+        body = "" if newline < 0 else chunk[newline + 1 :]
+        if _PRUNE_STRUCTURAL_HINT_RE.search(body):
+            kept.append(chunk)
+            continue
+        prose = _PRUNE_CITATION_TOKEN_RE.sub("", body).strip()
+        if len(prose) < _PRUNE_EMPTY_BODY_THRESHOLD:
+            dropped_any = True
+            continue
+        if len(prose) < _PRUNE_MIN_SUBSTANTIVE_CHARS and _DANGLING_COLON_RE.search(prose):
+            dropped_any = True
+            continue
+        kept.append(chunk)
+    if not dropped_any:
+        return content
+    return head + "".join(kept)
 
 
 def _deduplicate_paragraphs(content: str) -> str:
