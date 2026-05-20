@@ -58,7 +58,8 @@ class SQLiteEntityStateView(EntityStateView):
         if not namespace or not entity or not attribute:
             raise ValueError("namespace, entity, attribute must be non-empty")
 
-        ts = valid_from if valid_from is not None else time.time()
+        explicit_ts = valid_from is not None
+        ts: float = valid_from if valid_from is not None else time.time()
         conn = self._backend._conn()
         try:
             with conn:  # Atomic: close-old + insert-new must succeed together.
@@ -71,10 +72,24 @@ class SQLiteEntityStateView(EntityStateView):
                     (namespace, entity, attribute),
                 ).fetchone()
 
-                if prior is not None and ts < prior["valid_from"]:
-                    raise ValueError("valid_from must be >= existing active row's valid_from")
-
                 if prior is not None:
+                    prior_ts = prior["valid_from"]
+                    # Explicit caller-supplied valid_from must not move
+                    # backward — that signals a real backdating bug we
+                    # want surfaced. Wall-clock writes (valid_from=None)
+                    # are auto-monotonized against the prior row to
+                    # absorb clock granularity (Windows / virtualised
+                    # hosts), repeat time.time() returns inside a single
+                    # tick, and writes that immediately follow a prior
+                    # row that was itself bumped. The UNIQUE
+                    # (namespace, entity, attribute, valid_from)
+                    # constraint requires strict monotonicity per
+                    # triple; bumping by a microsecond keeps the
+                    # closed-open interval contract intact.
+                    if explicit_ts and ts < prior_ts:
+                        raise ValueError("valid_from must be >= existing active row's valid_from")
+                    if ts <= prior_ts:
+                        ts = prior_ts + 1e-6
                     conn.execute(
                         "UPDATE entity_state SET valid_to=? WHERE state_id=?",
                         (ts, prior["state_id"]),

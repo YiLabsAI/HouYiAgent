@@ -163,6 +163,30 @@ class TestSQLiteEntityStateViewQuery:
         assert view.get_active("ws", "ghost") == []
 
 
+class TestSQLiteEntityStateViewMonotonic:
+    """Explicit timestamps still raise on backdating; wall-clock ones auto-bump."""
+
+    def test_explicit_backdated_raises(self, view: SQLiteEntityStateView) -> None:
+        view.upsert("ws", "user", "city", "Beijing", valid_from=200.0)
+        with pytest.raises(ValueError, match="valid_from must be"):
+            view.upsert("ws", "user", "city", "Shanghai", valid_from=100.0)
+
+    def test_explicit_equal_auto_bumps(self, view: SQLiteEntityStateView) -> None:
+        view.upsert("ws", "user", "city", "Beijing", valid_from=100.0)
+        rec = view.upsert("ws", "user", "city", "Shanghai", valid_from=100.0)
+        # Same explicit ts is treated as a granularity collision and bumped.
+        assert rec.valid_from > 100.0
+        assert view.get_active("ws", "user", "city")[0].value == "Shanghai"
+
+    def test_wallclock_collision_resolves(self, view: SQLiteEntityStateView) -> None:
+        # Three rapid wall-clock writes (valid_from=None) must all succeed.
+        for value in ("a", "b", "c"):
+            view.upsert("ws", "user", "tag", value)
+        active = view.get_active("ws", "user", "tag")
+        assert len(active) == 1
+        assert active[0].value == "c"
+
+
 class TestSQLiteEntityStateViewSourceLink:
     """Source unit linkage for provenance lookups."""
 
