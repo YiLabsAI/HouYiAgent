@@ -99,6 +99,23 @@ rag = [
     "bm25s>=0.2.0",
 ]
 
+bench = [
+    # Optional: only needed when running `python -m houyi.arena.memory_bench`
+    # against the real HaluMem-Medium dataset. Install with:
+    #   uv pip install -e ".[bench]"
+    "datasets>=2.14.0",
+]
+
+memory = [
+    # Optional: enables the default memory stack (sqlite-vec ANN +
+    # local sentence-transformers embedding backend). Without this extra
+    # the memory backend silently degrades to brute-force Python cosine
+    # over BLOB-stored embeddings and the local provider is unavailable.
+    # Install with: uv pip install -e ".[memory]"
+    "sqlite-vec>=0.1.6",
+    "sentence-transformers>=3.0.0",
+]
+
 rag-embedding = [
     "fastembed>=0.3.0",
 ]
@@ -204,6 +221,12 @@ max-statements = 50
 "houyi/arena/bench2_compat/**/*.py" = [
     "T201", # print is the upstream bench2 stdout logging mechanism (subprocess context)
     "B007", # enumerate index inherited from upstream bench2 code style
+]
+"houyi/arena/memory_bench/__main__.py" = [
+    "T201", # CLI entrypoint writes JSON report to stdout
+]
+"houyi/application/evolution/__main__.py" = [
+    "T201", # CLI entrypoint writes summary line to stdout
 ]
 
 [tool.mypy]

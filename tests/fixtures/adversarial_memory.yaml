@@ -1,0 +1,604 @@
+# Adversarial memory fixture — S2.3-T16
+#
+# Each entry exercises a known recall / answer-side hazard. The
+# memory bench harness (S2.4-T7+) loads this file and asserts that
+# the system either produces the expected answer or abstains with
+# the expected reason. New cases SHOULD pick a documented kind from
+# the schema below; new kinds SHOULD update the loader's enum.
+#
+# Schema:
+#   id              — short kebab-case id, unique
+#   kind            — one of:
+#                       negation_check, retracted_fact, temporal_conflict,
+#                       vague_certainty, relational_multi_hop,
+#                       empty_memory, false_premise, implicit_expectation,
+#                       contradiction, ambiguous_subject, paraphrase_recall,
+#                       sourceless_drop
+#   query           — the user's question
+#   seed_facts      — list of {subject, predicate, object, certainty,
+#                              valid_from?, valid_to?, source_anchor}
+#                     facts pre-seeded into entity_state before recall
+#   expected:
+#     mode          — one of: answer | abstain
+#     reason        — when mode=abstain: matches LLMAnswerer.reason
+#                     (no_candidates / low_evidence / explicit_absence /
+#                      contradicting_evidence / llm_idk / too_few_facts /
+#                      low_top_score / timeout / llm_failed) or
+#                     "any_abstain" if any of the above is acceptable
+#     contains      — when mode=answer: substring(s) the answer must
+#                     contain (case-insensitive)
+#     forbid        — substring(s) the answer must NOT contain
+
+cases:
+
+  # ---------------------------------------------------------------------
+  # Negation checks (yes/no over presence) — 8 cases
+  # ---------------------------------------------------------------------
+
+  - id: neg-001
+    kind: negation_check
+    query: "Did I ever tell you my favorite color?"
+    seed_facts: []
+    expected:
+      mode: abstain
+      reason: explicit_absence
+
+  - id: neg-002
+    kind: negation_check
+    query: "Have I mentioned my home address?"
+    seed_facts: []
+    expected:
+      mode: abstain
+      reason: explicit_absence
+
+  - id: neg-003
+    kind: negation_check
+    query: "Do I have a pet?"
+    seed_facts:
+      - {subject: "user", predicate: "owns_pet", object: "false", certainty: "certain", source_anchor: "t-101"}
+    expected:
+      mode: answer
+      contains: ["no", "false"]
+
+  - id: neg-004
+    kind: negation_check
+    query: "Have I told you my mother's name?"
+    seed_facts:
+      - {subject: "user", predicate: "father_name", object: "John", certainty: "certain", source_anchor: "t-110"}
+    expected:
+      mode: abstain
+      reason: any_abstain
+
+  - id: neg-005
+    kind: negation_check
+    query: "Did I say I work at Google?"
+    seed_facts:
+      - {subject: "user", predicate: "employer", object: "Microsoft", certainty: "certain", source_anchor: "t-115"}
+    expected:
+      mode: answer
+      contains: ["microsoft"]
+      forbid: ["google"]
+
+  - id: neg-006
+    kind: negation_check
+    query: "Have I mentioned my anniversary date?"
+    seed_facts: []
+    expected:
+      mode: abstain
+      reason: any_abstain
+
+  - id: neg-007
+    kind: negation_check
+    query: "Did I tell you I dislike spicy food?"
+    seed_facts:
+      - {subject: "user", predicate: "likes_spicy_food", object: "true", certainty: "probable", source_anchor: "t-122"}
+    expected:
+      mode: answer
+      forbid: ["dislike"]
+
+  - id: neg-008
+    kind: negation_check
+    query: "Have I shared my SSN with you?"
+    seed_facts: []
+    expected:
+      mode: abstain
+      reason: any_abstain
+
+  # ---------------------------------------------------------------------
+  # Retracted facts — 6 cases
+  # ---------------------------------------------------------------------
+
+  - id: ret-001
+    kind: retracted_fact
+    query: "What is my address?"
+    seed_facts:
+      - {subject: "user", predicate: "address", object: "100 Pine St", certainty: "certain",
+         valid_from: 1700000000, valid_to: 1700050000, source_anchor: "t-201"}
+    expected:
+      mode: abstain
+      reason: any_abstain
+
+  - id: ret-002
+    kind: retracted_fact
+    query: "Where do I live now?"
+    seed_facts:
+      - {subject: "user", predicate: "address", object: "100 Pine St", certainty: "certain",
+         valid_from: 1700000000, valid_to: 1700050000, source_anchor: "t-202"}
+      - {subject: "user", predicate: "address", object: "200 Oak Ave", certainty: "certain",
+         valid_from: 1700050000, source_anchor: "t-203"}
+    expected:
+      mode: answer
+      contains: ["oak"]
+      forbid: ["pine"]
+
+  - id: ret-003
+    kind: retracted_fact
+    query: "What car do I own?"
+    seed_facts:
+      - {subject: "user", predicate: "car", object: "Honda", certainty: "certain",
+         valid_from: 1700000000, valid_to: 1700100000, source_anchor: "t-210"}
+    expected:
+      mode: abstain
+      reason: any_abstain
+
+  - id: ret-004
+    kind: retracted_fact
+    query: "What is my phone number?"
+    seed_facts:
+      - {subject: "user", predicate: "phone", object: "555-0100", certainty: "certain",
+         valid_from: 1700000000, valid_to: 1700020000, source_anchor: "t-220"}
+      - {subject: "user", predicate: "phone", object: "555-0200", certainty: "certain",
+         valid_from: 1700020000, source_anchor: "t-221"}
+    expected:
+      mode: answer
+      contains: ["0200"]
+      forbid: ["0100"]
+
+  - id: ret-005
+    kind: retracted_fact
+    query: "What's my favorite drink?"
+    seed_facts:
+      - {subject: "user", predicate: "favorite_drink", object: "coffee", certainty: "certain",
+         valid_from: 1700000000, valid_to: 1700030000, source_anchor: "t-230"}
+    expected:
+      mode: abstain
+      reason: any_abstain
+
+  - id: ret-006
+    kind: retracted_fact
+    query: "Which company do I work for?"
+    seed_facts:
+      - {subject: "user", predicate: "employer", object: "ACME", certainty: "certain",
+         valid_from: 1700000000, valid_to: 1700040000, source_anchor: "t-240"}
+      - {subject: "user", predicate: "employer", object: "Globex", certainty: "certain",
+         valid_from: 1700040000, source_anchor: "t-241"}
+    expected:
+      mode: answer
+      contains: ["globex"]
+      forbid: ["acme"]
+
+  # ---------------------------------------------------------------------
+  # Temporal conflicts (multiple historical values) — 5 cases
+  # ---------------------------------------------------------------------
+
+  - id: tmp-001
+    kind: temporal_conflict
+    query: "What was my address in early 2023?"
+    seed_facts:
+      - {subject: "user", predicate: "address", object: "10 First Ave", certainty: "certain",
+         valid_from: 1672531200, valid_to: 1680000000, source_anchor: "t-301"}
+      - {subject: "user", predicate: "address", object: "20 Second St", certainty: "certain",
+         valid_from: 1680000000, source_anchor: "t-302"}
+    expected:
+      mode: answer
+      contains: ["first"]
+
+  - id: tmp-002
+    kind: temporal_conflict
+    query: "What's my latest job title?"
+    seed_facts:
+      - {subject: "user", predicate: "title", object: "junior engineer", certainty: "certain",
+         valid_from: 1672531200, valid_to: 1700000000, source_anchor: "t-303"}
+      - {subject: "user", predicate: "title", object: "senior engineer", certainty: "certain",
+         valid_from: 1700000000, source_anchor: "t-304"}
+    expected:
+      mode: answer
+      contains: ["senior"]
+
+  - id: tmp-003
+    kind: temporal_conflict
+    query: "What was my title last year?"
+    seed_facts:
+      - {subject: "user", predicate: "title", object: "intern", certainty: "certain",
+         valid_from: 1640000000, valid_to: 1670000000, source_anchor: "t-310"}
+    expected:
+      mode: answer
+      contains: ["intern"]
+
+  - id: tmp-004
+    kind: temporal_conflict
+    query: "Where did I go to school before 2020?"
+    seed_facts:
+      - {subject: "user", predicate: "school", object: "MIT", certainty: "certain",
+         valid_from: 1500000000, valid_to: 1577836800, source_anchor: "t-315"}
+    expected:
+      mode: answer
+      contains: ["mit"]
+
+  - id: tmp-005
+    kind: temporal_conflict
+    query: "What is my current marital status?"
+    seed_facts:
+      - {subject: "user", predicate: "marital_status", object: "single", certainty: "certain",
+         valid_from: 1600000000, valid_to: 1650000000, source_anchor: "t-320"}
+      - {subject: "user", predicate: "marital_status", object: "married", certainty: "certain",
+         valid_from: 1650000000, source_anchor: "t-321"}
+    expected:
+      mode: answer
+      contains: ["married"]
+
+  # ---------------------------------------------------------------------
+  # Vague certainty (must NOT confidently answer) — 5 cases
+  # ---------------------------------------------------------------------
+
+  - id: vag-001
+    kind: vague_certainty
+    query: "Where do I live?"
+    seed_facts:
+      - {subject: "user", predicate: "address", object: "maybe Boston", certainty: "vague", source_anchor: "t-401"}
+    expected:
+      mode: abstain
+      reason: any_abstain
+
+  - id: vag-002
+    kind: vague_certainty
+    query: "Who is my doctor?"
+    seed_facts:
+      - {subject: "user", predicate: "doctor", object: "Dr Smith?", certainty: "vague", source_anchor: "t-402"}
+    expected:
+      mode: abstain
+      reason: any_abstain
+
+  - id: vag-003
+    kind: vague_certainty
+    query: "What's my goal weight?"
+    seed_facts:
+      - {subject: "user", predicate: "goal_weight", object: "around 70kg", certainty: "vague", source_anchor: "t-403"}
+    expected:
+      mode: abstain
+      reason: any_abstain
+
+  - id: vag-004
+    kind: vague_certainty
+    query: "Which gym do I go to?"
+    seed_facts:
+      - {subject: "user", predicate: "gym", object: "Equinox?", certainty: "vague", source_anchor: "t-404"}
+    expected:
+      mode: abstain
+      reason: any_abstain
+
+  - id: vag-005
+    kind: vague_certainty
+    query: "What time do I sleep?"
+    seed_facts:
+      - {subject: "user", predicate: "sleep_time", object: "11pm-ish", certainty: "vague", source_anchor: "t-405"}
+    expected:
+      mode: abstain
+      reason: any_abstain
+
+  # ---------------------------------------------------------------------
+  # Multi-hop relational — 5 cases
+  # ---------------------------------------------------------------------
+
+  - id: rel-001
+    kind: relational_multi_hop
+    query: "What is the capital of the country my mother lives in?"
+    seed_facts:
+      - {subject: "mother", predicate: "lives_in", object: "France", certainty: "certain", source_anchor: "t-501"}
+      - {subject: "France", predicate: "capital", object: "Paris", certainty: "certain", source_anchor: "t-502"}
+    expected:
+      mode: answer
+      contains: ["paris"]
+
+  - id: rel-002
+    kind: relational_multi_hop
+    query: "What language does my boss's spouse speak?"
+    seed_facts:
+      - {subject: "boss", predicate: "spouse", object: "Maria", certainty: "certain", source_anchor: "t-510"}
+      - {subject: "Maria", predicate: "language", object: "Spanish", certainty: "certain", source_anchor: "t-511"}
+    expected:
+      mode: answer
+      contains: ["spanish"]
+
+  - id: rel-003
+    kind: relational_multi_hop
+    query: "Where does my brother work?"
+    seed_facts:
+      - {subject: "user", predicate: "brother", object: "Tom", certainty: "certain", source_anchor: "t-520"}
+      - {subject: "Tom", predicate: "employer", object: "Pixar", certainty: "certain", source_anchor: "t-521"}
+    expected:
+      mode: answer
+      contains: ["pixar"]
+
+  - id: rel-004
+    kind: relational_multi_hop
+    query: "What does my father drive?"
+    seed_facts:
+      - {subject: "father", predicate: "car", object: "Tesla Model Y", certainty: "certain", source_anchor: "t-530"}
+    expected:
+      mode: answer
+      contains: ["tesla"]
+
+  - id: rel-005
+    kind: relational_multi_hop
+    query: "What's the airport code of the city my best friend lives in?"
+    seed_facts:
+      - {subject: "best_friend", predicate: "lives_in", object: "Tokyo", certainty: "certain", source_anchor: "t-540"}
+      - {subject: "Tokyo", predicate: "airport_code", object: "HND", certainty: "certain", source_anchor: "t-541"}
+    expected:
+      mode: answer
+      contains: ["hnd"]
+
+  # ---------------------------------------------------------------------
+  # Empty memory / cold start — 4 cases
+  # ---------------------------------------------------------------------
+
+  - id: emp-001
+    kind: empty_memory
+    query: "What's my name?"
+    seed_facts: []
+    expected:
+      mode: abstain
+      reason: no_candidates
+
+  - id: emp-002
+    kind: empty_memory
+    query: "When is my birthday?"
+    seed_facts: []
+    expected:
+      mode: abstain
+      reason: no_candidates
+
+  - id: emp-003
+    kind: empty_memory
+    query: "What language do I speak?"
+    seed_facts: []
+    expected:
+      mode: abstain
+      reason: no_candidates
+
+  - id: emp-004
+    kind: empty_memory
+    query: "Tell me what you remember about me."
+    seed_facts: []
+    expected:
+      mode: abstain
+      reason: no_candidates
+
+  # ---------------------------------------------------------------------
+  # False premise (question assumes a fact that doesn't exist) — 4 cases
+  # ---------------------------------------------------------------------
+
+  - id: fp-001
+    kind: false_premise
+    query: "Why did I quit my job at NASA?"
+    seed_facts:
+      - {subject: "user", predicate: "employer", object: "Microsoft", certainty: "certain", source_anchor: "t-601"}
+    expected:
+      mode: answer
+      contains: ["microsoft"]
+      forbid: ["nasa"]
+
+  - id: fp-002
+    kind: false_premise
+    query: "How was my trip to Mars?"
+    seed_facts:
+      - {subject: "user", predicate: "last_trip", object: "Hawaii", certainty: "certain", source_anchor: "t-610"}
+    expected:
+      mode: answer
+      forbid: ["mars"]
+
+  - id: fp-003
+    kind: false_premise
+    query: "What did my twin sister say?"
+    seed_facts:
+      - {subject: "user", predicate: "siblings_count", object: "0", certainty: "certain", source_anchor: "t-620"}
+    expected:
+      mode: abstain
+      reason: any_abstain
+
+  - id: fp-004
+    kind: false_premise
+    query: "When did I retire?"
+    seed_facts:
+      - {subject: "user", predicate: "employed", object: "true", certainty: "certain", source_anchor: "t-630"}
+    expected:
+      mode: abstain
+      reason: any_abstain
+
+  # ---------------------------------------------------------------------
+  # Implicit expectation (very common but unstated) — 4 cases
+  # ---------------------------------------------------------------------
+
+  - id: imp-001
+    kind: implicit_expectation
+    query: "Send the report to my usual email."
+    seed_facts: []
+    expected:
+      mode: abstain
+      reason: any_abstain
+
+  - id: imp-002
+    kind: implicit_expectation
+    query: "Book a flight to my hometown."
+    seed_facts:
+      - {subject: "user", predicate: "hometown", object: "Seattle", certainty: "certain", source_anchor: "t-701"}
+    expected:
+      mode: answer
+      contains: ["seattle"]
+
+  - id: imp-003
+    kind: implicit_expectation
+    query: "Order from the place I usually go to."
+    seed_facts: []
+    expected:
+      mode: abstain
+      reason: any_abstain
+
+  - id: imp-004
+    kind: implicit_expectation
+    query: "Call my emergency contact."
+    seed_facts:
+      - {subject: "user", predicate: "emergency_contact", object: "Mom: 555-0123",
+         certainty: "certain", source_anchor: "t-710"}
+    expected:
+      mode: answer
+      contains: ["mom", "555-0123"]
+
+  # ---------------------------------------------------------------------
+  # Contradictions — 4 cases
+  # ---------------------------------------------------------------------
+
+  - id: con-001
+    kind: contradiction
+    query: "What is my favorite color?"
+    seed_facts:
+      - {subject: "user", predicate: "favorite_color", object: "red", certainty: "certain", source_anchor: "t-801"}
+      - {subject: "user", predicate: "favorite_color", object: "blue", certainty: "certain", source_anchor: "t-802"}
+    expected:
+      mode: abstain
+      reason: any_abstain
+
+  - id: con-002
+    kind: contradiction
+    query: "Am I vegetarian?"
+    seed_facts:
+      - {subject: "user", predicate: "is_vegetarian", object: "true", certainty: "probable", source_anchor: "t-810"}
+      - {subject: "user", predicate: "is_vegetarian", object: "false", certainty: "probable", source_anchor: "t-811"}
+    expected:
+      mode: abstain
+      reason: any_abstain
+
+  - id: con-003
+    kind: contradiction
+    query: "Do I drink alcohol?"
+    seed_facts:
+      - {subject: "user", predicate: "drinks_alcohol", object: "true", certainty: "certain", source_anchor: "t-820"}
+      - {subject: "user", predicate: "drinks_alcohol", object: "false", certainty: "certain", source_anchor: "t-821"}
+    expected:
+      mode: abstain
+      reason: any_abstain
+
+  - id: con-004
+    kind: contradiction
+    query: "How old am I?"
+    seed_facts:
+      - {subject: "user", predicate: "age", object: "30", certainty: "certain", source_anchor: "t-830"}
+      - {subject: "user", predicate: "age", object: "35", certainty: "certain", source_anchor: "t-831"}
+    expected:
+      mode: abstain
+      reason: any_abstain
+
+  # ---------------------------------------------------------------------
+  # Ambiguous subject — 3 cases
+  # ---------------------------------------------------------------------
+
+  - id: amb-001
+    kind: ambiguous_subject
+    query: "What's John's number?"
+    seed_facts:
+      - {subject: "John Smith", predicate: "phone", object: "555-1111", certainty: "certain", source_anchor: "t-901"}
+      - {subject: "John Doe", predicate: "phone", object: "555-2222", certainty: "certain", source_anchor: "t-902"}
+    expected:
+      mode: abstain
+      reason: any_abstain
+
+  - id: amb-002
+    kind: ambiguous_subject
+    query: "Where does Anna live?"
+    seed_facts:
+      - {subject: "Anna (sister)", predicate: "address", object: "Berlin", certainty: "certain", source_anchor: "t-910"}
+      - {subject: "Anna (colleague)", predicate: "address", object: "Munich", certainty: "certain", source_anchor: "t-911"}
+    expected:
+      mode: abstain
+      reason: any_abstain
+
+  - id: amb-003
+    kind: ambiguous_subject
+    query: "What does Mike like?"
+    seed_facts:
+      - {subject: "Mike", predicate: "likes", object: "tennis", certainty: "certain", source_anchor: "t-920"}
+    expected:
+      mode: answer
+      contains: ["tennis"]
+
+  # ---------------------------------------------------------------------
+  # Paraphrase recall (text differs from seed phrasing) — 4 cases
+  # ---------------------------------------------------------------------
+
+  - id: par-001
+    kind: paraphrase_recall
+    query: "Where am I from?"
+    seed_facts:
+      - {subject: "user", predicate: "hometown", object: "Boston", certainty: "certain", source_anchor: "t-1001"}
+    expected:
+      mode: answer
+      contains: ["boston"]
+
+  - id: par-002
+    kind: paraphrase_recall
+    query: "What do I do for a living?"
+    seed_facts:
+      - {subject: "user", predicate: "job_title", object: "data engineer", certainty: "certain", source_anchor: "t-1010"}
+    expected:
+      mode: answer
+      contains: ["data engineer"]
+
+  - id: par-003
+    kind: paraphrase_recall
+    query: "Got any pets?"
+    seed_facts:
+      - {subject: "user", predicate: "pet", object: "golden retriever", certainty: "certain", source_anchor: "t-1020"}
+    expected:
+      mode: answer
+      contains: ["golden retriever"]
+
+  - id: par-004
+    kind: paraphrase_recall
+    query: "What's my mom's first name?"
+    seed_facts:
+      - {subject: "user", predicate: "mother_name", object: "Alice", certainty: "certain", source_anchor: "t-1030"}
+    expected:
+      mode: answer
+      contains: ["alice"]
+
+  # ---------------------------------------------------------------------
+  # Sourceless drop — fact recorded without provenance — 3 cases
+  # ---------------------------------------------------------------------
+
+  - id: src-001
+    kind: sourceless_drop
+    query: "What's my preferred airline?"
+    seed_facts:
+      - {subject: "user", predicate: "airline", object: "Delta", certainty: "certain", source_anchor: ""}
+    expected:
+      mode: abstain
+      reason: any_abstain
+
+  - id: src-002
+    kind: sourceless_drop
+    query: "What's my insurance provider?"
+    seed_facts:
+      - {subject: "user", predicate: "insurance", object: "Aetna", certainty: "certain", source_anchor: ""}
+    expected:
+      mode: abstain
+      reason: any_abstain
+
+  - id: src-003
+    kind: sourceless_drop
+    query: "Who's my dentist?"
+    seed_facts:
+      - {subject: "user", predicate: "dentist", object: "Dr Lee", certainty: "certain", source_anchor: ""}
+    expected:
+      mode: abstain
+      reason: any_abstain

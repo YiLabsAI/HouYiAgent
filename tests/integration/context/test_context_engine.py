@@ -1,6 +1,5 @@
-"""Integration tests for Context Engine.
+"""Context Engine: TokenEstimator → ContextPlanner → ContextRenderer → LLM messages.
 
-Tests the full chain: TokenEstimator → ContextPlanner → ContextRenderer → LLM messages.
 Verifies format correctness, token counting consistency, truncation behavior,
 and memory injection across the entire context pipeline.
 """

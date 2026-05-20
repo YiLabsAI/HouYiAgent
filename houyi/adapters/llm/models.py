@@ -3,14 +3,14 @@
 This file provides fallback constants for the SDK. In production, model
 lists SHOULD be fetched dynamically from provider APIs (e.g. /v1/models)
 rather than hardcoded here. The constants below serve as:
-  - Default model when none is configured
-  - Context window lookup for token estimation
-  - Provider identifiers (canonical keys)
+ - Default model when none is configured
+ - Context window lookup for token estimation
+ - Provider identifiers (canonical keys)
 
 Usage:
-    from houyi.adapters.llm.models import DEFAULT_MODEL, MODEL_CONTEXT_WINDOWS
+ from houyi.adapters.llm.models import DEFAULT_MODEL, MODEL_CONTEXT_WINDOWS
 
-    model = os.getenv(ENV_SILICONFLOW_MODEL, DEFAULT_MODEL)
+ model = os.getenv(ENV_SILICONFLOW_MODEL, DEFAULT_MODEL)
 """
 
 from __future__ import annotations
@@ -64,8 +64,8 @@ GLM_5 = "GLM-5"
 # and defined in PROVIDER_DISPLAY_NAMES below.
 #
 # Google has two distinct providers:
-#   - google_ai: Google AI Studio / Gemini API (API key auth, direct access)
-#   - vertex:    Google Cloud Vertex AI (GCP project + service account auth)
+# - google_ai: Google AI Studio / Gemini API (API key auth, direct access)
+# - vertex: Google Cloud Vertex AI (GCP project + service account auth)
 # ---------------------------------------------------------------------------
 PROVIDER_SILICONFLOW = "siliconflow"
 PROVIDER_OPENAI = "openai"

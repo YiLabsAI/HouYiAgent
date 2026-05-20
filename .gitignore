@@ -98,6 +98,9 @@ knowledge/
 .claude/
 .openclaw/
 
-# Benchmark outputs (keep query.jsonl, ignore generated results)
+# Benchmark outputs — all run artifacts live under benchmark/output/
+# Sub-layout:
+#   benchmark/output/deep-research/   deep-research bench runs
+#   benchmark/output/memory/          memory bench runs (locomo, halumem and etc.)
 benchmark/output/
 

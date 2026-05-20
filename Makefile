@@ -41,7 +41,7 @@ help:
 	@echo "  make lint             Run all linters (ruff)"
 	@echo "  make lint-fix         Run linters with auto-fix"
 	@echo "  make lint-imports     Check import layer boundaries"
-	@echo "  make benchmark        Run benchmarks (default: pytest -m benchmark, use BENCH_TARGET=memory|rag|runtime|verification|observability|all or BENCH_PATH=...; use BENCH_KIND=arena for DeepResearch-Bench)"
+	@echo "  make benchmark        Run benchmarks (default: pytest -m benchmark, use BENCH_TARGET=memory|memory-halumem|rag|runtime|verification|observability|all or BENCH_PATH=...; use BENCH_KIND=arena for DeepResearch-Bench)"
 	@echo ""
 	@echo "Testing:"
 	@echo "  make test-sdk-unit    Run SDK unit tests"
@@ -220,6 +220,7 @@ benchmark:
 		case "$(BENCH_TARGET)" in \
 			all) bench_path="$${BENCH_PATH:-tests/}" ;; \
 			memory) bench_path="tests/integration/benchmark/test_memory.py" ;; \
+			memory-halumem) bench_path="tests/integration/benchmark/test_memory_halumem.py" ;; \
 			rag) bench_path="tests/rag/benchmark" ;; \
 			runtime) bench_path="tests/application/runtime/test_runtime_benchmark.py" ;; \
 			verification) bench_path="tests/integration/verification/test_performance.py" ;; \

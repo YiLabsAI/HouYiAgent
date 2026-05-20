@@ -18,6 +18,7 @@ from houyi.adapters.memory.extractor import MemoryCandidateExtractor
 from houyi.adapters.memory.forgetting import apply_forgetting
 from houyi.adapters.memory.retriever import MemoryRetriever
 from houyi.adapters.memory.store import MemoryStore
+from houyi.adapters.memory.turn_writer import TurnDetector, TurnWriter, WriteResult
 from houyi.adapters.memory.types import (
     CandidateStatus,
     DedupMatch,
@@ -65,6 +66,9 @@ __all__ = [
     "SQLiteMemoryBackend",
     "SessionContext",
     "TTLPolicy",
+    "TurnDetector",
+    "TurnWriter",
+    "WriteResult",
     "apply_forgetting",
     "cosine_similarity",
     "create_backend",

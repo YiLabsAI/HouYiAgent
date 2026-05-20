@@ -19,6 +19,9 @@ class ConfigService:
         retry_policy = run_settings.get("retry_policy") if isinstance(run_settings, dict) else None
         if retry_policy is not None:
             resolved["retry_policy"] = retry_policy
+        use_mock_llm = run_settings.get("use_mock_llm") if isinstance(run_settings, dict) else None
+        if use_mock_llm is not None:
+            resolved["use_mock_llm"] = bool(use_mock_llm)
         return resolved
 
     def resolve_tool_settings(
@@ -63,6 +66,8 @@ class ConfigService:
 
     @staticmethod
     def _coerce_tool_names(tool_names: Any | None) -> list[str]:
+        if tool_names is None:
+            return []
         if isinstance(tool_names, str):
             try:
                 parsed = json.loads(tool_names)
@@ -72,8 +77,6 @@ class ConfigService:
                     return [str(parsed)]
             except json.JSONDecodeError:
                 return [name.strip() for name in tool_names.split(",") if name.strip()]
-        if tool_names is None:
-            return []
         if isinstance(tool_names, list):
             return [str(name) for name in tool_names if str(name).strip()]
         return [str(tool_names)]

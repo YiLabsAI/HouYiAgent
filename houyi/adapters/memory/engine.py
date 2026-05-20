@@ -17,6 +17,7 @@ from houyi.adapters.memory.builder import MemoryCandidateBuilder
 from houyi.adapters.memory.classifier import MemoryClassifier
 from houyi.adapters.memory.deduplicator import MemoryDeduplicator
 from houyi.adapters.memory.embedding import EmbeddingProvider
+from houyi.adapters.memory.event_emitter import MemoryEventEmitter
 from houyi.adapters.memory.extractor import MemoryCandidateExtractor
 from houyi.adapters.memory.forgetting import apply_forgetting
 from houyi.adapters.memory.retriever import MemoryRetriever
@@ -36,6 +37,7 @@ from houyi.adapters.memory.types import (
     MemorySourceKind,
     SessionContext,
 )
+from houyi.application.evolution.events import EvolutionEventType
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +64,7 @@ class MemoryEngine:
         llm_adapter: Any | None = None,
         policy: MemoryPolicy | None = None,
         forgetting_policy: ForgettingPolicy | None = None,
+        emitter: MemoryEventEmitter | None = None,
     ):
         self._store = store
         self._builder = builder or MemoryCandidateBuilder(llm_adapter=llm_adapter)
@@ -76,6 +79,12 @@ class MemoryEngine:
         self._embedding = embedding_provider
         self._policy = policy or MemoryPolicy()
         self._forgetting = forgetting_policy or ForgettingPolicy()
+        # Optional hot-path event emitter. The engine emits RECALL_FAILURE
+        # when its retriever returns no recalls so the legacy retrieval
+        # path still produces evolution signals on top of the new
+        # RecallOrchestrator path. Production wiring may share a single
+        # MemoryEventEmitter across both surfaces.
+        self._emitter = emitter or MemoryEventEmitter()
 
     @property
     def store(self) -> MemoryStore:
@@ -223,7 +232,21 @@ class MemoryEngine:
         top_k: int = 5,
     ) -> list[MemoryRecall]:
         """Retrieve relevant memories for a query."""
-        return await self._retriever.retrieve(query, session_context, top_k)
+        recalls = await self._retriever.retrieve(query, session_context, top_k)
+        if not recalls:
+            # Empty recall = retrieval miss on the legacy path. Surface to
+            # the evolution control plane the same way the new orchestrator
+            # does, so signal mining is path-uniform.
+            self._emitter.emit(
+                EvolutionEventType.RECALL_FAILURE,
+                target="memory_engine",
+                payload={
+                    "query_preview": query[:200],
+                    "reason": "no_candidates",
+                },
+                metrics={"top_k": float(top_k)},
+            )
+        return recalls
 
     async def build_context(
         self,

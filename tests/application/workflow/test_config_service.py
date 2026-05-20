@@ -53,6 +53,11 @@ class TestConfigService:
         resolved = service.normalize_run_settings({"retry_policy": {"max_retries": 2}})
         assert resolved["retry_policy"] == {"max_retries": 2}
 
+    def test_preserves_mock_llm(self):
+        service = ConfigService()
+        resolved = service.normalize_run_settings({"use_mock_llm": True})
+        assert resolved["use_mock_llm"] is True
+
     def test_tool_choice_json(self):
         service = ConfigService()
         resolved = service.resolve_tool_settings(

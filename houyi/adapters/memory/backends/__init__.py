@@ -4,8 +4,14 @@ from __future__ import annotations
 
 from typing import Any
 
-from houyi.adapters.memory.backends.base import MemoryBackend
+from houyi.adapters.memory.backends.base import (
+    CandidateInbox,
+    EntityStateView,
+    MemoryBackend,
+)
 from houyi.adapters.memory.backends.sqlite import SQLiteMemoryBackend
+from houyi.adapters.memory.backends.sqlite_candidate_inbox import SQLiteCandidateInbox
+from houyi.adapters.memory.backends.sqlite_entity_state import SQLiteEntityStateView
 
 BACKEND_REGISTRY: dict[str, type[MemoryBackend]] = {
     "sqlite": SQLiteMemoryBackend,
@@ -32,7 +38,11 @@ def create_backend(name: str = "sqlite", **kwargs: Any) -> MemoryBackend:
 
 __all__ = [
     "BACKEND_REGISTRY",
+    "CandidateInbox",
+    "EntityStateView",
     "MemoryBackend",
+    "SQLiteCandidateInbox",
+    "SQLiteEntityStateView",
     "SQLiteMemoryBackend",
     "create_backend",
 ]

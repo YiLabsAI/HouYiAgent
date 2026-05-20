@@ -1,9 +1,15 @@
 """SQLite-based memory backend with FTS5 full-text search and embedding cache.
 
 Schema:
-  memories      — main record table (scope+key UNIQUE)
-  memories_fts  — FTS5 virtual table, auto-synced via triggers
-  embedding_cache — per-provider/model embedding BLOB cache
+ memories — main record table (scope+key UNIQUE)
+ memories_fts — FTS5 virtual table, auto-synced via triggers
+ memories_vec — sqlite-vec vec0 virtual table (created lazily,
+ only when the extension is available; joined to
+ memories via rowid)
+ memories_vec_meta — single-row meta table storing the active vector
+ dimension; required because vec0 tables are typed
+ at CREATE time
+ embedding_cache — per-provider/model embedding BLOB cache
 """
 
 from __future__ import annotations
@@ -11,52 +17,52 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
-import math
 import sqlite3
-import struct
 import threading
-import time
 from pathlib import Path
 from typing import Any
 
 from houyi.adapters.memory.backends.base import MemoryBackend
+from houyi.adapters.memory.backends.sqlite_connection import SQLiteConnectionManager
+from houyi.adapters.memory.backends.sqlite_embedding_cache import SQLiteEmbeddingCache
+from houyi.adapters.memory.backends.sqlite_extract_queue import SQLiteExtractQueue
+from houyi.adapters.memory.backends.sqlite_fts_search import SQLiteFTSSearch
+from houyi.adapters.memory.backends.sqlite_raw_turn_log import SQLiteRawTurnLog
+from houyi.adapters.memory.backends.sqlite_schema import SQLiteSchemaManager
+from houyi.adapters.memory.backends.sqlite_vector_search import SQLiteVectorSearch
 from houyi.adapters.memory.types import (
     MemoryProvenance,
     MemoryRecord,
     MemoryScope,
     MemoryType,
+    RawTurn,
 )
 
 logger = logging.getLogger(__name__)
 
-_SCHEMA_VERSION = 1
+_SCHEMA_VERSION = 2
 
 
 def _pack_floats(vec: list[float]) -> bytes:
     """Serialize float list to compact binary (float32)."""
+    import struct
+
     return struct.pack(f"<{len(vec)}f", *vec)
 
 
 def _unpack_floats(data: bytes) -> list[float]:
     """Deserialize binary to float list."""
+    import struct
+
     n = len(data) // 4
     return list(struct.unpack(f"<{n}f", data))
-
-
-def _cosine_sim(a: list[float], b: list[float]) -> float:
-    if len(a) != len(b):
-        return 0.0
-    dot = sum(x * y for x, y in zip(a, b, strict=True))
-    na = math.sqrt(sum(x * x for x in a)) or 1.0
-    nb = math.sqrt(sum(x * x for x in b)) or 1.0
-    return dot / (na * nb)
 
 
 class SQLiteMemoryBackend(MemoryBackend):
     """SQLite backend with FTS5 and embedding cache.
 
-    Follows the same thread-safety pattern as ``SQLiteSpanStorage``:
-    WAL mode, ``check_same_thread=False``, thread-local connections.
+    Follows the same thread-safety pattern as SQLiteSpanStorage:
+    WAL mode, check_same_thread=False, thread-local connections.
     """
 
     def __init__(
@@ -64,116 +70,28 @@ class SQLiteMemoryBackend(MemoryBackend):
         db_path: str | Path | None = None,
         data_dir: str | Path | None = None,
     ):
-        if db_path:
-            self._db_path = Path(db_path)
-        elif data_dir:
-            self._db_path = Path(data_dir) / ".houyi" / "memory.db"
-        else:
-            self._db_path = Path(".houyi") / "memory.db"
-
-        self._db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._local = threading.local()
-        self._connections: set[sqlite3.Connection] = set()
         self._lock = threading.Lock()
-        self._init_schema()
+        self._conn_manager = SQLiteConnectionManager(db_path, data_dir)
+        self._schema_manager = SQLiteSchemaManager(self._conn_manager)
+        self._schema_manager.init_schema()
 
-    # ------------------------------------------------------------------
-    # Connection management
-    # ------------------------------------------------------------------
+        self._vector_search = SQLiteVectorSearch(self._conn_manager, self._schema_manager)
+        self._fts_search = SQLiteFTSSearch(self._conn_manager)
+        self._embedding_cache = SQLiteEmbeddingCache(self._conn_manager)
+        self._raw_turn_log = SQLiteRawTurnLog(self._conn_manager, self._lock)
+        self._extract_queue = SQLiteExtractQueue(self._conn_manager, self._raw_turn_log, self._lock)
 
     def _conn(self) -> sqlite3.Connection:
-        if not hasattr(self._local, "conn") or self._local.conn is None:
-            conn = sqlite3.connect(
-                str(self._db_path),
-                check_same_thread=False,
-                timeout=30.0,
-            )
-            conn.row_factory = sqlite3.Row
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA synchronous=NORMAL")
-            conn.execute("PRAGMA foreign_keys=ON")
-            self._local.conn = conn
-            with self._lock:
-                self._connections.add(conn)
-        return self._local.conn
+        return self._conn_manager.get_connection()
 
-    def _init_schema(self) -> None:
-        conn = self._conn()
-        cur = conn.cursor()
-        try:
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS memories (
-                    record_id   TEXT PRIMARY KEY,
-                    scope       TEXT NOT NULL,
-                    key         TEXT NOT NULL,
-                    content     TEXT NOT NULL,
-                    memory_type TEXT NOT NULL DEFAULT 'fact',
-                    tags        TEXT DEFAULT '[]',
-                    confidence  REAL DEFAULT 1.0,
-                    decay       REAL DEFAULT 1.0,
-                    provenance  TEXT,
-                    metadata    TEXT DEFAULT '{}',
-                    created_at  REAL NOT NULL,
-                    updated_at  REAL NOT NULL,
-                    ttl         REAL,
-                    valid_from  REAL,
-                    valid_to    REAL,
-                    embedding   BLOB,
-                    UNIQUE(scope, key)
-                )
-            """)
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_mem_scope ON memories(scope)")
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_mem_type ON memories(memory_type)")
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_mem_updated ON memories(updated_at DESC)")
+    @property
+    def _db_path(self) -> Path:
+        """Expose db_path for test compatibility."""
+        return self._conn_manager.db_path
 
-            cur.execute("""
-                CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
-                    key, content, tags,
-                    content='memories',
-                    content_rowid='rowid',
-                    tokenize='unicode61'
-                )
-            """)
-
-            cur.execute("""
-                CREATE TRIGGER IF NOT EXISTS mem_fts_ai AFTER INSERT ON memories BEGIN
-                    INSERT INTO memories_fts(rowid, key, content, tags)
-                    VALUES (new.rowid, new.key, new.content, new.tags);
-                END
-            """)
-            cur.execute("""
-                CREATE TRIGGER IF NOT EXISTS mem_fts_ad AFTER DELETE ON memories BEGIN
-                    INSERT INTO memories_fts(memories_fts, rowid, key, content, tags)
-                    VALUES ('delete', old.rowid, old.key, old.content, old.tags);
-                END
-            """)
-            cur.execute("""
-                CREATE TRIGGER IF NOT EXISTS mem_fts_au AFTER UPDATE ON memories BEGIN
-                    INSERT INTO memories_fts(memories_fts, rowid, key, content, tags)
-                    VALUES ('delete', old.rowid, old.key, old.content, old.tags);
-                    INSERT INTO memories_fts(rowid, key, content, tags)
-                    VALUES (new.rowid, new.key, new.content, new.tags);
-                END
-            """)
-
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS embedding_cache (
-                    record_id  TEXT NOT NULL,
-                    provider   TEXT NOT NULL,
-                    model      TEXT NOT NULL,
-                    embedding  BLOB NOT NULL,
-                    created_at REAL NOT NULL,
-                    PRIMARY KEY (record_id, provider, model),
-                    FOREIGN KEY (record_id) REFERENCES memories(record_id) ON DELETE CASCADE
-                )
-            """)
-
-            conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            cur.close()
+    def _rowid_for(self, scope: MemoryScope, key: str) -> int | None:
+        """Return the internal rowid for a (key, scope) pair, or None if missing."""
+        return self._vector_search._rowid_for(scope, key)
 
     # ------------------------------------------------------------------
     # CRUD
@@ -182,14 +100,16 @@ class SQLiteMemoryBackend(MemoryBackend):
     def put(self, record: MemoryRecord) -> None:
         conn = self._conn()
         emb_blob = _pack_floats(record.embedding) if record.embedding else None
+        embedding_pending = 0 if record.embedding else 1
         conn.execute(
             """
-            INSERT INTO memories
+                INSERT INTO memories
                 (record_id, scope, key, content, memory_type, tags, confidence,
-                 decay, provenance, metadata, created_at, updated_at, ttl,
-                 valid_from, valid_to, embedding)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(scope, key) DO UPDATE SET
+                decay, provenance, metadata, created_at, updated_at, ttl,
+                valid_from, valid_to, embedding,
+                embedding_pending, embedding_provider)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(scope, key) DO UPDATE SET
                 content=excluded.content,
                 memory_type=excluded.memory_type,
                 tags=excluded.tags,
@@ -201,7 +121,9 @@ class SQLiteMemoryBackend(MemoryBackend):
                 ttl=excluded.ttl,
                 valid_from=excluded.valid_from,
                 valid_to=excluded.valid_to,
-                embedding=excluded.embedding
+                embedding=excluded.embedding,
+                embedding_pending=excluded.embedding_pending,
+                embedding_provider=excluded.embedding_provider
             """,
             (
                 record.record_id,
@@ -220,8 +142,16 @@ class SQLiteMemoryBackend(MemoryBackend):
                 record.valid_from,
                 record.valid_to,
                 emb_blob,
+                embedding_pending,
+                record.metadata.get("embedding_provider")
+                if isinstance(record.metadata, dict)
+                else None,
             ),
         )
+        if record.embedding:
+            self._vector_search.upsert_vec_row(record.scope, record.key, record.embedding)
+        else:
+            self._vector_search.delete_vec_row(record.scope, record.key)
         conn.commit()
 
     def get(self, key: str, scope: MemoryScope) -> MemoryRecord | None:
@@ -291,10 +221,18 @@ class SQLiteMemoryBackend(MemoryBackend):
 
     def delete(self, key: str, scope: MemoryScope) -> bool:
         conn = self._conn()
+        rowid = self._vector_search._rowid_for(scope, key)
         cur = conn.execute(
             "DELETE FROM memories WHERE scope=? AND key=?",
             (scope.value, key),
         )
+        if (
+            rowid is not None
+            and self._conn_manager.vec_available
+            and self._conn_manager.vec_dim is not None
+        ):
+            with contextlib.suppress(sqlite3.OperationalError):
+                conn.execute("DELETE FROM memories_vec WHERE rowid=?", (rowid,))
         conn.commit()
         return cur.rowcount > 0
 
@@ -303,8 +241,28 @@ class SQLiteMemoryBackend(MemoryBackend):
         if scope is None:
             cur = conn.execute("DELETE FROM memories")
             conn.execute("DELETE FROM embedding_cache")
+            conn.execute("DELETE FROM entity_state")
+            conn.execute("DELETE FROM vague_candidates")
+            if self._conn_manager.vec_available and self._conn_manager.vec_dim is not None:
+                with contextlib.suppress(sqlite3.OperationalError):
+                    conn.execute("DELETE FROM memories_vec")
         else:
+            rowids: list[int] = [
+                int(r["rowid"])
+                for r in conn.execute("SELECT rowid FROM memories WHERE scope=?", (scope.value,))
+            ]
             cur = conn.execute("DELETE FROM memories WHERE scope=?", (scope.value,))
+            if (
+                rowids
+                and self._conn_manager.vec_available
+                and self._conn_manager.vec_dim is not None
+            ):
+                with contextlib.suppress(sqlite3.OperationalError):
+                    placeholders = ",".join("?" * len(rowids))
+                    conn.execute(
+                        f"DELETE FROM memories_vec WHERE rowid IN ({placeholders})",
+                        rowids,
+                    )
         conn.commit()
         return cur.rowcount
 
@@ -318,61 +276,7 @@ class SQLiteMemoryBackend(MemoryBackend):
         scope: MemoryScope | None = None,
         limit: int = 20,
     ) -> list[tuple[MemoryRecord, float]]:
-        fts_query = self._sanitize_fts(query)
-        if not fts_query:
-            return []
-
-        if scope is not None:
-            rows = (
-                self._conn()
-                .execute(
-                    """
-                SELECT m.*, bm25(memories_fts) AS fts_rank
-                FROM memories_fts f
-                JOIN memories m ON f.rowid = m.rowid
-                WHERE memories_fts MATCH ? AND m.scope = ?
-                ORDER BY bm25(memories_fts)
-                LIMIT ?
-                """,
-                    (fts_query, scope.value, limit),
-                )
-                .fetchall()
-            )
-        else:
-            rows = (
-                self._conn()
-                .execute(
-                    """
-                SELECT m.*, bm25(memories_fts) AS fts_rank
-                FROM memories_fts f
-                JOIN memories m ON f.rowid = m.rowid
-                WHERE memories_fts MATCH ?
-                ORDER BY bm25(memories_fts)
-                LIMIT ?
-                """,
-                    (fts_query, limit),
-                )
-                .fetchall()
-            )
-
-        results = []
-        for row in rows:
-            record = self._row_to_record(row)
-            if not record.is_expired:
-                score = -dict(row)["fts_rank"]
-                results.append((record, score))
-        return results
-
-    @staticmethod
-    def _sanitize_fts(query: str) -> str:
-        """Escape special FTS5 characters and build OR query from terms."""
-        import re
-
-        terms = re.findall(r"\w+", query)
-        if not terms:
-            return ""
-        escaped = [f'"{t}"' for t in terms]
-        return " OR ".join(escaped)
+        return self._fts_search.search_fts(query, scope, limit)
 
     # ------------------------------------------------------------------
     # Embedding cache
@@ -384,17 +288,7 @@ class SQLiteMemoryBackend(MemoryBackend):
         provider: str,
         model: str,
     ) -> list[float] | None:
-        row = (
-            self._conn()
-            .execute(
-                "SELECT embedding FROM embedding_cache WHERE record_id=? AND provider=? AND model=?",
-                (record_id, provider, model),
-            )
-            .fetchone()
-        )
-        if row is None:
-            return None
-        return _unpack_floats(row["embedding"])
+        return self._embedding_cache.get_embedding(record_id, provider, model)
 
     def put_embedding(
         self,
@@ -403,18 +297,7 @@ class SQLiteMemoryBackend(MemoryBackend):
         model: str,
         embedding: list[float],
     ) -> None:
-        conn = self._conn()
-        conn.execute(
-            """
-            INSERT INTO embedding_cache (record_id, provider, model, embedding, created_at)
-            VALUES (?, ?, ?, ?, ?)
-            ON CONFLICT(record_id, provider, model) DO UPDATE SET
-                embedding=excluded.embedding,
-                created_at=excluded.created_at
-            """,
-            (record_id, provider, model, _pack_floats(embedding), time.time()),
-        )
-        conn.commit()
+        self._embedding_cache.put_embedding(record_id, provider, model, embedding)
 
     def search_embedding(
         self,
@@ -422,51 +305,138 @@ class SQLiteMemoryBackend(MemoryBackend):
         scope: MemoryScope | None = None,
         limit: int = 20,
     ) -> list[tuple[MemoryRecord, float]]:
-        """Brute-force cosine search over in-row embeddings.
+        return self.search_vector(query_embedding, scope=scope, limit=limit)
 
-        For < 10K records this is sub-100ms. Larger stores should use
-        a dedicated vector index (e.g. sqlite-vec extension).
-        """
-        if scope is not None:
-            rows = (
-                self._conn()
-                .execute(
-                    "SELECT * FROM memories WHERE embedding IS NOT NULL AND scope=?",
-                    (scope.value,),
-                )
-                .fetchall()
-            )
-        else:
-            rows = (
-                self._conn()
-                .execute(
-                    "SELECT * FROM memories WHERE embedding IS NOT NULL",
-                )
-                .fetchall()
-            )
+    def search_vector(
+        self,
+        query_embedding: list[float],
+        *,
+        scope: MemoryScope | None = None,
+        rowid_filter: list[int] | None = None,
+        limit: int = 20,
+    ) -> list[tuple[MemoryRecord, float]]:
+        return self._vector_search.search_vector(
+            query_embedding, scope=scope, rowid_filter=rowid_filter, limit=limit
+        )
 
-        scored: list[tuple[MemoryRecord, float]] = []
+    # ------------------------------------------------------------------
+    # Embedding backfill bookkeeping
+    # ------------------------------------------------------------------
+
+    def list_pending_embeddings(self, limit: int = 64) -> list[tuple[int, MemoryRecord]]:
+        rows = (
+            self._conn()
+            .execute(
+                "SELECT rowid, * FROM memories "
+                "WHERE embedding_pending = 1 "
+                "ORDER BY created_at ASC "
+                "LIMIT ?",
+                (limit,),
+            )
+            .fetchall()
+        )
+        out: list[tuple[int, MemoryRecord]] = []
         for row in rows:
             record = self._row_to_record(row)
-            if record.is_expired or record.embedding is None:
+            if record.is_expired:
                 continue
-            sim = _cosine_sim(query_embedding, record.embedding)
-            scored.append((record, sim))
+            out.append((int(row["rowid"]), record))
+        return out
 
-        scored.sort(key=lambda x: x[1], reverse=True)
-        return scored[:limit]
+    def mark_embedding_filled(
+        self,
+        rowid: int,
+        embedding: list[float],
+        *,
+        provider: str | None = None,
+    ) -> None:
+        conn = self._conn()
+        conn.execute(
+            "UPDATE memories SET embedding = ?, embedding_pending = 0, "
+            "embedding_provider = COALESCE(?, embedding_provider) "
+            "WHERE rowid = ?",
+            (_pack_floats(embedding), provider, rowid),
+        )
+        if self._schema_manager.ensure_vec_table(len(embedding)):
+            with contextlib.suppress(sqlite3.OperationalError):
+                conn.execute("DELETE FROM memories_vec WHERE rowid = ?", (rowid,))
+                conn.execute(
+                    "INSERT INTO memories_vec(rowid, embedding) VALUES (?, ?)",
+                    (rowid, _pack_floats(embedding)),
+                )
+        conn.commit()
+
+    # ------------------------------------------------------------------
+    # Raw turn log (L0)
+    # ------------------------------------------------------------------
+
+    def append_raw_turn(self, turn: RawTurn) -> RawTurn:
+        return self._raw_turn_log.append_raw_turn(turn)
+
+    def list_raw_turns(
+        self,
+        namespace: str,
+        session_id: str,
+        *,
+        limit: int = 200,
+        offset: int = 0,
+    ) -> list[RawTurn]:
+        return self._raw_turn_log.list_raw_turns(namespace, session_id, limit=limit, offset=offset)
+
+    def count_raw_turns(self, namespace: str, session_id: str) -> int:
+        return self._raw_turn_log.count_raw_turns(namespace, session_id)
+
+    def get_raw_turn(self, turn_id: str) -> RawTurn | None:
+        return self._raw_turn_log.get_raw_turn(turn_id)
+
+    # ------------------------------------------------------------------
+    # Extract queue (L0 → L1 hand-off)
+    # ------------------------------------------------------------------
+
+    def enqueue_extract(
+        self,
+        turn: RawTurn,
+        *,
+        now: float | None = None,
+    ) -> str:
+        return self._extract_queue.enqueue_extract(turn, now=now)
+
+    def claim_extract_jobs(
+        self,
+        *,
+        limit: int = 8,
+        namespace: str | None = None,
+        lease_seconds: float = 60.0,
+        now: float | None = None,
+    ) -> list[tuple[str, RawTurn]]:
+        return self._extract_queue.claim_extract_jobs(
+            limit=limit, namespace=namespace, lease_seconds=lease_seconds, now=now
+        )
+
+    def mark_extract_done(self, queue_id: str) -> None:
+        self._extract_queue.mark_extract_done(queue_id)
+
+    def mark_extract_failed(
+        self,
+        queue_id: str,
+        error: str,
+        *,
+        retry: bool = True,
+        max_attempts: int = 5,
+    ) -> None:
+        self._extract_queue.mark_extract_failed(
+            queue_id, error, retry=retry, max_attempts=max_attempts
+        )
+
+    def extract_queue_stats(self) -> dict[str, int]:
+        return self._extract_queue.extract_queue_stats()
 
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
 
     def close(self) -> None:
-        with self._lock:
-            for conn in self._connections:
-                with contextlib.suppress(Exception):
-                    conn.close()
-            self._connections.clear()
-        self._local.conn = None
+        self._conn_manager.close_all()
 
     def __del__(self) -> None:
         self.close()
@@ -475,7 +445,8 @@ class SQLiteMemoryBackend(MemoryBackend):
     # Row mapping
     # ------------------------------------------------------------------
 
-    def _row_to_record(self, row: sqlite3.Row) -> MemoryRecord:
+    @staticmethod
+    def _row_to_record(row: sqlite3.Row) -> MemoryRecord:
         d: dict[str, Any] = dict(row)
         prov = None
         if d.get("provenance"):
