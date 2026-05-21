@@ -119,3 +119,16 @@ class TestRecords:
     async def test_recall_history_placeholder(self, svc):
         history = await svc.get_recall_history("any_id")
         assert history == []
+
+
+class TestAnswerRoute:
+    def test_detects_memory_intent(self, svc):
+        assert svc.should_use_memory_answer("Do you remember my deadline?") is True
+        assert svc.should_use_memory_answer("please explain transformer architecture") is False
+
+    async def test_answer_query(self, svc):
+        c = MemoryCandidate(content="Remember that deploy day is Friday", confidence=0.9)
+        svc.add_candidates([c])
+        await svc.approve_candidate(c.candidate_id)
+        result = await svc.answer_query("what did i tell you about deploy day")
+        assert result.answer != ""

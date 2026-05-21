@@ -8,7 +8,7 @@ Tests cover model selection and system_instructions resolution.
 
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from houyi_studio.server.chat import chat_service as chat_service_module
@@ -24,6 +24,7 @@ from houyi_studio.server.chat.types import (
 )
 
 from houyi.adapters.llm.base import StreamChunk
+from houyi.adapters.memory.answerer import AnswerResult
 
 
 @pytest.fixture
@@ -312,7 +313,7 @@ class TestEnableReasoningPassthrough:
 
 class TestRepoIntentIsolation:
     @pytest.mark.asyncio
-    async def test_preserves_history_under_low_pressure(self, store: JsonStore):
+    async def test_preserves_history_low_pressure(self, store: JsonStore):
         conv = Conversation(title="Repo Intent Isolation", model="", system_instructions="")
         conv.messages = [
             Message(message_id=f"m{i}", role=MessageRole.USER, content=f"older message {i}")
@@ -502,3 +503,40 @@ class TestProviderRouting:
         assert isinstance(adapter, chat_service_module.SiliconFlowAdapter)
         assert adapter.base_url == "https://api.siliconflow.cn/v1"
         assert adapter.model == "deepseek-ai/DeepSeek-R1"
+
+
+class TestMemoryAnswerRouting:
+    @pytest.mark.asyncio
+    async def test_routes_memory_answer(self, store: JsonStore):
+        conv = _make_conversation(store, model="", system_instructions="")
+        memory_service = MagicMock()
+        memory_service.should_use_memory_answer.return_value = True
+        memory_service.answer_query = AsyncMock(
+            return_value=AnswerResult(
+                answer="You said deploy on Friday.",
+                abstained=False,
+                reason="deterministic_match",
+                citations=(),
+                facts_used=1,
+                prompt_chars=0,
+                raw_llm_output="",
+            )
+        )
+        service = ChatService(
+            json_store=store,
+            memory_service=memory_service,
+            default_model=GLOBAL_MODEL,
+            default_system_instructions=GLOBAL_SYSTEM,
+        )
+        mock_adapter = _mock_llm_adapter()
+
+        with _patch_adapter(service, mock_adapter):
+            request = SendMessageRequest(content="Do you remember my deploy day?")
+            chunks = []
+            async for chunk in service.send_message(conv.conversation_id, request):
+                chunks.append(chunk)
+
+        mock_adapter.stream_chat.assert_not_called()
+        memory_service.answer_query.assert_awaited_once()
+        assert any("You said deploy on Friday." in chunk for chunk in chunks)
+        assert any('"finish_reason": "memory_answer"' in chunk for chunk in chunks)

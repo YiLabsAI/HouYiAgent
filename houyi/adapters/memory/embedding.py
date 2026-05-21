@@ -91,7 +91,6 @@ class NoOpEmbeddingProvider(EmbeddingProvider):
 
 
 DEFAULT_SILICONFLOW_EMBEDDING_MODEL = "BAAI/bge-m3"
-DEFAULT_SILICONFLOW_BASE_URL = "https://api.siliconflow.cn/v1"
 DEFAULT_SILICONFLOW_DIMENSION = 1024  # BGE-M3 native dimension
 
 
@@ -112,16 +111,18 @@ class SiliconFlowEmbeddingProvider(EmbeddingProvider):
         api_key: str,
         *,
         model: str = DEFAULT_SILICONFLOW_EMBEDDING_MODEL,
-        base_url: str = DEFAULT_SILICONFLOW_BASE_URL,
+        base_url: str | None = None,
         dimension: int = DEFAULT_SILICONFLOW_DIMENSION,
         timeout_s: float = 10.0,
         max_batch: int = 32,
     ):
         if not api_key:
             raise ValueError("SiliconFlowEmbeddingProvider requires a non-empty api_key")
+        from houyi.infrastructure.config.env_config import EnvConfig
+
         self._api_key = api_key
         self._model = model
-        self._base_url = base_url.rstrip("/")
+        self._base_url = (base_url or EnvConfig.get().siliconflow_base_url).rstrip("/")
         self._dim = dimension
         self._timeout_s = timeout_s
         self._max_batch = max_batch
@@ -266,14 +267,17 @@ def make_embedding_provider(
     if provider == _PROVIDER_NOOP:
         return NoOpEmbeddingProvider()
     if provider == _PROVIDER_SILICONFLOW:
-        key = api_key or os.getenv("SILICONFLOW_API_KEY")
+        from houyi.infrastructure.config.env_config import EnvConfig
+
+        _env = EnvConfig.get()
+        key = api_key or _env.siliconflow_api_key
         if not key:
             raise EmbeddingProviderError(
                 "EMBEDDING_PROVIDER='siliconflow' but SILICONFLOW_API_KEY is unset."
             )
         return SiliconFlowEmbeddingProvider(
             api_key=key,
-            model=model or os.getenv("EMBEDDING_MODEL") or DEFAULT_SILICONFLOW_EMBEDDING_MODEL,
+            model=model or _env.embedding_model or DEFAULT_SILICONFLOW_EMBEDDING_MODEL,
         )
     if provider == _PROVIDER_LOCAL:
         return SentenceTransformerEmbeddingProvider(

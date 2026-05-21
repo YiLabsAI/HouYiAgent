@@ -40,6 +40,24 @@ class _FakeExtractor:
         return self.results.pop(0)
 
 
+class _BatchFakeExtractor(_FakeExtractor):
+    def __init__(self, results=None):
+        super().__init__(results=results)
+        self.batch_calls: list[list[tuple[str, str | None]]] = []
+
+    async def extract_batch(self, turns: list[tuple[str, str | None]]):
+        self.batch_calls.append(list(turns))
+        if not self.results:
+            return [_FakeResult(facts=[], raw_sourceless=[]) for _ in turns]
+        out = []
+        for _ in turns:
+            if self.results:
+                out.append(self.results.pop(0))
+            else:
+                out.append(_FakeResult(facts=[], raw_sourceless=[]))
+        return out
+
+
 @pytest.fixture()
 def backend(tmp_path):
     b = SQLiteMemoryBackend(db_path=tmp_path / "ext.db")
@@ -133,6 +151,33 @@ class TestProcessOnce:
         await worker.process_once()
         assert inbox.list_sourceless("default") == [{"foo": "bar"}]
         assert backend.extract_queue_stats() == {"done": 1}
+
+    async def test_batch_extractor(self, backend, state_view, inbox):
+        wp = _make_tw(backend)
+        t1 = _enqueue(wp, "alice likes tea")
+        t2 = _enqueue(wp, "alice likes coffee")
+        batch = _BatchFakeExtractor(
+            results=[
+                _FakeResult(facts=[_fact(obj="tea", anchor=t1.turn_id)]),
+                _FakeResult(facts=[_fact(obj="coffee", anchor=t2.turn_id)]),
+            ]
+        )
+        worker = ExtractorWorker(
+            backend=backend,
+            extractor=batch,
+            entity_state=state_view,
+            candidate_inbox=inbox,
+            config=ExtractorWorkerConfig(batch_size=8),
+        )
+        processed = await worker.process_once()
+        assert processed == 2
+        assert len(batch.batch_calls) == 1
+        payload = batch.batch_calls[0]
+        assert [anchor for _, anchor in payload] == [t1.turn_id, t2.turn_id]
+        rows = state_view.get_active("default", "alice", "likes")
+        assert len(rows) == 1
+        assert rows[0].value == "coffee"
+        assert backend.extract_queue_stats() == {"done": 2}
 
 
 class TestFailureHandling:

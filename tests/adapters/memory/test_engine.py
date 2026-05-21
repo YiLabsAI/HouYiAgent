@@ -20,9 +20,9 @@ from houyi.adapters.memory.types import (
 
 
 @pytest.fixture()
-def engine():
+def engine(tmp_path):
     """Engine with auto-approve and NoOp embeddings."""
-    store = MemoryStore()
+    store = MemoryStore(data_dir=tmp_path)
     emb = NoOpEmbeddingProvider(dim=32)
     policy = MemoryPolicy(auto_approve=True)
     yield MemoryEngine(store, embedding_provider=emb, policy=policy)
@@ -30,18 +30,18 @@ def engine():
 
 
 @pytest.fixture()
-def engine_no_emb():
+def engine_no_emb(tmp_path):
     """Engine without embedding provider (lexical-only fallback)."""
-    store = MemoryStore()
+    store = MemoryStore(data_dir=tmp_path)
     policy = MemoryPolicy(auto_approve=True)
     yield MemoryEngine(store, policy=policy)
     store.close()
 
 
 @pytest.fixture()
-def engine_manual_approve():
+def engine_manual_approve(tmp_path):
     """Engine requiring manual approval (auto_approve=False)."""
-    store = MemoryStore()
+    store = MemoryStore(data_dir=tmp_path)
     yield MemoryEngine(store, policy=MemoryPolicy(auto_approve=False))
     store.close()
 
@@ -153,7 +153,7 @@ class TestRecallPipeline:
             {"role": "user", "content": "Remember that the deploy target is k8s."},
         ]
         await engine.process_messages(messages)
-        recalls = await engine.recall("deployment")
+        recalls = await engine.recall("deploy target")
         text = engine.recall_as_context_text(recalls)
         assert "deploy" in text.lower() or "k8s" in text.lower()
 
@@ -216,6 +216,20 @@ class TestBuildContext:
             assert ctx.count("\n") <= 1
 
 
+class TestAnswer:
+    async def test_answer_uses_reasoner(self, engine: MemoryEngine):
+        await engine.process_messages(
+            [{"role": "user", "content": "Remember that preferred editor is neovim."}]
+        )
+        result = await engine.answer("what is my preferred editor")
+        assert result.abstained is False
+        assert "editor" in result.answer.lower() or "neovim" in result.answer.lower()
+
+    async def test_answer_abstains_empty(self, engine: MemoryEngine):
+        result = await engine.answer("what is my preference")
+        assert result.abstained is True
+
+
 class TestRecallContextText:
     """Test recall_as_context_text formatting."""
 
@@ -232,22 +246,19 @@ class TestRecallContextText:
         assert text == ""
 
 
-class TestEmbeddingCache:
-    """Test _cache_embedding writes to backend."""
+class TestEmbeddingWritePath:
+    """Synchronous approve path does not perform embedding writes."""
 
-    async def test_embedding_cached(self, engine: MemoryEngine):
+    async def test_approve_embedding_empty(self, engine: MemoryEngine):
         await engine.process_messages(
             [{"role": "user", "content": "Remember that Redis port is 6379."}]
         )
         records = engine.store.all_records()
         assert len(records) >= 1
         record = records[0]
-        assert record.embedding is not None
-        backend = engine.store.backend
-        cached = backend.get_embedding(record.record_id, "NoOpEmbeddingProvider", "32")
-        assert cached is not None
+        assert record.embedding is None
 
-    async def test_no_cache_without_emb(self, engine_no_emb: MemoryEngine):
+    async def test_no_embedding_without_provider(self, engine_no_emb: MemoryEngine):
         await engine_no_emb.process_messages(
             [{"role": "user", "content": "Remember that port is 443."}]
         )

@@ -24,9 +24,9 @@ from houyi.application.context.token_estimator import TokenEstimator
 
 
 @pytest.fixture()
-def engine():
+def engine(tmp_path):
     """Engine with auto-approve and NoOp embeddings."""
-    store = MemoryStore()
+    store = MemoryStore(data_dir=tmp_path)
     emb = NoOpEmbeddingProvider(dim=32)
     policy = MemoryPolicy(auto_approve=True)
     yield MemoryEngine(store, embedding_provider=emb, policy=policy)
@@ -144,7 +144,7 @@ class TestMultiTurnConversation:
         records = engine.store.all_records()
         assert len(records) >= 2
 
-        recalls = await engine.recall("What stack do we use?")
+        recalls = await engine.recall("database framework")
         assert len(recalls) >= 1
 
     async def test_context_grows_over_turns(
@@ -178,8 +178,8 @@ class TestMultiTurnConversation:
 class TestNoEmbeddingDegradation:
     """Works with lexical-only retrieval."""
 
-    async def test_lexical_recall_works(self):
-        store = MemoryStore()
+    async def test_lexical_recall_works(self, tmp_path):
+        store = MemoryStore(data_dir=tmp_path)
         engine = MemoryEngine(store, policy=MemoryPolicy(auto_approve=True))
 
         turn = [

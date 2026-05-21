@@ -17,7 +17,7 @@ import time
 from collections.abc import AsyncIterator, Iterator
 from dataclasses import dataclass
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from houyi.adapters.llm import (
     DEFAULT_MODEL,
@@ -26,8 +26,12 @@ from houyi.adapters.llm import (
     SiliconFlowAdapter,
     create_vertex_adapter,
 )
+
+if TYPE_CHECKING:
+    from ..memory.service import MemoryService
 from houyi.adapters.llm.openai_compat_adapter import OpenAICompatibleAdapter
 from houyi.adapters.memory import MemoryStore
+from houyi.adapters.memory.types import SessionContext
 from houyi.application.context.context_lifecycle import (
     ContextLifecycleHookService as ChatContextHookService,
 )
@@ -497,11 +501,11 @@ def _looks_like_web_intent(user_content: str) -> bool:
         for phrase in (
             "summarize this url",
             "summarize this link",
-            "总结这个链接",
-            "总结这个网页",
-            "读取这个链接",
-            "打开这个链接",
-            "访问这个链接",
+            "\u603b\u7ed3\u8fd9\u4e2a\u94fe\u63a5",
+            "\u603b\u7ed3\u8fd9\u4e2a\u7f51\u9875",
+            "\u8bfb\u53d6\u8fd9\u4e2a\u94fe\u63a5",
+            "\u6253\u5f00\u8fd9\u4e2a\u94fe\u63a5",
+            "\u8bbf\u95ee\u8fd9\u4e2a\u94fe\u63a5",
         )
     ):
         return True
@@ -847,6 +851,7 @@ class ChatService:
         self,
         json_store: JsonStore,
         memory_store: MemoryStore | None = None,
+        memory_service: MemoryService | None = None,
         default_model: str = "",
         default_system_instructions: str = "",
         settings_store: Any | None = None,
@@ -856,12 +861,14 @@ class ChatService:
         Args:
             json_store: Conversation persistence store.
             memory_store: Optional memory store for context injection.
+            memory_service: Optional memory service for direct memory answering.
             default_model: Default LLM model name.
             default_system_instructions: Default system prompt.
             settings_store: Optional SettingsStore for provider-based model routing.
         """
         self.json_store = json_store
         self.memory_store = memory_store
+        self._memory_service = memory_service
         self.default_model = default_model or DEFAULT_MODEL
         self.default_system_instructions = default_system_instructions
         self._settings_store = settings_store
@@ -1389,6 +1396,11 @@ class ChatService:
     ) -> dict[str, Any]:
         return await self._compaction_coordinator.compact_conversation(conversation_id)
 
+    def _should_route_memory_answer(self, request: SendMessageRequest) -> bool:
+        if self._memory_service is None:
+            return False
+        return self._memory_service.should_use_memory_answer(request.content)
+
     async def send_message(
         self,
         conversation_id: str,
@@ -1428,10 +1440,72 @@ class ChatService:
                 status="streaming",
             )
             active_streaming_registered = True
+            generation_metadata: dict[str, Any] = {}
+
+            if self._should_route_memory_answer(request):
+                memory_result = await self._memory_service.answer_query(
+                    request.content,
+                    session_context=SessionContext(session_id=conversation_id),
+                )
+                generation_metadata["memory_answer_routed"] = True
+                generation_metadata["memory_answer_reason"] = memory_result.reason
+                generation_metadata["memory_answer_abstained"] = memory_result.abstained
+                generation_metadata["memory_answer_facts_used"] = memory_result.facts_used
+                generation_metadata["memory_answer_citation_count"] = len(memory_result.citations)
+
+                yield SSEEvent(
+                    event="message.delta",
+                    data={
+                        "message_id": assistant_msg.message_id,
+                        "seq": 0,
+                        "content": memory_result.answer,
+                    },
+                ).encode()
+                completion_metadata: dict[str, Any] = {
+                    "trace_id": chat_span.trace_id,
+                    "finish_reason": "memory_answer",
+                    **generation_metadata,
+                }
+                completion_emitted_at = time.perf_counter()
+                yield SSEEvent(
+                    event="message.complete",
+                    data={
+                        "message_id": assistant_msg.message_id,
+                        "metadata": completion_metadata,
+                    },
+                ).encode()
+                persist_result = await self._turn_persistence.persist(
+                    conversation_id=conversation_id,
+                    conv_lock=prepared.conv_lock,
+                    assistant_msg=assistant_msg,
+                    content_parts=[memory_result.answer],
+                    reasoning_parts=[],
+                    persisted_tool_messages=[],
+                    usage_payload=None,
+                    finish_reason="memory_answer",
+                    budget_metadata=prepared.budget_metadata,
+                    generation_metadata=generation_metadata,
+                    completion_emitted_at=completion_emitted_at,
+                    chat_span=chat_span,
+                    model=prepared.model,
+                )
+                assistant_persisted = persist_result.persisted
+                if (
+                    isinstance(persist_result.context_state_event, dict)
+                    and persist_result.context_state_event
+                ):
+                    yield SSEEvent(
+                        event="context.state.updated",
+                        data={
+                            "message_id": assistant_msg.message_id,
+                            **persist_result.context_state_event,
+                        },
+                    ).encode()
+                return
+
             llm_messages = prepared.llm_messages
             context_usage = prepared.context_usage
             llm_adapter = self._get_adapter_for_model(prepared.model)
-            generation_metadata: dict[str, Any] = {}
             generation_metadata["request_adapter_class"] = llm_adapter.__class__.__name__
             generation_metadata["request_adapter_strict_message_string_contract"] = bool(
                 getattr(llm_adapter, "strict_message_string_contract", False)

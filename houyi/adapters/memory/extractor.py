@@ -4,7 +4,7 @@ Two extractor flavours co-exist in this module:
 
 1. MemoryCandidateExtractor — heuristic + LLM extractor that
  produces MemoryCandidate objects (loose payload + scope + type).
- Used by the legacy ingestion path that classifies/dedup/promotes
+ Used by the candidate ingestion path that classifies/dedup/promotes
  candidates downstream.
 2. AtomicFactExtractor — LLM-driven extractor that produces
  strict AtomicFact 6-tuples (subject/predicate/object + certainty
@@ -20,21 +20,14 @@ from __future__ import annotations
 import json
 import logging
 import re
-import time
-import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
-from houyi.adapters.memory.builder import MemoryCandidateBuilder
 from houyi.adapters.memory.types import (
     AtomicFact,
     Certainty,
     ExtractionContext,
-    MemoryBuildInput,
-    MemoryBuildItem,
     MemoryCandidate,
-    MemoryRecord,
-    MemoryScope,
     MemorySourceKind,
     MemoryType,
 )
@@ -61,6 +54,221 @@ _PREFERENCE_PATTERN = re.compile(
 _CONSTRAINT_PATTERN = re.compile(
     r"(?i)(?:don't|do not|never|avoid|stop)\s+(.+?)(?:\.|$)",
 )
+
+
+class MemoryCandidateExtractor:
+    """Extract MemoryCandidate rows via LLM (primary) or rules (fallback)."""
+
+    def __init__(
+        self,
+        *,
+        min_confidence: float = 0.6,
+        llm_adapter: Any | None = None,
+    ) -> None:
+        self._min_confidence = min_confidence
+        self._llm = llm_adapter
+
+    async def extract(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        context: ExtractionContext | None = None,
+    ) -> list[MemoryCandidate]:
+        ctx = context or ExtractionContext()
+        if self._llm is not None:
+            candidates = await self._extract_via_llm(messages, ctx)
+            if candidates:
+                return candidates
+        return self._extract_via_rules(messages, ctx)
+
+    async def _extract_via_llm(
+        self,
+        messages: list[dict[str, Any]],
+        ctx: ExtractionContext,
+    ) -> list[MemoryCandidate]:
+        if self._llm is None:
+            return []
+        user_messages = [m for m in messages if str(m.get("role", "")).lower() == "user"]
+        if not user_messages:
+            return []
+        user_text = "\n".join(str(m.get("content", "")) for m in user_messages if m.get("content"))
+        if not user_text.strip():
+            return []
+
+        prompt = [
+            {"role": "system", "content": _EXTRACTION_SYSTEM_PROMPT},
+            {"role": "user", "content": user_text},
+        ]
+        try:
+            response = await self._llm.chat(prompt, temperature=0.1, max_tokens=512)
+        except Exception:
+            return self._extract_via_rules(messages, ctx)
+        content = str(getattr(response, "content", "") or "")
+        return self._parse_llm_response(content, ctx, source_messages=user_messages)
+
+    def _parse_llm_response(
+        self,
+        content: str,
+        ctx: ExtractionContext,
+        *,
+        source_messages: list[dict[str, Any]] | None = None,
+    ) -> list[MemoryCandidate]:
+        decoded = self._decode_candidate_json(content)
+        if not decoded:
+            return []
+        msg_id = self._first_message_id(source_messages)
+        out: list[MemoryCandidate] = []
+        for item in decoded:
+            candidate = self._candidate_from_item(item, ctx, msg_id)
+            if candidate is not None:
+                out.append(candidate)
+        return out
+
+    @staticmethod
+    def _decode_candidate_json(content: str) -> list[dict[str, Any]]:
+        cleaned = _ATOMIC_FENCE_RE.sub("", content or "").strip()
+        if not cleaned:
+            return []
+        try:
+            decoded = json.loads(cleaned)
+        except Exception:
+            span = _extract_json_span(cleaned)
+            if not span:
+                return []
+            try:
+                decoded = json.loads(span)
+            except Exception:
+                return []
+        if not isinstance(decoded, list):
+            return []
+        return [item for item in decoded if isinstance(item, dict)]
+
+    @staticmethod
+    def _first_message_id(source_messages: list[dict[str, Any]] | None) -> str:
+        if not source_messages:
+            return ""
+        for msg in source_messages:
+            raw = str(msg.get("id", "") or "").strip()
+            if raw:
+                return raw
+        return ""
+
+    def _candidate_from_item(
+        self,
+        item: dict[str, Any],
+        ctx: ExtractionContext,
+        msg_id: str,
+    ) -> MemoryCandidate | None:
+        text = str(item.get("content", "") or "").strip()
+        if not text:
+            return None
+        confidence = float(item.get("confidence", 0.0) or 0.0)
+        if confidence < self._min_confidence:
+            return None
+        memory_type = self._parse_memory_type(str(item.get("type", "fact") or "fact"))
+        return self._make_candidate(
+            content=text,
+            memory_type=memory_type,
+            confidence=confidence,
+            message_id=msg_id,
+            ctx=ctx,
+        )
+
+    def _extract_via_rules(
+        self,
+        messages: list[dict[str, Any]],
+        ctx: ExtractionContext,
+    ) -> list[MemoryCandidate]:
+        out: list[MemoryCandidate] = []
+        for msg in messages:
+            if str(msg.get("role", "")).lower() != "user":
+                continue
+            content = str(msg.get("content", "") or "").strip()
+            if not content:
+                continue
+            message_id = str(msg.get("id", "") or "")
+
+            explicit = _EXPLICIT_MEMORY_PATTERN.search(content)
+            if explicit and explicit.group(1).strip():
+                out.append(
+                    self._make_candidate(
+                        content=explicit.group(1).strip(),
+                        memory_type=MemoryType.FACT,
+                        confidence=0.95,
+                        message_id=message_id,
+                        ctx=ctx,
+                    )
+                )
+
+            for m in _IDENTITY_PATTERN.finditer(content):
+                value = m.group(1).strip()
+                out.append(
+                    self._make_candidate(
+                        content=f"User name: {value}",
+                        memory_type=MemoryType.PROFILE,
+                        confidence=0.9,
+                        message_id=message_id,
+                        ctx=ctx,
+                    )
+                )
+
+            for m in _PREFERENCE_PATTERN.finditer(content):
+                value = m.group(1).strip()
+                out.append(
+                    self._make_candidate(
+                        content=f"User preference: {value}",
+                        memory_type=MemoryType.PREFERENCE,
+                        confidence=0.7,
+                        message_id=message_id,
+                        ctx=ctx,
+                    )
+                )
+
+            for m in _CONSTRAINT_PATTERN.finditer(content):
+                value = m.group(1).strip()
+                out.append(
+                    self._make_candidate(
+                        content=f"User constraint: {value}",
+                        memory_type=MemoryType.CONSTRAINT,
+                        confidence=0.9,
+                        message_id=message_id,
+                        ctx=ctx,
+                    )
+                )
+
+        return [c for c in out if c.confidence >= self._min_confidence]
+
+    @staticmethod
+    def _parse_memory_type(raw: str) -> MemoryType:
+        value = raw.strip().lower()
+        if value == "profile":
+            return MemoryType.PROFILE
+        if value == "preference":
+            return MemoryType.PREFERENCE
+        if value == "constraint":
+            return MemoryType.CONSTRAINT
+        return MemoryType.FACT
+
+    @staticmethod
+    def _make_candidate(
+        *,
+        content: str,
+        memory_type: MemoryType,
+        confidence: float,
+        message_id: str,
+        ctx: ExtractionContext,
+    ) -> MemoryCandidate:
+        source_ids = [message_id] if message_id else []
+        return MemoryCandidate(
+            content=content,
+            memory_type=memory_type,
+            confidence=confidence,
+            source_type=MemorySourceKind.CONVERSATION.value,
+            source_message_ids=source_ids,
+            source_context=f"turn:{ctx.turn_index}" if ctx.turn_index else "",
+            metadata={},
+        )
+
 
 # ---------------------------------------------------------------------------
 # LLM extraction prompt
@@ -105,250 +313,36 @@ Output:
  ]
 """
 
-_TYPE_MAP: dict[str, MemoryType] = {
-    "fact": MemoryType.FACT,
-    "preference": MemoryType.PREFERENCE,
-    "constraint": MemoryType.CONSTRAINT,
-    "profile": MemoryType.PROFILE,
+_ATOMIC_FACT_BATCH_SYSTEM_PROMPT = """You are an information extraction engine.
+Extract atomic facts from multiple turns. Each turn is prefixed by:
+<<TURN id=...>>
+
+Return JSON in this shape:
+{
+  "items": [
+    {
+      "source_anchor": "<turn-id>",
+      "facts": [
+        {
+          "subject": "...",
+          "predicate": "...",
+          "object": "...",
+          "certainty": "certain|probable|vague",
+          "accumulate": false,
+          "qualifiers": {"k": "v"}
+        }
+      ]
+    }
+  ]
 }
 
+Rules:
+1) Keep each fact under the correct source_anchor.
+2) If no fact is present for a turn, return that source_anchor with an empty facts array.
+3) Return only JSON, no markdown or prose.
+"""
 
-class MemoryCandidateExtractor:
-    """Extracts memory candidates from conversation messages.
-
-    When an llm_adapter is provided, uses LLM-based extraction
-    (language-agnostic, semantic understanding). Falls back to English-only
-    rule-based patterns when no LLM is available.
-    """
-
-    def __init__(
-        self,
-        min_confidence: float = 0.6,
-        llm_adapter: Any | None = None,
-    ):
-        self._min_confidence = min_confidence
-        self._llm = llm_adapter
-        self._builder = MemoryCandidateBuilder(
-            min_confidence=min_confidence,
-            llm_adapter=llm_adapter,
-        )
-
-    async def extract(
-        self,
-        messages: list[dict],
-        existing_memories: list[MemoryRecord] | None = None,
-        context: ExtractionContext | None = None,
-    ) -> list[MemoryCandidate]:
-        """Extract memory candidates from a message sequence.
-
-        Uses LLM extraction when available, otherwise falls back to
-        rule-based patterns (English only).
-
-        Args:
-        messages: List of message dicts with 'role' and 'content' keys.
-        existing_memories: Current memories for dedup hint.
-        context: Extraction context metadata.
-        """
-        ctx = context or ExtractionContext()
-        _ = existing_memories
-        memory_input = MemoryBuildInput(
-            source_type=MemorySourceKind.CONVERSATION,
-            scope=MemoryScope.USER,
-            source_context=f"turn:{ctx.turn_index}",
-            items=[
-                MemoryBuildItem(
-                    content=str(message.get("content", "")),
-                    role=str(message.get("role", "")),
-                    source_ids=[str(message.get("id", ""))] if message.get("id") else [],
-                )
-                for message in messages
-            ],
-            metadata={"suggested_tags": ctx.active_tags},
-        )
-        return await self._builder.build(memory_input, ctx)
-
-    # ------------------------------------------------------------------
-    # LLM-based extraction
-    # ------------------------------------------------------------------
-
-    async def _extract_via_llm(
-        self,
-        messages: list[dict],
-        ctx: ExtractionContext,
-    ) -> list[MemoryCandidate]:
-        """Send messages to LLM for structured memory extraction."""
-        user_texts = [
-            m.get("content", "") for m in messages if m.get("role") == "user" and m.get("content")
-        ]
-        if not user_texts:
-            return []
-
-        user_block = "\n".join(f"User: {t}" for t in user_texts)
-        llm_messages = [
-            {"role": "system", "content": _EXTRACTION_SYSTEM_PROMPT},
-            {"role": "user", "content": user_block},
-        ]
-
-        try:
-            llm = self._llm  # type narrowing already checked in caller
-            assert llm is not None  # for mypy
-            response = await llm.chat(
-                llm_messages,
-                temperature=0.1,
-                max_tokens=1024,
-            )
-            return self._parse_llm_response(response.content, ctx)
-        except Exception:
-            logger.warning("LLM extraction failed, falling back to rules", exc_info=True)
-            return self._extract_via_rules(
-                [{"role": "user", "content": t} for t in user_texts],
-                ctx,
-            )
-
-    def _parse_llm_response(
-        self,
-        content: str,
-        ctx: ExtractionContext,
-    ) -> list[MemoryCandidate]:
-        """Parse LLM JSON array response into candidates."""
-        content = content.strip()
-        if content.startswith("```"):
-            content = re.sub(r"^```(?:json)?\s*", "", content)
-            content = re.sub(r"\s*```$", "", content)
-
-        try:
-            items = json.loads(content)
-        except json.JSONDecodeError:
-            logger.warning("LLM returned non-JSON: %s", content[:200])
-            return []
-
-        if not isinstance(items, list):
-            return []
-
-        candidates: list[MemoryCandidate] = []
-        for item in items:
-            if not isinstance(item, dict):
-                continue
-            mem_content = item.get("content", "").strip()
-            mem_type_str = item.get("type", "fact")
-            confidence = float(item.get("confidence", 0.7))
-
-            if not mem_content or confidence < self._min_confidence:
-                continue
-
-            candidates.append(
-                MemoryCandidate(
-                    candidate_id=uuid.uuid4().hex[:12],
-                    scope=MemoryScope.USER,
-                    content=mem_content,
-                    memory_type=_TYPE_MAP.get(mem_type_str, MemoryType.FACT),
-                    source_message_ids=[],
-                    source_context=f"turn:{ctx.turn_index}",
-                    confidence=confidence,
-                )
-            )
-        return candidates
-
-    # ------------------------------------------------------------------
-    # Rule-based extraction (English-only fallback)
-    # ------------------------------------------------------------------
-
-    def _extract_via_rules(
-        self,
-        messages: list[dict],
-        ctx: ExtractionContext,
-    ) -> list[MemoryCandidate]:
-        candidates: list[MemoryCandidate] = []
-        for msg in messages:
-            if msg.get("role") != "user":
-                continue
-            content = msg.get("content", "")
-            msg_id = msg.get("id", "")
-            candidates.extend(self._extract_from_text(content, msg_id, ctx))
-        return [c for c in candidates if c.confidence >= self._min_confidence]
-
-    def _extract_from_text(
-        self,
-        text: str,
-        message_id: str,
-        ctx: ExtractionContext,
-    ) -> list[MemoryCandidate]:
-        candidates: list[MemoryCandidate] = []
-
-        for m in _EXPLICIT_MEMORY_PATTERN.finditer(text):
-            candidates.append(
-                self._make_candidate(
-                    content=m.group(1).strip(),
-                    memory_type=MemoryType.FACT,
-                    confidence=0.95,
-                    message_id=message_id,
-                    ctx=ctx,
-                )
-            )
-
-        for m in _IDENTITY_PATTERN.finditer(text):
-            candidates.append(
-                self._make_candidate(
-                    content=f"User name: {m.group(1).strip()}",
-                    memory_type=MemoryType.PROFILE,
-                    confidence=0.9,
-                    message_id=message_id,
-                    ctx=ctx,
-                )
-            )
-
-        for m in _PREFERENCE_PATTERN.finditer(text):
-            candidates.append(
-                self._make_candidate(
-                    content=m.group(0).strip(),
-                    memory_type=MemoryType.PREFERENCE,
-                    confidence=0.8,
-                    message_id=message_id,
-                    ctx=ctx,
-                )
-            )
-
-        for m in _CONSTRAINT_PATTERN.finditer(text):
-            candidates.append(
-                self._make_candidate(
-                    content=m.group(0).strip(),
-                    memory_type=MemoryType.CONSTRAINT,
-                    confidence=0.85,
-                    message_id=message_id,
-                    ctx=ctx,
-                )
-            )
-
-        return candidates
-
-    @staticmethod
-    def _make_candidate(
-        *,
-        content: str,
-        memory_type: MemoryType,
-        confidence: float,
-        message_id: str,
-        ctx: ExtractionContext,
-    ) -> MemoryCandidate:
-        return MemoryCandidate(
-            candidate_id=uuid.uuid4().hex[:12],
-            scope=MemoryScope.USER,
-            content=content,
-            memory_type=memory_type,
-            source_message_ids=[message_id] if message_id else [],
-            source_context=f"turn:{ctx.turn_index}",
-            confidence=confidence,
-            extracted_at=time.time(),
-        )
-
-
-# ---------------------------------------------------------------------------
-# AtomicFact extractor (6-tuple schema for entity-state write path)
-# ---------------------------------------------------------------------------
-
-
-_ATOMIC_FACT_SYSTEM_PROMPT = """\
-You are a fact extraction component for a long-term memory system. \
+_ATOMIC_FACT_SYSTEM_PROMPT = """You are an information extraction engine.
 Extract discrete factual claims from user messages as structured facts.
 
 OUTPUT SCHEMA (JSON array):
@@ -709,6 +703,86 @@ class AtomicFactExtractor:
                 facts.append(fact)
         return ExtractionResult(facts=facts, invalid_dropped=invalid)
 
+    async def extract_batch(
+        self,
+        turns: list[tuple[str, str | None]],
+    ) -> list[ExtractionResult]:
+        """Extract facts for multiple turns with one LLM call.
+
+        Args:
+            turns: Ordered list of (text, source_anchor).
+
+        Returns:
+            One ExtractionResult per input element, preserving order.
+        """
+        if not turns:
+            return []
+
+        normalized = self._normalize_batch_turns(turns)
+        prompt_parts = [f"<<TURN id={anchor}>>\n{text}" for text, anchor in normalized if text]
+        if not prompt_parts:
+            return [ExtractionResult() for _ in turns]
+
+        payload = "\n\n".join(prompt_parts)
+        parsed = await self._call_llm_batch(payload)
+        if parsed is None:
+            logger.warning(
+                "AtomicFactExtractor batch parse failed; fallback to single-turn extraction for %d turns",
+                len(turns),
+            )
+            return await self._fallback_single_turn(normalized)
+
+        by_anchor = {source_anchor: list(items) for source_anchor, items in parsed if source_anchor}
+        return self._results_from_batch_parse(normalized, by_anchor)
+
+    @staticmethod
+    def _normalize_batch_turns(turns: list[tuple[str, str | None]]) -> list[tuple[str, str]]:
+        normalized: list[tuple[str, str]] = []
+        for idx, (text, source_anchor) in enumerate(turns):
+            text_norm = (text or "").strip()
+            anchor = (source_anchor or "").strip()
+            if text_norm and not anchor:
+                anchor = f"batch-turn-{idx}"
+            normalized.append((text_norm, anchor))
+        return normalized
+
+    async def _fallback_single_turn(
+        self, normalized: list[tuple[str, str]]
+    ) -> list[ExtractionResult]:
+        out: list[ExtractionResult] = []
+        for text, anchor in normalized:
+            if not text:
+                out.append(ExtractionResult())
+                continue
+            out.append(await self.extract(text, anchor))
+        return out
+
+    def _results_from_batch_parse(
+        self,
+        normalized: list[tuple[str, str]],
+        by_anchor: dict[str, list[dict[str, Any]]],
+    ) -> list[ExtractionResult]:
+        out: list[ExtractionResult] = []
+        for text, anchor in normalized:
+            if not text:
+                out.append(ExtractionResult())
+                continue
+            items = by_anchor.get(anchor, [])
+            if not anchor or anchor.startswith("batch-turn-"):
+                out.append(ExtractionResult(raw_sourceless=list(items)))
+                continue
+
+            facts: list[AtomicFact] = []
+            invalid = 0
+            for item in items:
+                fact = self._build_fact(item, anchor)
+                if fact is None:
+                    invalid += 1
+                else:
+                    facts.append(fact)
+            out.append(ExtractionResult(facts=facts, invalid_dropped=invalid))
+        return out
+
     async def _call_llm(self, text: str) -> list[dict[str, Any]]:
         attempts = self._max_retries + 1
         for attempt in range(attempts):
@@ -765,6 +839,43 @@ class AtomicFactExtractor:
             return None
         return content
 
+    async def _call_llm_batch(self, text: str) -> list[tuple[str, list[dict[str, Any]]]] | None:
+        attempts = self._max_retries + 1
+        for attempt in range(attempts):
+            content = await self._request_llm_batch(text, retry=attempt > 0)
+            if content is None:
+                return None
+            items = self._parse_json_batch(content)
+            if items is not None:
+                return items
+        return None
+
+    async def _request_llm_batch(self, text: str, *, retry: bool) -> str | None:
+        user_content = text
+        if retry:
+            user_content = (
+                "The previous response was invalid JSON. Re-read the original batch and return only valid JSON.\n\n"
+                f"Original turns:\n{text}"
+            )
+        messages = [
+            {"role": "system", "content": _ATOMIC_FACT_BATCH_SYSTEM_PROMPT},
+            {"role": "user", "content": user_content},
+        ]
+        try:
+            response = await self._llm.chat(
+                messages,
+                temperature=self._temperature,
+                max_tokens=self._max_tokens,
+            )
+        except Exception:
+            logger.warning("AtomicFactExtractor batch LLM call failed", exc_info=True)
+            return None
+
+        content = getattr(response, "content", None)
+        if not isinstance(content, str):
+            return None
+        return content
+
     def _json_kwargs(self) -> dict[str, Any]:
         if not self._prefer_json_mode:
             return {}
@@ -783,6 +894,21 @@ class AtomicFactExtractor:
             except json.JSONDecodeError:
                 continue
         logger.warning("AtomicFactExtractor got non-JSON response: %s", last_candidate[:200])
+        return None
+
+    @staticmethod
+    def _parse_json_batch(content: str) -> list[tuple[str, list[dict[str, Any]]]] | None:
+        candidates = _json_candidates(content)
+        if not candidates:
+            return []
+        last_candidate = candidates[-1]
+        for candidate in candidates:
+            try:
+                decoded = json.loads(candidate)
+                return _batch_items_from_decoded(decoded)
+            except json.JSONDecodeError:
+                continue
+        logger.warning("AtomicFactExtractor got non-JSON batch response: %s", last_candidate[:200])
         return None
 
     @staticmethod
@@ -853,3 +979,28 @@ def _atomic_items_from_decoded(decoded: Any) -> list[dict[str, Any]]:
     if not isinstance(decoded, list):
         return []
     return [item for item in decoded if isinstance(item, dict)]
+
+
+def _batch_items_from_decoded(decoded: Any) -> list[tuple[str, list[dict[str, Any]]]]:
+    if isinstance(decoded, dict):
+        items = decoded.get("items")
+        if not isinstance(items, list):
+            return []
+        out_dict: list[tuple[str, list[dict[str, Any]]]] = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            source_anchor = str(item.get("source_anchor", "")).strip()
+            facts = _atomic_items_from_decoded(item.get("facts", []))
+            out_dict.append((source_anchor, facts))
+        return out_dict
+    if isinstance(decoded, list):
+        out_list: list[tuple[str, list[dict[str, Any]]]] = []
+        for item in decoded:
+            if not isinstance(item, dict):
+                continue
+            source_anchor = str(item.get("source_anchor", "")).strip()
+            facts = _atomic_items_from_decoded(item.get("facts", []))
+            out_list.append((source_anchor, facts))
+        return out_list
+    return []

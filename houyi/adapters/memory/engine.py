@@ -13,6 +13,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from houyi.adapters.memory.answerer import AnswerResult
 from houyi.adapters.memory.builder import MemoryCandidateBuilder
 from houyi.adapters.memory.classifier import MemoryClassifier
 from houyi.adapters.memory.deduplicator import MemoryDeduplicator
@@ -20,6 +21,12 @@ from houyi.adapters.memory.embedding import EmbeddingProvider
 from houyi.adapters.memory.event_emitter import MemoryEventEmitter
 from houyi.adapters.memory.extractor import MemoryCandidateExtractor
 from houyi.adapters.memory.forgetting import apply_forgetting
+from houyi.adapters.memory.reasoner import (
+    DeterministicReasoningPolicy,
+    LLMMemoryReasoningPolicy,
+    MemoryReasoner,
+    ReasoningPolicy,
+)
 from houyi.adapters.memory.retriever import MemoryRetriever
 from houyi.adapters.memory.store import MemoryStore
 from houyi.adapters.memory.types import (
@@ -62,6 +69,8 @@ class MemoryEngine:
         retriever: MemoryRetriever | None = None,
         embedding_provider: EmbeddingProvider | None = None,
         llm_adapter: Any | None = None,
+        reasoner: MemoryReasoner | None = None,
+        reasoning_policies: list[ReasoningPolicy] | None = None,
         policy: MemoryPolicy | None = None,
         forgetting_policy: ForgettingPolicy | None = None,
         emitter: MemoryEventEmitter | None = None,
@@ -79,12 +88,30 @@ class MemoryEngine:
         self._embedding = embedding_provider
         self._policy = policy or MemoryPolicy()
         self._forgetting = forgetting_policy or ForgettingPolicy()
+        self._reasoner = reasoner or self._build_reasoner(
+            llm_adapter=llm_adapter,
+            policies=reasoning_policies,
+        )
         # Optional hot-path event emitter. The engine emits RECALL_FAILURE
         # when its retriever returns no recalls so the legacy retrieval
         # path still produces evolution signals on top of the new
         # RecallOrchestrator path. Production wiring may share a single
         # MemoryEventEmitter across both surfaces.
         self._emitter = emitter or MemoryEventEmitter()
+
+    @staticmethod
+    def _build_reasoner(
+        *,
+        llm_adapter: Any | None,
+        policies: list[ReasoningPolicy] | None,
+    ) -> MemoryReasoner:
+        if policies is not None:
+            return MemoryReasoner(policies=policies)
+
+        default_policies: list[ReasoningPolicy] = [DeterministicReasoningPolicy()]
+        if llm_adapter is not None:
+            default_policies.append(LLMMemoryReasoningPolicy(llm_adapter))
+        return MemoryReasoner(default_policies)
 
     @property
     def store(self) -> MemoryStore:
@@ -165,11 +192,6 @@ class MemoryEngine:
 
     async def _store_candidate(self, candidate: MemoryCandidate) -> MemoryRecord:
         """Convert an approved candidate into a MemoryRecord and store it."""
-        embedding = None
-        if self._embedding:
-            embs = await self._embedding.embed([candidate.content])
-            embedding = embs[0] if embs else None
-
         record = MemoryRecord(
             scope=candidate.scope,
             key=self._derive_key(candidate),
@@ -184,16 +206,9 @@ class MemoryEngine:
                 extracted_by="memory_candidate_builder",
                 extraction_timestamp=candidate.extracted_at,
             ),
-            embedding=embedding,
+            embedding=None,
         )
         self._store.put_record(record)
-
-        if embedding and self._embedding:
-            self._cache_embedding(
-                record.record_id,
-                self._embedding,
-                embedding,
-            )
 
         return record
 
@@ -264,6 +279,21 @@ class MemoryEngine:
             return None
         text = self.recall_as_context_text(recalls)
         return text or None
+
+    async def answer(
+        self,
+        query: str,
+        session_context: SessionContext | None = None,
+        top_k: int = 5,
+    ) -> AnswerResult:
+        """Answer a query directly from memory recall + reasoning policies."""
+        recalls = await self.recall(query, session_context, top_k)
+        records: list[MemoryRecord] = []
+        for recall in recalls:
+            record = self._find_record(recall.memory_id)
+            if record is not None:
+                records.append(record)
+        return await self._reasoner.answer(query, recalls, records)
 
     def recall_as_context_text(
         self,

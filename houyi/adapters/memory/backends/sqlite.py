@@ -19,6 +19,7 @@ import json
 import logging
 import sqlite3
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -318,6 +319,48 @@ class SQLiteMemoryBackend(MemoryBackend):
         return self._vector_search.search_vector(
             query_embedding, scope=scope, rowid_filter=rowid_filter, limit=limit
         )
+
+    def prefilter_rowids(
+        self,
+        *,
+        scopes: list[MemoryScope] | None = None,
+        updated_after: float | None = None,
+        updated_before: float | None = None,
+        limit: int = 3000,
+    ) -> list[int]:
+        """Return a bounded, recency-ordered rowid subset for ANN prefilter.
+
+        This method performs predicate pushdown in SQL before vector search to
+        avoid full-index distance scans on large corpora.
+        """
+        conn = self._conn()
+        now = time.time()
+
+        clauses = [
+            "(ttl IS NULL OR created_at + ttl > ?)",
+            "(valid_to IS NULL OR valid_to > ?)",
+        ]
+        params: list[Any] = [now, now]
+
+        if scopes:
+            placeholders = ",".join("?" for _ in scopes)
+            clauses.append(f"scope IN ({placeholders})")
+            params.extend(scope.value for scope in scopes)
+
+        if updated_after is not None:
+            clauses.append("updated_at >= ?")
+            params.append(updated_after)
+
+        if updated_before is not None:
+            clauses.append("updated_at <= ?")
+            params.append(updated_before)
+
+        where_sql = " AND ".join(clauses)
+        rows = conn.execute(
+            f"SELECT rowid FROM memories WHERE {where_sql} ORDER BY updated_at DESC LIMIT ?",
+            (*params, limit),
+        ).fetchall()
+        return [int(row["rowid"]) for row in rows]
 
     # ------------------------------------------------------------------
     # Embedding backfill bookkeeping

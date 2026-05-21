@@ -16,6 +16,12 @@ from houyi.adapters.memory.embedding import (
 from houyi.adapters.memory.engine import MemoryEngine
 from houyi.adapters.memory.extractor import MemoryCandidateExtractor
 from houyi.adapters.memory.forgetting import apply_forgetting
+from houyi.adapters.memory.reasoner import (
+    DeterministicReasoningPolicy,
+    LLMMemoryReasoningPolicy,
+    MemoryReasoner,
+    ReasoningPolicy,
+)
 from houyi.adapters.memory.retriever import MemoryRetriever
 from houyi.adapters.memory.store import MemoryStore
 from houyi.adapters.memory.turn_writer import TurnDetector, TurnWriter, WriteResult
@@ -42,9 +48,11 @@ __all__ = [
     "BACKEND_REGISTRY",
     "CandidateStatus",
     "DedupMatch",
+    "DeterministicReasoningPolicy",
     "EmbeddingProvider",
     "ExtractionContext",
     "ForgettingPolicy",
+    "LLMMemoryReasoningPolicy",
     "MemoryBackend",
     "MemoryCandidate",
     "MemoryCandidateExtractor",
@@ -54,6 +62,7 @@ __all__ = [
     "MemoryLifecyclePolicy",
     "MemoryPolicy",
     "MemoryProvenance",
+    "MemoryReasoner",
     "MemoryRecall",
     "MemoryRecord",
     "MemoryRetriever",
@@ -61,6 +70,7 @@ __all__ = [
     "MemoryStore",
     "MemoryType",
     "NoOpEmbeddingProvider",
+    "ReasoningPolicy",
     "RecallMatchMethod",
     "RelevanceDetail",
     "SQLiteMemoryBackend",

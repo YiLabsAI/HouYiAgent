@@ -6,14 +6,17 @@ Handles candidate approval/rejection, record CRUD, and recall history.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
+from houyi.adapters.memory.answerer import AnswerResult
 from houyi.adapters.memory.engine import MemoryEngine
 from houyi.adapters.memory.types import (
     CandidateStatus,
     MemoryCandidate,
     MemoryRecord,
     MemoryScope,
+    SessionContext,
 )
 
 logger = logging.getLogger(__name__)
@@ -112,3 +115,30 @@ class MemoryService:
     async def get_recall_history(self, record_id: str) -> list[dict[str, Any]]:
         """Placeholder — recall tracking to be implemented."""
         return []
+
+    def should_use_memory_answer(self, query: str) -> bool:
+        text = str(query or "").strip().lower()
+        if not text:
+            return False
+        patterns = (
+            r"\bremember\b",
+            r"\brecall\b",
+            r"\bwhat did i (say|tell)\b",
+            r"\bwhat do you remember\b",
+            r"\bdo you remember\b",
+            r"\bmy (preference|constraint|setting|deadline)\b",
+        )
+        return any(re.search(pattern, text) is not None for pattern in patterns)
+
+    async def answer_query(
+        self,
+        query: str,
+        *,
+        session_context: SessionContext | None = None,
+        top_k: int = 5,
+    ) -> AnswerResult:
+        return await self._engine.answer(
+            query=query,
+            session_context=session_context,
+            top_k=top_k,
+        )

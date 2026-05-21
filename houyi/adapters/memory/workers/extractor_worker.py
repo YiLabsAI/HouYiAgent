@@ -103,6 +103,26 @@ class _ExtractorProtocol(Protocol):
     async def extract(self, text: str, source_anchor: str | None) -> Any: ...  # ExtractionResult
 
 
+class _BatchExtractorProtocol(_ExtractorProtocol, Protocol):
+    async def extract_batch(self, turns: list[tuple[str, str | None]]) -> list[Any]: ...
+
+
+def _source_anchor_for(turn: RawTurn) -> str:
+    raw = turn.metadata.get("source_anchor", "") if isinstance(turn.metadata, dict) else ""
+    anchor = str(raw).strip()
+    if anchor:
+        return anchor
+    return turn.turn_id
+
+
+def _extract_text_for(turn: RawTurn) -> str:
+    if isinstance(turn.metadata, dict):
+        raw = turn.metadata.get("extract_text", "")
+        if isinstance(raw, str) and raw.strip():
+            return raw
+    return turn.content
+
+
 class ExtractorWorker:
     """Drain the extract queue and project facts onto the state view."""
 
@@ -162,9 +182,67 @@ class ExtractorWorker:
         if not claimed:
             return 0
 
+        if hasattr(self._extractor, "extract_batch"):
+            await self._process_claimed_batch(claimed)
+            return len(claimed)
+
         for queue_id, turn in claimed:
             await self._process_job(queue_id, turn)
         return len(claimed)
+
+    async def _process_claimed_batch(self, claimed: list[tuple[str, RawTurn]]) -> None:
+        extractor = self._extractor
+        if not hasattr(extractor, "extract_batch"):
+            for queue_id, turn in claimed:
+                await self._process_job(queue_id, turn)
+            return
+
+        batch_extractor = extractor
+        payload = [(_extract_text_for(turn), _source_anchor_for(turn)) for _, turn in claimed]
+        try:
+            results = await batch_extractor.extract_batch(payload)
+        except Exception as exc:
+            logger.warning("batch extractor failed for %d jobs: %s", len(claimed), exc)
+            for queue_id, _turn in claimed:
+                await asyncio.to_thread(
+                    self._backend.mark_extract_failed,
+                    queue_id,
+                    f"batch_extract: {exc}"[:1000],
+                    retry=True,
+                    max_attempts=self._config.max_attempts,
+                )
+            return
+
+        if len(results) != len(claimed):
+            logger.warning(
+                "batch extractor returned mismatched results: expected=%d got=%d",
+                len(claimed),
+                len(results),
+            )
+            for queue_id, _turn in claimed:
+                await asyncio.to_thread(
+                    self._backend.mark_extract_failed,
+                    queue_id,
+                    "batch_extract: mismatched result count",
+                    retry=True,
+                    max_attempts=self._config.max_attempts,
+                )
+            return
+
+        for (queue_id, turn), result in zip(claimed, results, strict=False):
+            try:
+                await self._project_result(turn, result)
+            except Exception as exc:
+                logger.warning("projection failed for queue_id=%s: %s", queue_id, exc)
+                await asyncio.to_thread(
+                    self._backend.mark_extract_failed,
+                    queue_id,
+                    f"projection: {exc}"[:1000],
+                    retry=True,
+                    max_attempts=self._config.max_attempts,
+                )
+                continue
+            await asyncio.to_thread(self._backend.mark_extract_done, queue_id)
 
     async def run_forever(
         self,
@@ -202,8 +280,8 @@ class ExtractorWorker:
         """
         try:
             result = await self._extractor.extract(
-                text=turn.content,
-                source_anchor=turn.turn_id,
+                text=_extract_text_for(turn),
+                source_anchor=_source_anchor_for(turn),
             )
         except Exception as exc:
             logger.warning(
