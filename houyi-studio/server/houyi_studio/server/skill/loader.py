@@ -75,7 +75,7 @@ LoadResult = tuple[bool, str, str | None]
 
 
 class SkillLoader:
-    """Loads / unloads skills from various sources into a ``SkillRegistry``.
+    """Loads / unloads skills from various sources into a SkillRegistry.
 
     Responsibilities (SRP):
     - Local file loading (.md, .json)
@@ -100,7 +100,7 @@ class SkillLoader:
     def load(self, source: str, install_strategy: str | None = None) -> LoadResult:
         """Load skill(s) from *source* (file path, URL, or directory).
 
-        Returns ``(success, skill_name_or_error_code, error_message_or_None)``.
+        Returns (success, skill_name_or_error_code, error_message_or_None).
         """
         if source.startswith("http://") or source.startswith("https://"):
             return self._load_from_url(source)
@@ -149,8 +149,8 @@ class SkillLoader:
     def refresh_managed_external_skills(self) -> None:
         """Rescan managed skill directories and prune stale registry entries.
 
-        This keeps ``list_skills`` aligned with disk changes (manual delete/move),
-        especially for managed ``~/.houyi/skills`` + ``~/.houyi/sources/local``.
+        This keeps list_skills aligned with disk changes (manual delete/move),
+        especially for managed ~/.houyi/skills + ~/.houyi/sources/local.
         """
         managed_skills_root = self._managed_global_skills_root()
         managed_local_sources_root = self._managed_local_sources_root()
@@ -207,8 +207,8 @@ class SkillLoader:
         """Delete managed on-disk package links/data for *skill_name* and unload it.
 
         Removal scope is intentionally restricted to managed skill roots:
-        - ``~/.houyi/skills/<package>``
-        - ``~/.houyi/sources/local/<package>``
+        - ~/.houyi/skills/<package>
+        - ~/.houyi/sources/local/<package>
         """
         skill = self._registry.get(skill_name)
         if not skill:
@@ -790,8 +790,8 @@ class SkillLoader:
         """Hydrate ext__ aliases with core runtime when external spec is metadata-only.
 
         Two-phase resolution:
-        1. RuntimeResolver: if a skill declares a ``runtime`` contract with an
-           ``adapter``, dynamically import and bind it as executor.
+        1. RuntimeResolver: if a skill declares a runtime contract with an
+           adapter, dynamically import and bind it as executor.
         2. Core fallback: if the skill still lacks an executor, inherit from the
            matching core skill (ext__X -> X).
         """
@@ -846,8 +846,8 @@ class SkillLoader:
         """Bind a script-compatible executor for instruction-driven script skills.
 
         Many community SKILL.md files do not provide a HouYi-specific
-        ``runtime.adapter`` block, but still define executable workflows via
-        command examples (e.g. ``python scripts/run.py ...``). This method scans
+        runtime.adapter block, but still define executable workflows via
+        command examples (e.g. python scripts/run.py ...). This method scans
         instructions for command templates and binds a generic executor.
         """
         skill = self._registry.get(loaded_name)
@@ -1308,7 +1308,7 @@ def normalize_github_url(url: str) -> str:
 
 
 def validate_skill_content(content: str, url: str) -> None:
-    """Raise ``ValueError`` if *content* looks like HTML or is empty."""
+    """Raise ValueError if *content* looks like HTML or is empty."""
     stripped = content.strip()
     if stripped.startswith("<!DOCTYPE") or stripped.startswith("<html"):
         raise ValueError(
@@ -1321,7 +1321,7 @@ def validate_skill_content(content: str, url: str) -> None:
 
 
 def _validate_parsed_skill(skill: object) -> None:
-    """Raise ``ValueError`` if the skill has no usable name."""
+    """Raise ValueError if the skill has no usable name."""
     name = getattr(skill, "name", None)
     if not name or name == SKILL_NAME_UNKNOWN:
         raise ValueError(

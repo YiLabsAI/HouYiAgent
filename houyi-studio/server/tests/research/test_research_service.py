@@ -537,9 +537,9 @@ class TestArchivedReportNormalization:
         assert out["sections"][0]["content"] == "Just prose [ref_1]."
 
     def test_expands_comma_refs(self):
-        # Comma-grouped ``[ref_a, ref_b]`` tokens would bypass the
+        # Comma-grouped [ref_a, ref_b] tokens would bypass the
         # single-ref resolver and render as literal bracket noise. The
-        # load path must split them into atomic ``[ref_a][ref_b]``.
+        # load path must split them into atomic [ref_a][ref_b].
         report = {
             "sections": [
                 {
@@ -555,7 +555,7 @@ class TestArchivedReportNormalization:
         assert "[ref_aaaaaaaa][ref_bbbbbbbb]" in content
 
     def test_strips_citation_trailer(self):
-        # An escaped ``","citations":`` trailer embedded in the content
+        # An escaped ","citations": trailer embedded in the content
         # string leaks as visible JSON noise; the load path must cut
         # the body at the first such boundary.
         trailer = (

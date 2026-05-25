@@ -17,7 +17,7 @@ def process_retrieval_results(
 ) -> dict[str, Any]:
     """Aggregate per-strategy execution outcomes into retrieval metadata.
 
-    Successful strategies are appended into `strategies_used` and `all_results` for
+    Successful strategies are appended into strategies_used and all_results for
     later fusion. When timeout fallback is disabled, any timeout causes previously
     collected retrieval results to be cleared so callers do not answer from a partial
     retrieval set.

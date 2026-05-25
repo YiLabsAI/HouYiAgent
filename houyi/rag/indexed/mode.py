@@ -47,7 +47,7 @@ logger = logging.getLogger(__name__)
 class IndexedMode:
     """Runtime facade for indexed retrieval and ingest orchestration.
 
-    `IndexedMode` coordinates indexed retrieval and ingest workflows while delegating
+    IndexedMode coordinates indexed retrieval and ingest workflows while delegating
     resource lifecycle, retrieval dispatch, backend search, result post-processing,
     and ingest pipeline steps to dedicated collaborators.
 
@@ -73,9 +73,9 @@ class IndexedMode:
             embedding_config: Embedding configuration
             graph_config: Graph retrieval configuration
             llm_adapter: Optional LLM adapter for reranking and generation
-            index_dir: Index storage directory (default: `{knowledge_dir}/.houyi`).
-                The public `RAG` entrypoint is expected to pass the effective value
-                from `RAGConfig.get_index_dir()` so the facade and config share one
+            index_dir: Index storage directory (default: {knowledge_dir}/.houyi).
+                The public RAG entrypoint is expected to pass the effective value
+                from RAGConfig.get_index_dir() so the facade and config share one
                 storage contract.
         """
         self._config = config
@@ -140,7 +140,7 @@ class IndexedMode:
         Retrieval-time failures are handled as soft degradation where possible:
         strategy failures and timeouts are reflected in retrieval metadata, rerank /
         query-analysis / CRAG failures fall back to available results, and the final
-        `RetrievalResult` preserves the indexed facade contract.
+        RetrievalResult preserves the indexed facade contract.
 
         Args:
             query: User query string
@@ -292,7 +292,7 @@ class IndexedMode:
     ) -> RetrievalExecutionRequest:
         """Build the stable execution request shared by parallel and sequential retrieval.
 
-        `IndexedMode` still owns the high-level collaborator wiring, but execution modes
+        IndexedMode still owns the high-level collaborator wiring, but execution modes
         should consume one consistent request contract so timeout policy, enabled
         strategies, and dispatch wiring cannot drift between paths.
         """

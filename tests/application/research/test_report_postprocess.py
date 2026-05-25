@@ -58,7 +58,7 @@ class TestDefaultPipeline:
         # Order is load-bearing: clean_noise runs first so downstream
         # structural passes see reasonably clean paragraphs; prune
         # runs after both dedup passes so it sees the final set of
-        # surviving ``###`` blocks; language enforcement runs last so
+        # surviving ### blocks; language enforcement runs last so
         # it can translate the already-structurally-clean body.
         expected = (
             clean_noise_step,
@@ -120,13 +120,13 @@ class TestPostprocessSection:
         assert result.title == "Allocation"
 
     async def test_none_uses_default(self):
-        # Default pipeline must run when ``steps`` is omitted.  We supply
+        # Default pipeline must run when steps is omitted.  We supply
         # a body that is already clean so no step mutates it; the key
-        # assertion is that ``postprocess_section`` does not raise when
+        # assertion is that postprocess_section does not raise when
         # invoking every default step.
         ctx = _make_ctx(query="How are pensions structured?")
-        # Body avoids every noise-detection trigger word (no ``search``,
-        # ``query``, ``retrieval``, ``results found`` etc.) and carries
+        # Body avoids every noise-detection trigger word (no search,
+        # query, retrieval, results found etc.) and carries
         # an inline citation so the clean_noise step short-circuits.
         section = _make_section(
             "A clean paragraph with an inline citation [ref_001] that "
@@ -145,7 +145,7 @@ class TestPostprocessSection:
 
 class TestConsolidateParagraphsStep:
     async def test_merges_shorts(self):
-        # The step delegates to ``_consolidate_short_paragraphs``; we
+        # The step delegates to _consolidate_short_paragraphs; we
         # only need to confirm the wrapper plumbs the call through.
         body = "Short line one.\n\nShort line two.\n\nShort line three."
         result = await consolidate_paragraphs_step(_make_section(body), _make_ctx())
@@ -160,13 +160,13 @@ class TestDeduplicateSubheadingsStep:
             "### Overview\n\nFirst pass body with [ref_001].\n\n"
         )
         result = await deduplicate_subheadings_step(_make_section(duplicated), _make_ctx())
-        # Only one ``### Overview`` should remain after dedup.
+        # Only one ### Overview should remain after dedup.
         assert result.content.count("### Overview") == 1
 
 
 class TestDeduplicateParagraphsStep:
     async def test_drops_verbatim_repeat(self):
-        # ``_PARAGRAPH_DUP_MIN_CHARS`` is 150 in the implementation;
+        # _PARAGRAPH_DUP_MIN_CHARS is 150 in the implementation;
         # build a paragraph comfortably above that.
         paragraph = (
             "Sovereign funds allocate across diversified asset classes "
@@ -182,8 +182,8 @@ class TestDeduplicateParagraphsStep:
 
 class TestPruneEmptySubheadingsStep:
     async def test_drops_fully_empty_subheading(self):
-        # The live ZH session ``rr_d79ddb66a58c`` shows section 4 ending
-        # with two back-to-back empty ``###`` blocks.  The prune step
+        # The live ZH session rr_d79ddb66a58c shows section 4 ending
+        # with two back-to-back empty ### blocks.  The prune step
         # must delete both while preserving the substantive block that
         # precedes them.
         body = (
@@ -202,10 +202,10 @@ class TestPruneEmptySubheadingsStep:
     async def test_drops_dangling_colon(self):
         # Live pattern from session section 5: a heading that reads
         # "Items to clarify" (26 CJK chars) with a body that is a
-        # 29-CJK-char intro ending in a fullwidth colon ``U+FF1A`` but
+        # 29-CJK-char intro ending in a fullwidth colon U+FF1A but
         # never followed by the promised list.  Must be pruned as a
         # dangling-intro orphan.  Both heading and body are encoded
-        # via ``\uXXXX`` escapes to satisfy the repo's no-raw-CJK rule
+        # via \uXXXX escapes to satisfy the repo's no-raw-CJK rule
         # while still reproducing the observed defect exactly.
         cjk_intro = (
             "\u7efc\u5408\u4e0a\u8ff0\u5206\u6790\uff0c\u4ee5\u4e0b\u95ee\u9898"
@@ -224,7 +224,7 @@ class TestPruneEmptySubheadingsStep:
         assert cjk_intro not in result.content
 
     async def test_drops_citation_only_body(self):
-        # A body that is nothing but ``[ref_xxx]`` tokens counts as
+        # A body that is nothing but [ref_xxx] tokens counts as
         # empty after the citation-strip pass: there is no prose the
         # reader can hold onto under the heading.
         body = (
@@ -258,7 +258,7 @@ class TestPruneEmptySubheadingsStep:
         assert "| A | B |" in result.content
 
     async def test_preserves_leading_prose(self):
-        # Section lead (prose before the first ``###``) must survive
+        # Section lead (prose before the first ###) must survive
         # unchanged regardless of what happens to the heading blocks.
         body = (
             "Leading paragraph that sets up the whole section without a "
@@ -323,10 +323,10 @@ class TestCleanNoiseStep:
     async def test_passthrough_on_clean(self):
         # A paragraph that already carries a citation and no noise
         # patterns should skip the LLM rewrite entirely.  MockLLM has
-        # an empty response queue: calling it would return ``{}`` and
+        # an empty response queue: calling it would return {} and
         # pollute the body, so surviving unchanged confirms the step
         # correctly short-circuited.  Avoid pattern trigger words like
-        # ``retrieval`` / ``query`` / ``search`` in this body.
+        # retrieval / query / search in this body.
         body = (
             "Analysts observe a persistent gap between policy targets "
             "and realised allocations [ref_001], with the widest "
@@ -353,7 +353,7 @@ class TestCleanNoiseStep:
         result = await clean_noise_step(_make_section(noisy_body), ctx)
         # Noise rewrite replaces the paragraph with the LLM output; the
         # citation group normaliser runs as a post-pass so the body
-        # should carry the atomic ``[ref_001]`` form.
+        # should carry the atomic [ref_001] form.
         assert "[ref_001]" in result.content
         assert "searched" not in result.content.lower()
 
@@ -364,7 +364,7 @@ class TestCleanNoiseStep:
 
 
 class TestEnforceQueryLanguageStep:
-    # ZH sample: ``zhuquan caifu jijin touzi yu quanqiu peizhi qushi``.
+    # ZH sample: zhuquan caifu jijin touzi yu quanqiu peizhi qushi.
     _CJK_BODY = (
         "\u4e3b\u6743\u8d22\u5bcc\u57fa\u91d1\u5728\u6295\u8d44\u4e2d\u901a\u5e38"
         "\u91c7\u7528\u591a\u5143\u5316\u8d44\u4ea7\u914d\u7f6e\u7b56\u7565"
@@ -378,7 +378,7 @@ class TestEnforceQueryLanguageStep:
         # language.  Empty MockLLM response queue means any LLM call
         # would produce noise — not reaching the LLM is the assertion.
         llm = MockLLM(responses=[])
-        # ZH query: ``zhuquan caifu jijin peizhi``.
+        # ZH query: zhuquan caifu jijin peizhi.
         ctx = _make_ctx(
             query=("\u4e3b\u6743\u8d22\u5bcc\u57fa\u91d1\u914d\u7f6e\u8d8b\u52bf"),
             llm=llm,
@@ -461,13 +461,13 @@ class TestOfflineReplay:
         result = await postprocess_section(section, ctx)
         # Duplicate subheading tree collapses to a single occurrence.
         assert result.content.count("### Overview") == 1
-        # The surviving ``### Risk profile`` is untouched.
+        # The surviving ### Risk profile is untouched.
         assert "### Risk profile" in result.content
 
 
 # Type-level: the module exports a usable Callable alias.  This guards
-# against a future edit that accidentally breaks the public ``Step``
-# contract by, e.g., removing the ``ctx`` parameter.
+# against a future edit that accidentally breaks the public Step
+# contract by, e.g., removing the ctx parameter.
 def test_step_alias_is_callable():
     async def fake_step(section, ctx):  # type: ignore[no-untyped-def]
         return section
@@ -476,10 +476,10 @@ def test_step_alias_is_callable():
     assert callable(step)
 
 
-# Note: module-level ``pytest.mark.asyncio`` is intentionally omitted.
-# The project's pytest config uses ``asyncio_mode = auto``, so async
+# Note: module-level pytest.mark.asyncio is intentionally omitted.
+# The project's pytest config uses asyncio_mode = auto, so async
 # tests run under the asyncio event loop automatically, while sync
-# tests (e.g. ``TestDefaultPipeline``) stay plain.
+# tests (e.g. TestDefaultPipeline) stay plain.
 
 _ = pytest  # keep the import anchored; the module imports pytest for
 #              fixtures in sibling helper files without using it here.

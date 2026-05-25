@@ -1,43 +1,43 @@
 """Per-section post-processing pipeline for the report generation subsystem.
 
 Owns the fixed sequence of content-mutating and language-enforcement
-steps that each ``ReportSection`` goes through after the writer LLM
-returns.  Factored out of ``report.py`` so steps can be unit-tested
+steps that each ReportSection goes through after the writer LLM
+returns.  Factored out of report.py so steps can be unit-tested
 and replayed on saved sections without invoking the full
-``ReportGenerator``.
+ReportGenerator.
 
 Design
 ------
-* **Context** (:class:`SectionPostProcessContext`) carries the per-section
+* **Context** (SectionPostProcessContext) carries the per-section
   inputs plus the LLM handle and decoding kwargs the stateful steps need.
   Putting the LLM dependency into the context keeps every step a plain
-  ``async def`` — no closure factories — so the pipeline is a flat list
+  async def — no closure factories — so the pipeline is a flat list
   of functions with a uniform signature.
-* **Step** (:data:`SectionPostProcessStep`) is an alias for
-  ``Callable[[ReportSection, SectionPostProcessContext], Awaitable[ReportSection]]``.
+* **Step** (SectionPostProcessStep) is an alias for
+  Callable[[ReportSection, SectionPostProcessContext], Awaitable[ReportSection]].
   A step mutates and returns the section; it is free to short-circuit.
-* **Runner** (:func:`postprocess_section`) iterates through the supplied
+* **Runner** (postprocess_section) iterates through the supplied
   step sequence.  Default ordering is fixed in
-  :data:`DEFAULT_SECTION_POSTPROCESS_STEPS`.
+  DEFAULT_SECTION_POSTPROCESS_STEPS.
 
 The default step order is load-bearing:
-  1. ``clean_noise_step`` rewrites noisy paragraphs via targeted
+  1. clean_noise_step rewrites noisy paragraphs via targeted
      micro-LLM calls; all subsequent steps rely on a reasonably clean
      paragraph structure.
-  2. ``consolidate_paragraphs_step`` normalises paragraph layout
+  2. consolidate_paragraphs_step normalises paragraph layout
      (merge shorts, split giants).
-  3. ``deduplicate_subheadings_step`` collapses duplicate ``###`` trees
+  3. deduplicate_subheadings_step collapses duplicate ### trees
      emitted by writer pass-2 regressions.
-  4. ``deduplicate_paragraphs_step`` drops verbatim paragraph repeats
+  4. deduplicate_paragraphs_step drops verbatim paragraph repeats
      that remain after subheading dedup.
-  5. ``prune_empty_subheadings_step`` drops ``###`` blocks whose body
+  5. prune_empty_subheadings_step drops ### blocks whose body
      is empty or a dangling colon-only intro.  Must run after dedup
      so the empty-heading detector sees the final set of headings,
-     and before ``strip_writer_leaks_step`` so downstream structural
+     and before strip_writer_leaks_step so downstream structural
      analysis never sees the orphan shells.
-  6. ``strip_writer_leaks_step`` removes writer/tool-layer leaks
+  6. strip_writer_leaks_step removes writer/tool-layer leaks
      (JSON envelope fragments, junk tokens, orphan reference IDs).
-  7. ``enforce_query_language_step`` aligns the body + title language
+  7. enforce_query_language_step aligns the body + title language
      with the query language (currently implements the CJK-to-English
      direction).
 """
@@ -52,16 +52,16 @@ from typing import Any
 from houyi.adapters.llm.base import LLMAdapter
 from houyi.application.research.types import ReportSection
 
-# The per-section helper bindings (``_consolidate_short_paragraphs``,
-# ``_parse_section``, ``_TRANSLATE_PROMPT`` ...) live in
-# ``houyi.application.research.report``.  Importing them at module
-# load would form a circular dependency with ``report.py`` (which
-# imports ``postprocess_section`` and friends from this module to run
+# The per-section helper bindings (_consolidate_short_paragraphs,
+# _parse_section, _TRANSLATE_PROMPT ...) live in
+# houyi.application.research.report.  Importing them at module
+# load would form a circular dependency with report.py (which
+# imports postprocess_section and friends from this module to run
 # the pipeline).  The standard Python remedy is to defer those
 # imports to the call sites that need them — every step body below
-# starts with a small ``from ...report import ...`` line that lists
+# starts with a small from ...report import ... line that lists
 # exactly the helpers that step needs.  Python caches module imports
-# in ``sys.modules`` so the runtime cost is a single dict lookup per
+# in sys.modules so the runtime cost is a single dict lookup per
 # call after the first.
 
 logger = logging.getLogger(__name__)
@@ -90,11 +90,11 @@ __all__ = [
 class SectionPostProcessContext:
     """Inputs + environment shared by every step in the pipeline.
 
-    ``query`` / ``title`` / ``objective`` / ``available_refs`` describe
-    the section being processed.  ``llm`` / ``llm_kwargs`` /
-    ``section_max_tokens`` are the LLM handle used by the two
-    LLM-backed steps (``clean_noise_step`` and
-    ``enforce_query_language_step``); the four deterministic text-only
+    query / title / objective / available_refs describe
+    the section being processed.  llm / llm_kwargs /
+    section_max_tokens are the LLM handle used by the two
+    LLM-backed steps (clean_noise_step and
+    enforce_query_language_step); the four deterministic text-only
     steps ignore them.
     """
 
@@ -125,7 +125,7 @@ async def postprocess_section(
 ) -> ReportSection:
     """Run the post-processing pipeline on a single section.
 
-    ``steps`` defaults to :data:`DEFAULT_SECTION_POSTPROCESS_STEPS`.
+    steps defaults to DEFAULT_SECTION_POSTPROCESS_STEPS.
     Each step receives the result of the previous step; the final
     section is returned.  The function does not catch step-level
     exceptions — callers are expected to decide whether to raise or
@@ -153,9 +153,9 @@ async def clean_noise_step(
     paragraphs trigger a targeted LLM rewrite, so latency stays bounded
     at roughly one rewrite call per noisy paragraph.  Rewritten bodies
     that come back empty remove the paragraph entirely; the joined
-    output runs through :func:`_normalize_citation_groups` as a
+    output runs through _normalize_citation_groups as a
     defence-in-depth pass so any direct callers (tests, debug scripts)
-    still get atomic ``[ref_xxx]`` citations.
+    still get atomic [ref_xxx] citations.
     """
 
     from houyi.application.research.report import (
@@ -206,11 +206,11 @@ async def deduplicate_subheadings_step(
     section: ReportSection,
     ctx: SectionPostProcessContext,
 ) -> ReportSection:
-    """Collapse duplicate ``### Subheading`` blocks in a single body.
+    """Collapse duplicate ### Subheading blocks in a single body.
 
     Triggered by the writer pass-2 regression where the entire
     subheading tree is emitted twice.  Must run before
-    :func:`deduplicate_paragraphs_step` because dropping the pass-2
+    deduplicate_paragraphs_step because dropping the pass-2
     tree first lets the paragraph pass catch the bridging paragraph
     that remains attached to the pass-1 tail.
     """
@@ -229,7 +229,7 @@ async def deduplicate_paragraphs_step(
     """Remove paragraphs that appear verbatim more than once.
 
     Paragraph-granularity companion to
-    :func:`deduplicate_subheadings_step` — drops the long verbatim
+    deduplicate_subheadings_step — drops the long verbatim
     transition paragraph that bridged the pass-1 → pass-2 trees and
     survives subheading dedup.
     """
@@ -245,14 +245,14 @@ async def prune_empty_subheadings_step(
     section: ReportSection,
     ctx: SectionPostProcessContext,
 ) -> ReportSection:
-    """Drop orphan ``### Subheading`` blocks with empty or colon-only bodies.
+    """Drop orphan ### Subheading blocks with empty or colon-only bodies.
 
     The writer occasionally emits headings with no body, or with a
     single "here follows a list:" sentence and then no list.  Both
     shapes hit multiple RACE criteria at once (information depth,
     structural clarity, complete coverage) so keeping them costs
     more than dropping them.  Runs after the dedup passes so the
-    empty-heading detector sees the final set of surviving ``###``
+    empty-heading detector sees the final set of surviving ###
     blocks; runs before the writer-leak scrubber so downstream
     structural analysis never sees the orphan heading shells.
     """
@@ -271,8 +271,8 @@ async def strip_writer_leaks_step(
     """Strip writer / tool-layer leaks that escaped upstream parsers.
 
     Covers three leak classes that outran the per-paragraph unwrap:
-    multiline ``{"content": "..."}`` envelope residue, broken fenced
-    blocks dominated by ``ref_<hex>`` / ``sync`` / ``30s`` junk tokens,
+    multiline {"content": "..."} envelope residue, broken fenced
+    blocks dominated by ref_<hex> / sync / 30s junk tokens,
     and orphan reference IDs in prose.  Deterministic, language-
     agnostic, idempotent on already-clean prose.
     """
@@ -294,7 +294,7 @@ async def enforce_query_language_step(
     the rendered section should match.  The current implementation
     covers the CJK-heavy body → English direction, which is the only
     observed regression so far.  When future query coverage expands
-    (e.g. Japanese, Korean), add dispatch on ``ctx.query`` language
+    (e.g. Japanese, Korean), add dispatch on ctx.query language
     here.
 
     Best-effort: a failed LLM call or a translated body that did not
@@ -346,10 +346,10 @@ async def _rewrite_noisy_paragraph_impl(
 ) -> str:
     """Targeted LLM rewrite for a single noisy paragraph.
 
-    Free-function companion to :func:`clean_noise_step` so the
+    Free-function companion to clean_noise_step so the
     orchestration logic (split → detect → rewrite → join) stays in
-    the step function without smuggling ``self`` into a step.
-    ``ReportGenerator._rewrite_noisy_paragraph`` is a thin delegating
+    the step function without smuggling self into a step.
+    ReportGenerator._rewrite_noisy_paragraph is a thin delegating
     wrapper around this function for test back-compat.
     """
 
@@ -375,14 +375,14 @@ async def _rewrite_noisy_paragraph_impl(
         result = resp.content.strip()
         if result.lower() in ("(empty)", ""):
             return ""
-        # Strip ``{"content": "..."}`` envelopes the rewrite LLM
+        # Strip {"content": "..."} envelopes the rewrite LLM
         # occasionally emits.  Without this the wrapper leaked into
         # the paragraph and escaped mermaid fences inside the JSON
         # string classified the whole paragraph as structural,
         # bypassing downstream paragraph-structure normalisation.
         result = _strip_content_envelope(result)
         # Normalise comma-grouped citations at the earliest point so
-        # every downstream consumer sees atomic ``[ref_x]`` tokens.
+        # every downstream consumer sees atomic [ref_x] tokens.
         return _normalize_citation_groups(result)
     except Exception:
         logger.warning("Noise rewrite failed for section '%s'", title, exc_info=True)
@@ -401,11 +401,11 @@ async def _maybe_translate_cjk_to_english(
 
     Runs when either the section body or the section title carries
     CJK on an English query.  Body triggers on the
-    ``_EN_SECTION_CJK_RATIO_MAX`` threshold; title triggers whenever
+    _EN_SECTION_CJK_RATIO_MAX threshold; title triggers whenever
     any CJK character is present (titles are short enough that a
     single CJK char is a regression against leaderboard heading
     rendering).  Body and title are translated by the same LLM call
-    so the rendered ``## <title>`` and body stay language-consistent.
+    so the rendered ## <title> and body stay language-consistent.
 
     Returns the original section unchanged when the translation LLM
     call fails or when the translated body still contains more CJK

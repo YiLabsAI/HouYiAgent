@@ -1,7 +1,7 @@
 """Factory helpers for retrieval-domain convenience constructors.
 
 The exported factory in this module currently provides a convenience path for
-building a `HybridRetriever` backed by indexed-mode concrete components. The
+building a HybridRetriever backed by indexed-mode concrete components. The
 retrieval domain keeps the reusable retriever abstraction, while the indexed
 runtime wiring stays contained in this module instead of leaking into package
 callers.
@@ -22,9 +22,9 @@ def _build_indexed_hybrid_components(
 ) -> dict[str, Any]:
     """Build the indexed-backed collaborators used by the convenience factory.
 
-    This keeps concrete `indexed/` wiring in one place so the exported factory
+    This keeps concrete indexed/ wiring in one place so the exported factory
     remains a thin adapter from package-level convenience API to retrieval-local
-    `HybridRetriever` construction.
+    HybridRetriever construction.
     """
     from houyi.rag.config import EmbeddingConfig
     from houyi.rag.indexed.embedding import create_embedder
@@ -62,7 +62,7 @@ def create_hybrid_retriever(
 
     This is a package-level convenience API, not the canonical ownership point
     for retrieval abstractions. Callers that already have protocol-shaped
-    backends should construct `HybridRetriever` directly.
+    backends should construct HybridRetriever directly.
     """
     return HybridRetriever(
         **_build_indexed_hybrid_components(

@@ -56,7 +56,7 @@ def backend(tmp_path):
 
 
 def _seed_pending(backend, n: int = 3):
-    """Drop ``n`` MemoryRecord rows with no embedding into the backend."""
+    """Drop n MemoryRecord rows with no embedding into the backend."""
     for i in range(n):
         backend.put(MemoryRecord(key=f"k{i}", content=f"text {i}", embedding=None))
 

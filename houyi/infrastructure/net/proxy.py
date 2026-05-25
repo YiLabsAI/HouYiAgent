@@ -57,11 +57,11 @@ def resolve_web_search_proxy() -> ProxyResolution:
 
 
 def detect_proxy() -> str | None:
-    """Return the best available HTTPS/HTTP proxy URL, or ``None``.
+    """Return the best available HTTPS/HTTP proxy URL, or None.
 
     Resolution order:
-    1. ``HOUYI_PROXY_URL`` env var (explicit override)
-    2. System HTTPS proxy via ``urllib.request.getproxies()``
+    1. HOUYI_PROXY_URL env var (explicit override)
+    2. System HTTPS proxy via urllib.request.getproxies()
     3. System HTTP proxy (fallback)
     """
     proxy_url, _ = _detect_proxy_source()

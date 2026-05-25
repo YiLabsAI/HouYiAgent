@@ -265,7 +265,7 @@ class SearchContext(BaseModel):
     prior_findings: list[str] = Field(default_factory=list)
     excluded_urls: list[str] = Field(default_factory=list)
     preferred_domains: list[str] = Field(default_factory=list)
-    # Optional runtime caps. `0` means "let the budget policy decide" instead of forcing a hard limit here.
+    # Optional runtime caps. 0 means "let the budget policy decide" instead of forcing a hard limit here.
     max_results_per_query: int = 0
     max_query_parallelism: int = 0
     max_total_sources: int = 100
@@ -349,7 +349,7 @@ class SearchRound(BaseModel):
     new_domains: int = 0
     zero_hit_query_count: int = 0
     duplicate_url_rate: float = 0.0
-    # Cached count form of `missing_dimensions` for quick telemetry / aggregation consumers.
+    # Cached count form of missing_dimensions for quick telemetry / aggregation consumers.
     missing_dimensions_count: int = 0
     missing_dimensions: list[str] = Field(default_factory=list)
     # Snapshot of structured evidence state at the moment this round finished.

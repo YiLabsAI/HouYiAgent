@@ -1,12 +1,12 @@
 """Vertex AI adapter using httpx + JWT (zero SDK dependency).
 
-Auth: reads ``GOOGLE_APPLICATION_CREDENTIALS`` (service account JSON),
-signs a JWT with ``openssl`` subprocess, exchanges for ``access_token``,
-then calls the Vertex AI OpenAI-compatible ``chat/completions`` endpoint.
+Auth: reads GOOGLE_APPLICATION_CREDENTIALS (service account JSON),
+signs a JWT with openssl subprocess, exchanges for access_token,
+then calls the Vertex AI OpenAI-compatible chat/completions endpoint.
 
-This is the **fallback** adapter used when the ``google-genai`` SDK is not
-installed.  The SDK-based ``GoogleVertexGeminiAdapter`` (in
-``vertex_gemini_adapter.py``) is preferred when available.
+This is the **fallback** adapter used when the google-genai SDK is not
+installed.  The SDK-based GoogleVertexGeminiAdapter (in
+vertex_gemini_adapter.py) is preferred when available.
 """
 
 from __future__ import annotations

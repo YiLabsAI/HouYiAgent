@@ -26,7 +26,7 @@ class AgentTypeConfig(BaseModel):
 class AgentRegistry:
     """Thread-safe registry of agent type configs.
 
-    Provides ``register`` / ``get`` / ``list_available`` for the Agent Hub
+    Provides register / get / list_available for the Agent Hub
     and orchestrator to discover available agent types.
     """
 
@@ -40,7 +40,7 @@ class AgentRegistry:
             self._store[agent_type] = config
 
     def get(self, agent_type: str) -> AgentTypeConfig | None:
-        """Look up a registered agent type, or ``None``."""
+        """Look up a registered agent type, or None."""
         with self._lock:
             return self._store.get(agent_type)
 

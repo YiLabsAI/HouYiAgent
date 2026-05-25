@@ -36,7 +36,7 @@ def infer_skills_subdir(repo_root: Path, preferred_subdir: str = "skills") -> st
     """Infer the directory that should be symlinked into managed skills.
 
     Priority:
-    1. Explicit preferred subdir if present (default: ``skills``)
+    1. Explicit preferred subdir if present (default: skills)
     2. Repo root if it directly contains SKILL.md
     3. First direct child directory that contains one or more SKILL.md files
     """

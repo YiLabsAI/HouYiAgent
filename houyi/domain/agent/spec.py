@@ -38,8 +38,8 @@ class AgentTeamConfig(BaseModel):
 class AgentSpec(BaseModel):
     """Specification for an agent.
 
-    Phase 2 fields (``team_agents``, ``max_turns``, ``context_strategy``,
-    ``memory_config``) are backward-compatible—all default to ``None`` or
+    Phase 2 fields (team_agents, max_turns, context_strategy,
+    memory_config) are backward-compatible—all default to None or
     safe defaults so that existing callers are unaffected.
     """
 

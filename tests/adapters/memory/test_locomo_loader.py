@@ -1,7 +1,7 @@
 """LoCoMo loader tests.
 
 The real LoCoMo corpus is ~50MB and lives outside the repo (cloned to
-``/Users/von/workspace/locomo`` during dev). Tests therefore drive a
+/Users/von/workspace/locomo during dev). Tests therefore drive a
 self-contained mini-payload to verify the parser, and add an opt-in
 smoke test that runs against the real file when present.
 """

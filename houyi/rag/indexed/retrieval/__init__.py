@@ -1,7 +1,7 @@
 """Indexed-mode retrieval orchestration collaborators.
 
 This package contains retrieval dispatch and execution helpers that are owned by
-`IndexedMode` and are specific to indexed retrieval orchestration rather than the
+IndexedMode and are specific to indexed retrieval orchestration rather than the
 cross-mode retrieval domain.
 """
 

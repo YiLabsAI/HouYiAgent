@@ -554,7 +554,7 @@ class TestIntermediateContext:
         assert len(report.sections) == 2
         assert report.summary == "Summary."
 
-    async def test_intermediate_context_builds_analysis(self):
+    async def test_intermediate_builds_analysis(self):
         from houyi.application.research.report import _intermediate_context
         from houyi.application.research.runtime.intermediate import IntermediateReport
 
@@ -634,7 +634,7 @@ class TestParseSectionEdgeCases:
         assert not section.content.startswith("{")
         assert '"content"' not in section.content
 
-    async def test_repair_unescaped_quote_envelope(self):
+    async def test_unescaped_quote_envelope(self):
         # Writer envelope where the body contains a stray unescaped quote,
         # breaking json.loads. The repair fallback must still return clean
         # prose with the envelope tokens removed.
@@ -673,7 +673,7 @@ class TestParseSectionEdgeCases:
         # Markdown then renders the orphan fence as an unclosed code
         # block, or — once stripped — the indented body falls back to an
         # unlabelled indented code block. Parsing must restore a matching
-        # opener (with a ``mermaid`` tag when arrows/keywords are present)
+        # opener (with a mermaid tag when arrows/keywords are present)
         # so the content renders as a proper labelled code block.
         from houyi.application.research.report import _parse_section
 
@@ -690,7 +690,7 @@ class TestParseSectionEdgeCases:
         )
         envelope = json.dumps({"content": content, "citations": []})
         section = _parse_section("Self-evolution mechanism", envelope)
-        # A balanced ```mermaid ... ``` pair must now wrap the diagram,
+        # A balanced mermaid ...  pair must now wrap the diagram,
         # and the prose on both sides must survive intact.
         assert "```mermaid" in section.content
         assert section.content.count("```") == 2
@@ -736,11 +736,11 @@ class TestParseSectionEdgeCases:
     async def test_strips_envelope_citations_trailer(self):
         # Some writers emit a malformed envelope where the citations
         # array is double-nested (escaped inside the content string AND
-        # as a sibling field). ``json.loads`` still succeeds, but
-        # ``data["content"]`` carries the escaped trailer verbatim and
+        # as a sibling field). json.loads still succeeds, but
+        # data["content"] carries the escaped trailer verbatim and
         # it renders as visible JSON noise at the end of the section.
         # The normalizer must cut the content at the first
-        # ``","citations":`` boundary.
+        # ","citations": boundary.
         from houyi.application.research.report import _parse_section
 
         # Build content whose JSON-escaped form reproduces the trailer
@@ -838,7 +838,7 @@ class TestNoiseRewrite:
         assert "[ref_002]" in result
 
     async def test_strips_content_envelope(self):
-        # Rewrite LLM occasionally responds with ``{"content": "..."}``
+        # Rewrite LLM occasionally responds with {"content": "..."}
         # instead of plain prose. The wrapper must be unwrapped before the
         # text reaches downstream consumers; otherwise escaped fences
         # inside the JSON string classify the whole paragraph as
@@ -1184,7 +1184,7 @@ class TestParagraphConsolidation:
     def test_counts_cjk_sentence_terminators(self):
         # CJK terminators "\u3002\uff01\uff1f" must register as sentence
         # boundaries; otherwise Chinese paragraphs collapse to "1 sentence"
-        # and trigger unwanted merges. Guards the ``_SENTENCE_TERMINATORS``
+        # and trigger unwanted merges. Guards the _SENTENCE_TERMINATORS
         # regex so CJK parity with ASCII stays covered.
         assert (
             _count_sentences(
@@ -1233,10 +1233,10 @@ class TestParagraphConsolidation:
         assert out.strip() == para
 
     def test_strips_per_paragraph_envelope(self):
-        # Section writers sometimes emit multiple ``{"content": "..."}``
-        # envelopes in a single response; ``_parse_section`` only strips
+        # Section writers sometimes emit multiple {"content": "..."}
+        # envelopes in a single response; _parse_section only strips
         # the first one, leaving subsequent envelopes as raw paragraphs.
-        # ``_consolidate_short_paragraphs`` must unwrap them defensively
+        # _consolidate_short_paragraphs must unwrap them defensively
         # so the final article carries no JSON artefacts. Without this
         # path, repair / multi-envelope writer output continues to leak
         # wrapper prefixes into the body.
@@ -1278,11 +1278,11 @@ class TestParagraphConsolidation:
 
 
 class TestScrubArtifacts:
-    """``_scrub_generation_artifacts`` is the last-mile junk-token gate.
+    """_scrub_generation_artifacts is the last-mile junk-token gate.
 
     Protects the scored article from three failure modes: multiline
-    ``{"content": "..."}`` envelope leaks, fenced blocks whose body
-    devolved into ``ref_<hex>`` / ``sync`` / ``30s`` tokens, and
+    {"content": "..."} envelope leaks, fenced blocks whose body
+    devolved into ref_<hex> / sync / 30s tokens, and
     orphan hex reference IDs that escape the citation renumberer.
     """
 
@@ -1342,7 +1342,7 @@ class TestScrubArtifacts:
 
     def test_unwraps_truncated_envelope(self):
         # Malformed (never-closed) envelope leaking into the body.
-        # Observed on ZH Q1: the writer emits ``{\\n  "content": "...``
+        # Observed on ZH Q1: the writer emits {\\n  "content": "...
         # then flows into a Markdown section heading without closing
         # the object.  The unwrap path must recover the inner prose.
         from houyi.application.research.report import _scrub_generation_artifacts
@@ -1465,7 +1465,7 @@ class TestQueryIsEnglish:
 
 
 class TestCjkCharRatio:
-    """``_cjk_char_ratio`` powers the EN section language gate."""
+    """_cjk_char_ratio powers the EN section language gate."""
 
     def test_pure_english_zero(self):
         assert _cjk_char_ratio("Pure English prose.") == 0.0
@@ -1494,7 +1494,7 @@ class TestLanguageGate:
 
     Protects English queries from emitting Chinese-dominant reports
     when search evidence is CJK-heavy; this was observed as a major
-    driver of the ``inst`` / ``comp`` gap on EN leaderboard cases.
+    driver of the inst / comp gap on EN leaderboard cases.
     """
 
     def _source(self) -> SourceReference:
@@ -1616,7 +1616,7 @@ class TestLanguageGate:
 
 
 class TestDeduplicateSubheadings:
-    """Post-generation guard that collapses duplicated ``### Subheading`` trees."""
+    """Post-generation guard that collapses duplicated ### Subheading trees."""
 
     def test_single_pass(self):
         content = (

@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 def _default_knowledge_dir() -> str:
     """Get default knowledge directory from EnvConfig.
 
-    Reads RAG_KNOWLEDGE_DIR env var; falls back to ``"knowledge/"``.
+    Reads RAG_KNOWLEDGE_DIR env var; falls back to "knowledge/".
     Logs a warning if the env var is not explicitly set.
     """
     from houyi.infrastructure.config import env

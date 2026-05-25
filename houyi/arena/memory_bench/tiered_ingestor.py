@@ -1,19 +1,19 @@
 """Tiered (L0+L1) bench ingestor adapter for memory_bench.
 
-Wraps the production `TurnWriter` + `ExtractorWorker` pair behind the
-runner's `IngestorLike` protocol so the bench harness can drive the
+Wraps the production TurnWriter + ExtractorWorker pair behind the
+runner's IngestorLike protocol so the bench harness can drive the
 asynchronous write path under the same interface as the legacy
-`MemoryIngestor`. The adapter intentionally does *not* re-implement
+MemoryIngestor. The adapter intentionally does *not* re-implement
 extraction or fact projection — that work stays inside the worker so the
 benchmark exercises the real production code path.
 
-Two surfaces beyond `ingest_turn` are exposed for the runner:
+Two surfaces beyond ingest_turn are exposed for the runner:
 
-- `drain()` — runs `ExtractorWorker.process_once` in a loop until the
+- drain() — runs ExtractorWorker.process_once in a loop until the
   queue is empty so all enqueued L1 work is settled before the runner reads
   active memories.
-- `extractor_calls` — cumulative count of `extract` invocations (a
-  cheap cost proxy aligned with the bench's `BenchTimings.extractor_calls`
+- extractor_calls — cumulative count of extract invocations (a
+  cheap cost proxy aligned with the bench's BenchTimings.extractor_calls
   field).
 
 Retraction is intentionally retained on the synchronous fast path: it is
@@ -87,8 +87,8 @@ class TieredBenchIngestor:
                 backend as the worker.
             extractor: AtomicFactExtractor-like object. Wrapped with a
                 counting decorator and handed to the worker via
-                `worker_factory`.
-            worker_factory: callable `(counting_extractor) -> ExtractorWorker`.
+                worker_factory.
+            worker_factory: callable (counting_extractor) -> ExtractorWorker.
                 Receives the wrapped extractor so the counter sees every
                 drain call. The bench fixture is responsible for binding
                 backend / entity_state / candidate_inbox.
@@ -144,7 +144,7 @@ class TieredBenchIngestor:
     async def drain(self, *, max_iterations: int = 1024) -> int:
         """Drain queued L1 jobs until the queue is empty.
 
-        Returns the total number of jobs processed. `max_iterations` is a
+        Returns the total number of jobs processed. max_iterations is a
         defensive cap so a buggy worker never spins forever inside a test.
         """
         total = 0

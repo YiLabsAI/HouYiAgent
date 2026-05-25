@@ -133,9 +133,9 @@ class AnthropicAdapter(LLMAdapter):
         """Streaming chat completion with Anthropic.
 
         Yields:
-            ``StreamChunk`` objects.
+            StreamChunk objects.
             Anthropic tool_use arrives as complete blocks (not deltas),
-            so ``tool_calls_delta`` is always ``None``.
+            so tool_calls_delta is always None.
         """
         params = self._build_anthropic_params(
             messages=messages,

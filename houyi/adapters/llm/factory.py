@@ -48,12 +48,12 @@ class LLMAdapterFactory:
         Args:
             provider: Provider name.  Supported values:
 
-                * ``siliconflow`` — SiliconFlowAdapter (default)
-                * ``vertex`` / ``google_ai`` — Gemini
-                * ``openai`` — OpenAI via the SDK
-                * ``openai_compat`` — generic OpenAI-compatible endpoint
-                * ``deepseek`` — DeepSeek via OpenAI-compatible endpoint
-                * ``None`` — reads ``DEFAULT_LLM_PROVIDER`` from env
+                * siliconflow — SiliconFlowAdapter (default)
+                * vertex / google_ai — Gemini
+                * openai — OpenAI via the SDK
+                * openai_compat — generic OpenAI-compatible endpoint
+                * deepseek — DeepSeek via OpenAI-compatible endpoint
+                * None — reads DEFAULT_LLM_PROVIDER from env
 
         Returns:
             Configured LLM adapter instance.
@@ -126,7 +126,7 @@ def _create_vertex_adapter() -> LLMAdapter:
 
 
 def _create_openai_adapter() -> LLMAdapter:
-    """Create an OpenAI adapter (requires ``openai`` SDK)."""
+    """Create an OpenAI adapter (requires openai SDK)."""
     from houyi.adapters.llm.openai_adapter import OpenAIAdapter
 
     return OpenAIAdapter()

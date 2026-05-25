@@ -1,13 +1,13 @@
 """Heuristic policy helpers for agentic round orchestration.
 
-This module owns the lightweight, local rules used by `AgenticMode` when no
+This module owns the lightweight, local rules used by AgenticMode when no
 LLM call is needed: early termination, keyword fallback/refinement, entity
 harvesting from retrieved snippets, result deduplication, and simple answer
 assembly.
 
 These helpers are intentionally shallow policies rather than reusable generic
 RAG primitives. They encode the current agentic search strategy and can evolve
-with the round orchestration without coupling `AgenticMode` to large in-method
+with the round orchestration without coupling AgenticMode to large in-method
  heuristic blocks.
 """
 

@@ -59,7 +59,7 @@ class AgenticMode:
     1. Reading hierarchical directory indexes (data_structure.md)
     2. Using grep/read_file tools to search and retrieve content
     3. Iteratively refining file search over multiple rounds
-    4. Delegating round heuristics and fallback policies to `agentic.policies`
+    4. Delegating round heuristics and fallback policies to agentic.policies
     5. Using LLM collaborators for keyword extraction and answer generation when available
     """
 
@@ -227,7 +227,7 @@ class AgenticMode:
         """Execute one search round and return round-local metadata.
 
         This method is responsible for selecting the inputs for a round.
-        The actual search invocation is funneled through `_search_round_files()`
+        The actual search invocation is funneled through _search_round_files()
         so that all rounds share the same search call shape and metadata can
         consistently reflect the effective search workload in that round.
         """
@@ -312,7 +312,7 @@ class AgenticMode:
     ) -> list[SearchResult]:
         """Run the file search for a round when both paths and keywords exist.
 
-        A round can still report zero searched files by passing an empty `paths`
+        A round can still report zero searched files by passing an empty paths
         list, which keeps round metadata aligned with the actual work attempted.
         """
         if not paths or not keywords:

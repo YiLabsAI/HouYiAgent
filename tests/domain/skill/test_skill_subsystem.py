@@ -1,9 +1,9 @@
 """Skill subsystem tests: policy governance, hooks lifecycle, registry, and service.
 
-These tests stay within the ``houyi.core.skill`` + ``houyi.core.skill_registry``
-boundary (no ``ToolCallRunner``).
+These tests stay within the houyi.core.skill + houyi.core.skill_registry
+boundary (no ToolCallRunner).
 
-Use ``pytest -m smoke`` to run only the critical-path smoke tests.
+Use pytest -m smoke to run only the critical-path smoke tests.
 """
 
 from __future__ import annotations
@@ -42,7 +42,7 @@ class TestSmokeFullCycle:
     """Smoke test: SKILL.md → parse → register → list → tool_schema → execute.
 
     These must ALL pass before any delivery.
-    Run with ``pytest -m smoke`` for fast feedback.
+    Run with pytest -m smoke for fast feedback.
     """
 
     @pytest.mark.smoke
@@ -118,7 +118,7 @@ class TestSmokeFullCycle:
         assert registry.get("smoke-test-skill") is None
 
     @pytest.mark.smoke
-    def test_directory_discovery_and_registration(self, tmp_path: Path) -> None:
+    def test_directory_discovery(self, tmp_path: Path) -> None:
         """Smoke: discover SKILL.md files in directory tree and register all."""
         for skill_name in ["alpha", "beta", "gamma"]:
             skill_dir = tmp_path / skill_name

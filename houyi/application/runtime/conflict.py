@@ -83,7 +83,7 @@ class ConflictResolver:
 
     1. **Source voting** — compare source overlap and volume.
     2. **LLM arbitration** — an LLM judge evaluates credibility (when
-       ``llm_adapter`` is provided).
+       llm_adapter is provided).
     3. **Dual presentation** — when the arbiter declares "both" valid,
        both perspectives are preserved with a complementary summary.
     """

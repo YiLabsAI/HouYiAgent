@@ -1,8 +1,8 @@
 """Shared test fixtures and safety guards.
 
 SAFETY: Prevent any test from accidentally using the production
-``.houyi/knowledge`` storage directory.  All knowledge tests must use
-``KnowledgeService(storage_dir=tmp_path)`` for isolation.
+.houyi/knowledge storage directory.  All knowledge tests must use
+KnowledgeService(storage_dir=tmp_path) for isolation.
 """
 
 from __future__ import annotations
@@ -23,8 +23,8 @@ _PROD_KNOWLEDGE_DIR = os.path.join(_PROJECT_ROOT, ".houyi", "knowledge")
 def _guard_production_knowledge_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Ensure ENV_KNOWLEDGE_STORAGE never points to the production directory.
 
-    If a test accidentally creates ``KnowledgeService()`` without an explicit
-    ``storage_dir``, this fixture redirects the default to a safe temp directory
+    If a test accidentally creates KnowledgeService() without an explicit
+    storage_dir, this fixture redirects the default to a safe temp directory
     so that production data is never touched.
     """
     # If no env var is set, set one pointing to a temp directory that pytest

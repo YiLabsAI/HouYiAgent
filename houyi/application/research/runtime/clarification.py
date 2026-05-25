@@ -46,8 +46,8 @@ Respond ONLY with JSON:
 class ClarificationAgent:
     """Analyzes query clarity and suggests improvements.
 
-    Use as an optional pre-processing step before ``ResearchPlanner``.
-    When ``needs_clarification`` is True, the UI should present the
+    Use as an optional pre-processing step before ResearchPlanner.
+    When needs_clarification is True, the UI should present the
     suggested questions to the user.
     """
 

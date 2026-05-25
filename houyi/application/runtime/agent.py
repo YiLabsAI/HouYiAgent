@@ -1,6 +1,6 @@
 """Runtime agent canonical module.
 
-``Agent`` is the **user-facing entry point** for all HouYi agent execution —
+Agent is the **user-facing entry point** for all HouYi agent execution —
 tool loops, team delegation, and autonomous collaboration.
 """
 
@@ -20,13 +20,13 @@ if TYPE_CHECKING:
 class Agent:
     """Agent runtime instance — the canonical SDK entry point.
 
-    Wraps ``AgentSpec`` with execution capabilities.  Supports three
-    execution paths, selected automatically by ``run()`` / ``arun()``:
+    Wraps AgentSpec with execution capabilities.  Supports three
+    execution paths, selected automatically by run() / arun():
 
-    1. **Tool-loop** — agent has ``tools`` (no team_agents): iterative
-       LLM -> tool-call -> result loop via ``AgentRunner``.
-    2. **Orchestrated** — agent has ``team_agents`` or ``mode`` is set:
-       ``AgentOrchestrator`` handles delegate / autonomous collaboration.
+    1. **Tool-loop** — agent has tools (no team_agents): iterative
+       LLM -> tool-call -> result loop via AgentRunner.
+    2. **Orchestrated** — agent has team_agents or mode is set:
+       AgentOrchestrator handles delegate / autonomous collaboration.
     3. **DAG** — fallback graph-based execution via planner + executor.
 
     Usage::
@@ -122,9 +122,9 @@ class Agent:
     # ── Sync entry point ──────────────────────────────────────
 
     def run(self, input: str | Task) -> Any:
-        """Synchronous entry point (wraps ``asyncio.run``).
+        """Synchronous entry point (wraps asyncio.run).
 
-        Use ``arun()`` when already inside an event loop (servers, notebooks).
+        Use arun() when already inside an event loop (servers, notebooks).
         """
         from houyi.application.runtime.task import Task
 
@@ -148,7 +148,7 @@ class Agent:
     async def arun(self, input: str | Task) -> Any:
         """Async entry point for use within existing event loops.
 
-        Routing logic matches ``run()`` but avoids ``asyncio.run()``.
+        Routing logic matches run() but avoids asyncio.run().
         """
         from houyi.application.runtime.task import Task
 

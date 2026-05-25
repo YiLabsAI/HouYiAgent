@@ -202,12 +202,12 @@ class MemoryBenchRunner:
             drain_callback: optional async hook invoked after the ingest
                 stage and before active-memory readout. The tiered path
                 points this at ExtractorWorker drainage so its work is
-                counted into `timings.drain_total_ms` rather than masked
+                counted into timings.drain_total_ms rather than masked
                 across the next session boundary.
             cost_probe: optional callable returning a cumulative
                 "extractor calls" counter. The runner snapshots it before
                 and after each session and records the delta into
-                `timings.extractor_calls` as a cheap cost proxy.
+                timings.extractor_calls as a cheap cost proxy.
         """
         self._ingestor = ingestor
         self._reader = reader

@@ -1,15 +1,15 @@
 """Facade that assembles the RAG sub-services into a single public API.
 
 Responsibilities:
-    - Instantiate :class:`LibraryRepository`, :class:`DocumentService`,
-      :class:`IngestService`, and :class:`SearchService`.
+    - Instantiate LibraryRepository, DocumentService,
+      IngestService, and SearchService.
     - Delegate every public method to the appropriate sub-service so that
-      existing callers can continue using a single ``KnowledgeService``
+      existing callers can continue using a single KnowledgeService
       object.
-    - Host the ``get_knowledge_service()`` singleton.
+    - Host the get_knowledge_service() singleton.
 
 Dependencies:
-    - All sibling modules in the ``rag`` package.
+    - All sibling modules in the rag package.
 
 Thread Safety:
     Same constraints as the underlying services — single-writer.
@@ -29,7 +29,7 @@ from .search_service import SearchService
 class KnowledgeService:
     """Unified facade over the RAG sub-services.
 
-    This class preserves the original ``KnowledgeService`` API so that
+    This class preserves the original KnowledgeService API so that
     existing call-sites do not need to change.  Internally every method
     is a thin delegation to the focused sub-service that owns the logic.
 
@@ -221,7 +221,7 @@ _knowledge_service: KnowledgeService | None = None
 
 
 def get_knowledge_service() -> KnowledgeService:
-    """Return (or create) the global :class:`KnowledgeService` singleton."""
+    """Return (or create) the global KnowledgeService singleton."""
     global _knowledge_service
     if _knowledge_service is None:
         _knowledge_service = KnowledgeService()

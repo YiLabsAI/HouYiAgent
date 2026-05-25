@@ -67,7 +67,7 @@ class TestComposites:
         assert t.should_extract(_turn("hello there"))
 
     def test_empty_all_of_accepts(self):
-        # ``all([]) == True`` — useful as a "permissive" sentinel for tests.
+        # all([]) == True — useful as a "permissive" sentinel for tests.
         t = all_of()
         assert t.should_extract(_turn("anything", role="system"))
 
@@ -82,7 +82,7 @@ class TestComposites:
         assert t.should_extract(_turn("plain msg", role="user"))
 
     def test_empty_any_of_rejects(self):
-        # Counter-intuitive default would be True (``any([]) == False`` in
+        # Counter-intuitive default would be True (any([]) == False in
         # Python, but the doc explicitly states "rejects").
         assert not any_of().should_extract(_turn("hi"))
 

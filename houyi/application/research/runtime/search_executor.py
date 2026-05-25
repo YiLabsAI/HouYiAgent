@@ -65,7 +65,7 @@ _EARLY_STOP_BUDGET_FLOOR = 0.20
 class SearchExecutor:
     """Coordinates multi-round search for a single sub-question.
 
-    Uses existing ``WebSearchService`` with ``include_content=True`` (browse
+    Uses existing WebSearchService with include_content=True (browse
     mode) to get both URLs and full content in a single call.
     """
 
@@ -112,7 +112,7 @@ class SearchExecutor:
     ) -> SearchResult:
         """Execute multi-round search until information is sufficient.
 
-        Returns a ``SearchResult`` containing all rounds, deduplicated
+        Returns a SearchResult containing all rounds, deduplicated
         sources, and a coverage score.
         """
         rounds: list[SearchRound] = []
@@ -865,7 +865,7 @@ def _can_terminate_early(
 ) -> bool:
     """Determine whether additional search rounds can be skipped.
 
-    Returns ``True`` when the search shows diminishing returns:
+    Returns True when the search shows diminishing returns:
 
     - **Yield decay**: the current round produced ≤ 50% of the new
       unique URLs that the previous round found (or zero hits), AND
@@ -874,7 +874,7 @@ def _can_terminate_early(
 
     Critical-gap guard: keeps searching when core authority / identity /
     facet-fit gaps are still open — *unless* the sub-question time budget
-    is almost exhausted (``remaining_budget_ratio < _EARLY_STOP_BUDGET_FLOOR``),
+    is almost exhausted (remaining_budget_ratio < _EARLY_STOP_BUDGET_FLOOR),
     in which case early termination is allowed to prevent latency blowout.
     """
     if len(rounds) < 2:
@@ -926,7 +926,7 @@ _MIN_ASCII_TOKEN_LEN = 3
 
 
 def _is_cjk_char(ch: str) -> bool:
-    """Return True when ``ch`` is a CJK unified ideograph or common extension.
+    """Return True when ch is a CJK unified ideograph or common extension.
 
     Scope is intentionally narrow to the ranges actually seen in planner
     output (Basic Multilingual Plane CJK + Extension A + Compatibility).
@@ -943,7 +943,7 @@ def _apply_query_hygiene(queries: Iterable[str]) -> tuple[list[str], int]:
     Applied rules, in order, all case-insensitive:
 
     1. **Repeated token**: queries with two or more tokens where any token
-       appears more than once (e.g. ``"X X"``).  These are almost always
+       appears more than once (e.g. "X X").  These are almost always
        planner bugs and waste provider quota.
     2. **Filler/stopword-only**: queries whose every token is drawn from
        the shared taxonomy vocabularies (filler fragments, CJK
@@ -961,7 +961,7 @@ def _apply_query_hygiene(queries: Iterable[str]) -> tuple[list[str], int]:
         queries: iterable of raw query strings.
 
     Returns:
-        Tuple ``(kept_queries, dropped_count)``.  ``dropped_count`` also
+        Tuple (kept_queries, dropped_count).  dropped_count also
         counts blank / whitespace-only entries.
     """
     filler_lower = {token.lower() for token in QUERY_HYGIENE_FILLER_TOKENS}

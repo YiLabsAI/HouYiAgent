@@ -66,8 +66,8 @@ def _mock_llm_adapter():
 def _patch_adapter(service: ChatService, mock_adapter):
     """Patch _get_adapter_for_model to always return mock_adapter.
 
-    ChatService no longer has a single ``_llm_adapter`` attribute; it routes
-    models via ``_get_adapter_for_model()``.  We patch that method so every
+    ChatService no longer has a single _llm_adapter attribute; it routes
+    models via _get_adapter_for_model().  We patch that method so every
     model resolves to our mock.
     """
     return patch.object(service, "_get_adapter_for_model", return_value=mock_adapter)

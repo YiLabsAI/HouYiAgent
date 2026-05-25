@@ -6,13 +6,13 @@ flow published by the upstream open-source project
 https://github.com/Ayanami0730/deep_research_bench.
 
 In particular, the stage layout and entrypoints are aligned with the upstream
-`run_benchmark.sh` wrapper plus these public scripts:
-- `deepresearch_bench_race.py`
-- `utils.extract`
-- `utils.deduplicate`
-- `utils.scrape`
-- `utils.validate`
-- `utils.stat`
+run_benchmark.sh wrapper plus these public scripts:
+- deepresearch_bench_race.py
+- utils.extract
+- utils.deduplicate
+- utils.scrape
+- utils.validate
+- utils.stat
 
 HouYi keeps article generation in-repo, then runs the official-style Bench II
 scoring pipeline as a sidecar so report generation and benchmark scoring remain

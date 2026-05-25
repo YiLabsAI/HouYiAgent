@@ -2,14 +2,14 @@
 
 Responsibilities:
     - Execute RAG queries against a library's index using
-      ``houyi.rag.RAG.query()``.
+      houyi.rag.RAG.query().
     - Fall back to a simple keyword-grep search when the RAG engine or
       embedding provider is unavailable.
 
 Dependencies:
-    - :class:`~.library_repository.LibraryRepository` for library lookup
+    - ~.library_repository.LibraryRepository for library lookup
       and path resolution.
-    - :func:`~.embedding_config.resolve_embedding_config` for embedding
+    - ~.embedding_config.resolve_embedding_config for embedding
       provider resolution.
 
 Thread Safety:
@@ -33,7 +33,7 @@ class SearchService:
     """Executes search queries against knowledge libraries.
 
     Args:
-        repo: The shared :class:`LibraryRepository` instance.
+        repo: The shared LibraryRepository instance.
     """
 
     def __init__(self, repo: LibraryRepository) -> None:
@@ -57,9 +57,9 @@ class SearchService:
             top_k: Maximum number of results to return.
 
         Returns:
-            A result dict with ``query``, ``results``, ``mode_used``,
-            ``total_results``, and optionally ``answer``, ``quality``,
-            ``error``, etc.
+            A result dict with query, results, mode_used,
+            total_results, and optionally answer, quality,
+            error, etc.
         """
         library = None
         if library_id:
@@ -261,7 +261,7 @@ class SearchService:
             top_k: Maximum number of results.
 
         Returns:
-            A result dict in the same shape as :meth:`search_knowledge`.
+            A result dict in the same shape as search_knowledge.
         """
         results: list[dict[str, Any]] = []
         dir_path = Path(knowledge_dir)

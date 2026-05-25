@@ -76,7 +76,7 @@ async def execute_kb_analyze(input_data: KBAnalyzeInput) -> KBAnalyzeOutput:
     """Execute knowledge base analysis.
 
     This executor stays intentionally lightweight: it inspects the knowledge tree
-    directly but relies on `RAGConfig.get_index_dir()` for index-location semantics
+    directly but relies on RAGConfig.get_index_dir() for index-location semantics
     so the skill stays aligned with the main RAG facade's storage contract.
 
     Args:

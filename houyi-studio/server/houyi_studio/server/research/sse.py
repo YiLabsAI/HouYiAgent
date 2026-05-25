@@ -1,7 +1,7 @@
 """Research SSE event stream.
 
 Structured envelope format for real-time research progress delivery.
-Supports ``Last-Event-ID`` reconnection with replay.
+Supports Last-Event-ID reconnection with replay.
 """
 
 from __future__ import annotations
@@ -81,7 +81,7 @@ async def research_sse_stream(
 ) -> AsyncGenerator[str, None]:
     """Yield SSE-formatted events from the research run emitter.
 
-    Supports reconnection via ``last_event_id``: replays buffered events
+    Supports reconnection via last_event_id: replays buffered events
     that were emitted after the given event ID.
     """
     buffer: list[ResearchSSEEnvelope] = event_buffer if event_buffer is not None else []

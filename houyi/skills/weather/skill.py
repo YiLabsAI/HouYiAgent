@@ -398,13 +398,13 @@ def get_weather(
     """Get weather using coordinates or city with provider fallback.
 
     Supports two input modes:
-    1) Coordinates mode: ``lat`` + ``lon`` (+ optional ``date``)
-    2) City mode: ``city`` (+ optional ``country`` + optional ``date``)
+    1) Coordinates mode: lat + lon (+ optional date)
+    2) City mode: city (+ optional country + optional date)
 
     Provider choices:
-    - ``openmeteo``: structured daily forecast (date-aware)
-    - ``wttr``: current weather text summary
-    - ``auto`` (default): try Open-Meteo first, fallback to wttr when possible
+    - openmeteo: structured daily forecast (date-aware)
+    - wttr: current weather text summary
+    - auto (default): try Open-Meteo first, fallback to wttr when possible
 
     Args:
         lat: Latitude coordinate (-90 to 90).
@@ -412,7 +412,7 @@ def get_weather(
         date: ISO date string or relative string like "today"/"tomorrow".
         city: City name for friendly input mode.
         country: Optional country/region to disambiguate city.
-        provider: ``auto`` | ``openmeteo`` | ``wttr``.
+        provider: auto | openmeteo | wttr.
 
     Returns:
         Human-readable weather summary.

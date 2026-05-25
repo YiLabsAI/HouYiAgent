@@ -1,8 +1,8 @@
 """Benchmark runner for DeepResearch-Bench evaluation.
 
-Loads queries from a JSONL file (DeepResearch-Bench ``query.jsonl`` format),
-runs each through ``ResearchRuntime``, and writes results in the required
-``{id, prompt, article}`` JSONL format for benchmark scoring.
+Loads queries from a JSONL file (DeepResearch-Bench query.jsonl format),
+runs each through ResearchRuntime, and writes results in the required
+{id, prompt, article} JSONL format for benchmark scoring.
 
 Usage::
 
@@ -80,7 +80,7 @@ class BenchmarkRunner:
     web_search:
         Web search provider for information retrieval.
     settings:
-        Default ``ResearchSettings`` applied to every query.
+        Default ResearchSettings applied to every query.
     concurrency:
         Max parallel research runs (default 3 to respect API limits).
     run_timeout:
@@ -112,7 +112,7 @@ class BenchmarkRunner:
         """Run the full benchmark suite.
 
         Args:
-            query_path: Path to ``query.jsonl`` (DeepResearch-Bench format).
+            query_path: Path to query.jsonl (DeepResearch-Bench format).
             output_path: Path to write results JSONL.
             resume: If True, skip queries already present in *output_path*.
         """
@@ -235,13 +235,13 @@ class BenchmarkRunner:
 
 
 # Matches inline markdown links whose anchor text is non-empty and whose
-# URL is http(s). Used by ``_renumber_citations`` to convert verbose
-# ``[title](url)`` citations into short ``[N]`` numbered form.
+# URL is http(s). Used by _renumber_citations to convert verbose
+# [title](url) citations into short [N] numbered form.
 #
 # The anchor permits **one level of nested brackets** so that LLM-produced
-# citations like ``[[PDF] Report title](https://...)`` or
-# ``[Paper [v2]](https://...)`` are matched and normalised. Without this
-# allowance the earlier regex stopped at the first ``]``, leaving the
+# citations like [[PDF] Report title](https://...) or
+# [Paper [v2]](https://...) are matched and normalised. Without this
+# allowance the earlier regex stopped at the first ], leaving the
 # verbose anchor leaking into the body (observed on ZH case1: 73 such
 # raw links, inflating body chars by ~34%; on EN5 qid=52: 24 raw links).
 # Kept deliberately conservative — no recursive nesting — to avoid
@@ -251,12 +251,12 @@ _REFERENCES_HEADING_RE = re.compile(r"^## References\s*$", re.MULTILINE)
 
 
 def _renumber_citations(article: str) -> str:
-    """Convert ``[title](url)`` inline citations into ``[N]`` numbered form.
+    """Convert [title](url) inline citations into [N] numbered form.
 
-    Scans the article body (content before any ``## References`` heading),
+    Scans the article body (content before any ## References heading),
     assigns sequential numbers by URL first-appearance order (repeated URLs
-    reuse the same number), and replaces each inline link with ``[N]``.
-    Rebuilds the References section as ``- [N] [title](url)`` entries.
+    reuse the same number), and replaces each inline link with [N].
+    Rebuilds the References section as - [N] [title](url) entries.
 
     The body is otherwise preserved verbatim. If the article contains no
     inline links, it is returned unchanged.
@@ -297,7 +297,7 @@ def _report_to_article(report: Any) -> str:
 
     DeepResearch-Bench expects a single Markdown string with inline
     citations for FACT / RACE evaluation. Inline citations are emitted as
-    short numbered markers ``[N]`` with a clean numbered References
+    short numbered markers [N] with a clean numbered References
     section at the end, matching academic conventions and the clean
     reading-experience requirement.
     """
@@ -347,7 +347,7 @@ def _report_to_article(report: Any) -> str:
         for ref in cited_refs:
             parts.append(f"- [{ref.title}]({ref.url})")
 
-    # Renumber verbose ``[title](url)`` citations to short ``[N]`` form.
+    # Renumber verbose [title](url) citations to short [N] form.
     return _renumber_citations("\n".join(parts))
 
 

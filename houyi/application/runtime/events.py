@@ -35,7 +35,7 @@ class AgentEventType(str, Enum):
 class AgentEvent(BaseModel):
     """Structured event emitted during agent execution.
 
-    Aligns with A2A ``tasks/sendSubscribe`` SSE event model.
+    Aligns with A2A tasks/sendSubscribe SSE event model.
     """
 
     event_type: AgentEventType
@@ -51,7 +51,7 @@ EventHandler = Callable[[AgentEvent], Coroutine[Any, Any, None]]
 class EventEmitter:
     """Async-safe typed event emitter with multi-listener support.
 
-    Listeners are invoked concurrently via ``asyncio.gather`` and never
+    Listeners are invoked concurrently via asyncio.gather and never
     block the caller—exceptions in individual handlers are logged but
     do not propagate.
 

@@ -97,7 +97,7 @@ class ContextRequestBuilder:
 
     This object owns the reusable context assembly / planning / rendering /
     recovery flow for a single request. Product adapters are expected to
-    project chat-specific objects into `ContextRequestBuildInput` before
+    project chat-specific objects into ContextRequestBuildInput before
     calling it.
     """
 

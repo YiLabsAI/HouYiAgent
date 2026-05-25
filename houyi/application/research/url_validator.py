@@ -40,7 +40,7 @@ class URLValidationReport(BaseModel):
 class URLValidator:
     """Validates URL accessibility with concurrent HTTP HEAD requests.
 
-    Uses ``asyncio.Semaphore`` to limit concurrency and prevent
+    Uses asyncio.Semaphore to limit concurrency and prevent
     overwhelming target servers.
     """
 
@@ -64,7 +64,9 @@ class URLValidator:
         tasks = []
         for url in unique:
             low = url.lower()
-            if any(p in low for p in self._LOCAL_PATTERNS) or not low.startswith(("http://", "https://")):
+            if any(p in low for p in self._LOCAL_PATTERNS) or not low.startswith(
+                ("http://", "https://")
+            ):
                 tasks.append(self._bogus(url))
             else:
                 tasks.append(self._check_url(url))

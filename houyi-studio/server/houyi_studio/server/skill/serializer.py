@@ -1,6 +1,6 @@
 """SkillSpec → dict serialization for the Console UI.
 
-Converts ``SkillSpec`` objects into plain dicts that can be serialized to
+Converts SkillSpec objects into plain dicts that can be serialized to
 JSON and sent to the frontend via WebSocket.  No side effects, no I/O —
 pure data transformation.
 """
@@ -70,9 +70,9 @@ def dominant_side_effect(perms: object) -> str:
 
 
 class SkillSerializer:
-    """Stateless converter: ``SkillSpec`` → dict.
+    """Stateless converter: SkillSpec → dict.
 
-    Separated from ``SkillService`` so the service class does not need to
+    Separated from SkillService so the service class does not need to
     know anything about JSON shape or UI presentation.
     """
 

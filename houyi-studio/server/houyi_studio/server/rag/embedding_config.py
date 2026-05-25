@@ -6,8 +6,8 @@ Responsibilities:
       explicit override → environment variables → auto-detection.
 
 Dependencies:
-    - ``houyi.infrastructure.config.env_config`` for environment variable names.
-    - ``houyi.rag.config.EmbeddingConfig`` (lazy import inside helpers).
+    - houyi.infrastructure.config.env_config for environment variable names.
+    - houyi.rag.config.EmbeddingConfig (lazy import inside helpers).
 
 Thread Safety:
     All functions are stateless and safe to call from any thread/task.
@@ -49,7 +49,7 @@ def _default_storage_dir() -> Path:
     """Lazily resolve the default storage directory.
 
     Returns the path at call time so that tests can set
-    ``HOUYI_KNOWLEDGE_STORAGE`` *before* importing.
+    HOUYI_KNOWLEDGE_STORAGE *before* importing.
     """
     return Path(os.getenv(ENV_KNOWLEDGE_STORAGE, ".houyi/knowledge")).resolve()
 
@@ -58,7 +58,7 @@ def get_library_storage_dir(library_id: str) -> Path:
     """Return the root storage directory for *library_id*.
 
     For test isolation prefer the instance methods on
-    :class:`~.library_repository.LibraryRepository`.
+    ~.library_repository.LibraryRepository.
     """
     return _default_storage_dir() / library_id
 
@@ -76,15 +76,15 @@ def get_library_index_dir(library_id: str) -> Path:
 def is_index_path(path: Path) -> bool:
     """Check whether *path* is an internal index file that should be skipped.
 
-    Index files live under ``{storage}/<lib>/index/``.  Upload files under
-    ``{storage}/<lib>/uploads/`` are **not** skipped.
+    Index files live under {storage}/<lib>/index/.  Upload files under
+    {storage}/<lib>/uploads/ are **not** skipped.
 
     Args:
         path: Filesystem path to inspect.
 
     Returns:
-        ``True`` when the path belongs to an index directory inside
-        ``.houyi``.
+        True when the path belongs to an index directory inside
+        .houyi.
     """
     path_str = str(path)
     index_unix = f"/{INDEX_SUBDIR}/"
@@ -143,15 +143,15 @@ def _make_embedding_config(
     model: str | None = None,
     dimension: int | None = None,
 ) -> Any:
-    """Create an ``EmbeddingConfig`` using provider defaults when needed.
+    """Create an EmbeddingConfig using provider defaults when needed.
 
     Args:
-        provider: Embedding provider name (``local``, ``gemini``, etc.).
+        provider: Embedding provider name (local, gemini, etc.).
         model: Override model identifier.
         dimension: Override vector dimension.
 
     Returns:
-        A ``houyi.rag.config.EmbeddingConfig`` instance.
+        A houyi.rag.config.EmbeddingConfig instance.
     """
     from houyi.rag.config import EmbeddingConfig
 
@@ -173,8 +173,8 @@ def resolve_embedding_config(
     """Resolve the embedding config using a clear priority chain.
 
     Priority (highest to lowest):
-        1. **Explicit override** — ``preferred_provider`` (from library metadata / UI).
-        2. **Environment variables** ``EMBEDDING_PROVIDER`` / ``EMBEDDING_MODEL``.
+        1. **Explicit override** — preferred_provider (from library metadata / UI).
+        2. **Environment variables** EMBEDDING_PROVIDER / EMBEDDING_MODEL.
         3. **Auto-detection** (Gemini → OpenAI → local fastembed).
 
     Args:
@@ -183,7 +183,7 @@ def resolve_embedding_config(
         preferred_dimension: Explicit dimension override.
 
     Returns:
-        ``(EmbeddingConfig, provider_name)`` or ``(None, "no_provider")``.
+        (EmbeddingConfig, provider_name) or (None, "no_provider").
     """
     if preferred_provider:
         if _is_provider_runtime_available(preferred_provider):
@@ -216,7 +216,7 @@ def _auto_detect_embedding() -> tuple[Any, str] | tuple[None, str]:
     Detection order: Gemini (API-key / Vertex) → OpenAI → local fastembed.
 
     Returns:
-        ``(EmbeddingConfig, provider_name)`` or ``(None, "no_provider")``.
+        (EmbeddingConfig, provider_name) or (None, "no_provider").
     """
     if os.environ.get(ENV_GOOGLE_API_KEY):
         try:
@@ -273,5 +273,5 @@ def _auto_detect_embedding() -> tuple[Any, str] | tuple[None, str]:
 
 
 def _detect_embedding_config() -> tuple[Any, str] | tuple[None, str]:
-    """Backward-compatible alias — prefer :func:`resolve_embedding_config`."""
+    """Backward-compatible alias — prefer resolve_embedding_config."""
     return resolve_embedding_config()

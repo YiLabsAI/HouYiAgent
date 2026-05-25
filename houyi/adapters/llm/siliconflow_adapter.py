@@ -1,6 +1,6 @@
 """SiliconFlow provider adapter.
 
-Strategy: prefer the OpenAI client path and fall back to raw ``httpx`` SSE.
+Strategy: prefer the OpenAI client path and fall back to raw httpx SSE.
 The client path provides retries, typed errors, streaming support, and usage tracking.
 """
 
@@ -66,7 +66,7 @@ def _looks_like_balance_error(error_text: str) -> bool:
     """Match SiliconFlow balance-exhaustion failures across inconsistent error shapes.
 
     SiliconFlow has returned both plain-text "INSUFFICIENT BALANCE" messages and
-    JSON fragments containing provider code ``30001``. We keep this provider-
+    JSON fragments containing provider code 30001. We keep this provider-
     specific detector narrow so retry/fallback logic can classify quota failures
     consistently until error normalization is centralized across adapters.
     """
@@ -341,7 +341,7 @@ def _project_messages(
     is_deepseek_tool_model = _is_deepseek_tool_model(model)
     # SiliconFlow DeepSeek (notably V3/V3.2) may reject OpenAI-style follow-up
     # tool transcripts that include assistant.tool_calls + tool role messages with
-    # provider error `code=20015` (`"messages" in request are illegal.`).
+    # provider error code=20015 ("messages" in request are illegal.).
     #
     # We keep first-round user/system messages in standard projection, but when
     # a tool transcript is present we convert assistant/tool turns into the same
@@ -466,7 +466,7 @@ def _tool_delta_impl(choice: Any) -> list[dict] | None:
 class SiliconFlowAdapter(OpenAICompatAdapterBase):
     """Adapter for the SiliconFlow provider.
 
-    Strategy: prefer the OpenAI client path and fall back to raw ``httpx`` SSE.
+    Strategy: prefer the OpenAI client path and fall back to raw httpx SSE.
     The client path provides retries, typed errors, streaming support, and usage
     tracking.
     """
@@ -513,8 +513,8 @@ class SiliconFlowAdapter(OpenAICompatAdapterBase):
     def _sanitize_request_messages(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Ensure OpenAI-compatible request fields are string-typed.
 
-        SiliconFlow rejects non-string `messages[*].content` and may also reject
-        non-string `assistant.tool_calls[*].function.arguments`.
+        SiliconFlow rejects non-string messages[*].content and may also reject
+        non-string assistant.tool_calls[*].function.arguments.
         """
         sanitized = self._sanitize_messages(messages)
         return sanitized
@@ -848,7 +848,7 @@ class SiliconFlowAdapter(OpenAICompatAdapterBase):
     ) -> AsyncIterator[StreamChunk]:
         """Stream chat completion with full message list.
 
-        Yields ``StreamChunk`` objects.
+        Yields StreamChunk objects.
         """
         request = self._build_request(
             messages=messages,

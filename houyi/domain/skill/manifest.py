@@ -128,7 +128,7 @@ class ToolContribution:
 class SkillContribution:
     """Skill contribution specification.
 
-    A skill contribution can reference an external SKILL.md file via ``path``,
+    A skill contribution can reference an external SKILL.md file via path,
     or provide inline metadata when no path is given.
     """
 

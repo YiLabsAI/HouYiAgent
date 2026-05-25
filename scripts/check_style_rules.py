@@ -2,54 +2,54 @@
 """Style rules gate: CJK-free source, short test names, CJK escape readability.
 
 Runs four checks against the Python / shell files passed on the command line.
-Designed to be called from ``scripts/check_code.sh`` and
-``scripts/quick_check.sh`` with the changed-files set so the gate stays cheap
-in normal developer workflows (it only sees what ``git diff`` emits).
+Designed to be called from scripts/check_code.sh and
+scripts/quick_check.sh with the changed-files set so the gate stays cheap
+in normal developer workflows (it only sees what git diff emits).
 
 Usage
 -----
 
     scripts/check_style_rules.py [--exclude GLOB] [PATH ...]
 
-Pass ``--exclude`` (repeatable) to skip paths that should legitimately contain
-CJK content — for example a future ``corpora/zh/`` fixture directory. Globs are
-matched against the ``fnmatch`` pattern of the full path string, so both
-``corpora/zh/*`` and ``**/zh_fixtures/**`` work.
+Pass --exclude (repeatable) to skip paths that should legitimately contain
+CJK content — for example a future corpora/zh/ fixture directory. Globs are
+matched against the fnmatch pattern of the full path string, so both
+corpora/zh/* and **/zh_fixtures/** work.
 
 Checks (in order)
 -----------------
 
 1. **ERROR** — source code must stay ASCII/latin-only. Any raw CJK character in
-   a ``.py`` file fails; use ``\\uXXXX`` escapes for CJK literals instead.
-   Rationale: per ``agent.md`` "no Chinese in code" (dai-ma-wu-zhong-wen)
-   and B3-106 in ``docs/design/deep-research-acceptance.md``.
-2. **ERROR** — test function names must stay short. Any ``def test_<name>``
-   under ``tests/`` fails when ``<name>`` (the portion AFTER the leading
-   ``test_``) contains more than 3 literal underscore characters. The check
-   counts underscores in the captured tail only; the ``test_`` prefix itself
+   a .py file fails; use \\uXXXX escapes for CJK literals instead.
+   Rationale: per agent.md "no Chinese in code" (dai-ma-wu-zhong-wen)
+   and B3-106 in docs/design/deep-research-acceptance.md.
+2. **ERROR** — test function names must stay short. Any def test_<name>
+   under tests/ fails when <name> (the portion AFTER the leading
+   test_) contains more than 3 literal underscore characters. The check
+   counts underscores in the captured tail only; the test_ prefix itself
    is never included.
 
-   Mapping onto ``agent.md`` §Test Function Naming (examples use
-   ``<name>`` = ``alpha_beta_...``):
+   Mapping onto agent.md §Test Function Naming (examples use
+   <name> = alpha_beta_...):
 
-   - ``test_alpha_beta`` — 2 tail segments, 1 underscore: **preferred**.
-   - ``test_alpha_beta_gamma`` — 3 tail segments, 2 underscores: preferred.
-   - ``test_alpha_beta_gamma_delta`` — 4 tail segments, 3 underscores: at the
+   - test_alpha_beta — 2 tail segments, 1 underscore: **preferred**.
+   - test_alpha_beta_gamma — 3 tail segments, 2 underscores: preferred.
+   - test_alpha_beta_gamma_delta — 4 tail segments, 3 underscores: at the
      hard cap. Passes, but reviewers should try to trim further.
-   - ``test_alpha_beta_gamma_delta_epsilon`` — 5 tail segments,
+   - test_alpha_beta_gamma_delta_epsilon — 5 tail segments,
      4 underscores: **FAILS**. Shorten the name or push scenario detail
      into a test class or docstring.
 
    A **WARN** also fires when the captured tail length exceeds 35 characters
-   (soft preference) or 45 characters (hard limit per ``agent.md``). The
+   (soft preference) or 45 characters (hard limit per agent.md). The
    45-char ceiling is also a hard expectation; it is kept as WARN rather
    than ERROR so borderline names surface without blocking otherwise clean
    commits. Treat any WARN as a rename opportunity in the same patch.
-3. **WARN**  — files that embed 5+ ``\\uXXXX`` CJK escapes but carry no ASCII
-   ``#`` comment anywhere in the file emit a warning so reviewers remember to
+3. **WARN**  — files that embed 5+ \\uXXXX CJK escapes but carry no ASCII
+   # comment anywhere in the file emit a warning so reviewers remember to
    add a short pinyin or English gloss.
-4. **ERROR** — new ``scripts/*.{sh,py}`` entrypoints must ship ``-h`` /
-   ``--help`` support. Enforces ``scripts/README.md`` L13 so adding a script
+4. **ERROR** — new scripts/*.{sh,py} entrypoints must ship -h /
+   --help support. Enforces scripts/README.md L13 so adding a script
    does not silently drift from the self-describing-entrypoint convention.
 
 Exit codes: 0 when there are no errors, 1 otherwise. Warnings print but never
@@ -76,12 +76,12 @@ _CJK_ESCAPE_RE = re.compile(
 _TEST_FUNC_RE = re.compile(r"^\s*(?:async\s+)?def\s+test_([A-Za-z0-9_]+)\s*\(")
 _ASCII_COMMENT_RE = re.compile(r"^\s*#\s")
 # Any of these tokens anywhere in the file indicates the script supports
-# ``-h`` / ``--help`` either directly (shell ``"-h"`` branches) or via argparse.
+# -h / --help either directly (shell "-h" branches) or via argparse.
 _HELP_SUPPORT_RE = re.compile(r'--help|"-h"|"\-\-help"|argparse|ArgumentParser|add_help')
 
 _MAX_TEST_UNDERSCORES = 3
 # Character-length limits for the captured tail of a test function name
-# (everything after the leading ``test_``).  Matches ``agent.md`` §Test
+# (everything after the leading test_).  Matches agent.md §Test
 # Function Naming: names should normally fit ~35 chars, and 45 is the hard
 # cap.  The WARN threshold lets reviewers nudge borderline names before the
 # next developer piles on a longer neighbour.
@@ -96,10 +96,10 @@ def _check_file(path: Path, text: str) -> tuple[list[str], list[str]]:
 
     is_python = path.suffix == ".py"
     is_test_file = is_python and "tests" in path.parts
-    # Only the repo-level ``scripts/`` directory holds true entrypoints.
-    # A test fixture path such as ``tests/scripts/__init__.py`` must not
+    # Only the repo-level scripts/ directory holds true entrypoints.
+    # A test fixture path such as tests/scripts/__init__.py must not
     # trip this gate just because its parent directory happens to be
-    # named ``scripts``.  Empty ``__init__.py`` files are also never
+    # named scripts.  Empty __init__.py files are also never
     # entrypoints by convention.
     is_script_entrypoint = (
         path.parent.name == "scripts"

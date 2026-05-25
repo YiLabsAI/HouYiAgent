@@ -43,10 +43,10 @@ class RAG:
     """Houyi RAG - Unified API for Agentic and Indexed retrieval.
 
     This facade provides the stable public entry point for all RAG operations:
-    - `index()`: Build indexes for Indexed mode
-    - `query()`: Execute retrieval queries
-    - `add()`: Add documents to existing index
-    - `refresh()`: Rebuild indexes
+    - index(): Build indexes for Indexed mode
+    - query(): Execute retrieval queries
+    - add(): Add documents to existing index
+    - refresh(): Rebuild indexes
 
     The facade owns config normalization, mode selection, and lazy runtime
     creation for Agentic and Indexed modes. Concrete retrieval / ingest logic

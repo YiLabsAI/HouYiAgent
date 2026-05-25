@@ -2,22 +2,22 @@
 
 Two API modes:
 
-1. **Vertex AI** (``GOOGLE_CLOUD_PROJECT`` required) — routes to
-   ``aiplatform.googleapis.com``.  Supports ALL models including
+1. **Vertex AI** (GOOGLE_CLOUD_PROJECT required) — routes to
+   aiplatform.googleapis.com.  Supports ALL models including
    preview.  Auth: ADC, service account, or GCP API key.
-2. **Developer API** (``GOOGLE_API_KEY`` only) — routes to
-   ``generativelanguage.googleapis.com``.  Auth: AI Studio API key
-   (``AIza...``).
+2. **Developer API** (GOOGLE_API_KEY only) — routes to
+   generativelanguage.googleapis.com.  Auth: AI Studio API key
+   (AIza...).
 
 Uses the default google-genai client over REST,
 making it compatible with HTTP proxies (unlike the gRPC-based vertexai client).
 
 Proxy handling:
-    Uses ``houyi.infrastructure.net.proxy.detect_proxy()`` for cross-platform system
-    proxy detection (with optional ``HOUYI_PROXY_URL`` override).
-    When a proxy is detected, a custom ``httpx`` client with the
-    proxy explicitly configured is injected into the ``genai.Client`` via
-    ``http_options``, guaranteeing the proxy is used for all requests.
+    Uses houyi.infrastructure.net.proxy.detect_proxy() for cross-platform system
+    proxy detection (with optional HOUYI_PROXY_URL override).
+    When a proxy is detected, a custom httpx client with the
+    proxy explicitly configured is injected into the genai.Client via
+    http_options, guaranteeing the proxy is used for all requests.
 """
 
 from __future__ import annotations
@@ -78,11 +78,11 @@ def _classify_client_error(exc: Exception) -> str:
 
 
 def _build_proxy_http_options(proxy_url: str) -> HttpOptionsDict:
-    """Build ``http_options`` dict with custom httpx clients that use *proxy_url*.
+    """Build http_options dict with custom httpx clients that use *proxy_url*.
 
-    Passing custom ``httpx`` clients via ``http_options`` to ``genai.Client``
+    Passing custom httpx clients via http_options to genai.Client
     guarantees the proxy is used for every request — the default
-    ``aiohttp`` streaming path is bypassed in favour of ``httpx``, which has
+    aiohttp streaming path is bypassed in favour of httpx, which has
     more reliable HTTP CONNECT tunnel proxy support.
     """
     import httpx  # google-genai already depends on httpx
@@ -319,14 +319,14 @@ class GoogleVertexGeminiAdapter(LLMAdapter):
 
     Two API modes:
 
-    1. **Vertex AI** — ``GOOGLE_CLOUD_PROJECT`` set (auto-detected from
+    1. **Vertex AI** — GOOGLE_CLOUD_PROJECT set (auto-detected from
        service-account JSON or explicit env var).  Auth via ADC / SA /
        GCP API key.  Supports ALL models including preview.
-    2. **Developer API** — only ``GOOGLE_API_KEY`` (``AIza...`` from
-       AI Studio).  Routes to ``generativelanguage.googleapis.com``.
+    2. **Developer API** — only GOOGLE_API_KEY (AIza... from
+       AI Studio).  Routes to generativelanguage.googleapis.com.
 
-    Compatible with both execution engine (``stream_completion``) and
-    chat service (``stream_chat`` yielding ``StreamChunk`` objects).
+    Compatible with both execution engine (stream_completion) and
+    chat service (stream_chat yielding StreamChunk objects).
     """
 
     def __init__(
@@ -414,9 +414,9 @@ class GoogleVertexGeminiAdapter(LLMAdapter):
     def from_env(cls) -> GoogleVertexGeminiAdapter:
         """Create from environment variables.
 
-        If ``GOOGLE_CLOUD_PROJECT`` is available (from env var or
+        If GOOGLE_CLOUD_PROJECT is available (from env var or
         auto-detected from service-account JSON) → Vertex AI mode.
-        Otherwise falls back to Developer API with ``GOOGLE_API_KEY``.
+        Otherwise falls back to Developer API with GOOGLE_API_KEY.
         """
         from houyi.infrastructure.config.env_config import EnvConfig
 
@@ -664,9 +664,9 @@ class GoogleVertexGeminiAdapter(LLMAdapter):
         extra_kwargs: dict[str, Any],
     ) -> Any:
         # API contract note:
-        # ``extra_kwargs`` comes from the shared chat pipeline and may include
+        # extra_kwargs comes from the shared chat pipeline and may include
         # OpenAI/OpenAI-compatible request fields. Gemini's
-        # ``types.GenerateContentConfig`` has a strict schema (extra_forbidden),
+        # types.GenerateContentConfig has a strict schema (extra_forbidden),
         # so we must explicitly strip non-Gemini keys before constructing config.
         config_kwargs: dict[str, Any] = {"temperature": temperature}
         if max_tokens is not None:
@@ -690,7 +690,7 @@ class GoogleVertexGeminiAdapter(LLMAdapter):
         extra_kwargs.pop("prompt_cache_key", None)
         # Shared final-stream logic may inject OpenAI stream usage controls.
         # Gemini config does not support these keys, and forwarding them causes
-        # pydantic ``extra_forbidden`` validation errors at runtime.
+        # pydantic extra_forbidden validation errors at runtime.
         extra_kwargs.pop("include_stream_usage", None)
         extra_kwargs.pop("stream_options", None)
         tool_choice = extra_kwargs.pop("tool_choice", None)
@@ -839,9 +839,9 @@ class GoogleVertexGeminiAdapter(LLMAdapter):
         """Stream chat completion.
 
         Yields:
-            ``StreamChunk`` objects.
+            StreamChunk objects.
             Gemini function_calls are complete objects (not deltas),
-            so ``tool_calls_delta`` is always ``None``.
+            so tool_calls_delta is always None.
         """
         try:
             from google.genai import types

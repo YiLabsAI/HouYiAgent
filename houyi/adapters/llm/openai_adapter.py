@@ -255,8 +255,8 @@ class OpenAIAdapter(LLMAdapter):
         """Streaming chat completion with OpenAI.
 
         Yields:
-            ``StreamChunk`` objects.
-            ``tool_calls_delta`` is populated with OpenAI delta dicts when present.
+            StreamChunk objects.
+            tool_calls_delta is populated with OpenAI delta dicts when present.
         """
         params = self._build_chat_params(
             messages=messages,

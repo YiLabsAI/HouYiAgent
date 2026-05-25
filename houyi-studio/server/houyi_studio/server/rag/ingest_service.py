@@ -3,16 +3,16 @@
 Responsibilities:
     - Discover files from user-supplied paths.
     - Perform incremental-ingest filtering (config-hash, mtime/size).
-    - Drive the ``houyi.rag.RAG.index()`` pipeline per-file with
+    - Drive the houyi.rag.RAG.index() pipeline per-file with
       progress callbacks and cancellation support.
     - Fall back to simple file counting when the RAG engine or an
       embedding provider is unavailable.
 
 Dependencies:
-    - :class:`~.library_repository.LibraryRepository` for library access
+    - ~.library_repository.LibraryRepository for library access
       and persistence.
-    - :func:`~.embedding_config.resolve_embedding_config` and
-      :func:`~.embedding_config.is_index_path` for embedding resolution
+    - ~.embedding_config.resolve_embedding_config and
+      ~.embedding_config.is_index_path for embedding resolution
       and path filtering.
 
 Thread Safety:
@@ -45,7 +45,7 @@ class IngestService:
     """Orchestrates file ingestion into a knowledge library.
 
     Args:
-        repo: The shared :class:`LibraryRepository` instance.
+        repo: The shared LibraryRepository instance.
     """
 
     def __init__(self, repo: LibraryRepository) -> None:
@@ -66,13 +66,13 @@ class IngestService:
             library_id: Target library ID.
             paths: File and/or directory paths to ingest.
             progress_callback: Optional async callable receiving
-                ``progress``, ``current_file``, ``files_processed``,
-                ``total_files`` keyword arguments.
-            incremental: When ``True``, skip unchanged files.
+                progress, current_file, files_processed,
+                total_files keyword arguments.
+            incremental: When True, skip unchanged files.
 
         Returns:
-            A result dict with ``success``, ``stats``, and optionally
-            ``error`` / ``warning`` keys.
+            A result dict with success, stats, and optionally
+            error / warning keys.
         """
         library = self._repo.get_library(library_id)
         if not library:
@@ -208,7 +208,7 @@ class IngestService:
         library: dict[str, Any],
         all_files: list[Path],
     ) -> tuple[list[Path], int]:
-        """Return ``(files_to_ingest, skipped_count)``."""
+        """Return (files_to_ingest, skipped_count)."""
         file_index = library.get("file_index", {})
         documents = library.get("documents", {})
 
@@ -496,7 +496,7 @@ class IngestService:
         """Create or update the document metadata record for *file_path*.
 
         Returns:
-            ``(doc_id, doc_metadata, created_new)`` tuple.
+            (doc_id, doc_metadata, created_new) tuple.
         """
         file_path_str = str(file_path.resolve())
         if "documents" not in library:

@@ -10,9 +10,9 @@ class ContextStrategy(BaseModel):
 
     Attributes:
         keep_tool_result: Number of recent tool-result messages to retain.
-            ``-1`` means keep all (no truncation).
+            -1 means keep all (no truncation).
         context_compress_limit: Token count at which old messages are
-            summarised into a compressed prefix.  ``0`` disables compression.
+            summarised into a compressed prefix.  0 disables compression.
         max_context_tokens: Hard upper bound on total context window tokens.
         summary_on_limit: When *True*, generate a summary of dropped
             messages instead of silently discarding them.

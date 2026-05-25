@@ -1,16 +1,16 @@
 """Persistent storage and CRUD operations for knowledge libraries.
 
 Responsibilities:
-    - Own the ``_libraries`` dict (the in-memory representation of
-      ``libraries.json``) and the ``_cancel_flags`` dict.
+    - Own the _libraries dict (the in-memory representation of
+      libraries.json) and the _cancel_flags dict.
     - Provide path helpers scoped to a specific service instance so that
-      tests can supply an isolated ``storage_dir``.
+      tests can supply an isolated storage_dir.
     - Load / save / migrate the JSON metadata file.
     - Expose CRUD methods for library management.
 
 Dependencies:
-    - :mod:`.embedding_config` for ``UPLOADS_SUBDIR``, ``INDEX_SUBDIR``,
-      ``_LIB_ID_PREFIX``, and ``_default_storage_dir``.
+    - .embedding_config for UPLOADS_SUBDIR, INDEX_SUBDIR,
+      _LIB_ID_PREFIX, and _default_storage_dir.
 
 Thread Safety:
     Not thread-safe.  Callers must serialise writes externally when
@@ -42,8 +42,8 @@ class LibraryRepository:
     """Manages knowledge-library persistence and CRUD.
 
     Args:
-        storage_dir: Override the storage root.  When ``None``, falls back to
-            the ``HOUYI_KNOWLEDGE_STORAGE`` env var or ``.houyi/knowledge``.
+        storage_dir: Override the storage root.  When None, falls back to
+            the HOUYI_KNOWLEDGE_STORAGE env var or .houyi/knowledge.
             **Always** supply an explicit path in tests.
     """
 
@@ -83,7 +83,7 @@ class LibraryRepository:
         self._storage_dir.mkdir(parents=True, exist_ok=True)
 
     def _load_libraries(self) -> None:
-        """Deserialise ``libraries.json`` into ``_libraries``."""
+        """Deserialise libraries.json into _libraries."""
         metadata_file = self._storage_dir / "libraries.json"
         if metadata_file.exists():
             try:
@@ -160,7 +160,7 @@ class LibraryRepository:
             logger.debug("Library data migration complete")
 
     def _save_libraries(self) -> None:
-        """Persist ``_libraries`` to ``libraries.json``."""
+        """Persist _libraries to libraries.json."""
         metadata_file = self._storage_dir / "libraries.json"
         try:
             with open(metadata_file, "w") as f:
@@ -197,12 +197,12 @@ class LibraryRepository:
         Args:
             name: Human-readable library name.
             description: Optional description.
-            mode: RAG mode (``agentic``, ``indexed``, ``auto``).
+            mode: RAG mode (agentic, indexed, auto).
             knowledge_dir: Path to the knowledge source directory.
             metadata: Extra metadata (chunking settings, etc.).
 
         Returns:
-            The created library dict, or ``None`` if *name* is a duplicate.
+            The created library dict, or None if *name* is a duplicate.
         """
         for lib in self._libraries.values():
             if lib.get("name") == name:
@@ -252,13 +252,13 @@ class LibraryRepository:
 
         Safety:
             Validates the *library_id* format and ensures the resolved path
-            is a strict child of ``storage_dir`` to prevent path-traversal.
+            is a strict child of storage_dir to prevent path-traversal.
 
         Args:
             library_id: The library to remove.
 
         Returns:
-            ``True`` if the library was deleted, ``False`` otherwise.
+            True if the library was deleted, False otherwise.
         """
         if library_id not in self._libraries:
             return False
@@ -312,7 +312,7 @@ class LibraryRepository:
             library_id: The identifier to search for.
 
         Returns:
-            The library dict, or ``None`` if not found.
+            The library dict, or None if not found.
         """
         return self._libraries.get(library_id)
 
@@ -325,11 +325,11 @@ class LibraryRepository:
 
         Args:
             library_id: The library to update.
-            updates: Key/value pairs to merge.  The ``metadata`` key is
+            updates: Key/value pairs to merge.  The metadata key is
                 *merged* rather than replaced.
 
         Returns:
-            The updated library dict, or ``None`` if not found.
+            The updated library dict, or None if not found.
         """
         library = self._libraries.get(library_id)
         if not library:

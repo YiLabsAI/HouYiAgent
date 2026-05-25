@@ -6,7 +6,7 @@ Responsibilities:
     - Status transitions (enable / disable / error).
 
 Dependencies:
-    - :class:`~.library_repository.LibraryRepository` (constructor-injected).
+    - ~.library_repository.LibraryRepository (constructor-injected).
 
 Thread Safety:
     Delegates all persistence to the repository; same caveats apply.
@@ -30,7 +30,7 @@ class DocumentService:
     """Manages documents and chunks inside knowledge libraries.
 
     Args:
-        repo: The shared :class:`LibraryRepository` instance.
+        repo: The shared LibraryRepository instance.
     """
 
     def __init__(self, repo: LibraryRepository) -> None:
@@ -61,7 +61,7 @@ class DocumentService:
             doc_id: Document identifier.
 
         Returns:
-            The document dict, or ``None``.
+            The document dict, or None.
         """
         library = self._repo.get_library(library_id)
         if not library:
@@ -79,11 +79,11 @@ class DocumentService:
         Args:
             library_id: Target library.
             file_path: Absolute or relative path to the file on disk.
-            status: Initial status (``pending`` / ``indexing`` / ``indexed``
-                / ``disabled`` / ``error``).
+            status: Initial status (pending / indexing / indexed
+                / disabled / error).
 
         Returns:
-            The created document dict, or ``None`` if the library does
+            The created document dict, or None if the library does
             not exist or the file is missing.
         """
         library = self._repo.get_library(library_id)
@@ -137,10 +137,10 @@ class DocumentService:
             status: New status string.
             chunk_count: Optionally update the chunk count.
             error_message: Attach an error message (cleared automatically
-                when the new status is not ``error``).
+                when the new status is not error).
 
         Returns:
-            The updated document dict, or ``None`` if not found.
+            The updated document dict, or None if not found.
         """
         library = self._repo.get_library(library_id)
         if not library:
@@ -174,7 +174,7 @@ class DocumentService:
             doc_id: Document to delete.
 
         Returns:
-            ``True`` if deleted, ``False`` if not found.
+            True if deleted, False if not found.
         """
         library = self._repo.get_library(library_id)
         if not library:
@@ -216,7 +216,7 @@ class DocumentService:
             doc_id: Document to disable.
 
         Returns:
-            The updated document dict, or ``None``.
+            The updated document dict, or None.
         """
         return self.update_document_status(library_id, doc_id, "disabled")
 
@@ -228,14 +228,14 @@ class DocumentService:
             doc_id: Document to enable.
 
         Returns:
-            The updated document dict, or ``None``.
+            The updated document dict, or None.
         """
         return self.update_document_status(library_id, doc_id, "indexed")
 
     def increment_retrieval_count(self, library_id: str, doc_id: str) -> None:
         """Bump the retrieval counter for a document.
 
-        The change is kept in memory only; a periodic ``repo.save()``
+        The change is kept in memory only; a periodic repo.save()
         will persist it (avoids hot-path disk I/O).
 
         Args:
@@ -290,11 +290,11 @@ class DocumentService:
             content: Raw text to chunk.
             chunk_size: Target size per chunk (characters).
             chunk_overlap: Overlap between consecutive chunks.
-            strategy: ``"recursive"`` (default) or ``"sentence"``.
+            strategy: "recursive" (default) or "sentence".
 
         Returns:
-            A list of dicts with ``index``, ``content`` (truncated),
-            and ``char_count``.
+            A list of dicts with index, content (truncated),
+            and char_count.
         """
         chunks: list[str] = []
         if strategy == "sentence":

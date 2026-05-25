@@ -1,6 +1,6 @@
 """Resource-management command handler (Workflow, Knowledge, Document).
 
-Part of the command-handler hierarchy extracted from ``app.py`` following the
+Part of the command-handler hierarchy extracted from app.py following the
 **Single Responsibility Principle (SRP)** and **Open/Closed Principle (OCP)**:
 
 Architecture
@@ -54,7 +54,7 @@ class CommandHandler:
 
     Responsibilities
     ----------------
-    - Workflow persistence: save / load / list workflows via ``ExecutionEngine.workflow_service``.
+    - Workflow persistence: save / load / list workflows via ExecutionEngine.workflow_service.
     - Knowledge-base lifecycle: CRUD on knowledge libraries, file ingestion (with progress
       streaming), index rebuilds, and cancellation.
     - Document management: list / get / delete / enable / disable documents and chunk
@@ -64,9 +64,9 @@ class CommandHandler:
 
     Integration
     -----------
-    Registered with ``CommandDispatcher`` for all ``SUPPORTED_COMMAND_TYPES``.
-    The dispatcher calls ``can_handle`` → ``handle`` on each incoming dict-based
-    command whose ``command_type`` matches.
+    Registered with CommandDispatcher for all SUPPORTED_COMMAND_TYPES.
+    The dispatcher calls can_handle → handle on each incoming dict-based
+    command whose command_type matches.
     """
 
     SUPPORTED_COMMAND_TYPES = {

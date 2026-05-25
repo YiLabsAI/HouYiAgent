@@ -128,7 +128,7 @@ class TestLibraryManagement:
 class TestDeleteLibrarySafety:
     """Tests for delete_library path-safety guards.
 
-    These tests ensure ``delete_library`` refuses to delete directories
+    These tests ensure delete_library refuses to delete directories
     that are outside the storage root, have malformed IDs, or are nested
     deeper than expected.
     """
@@ -142,7 +142,7 @@ class TestDeleteLibrarySafety:
         assert knowledge_service.delete_library(lib_id) is True
         assert knowledge_service.get_library(lib_id) is None
 
-    def test_delete_rejects_bad_id_format(self, knowledge_service):
+    def test_rejects_bad_id(self, knowledge_service):
         """IDs that don't start with 'lib_' are refused."""
         knowledge_service._repo._libraries["evil"] = {"library_id": "evil", "name": "bad"}
         assert knowledge_service.delete_library("evil") is False
@@ -161,7 +161,7 @@ class TestDeleteLibrarySafety:
         assert svc.storage_dir == (tmp_path / "custom").resolve()
         assert svc.storage_dir.exists()
 
-    def test_library_dirs_respect_storage_dir(self, tmp_path):
+    def test_library_respects_storage(self, tmp_path):
         """Instance methods return paths under the injected storage dir."""
         svc = KnowledgeService(storage_dir=tmp_path / "iso")
         lib = svc.create_library(name="Isolated", description="", mode="auto")
@@ -248,7 +248,7 @@ class TestDataMigration:
         assert lib["doc_count"] == 1  # Duplicate should be removed
         assert len(lib["documents"]) == 1
 
-    def test_migrate_ready_with_zero_chunks_to_degraded(self, knowledge_service):
+    def test_zero_chunks_degraded(self, knowledge_service):
         """Libraries with status=ready but chunks=0 should be migrated to degraded."""
         lib_id = "lib_test_zero_chunks"
         knowledge_service._repo._libraries[lib_id] = {
@@ -289,7 +289,7 @@ class TestDataMigration:
 class TestEmbeddingProviderDetection:
     """Tests for embedding provider detection and degraded status."""
 
-    def test_no_embedding_provider_sets_degraded_status(self, knowledge_service):
+    def test_no_embedding_sets_degraded(self, knowledge_service):
         """When no embedding provider is available, ingest should set status='degraded'
         instead of 'ready' when chunks=0."""
         from unittest.mock import patch
@@ -341,7 +341,7 @@ class TestEmbeddingProviderDetection:
                 if val is not None:
                     os.environ[key] = val
 
-    def test_google_cloud_project_env_enables_gemini_embedding(self):
+    def test_gcloud_project_enables_gemini(self):
         """GOOGLE_CLOUD_PROJECT env var should be checked for Gemini embedding."""
         env_backup = os.environ.get("GOOGLE_CLOUD_PROJECT")
         try:

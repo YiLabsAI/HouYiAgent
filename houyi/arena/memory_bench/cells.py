@@ -219,7 +219,7 @@ class CellRunner:
     """Formal runner for the 17-cell matrix.
 
     The runner is intentionally synchronous: each cell's check is a
-    deterministic callable so the matrix can run inside `make check`
+    deterministic callable so the matrix can run inside make check
     without an event loop. External-benchmark cells (LoCoMo / HaluMem)
     wire their async harness behind a sync wrapper before handing the
     closure here.

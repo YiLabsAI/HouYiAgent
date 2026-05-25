@@ -1,9 +1,9 @@
 """Research search orchestration core.
 
 This module owns cross-sub-question execution for Deep Research. The
-coordinator selects the orchestration strategy for `direct`, `delegate`, and
-`autonomous` modes, controls concurrency, emits lifecycle events, and routes
-each sub-question into the shared `SearchExecutor` kernel or the agent-based
+coordinator selects the orchestration strategy for direct, delegate, and
+autonomous modes, controls concurrency, emits lifecycle events, and routes
+each sub-question into the shared SearchExecutor kernel or the agent-based
 fallback path when needed.
 """
 
@@ -68,7 +68,7 @@ When finished, respond with ONLY a JSON object (no markdown fences):
 
 @dataclass(slots=True)
 class CoordinatorServices:
-    """Immutable runtime dependencies injected into `ResearchCoordinator`.
+    """Immutable runtime dependencies injected into ResearchCoordinator.
 
     This keeps the coordinator itself focused on orchestration logic instead
     of construction logic, and makes the execution contract explicit at the
@@ -96,7 +96,7 @@ class CoordinatorServices:
 
 @dataclass(slots=True)
 class SearchPhaseResult:
-    """Search-phase outputs produced by `ResearchCoordinator.run()`."""
+    """Search-phase outputs produced by ResearchCoordinator.run()."""
 
     search_results: list[SearchResult]
     aggregated_sources: AggregatedSources
@@ -213,7 +213,7 @@ class ResearchCoordinator:
     - choose mode-specific sub-question execution strategy
     - enforce cross-question concurrency limits
     - preserve retry / checkpoint semantics
-    - bridge shared-state collaboration for `autonomous`
+    - bridge shared-state collaboration for autonomous
     - degrade to the agent fallback path when the core search executor fails
     """
 

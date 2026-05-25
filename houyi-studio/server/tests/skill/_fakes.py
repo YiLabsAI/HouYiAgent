@@ -106,7 +106,7 @@ class _FakeModelAutoInvoke:
 
 class _FakePolicy:
     """Mimics InvocationPolicy.  Uses _FakeModelAutoInvoke so that
-    `.model_auto_invoke.value` works the same as the real enum."""
+    .model_auto_invoke.value works the same as the real enum."""
 
     def __init__(self, default_action="allow", model_auto_invoke=None):
         self.model_auto_invoke = _FakeModelAutoInvoke(default_action)

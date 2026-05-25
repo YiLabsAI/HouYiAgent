@@ -25,8 +25,8 @@ async def execute_parallel_retrieval(
 ) -> list[Any]:
     """Execute retrieval strategies concurrently and normalize their outcomes.
 
-    Each strategy may yield a task or be skipped by returning `None`. Task failures are
-    captured into `result_factory` records instead of surfacing to the facade. Pending
+    Each strategy may yield a task or be skipped by returning None. Task failures are
+    captured into result_factory records instead of surfacing to the facade. Pending
     tasks are cancelled after the timeout window and converted into timed-out results.
     """
 

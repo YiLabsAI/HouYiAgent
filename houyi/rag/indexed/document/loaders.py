@@ -160,7 +160,7 @@ def _format_tabular_rows(
 def _load_csv_file(path: Path) -> Document | None:
     """Load CSV file.
 
-    Uses stdlib ``csv`` by default and optionally pandas when available.
+    Uses stdlib csv by default and optionally pandas when available.
     """
     headers: list[str] = []
     rows: list[dict[str, str]] = []

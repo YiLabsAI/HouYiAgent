@@ -383,7 +383,7 @@ class TestHFRowTranslation:
         assert session.metadata == {"persona": "Alice"}
 
     def test_aliased_columns(self) -> None:
-        # ``conversation``/``memories`` are accepted as aliases.
+        # conversation/memories are accepted as aliases.
         row = {
             "conversation": [{"speaker": "user", "text": "hi"}],
             "memories": [{"text": "user said hi"}],

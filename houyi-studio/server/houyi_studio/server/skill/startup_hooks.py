@@ -183,8 +183,8 @@ def _hydrate_external_runtime(
     """Hydrate external alias skills with core runtime when missing.
 
     Two-phase resolution:
-    1. RuntimeResolver: if a skill declares a ``runtime`` contract with an
-       ``adapter``, dynamically import and bind it as executor.
+    1. RuntimeResolver: if a skill declares a runtime contract with an
+       adapter, dynamically import and bind it as executor.
     2. Core fallback: if the skill still lacks an executor, inherit from the
        matching core skill (ext__X -> X).
 
@@ -378,8 +378,8 @@ def register_console_skills() -> None:
 def _load_external_skills(registered_skills: list[str]) -> None:
     """Load external/community SKILL.md files from managed startup scan dirs.
 
-    Default scan path resolves to the managed ``.houyi/skills`` directory.
-    ``HOUYI_STARTUP_SKILLS_DIR`` can override it explicitly.
+    Default scan path resolves to the managed .houyi/skills directory.
+    HOUYI_STARTUP_SKILLS_DIR can override it explicitly.
     """
     for skills_dir in _resolve_external_skill_scan_dirs():
         if not skills_dir.is_dir():

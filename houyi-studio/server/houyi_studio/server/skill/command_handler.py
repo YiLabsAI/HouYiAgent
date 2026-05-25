@@ -1,6 +1,6 @@
 """Skill-lifecycle command handler (Load, Unload, Configure, DryRun, Metrics, Consent).
 
-Part of the command-handler hierarchy extracted from ``app.py`` following the
+Part of the command-handler hierarchy extracted from app.py following the
 **Single Responsibility Principle (SRP)** and **Open/Closed Principle (OCP)**:
 
 Architecture
@@ -32,7 +32,7 @@ Design rationale
     "export-skill-config") can be added here without touching the dispatcher
     or the other two handlers.
 
-*   **Dependency Inversion**: Collaborators (``send_event``, ``SkillService``)
+*   **Dependency Inversion**: Collaborators (send_event, SkillService)
     are constructor-injected, enabling isolated unit testing with fakes.
 """
 
@@ -89,23 +89,23 @@ class SkillCommandHandler:
 
     Responsibilities
     ----------------
-    - Discovery: list available skills with summary metadata (``list_skills``).
+    - Discovery: list available skills with summary metadata (list_skills).
     - Inspection: retrieve full skill detail including parameters, permissions,
-      and side-effect declarations (``get_skill_detail``).
+      and side-effect declarations (get_skill_detail).
     - Loading / unloading: activate or deactivate a skill in the current session
-      (``load_skill`` / ``unload_skill``).
+      (load_skill / unload_skill).
     - Configuration: update runtime parameters for a loaded skill
-      (``configure_skill``).
+      (configure_skill).
     - Dry-run: execute a skill in sandbox mode and return the result preview
-      without committing side effects (``dry_run_skill``).
+      without committing side effects (dry_run_skill).
     - Consent flow: relay user consent responses for skills that require explicit
-      approval before performing privileged operations (``consent_response``).
-    - Metrics: gather per-skill usage statistics (``get_skill_metrics``).
+      approval before performing privileged operations (consent_response).
+    - Metrics: gather per-skill usage statistics (get_skill_metrics).
 
     Integration
     -----------
-    Registered with ``CommandDispatcher`` under the ``command_type`` values of
-    each typed ``SkillCommand``.  The dispatcher invokes ``handle()`` with
+    Registered with CommandDispatcher under the command_type values of
+    each typed SkillCommand.  The dispatcher invokes handle() with
     the already-parsed Pydantic command and the session id.
     """
 

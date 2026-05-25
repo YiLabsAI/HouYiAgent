@@ -309,14 +309,14 @@ QUERY_HYGIENE_EN_STOPWORDS: tuple[str, ...] = (
 #
 # Three vocabularies power the contract:
 #
-# * ``SECTION_CRITICAL_ANALYSIS_KEYWORDS`` - presence of any of these tokens
+# * SECTION_CRITICAL_ANALYSIS_KEYWORDS - presence of any of these tokens
 #   in a section body signals that the author has acknowledged limitations,
 #   caveats, or competing interpretations. Postprocess guards attach a debug
 #   hint (HTML comment) when none of the tokens are found.
-# * ``SECTION_VISUAL_TRIGGER_KEYWORDS`` - hierarchy/sequence cues that justify
+# * SECTION_VISUAL_TRIGGER_KEYWORDS - hierarchy/sequence cues that justify
 #   a mermaid diagram. Postprocess guards attach a visualization hint when the
 #   cue is present but no mermaid fence is detected.
-# * ``UNIVERSAL_BACKBONE_FACETS`` - the minimal topic-agnostic outline
+# * UNIVERSAL_BACKBONE_FACETS - the minimal topic-agnostic outline
 #   contract. Only two facets are included: concept-framework and
 #   controversies-and-caveats. Any further facet would drift into
 #   topic-specific territory and is deliberately excluded.

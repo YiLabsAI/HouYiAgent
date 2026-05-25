@@ -2,8 +2,8 @@
 
 Instead of hardcoding tool-name-specific logic in the runner, coercion
 functions are registered in a registry keyed by tool name. The runner
-calls ``coerce_args(tool_name, args, resolved_outputs)`` and dispatches
-to the matching handler (or returns ``args`` unchanged).
+calls coerce_args(tool_name, args, resolved_outputs) and dispatches
+to the matching handler (or returns args unchanged).
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ _REGISTRY: dict[str, CoercionFn] = {}
 
 
 def register_arg_coercion(tool_name: str, fn: CoercionFn) -> None:
-    """Register a coercion function for ``tool_name``."""
+    """Register a coercion function for tool_name."""
     _REGISTRY[tool_name] = fn
 
 
@@ -29,7 +29,7 @@ def coerce_args(
     args: dict[str, Any],
     resolved_outputs: dict[str, Any],
 ) -> dict[str, Any]:
-    """Apply registered coercion (if any) for ``tool_name``."""
+    """Apply registered coercion (if any) for tool_name."""
     fn = _REGISTRY.get(tool_name)
     if fn is None:
         return args

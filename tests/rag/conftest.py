@@ -59,7 +59,7 @@ def patch_rag_constructor() -> Callable[[Any, Any], Any]:
 
 @pytest.fixture
 def patch_skill_rag_builder() -> Callable[[Any, Any], Any]:
-    """Patch a module-local ``build_skill_rag`` factory and yield the factory mock."""
+    """Patch a module-local build_skill_rag factory and yield the factory mock."""
 
     @contextmanager
     def _patch(skill_module: Any, rag_instance: Any):

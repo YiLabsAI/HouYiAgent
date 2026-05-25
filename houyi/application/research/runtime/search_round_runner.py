@@ -384,7 +384,7 @@ def _to_source_ref(hit: SearchHit) -> SourceReference:
 
 
 def _extract_domain(url: str) -> str:
-    """Return lowercase domain from a URL, stripping the ``www.`` prefix."""
+    """Return lowercase domain from a URL, stripping the www. prefix."""
     try:
         netloc = urlparse(url).netloc.lower()
     except Exception:

@@ -1,8 +1,8 @@
 """AgentOrchestrator: dual-mode orchestration engine (Delegate + Autonomous).
 
 Conceptual hierarchy:
-  - **Orchestration patterns** (primary API): ``run_delegate``, ``run_autonomous``
-  - **Execution primitives** (building blocks): ``run_sequential``, ``run_parallel``
+  - **Orchestration patterns** (primary API): run_delegate, run_autonomous
+  - **Execution primitives** (building blocks): run_sequential, run_parallel
 
 Delegate and Autonomous are the two main modes of multi-agent collaboration.
 Sequential and Parallel are execution strategies used within them (or standalone
@@ -69,17 +69,17 @@ class AgentOrchestrator:
     """Dual-mode orchestration engine for multi-agent collaboration.
 
     **Orchestration patterns** (primary):
-      - ``run_delegate``: One main agent delegates tasks to team agents.
-      - ``run_autonomous``: Peer agents collaborate via shared state
+      - run_delegate: One main agent delegates tasks to team agents.
+      - run_autonomous: Peer agents collaborate via shared state
         and message bus in iterative rounds.
 
     **Execution primitives** (building blocks):
-      - ``run_sequential``: Execute stages one after another, each receiving
+      - run_sequential: Execute stages one after another, each receiving
         the previous stage's output.
-      - ``run_parallel``: Execute agents concurrently and merge results.
+      - run_parallel: Execute agents concurrently and merge results.
 
-    The orchestrator integrates ``SharedStateBackend``, ``AgentMessageBus``,
-    ``ErrorPolicy``, and ``ConflictResolver`` for production-grade execution.
+    The orchestrator integrates SharedStateBackend, AgentMessageBus,
+    ErrorPolicy, and ConflictResolver for production-grade execution.
     """
 
     def __init__(
@@ -111,7 +111,7 @@ class AgentOrchestrator:
     ) -> OrchestratorResult:
         """Delegate mode: main agent decides sub-tasks, delegates, synthesises.
 
-        *agents* values may be ``AgentTeamConfig`` or ``Agent`` instances.
+        *agents* values may be AgentTeamConfig or Agent instances.
 
         1. Main runner produces a plan / task decomposition.
         2. Team agents execute their assigned tasks in parallel.

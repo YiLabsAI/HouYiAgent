@@ -292,7 +292,7 @@ class ToolCallRunner(_ToolCallRunnerBase):
 
         Args:
             preprocessors: Optional list of PreprocessorSpec objects.  When
-                provided, a :class:`PreprocessorPipeline` executes them
+                provided, a PreprocessorPipeline executes them
                 **before** the first LLM call and injects their outputs into
                 the message context.
         """

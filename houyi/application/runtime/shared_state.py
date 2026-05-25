@@ -53,22 +53,22 @@ class SharedStateBackend(ABC):
     async def write(self, state_id: str, updates: dict[str, Any]) -> None:
         """Atomic partial update using reducer semantics.
 
-        - ``list`` fields: *append* items from the update list.
-        - Scalar / ``dict`` fields: *overwrite* with the update value.
+        - list fields: *append* items from the update list.
+        - Scalar / dict fields: *overwrite* with the update value.
         """
 
     @abstractmethod
     def watch(self, state_id: str) -> AsyncIterator[StateChange]:
         """Subscribe to state changes (for Autonomous mode monitoring).
 
-        Implementations should be async generators (``async def`` with ``yield``).
-        The return type is ``AsyncIterator`` so that mypy treats the abstract
+        Implementations should be async generators (async def with yield).
+        The return type is AsyncIterator so that mypy treats the abstract
         signature and the concrete async-generator implementation consistently.
         """
 
 
 class InMemoryStateBackend(SharedStateBackend):
-    """Default in-process backend backed by ``dict`` + ``asyncio.Lock``."""
+    """Default in-process backend backed by dict + asyncio.Lock."""
 
     def __init__(self) -> None:
         self._store: dict[str, OrchestratorState] = {}

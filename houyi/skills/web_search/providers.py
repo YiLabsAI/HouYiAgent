@@ -1,20 +1,20 @@
 """Web search providers with shared HTTP infrastructure.
 
-Each provider implements the ``WebSearchProvider`` protocol.  Shared concerns:
+Each provider implements the WebSearchProvider protocol.  Shared concerns:
 
-* **HTTP error mapping** — ``_http_json_request()`` translates HTTP status codes
-  to typed ``ProviderError`` subclasses so the retry / fallback machinery in
-  ``WebSearchService`` can react uniformly.
-* **Proxy support** — every HTTP-based provider accepts an optional ``proxy_url``
-  that is wired through ``urllib.request.ProxyHandler``.
-* **Timeout enforcement** — per-provider ``timeout`` field with sensible default.
+* **HTTP error mapping** — _http_json_request() translates HTTP status codes
+  to typed ProviderError subclasses so the retry / fallback machinery in
+  WebSearchService can react uniformly.
+* **Proxy support** — every HTTP-based provider accepts an optional proxy_url
+  that is wired through urllib.request.ProxyHandler.
+* **Timeout enforcement** — per-provider timeout field with sensible default.
 
 Adding a new provider:
-    1. Create a ``@dataclass(slots=True)`` with ``name``, ``timeout``,
-       ``proxy_url``, and ``last_raw_payload`` fields.
-    2. Implement ``async def search(…) -> list[WebSearchResult]``.
-    3. Register it in ``build_default_provider_registry()``.
-    4. Add the ``elif`` branch in ``WebSearchService._build_provider()``.
+    1. Create a @dataclass(slots=True) with name, timeout,
+       proxy_url, and last_raw_payload fields.
+    2. Implement async def search(…) -> list[WebSearchResult].
+    3. Register it in build_default_provider_registry().
+    4. Add the elif branch in WebSearchService._build_provider().
 """
 
 from __future__ import annotations
@@ -63,7 +63,7 @@ _PROXY_ENV_KEYS = (
 
 
 class WebSearchProvider(Protocol):
-    """Minimal provider contract — any object with ``name`` + ``search()``."""
+    """Minimal provider contract — any object with name + search()."""
 
     name: str
 
@@ -115,8 +115,8 @@ _PROXY_RETRIABLE_ERRORS = (
 def _build_opener(*, proxy_url: str | None, proxy_policy: str) -> request.OpenerDirector:
     """Build an opener respecting the proxy resolution hierarchy.
 
-    - *proxy_policy* ``"off"`` → explicit no-proxy (``ProxyHandler({})``)
-    - *proxy_url* set → explicit proxy via ``ProxyHandler``
+    - *proxy_policy* "off" → explicit no-proxy (ProxyHandler({}))
+    - *proxy_url* set → explicit proxy via ProxyHandler
     - Otherwise → default opener (urllib detects system proxy as usual)
     """
     if proxy_policy == "off":
@@ -141,13 +141,13 @@ def _http_json_request(
     proxy_source: str = "direct",
     label: str = "Provider",
 ) -> dict[str, Any]:
-    """Execute HTTP request → parse JSON → map errors to ``ProviderError``.
+    """Execute HTTP request → parse JSON → map errors to ProviderError.
 
     All HTTP-based providers funnel requests through this function so that
     proxy wiring, timeout enforcement, and HTTP-to-ProviderError mapping are
     consistent across the board.
 
-    When *proxy_source* is ``"system"`` and the request fails with a
+    When *proxy_source* is "system" and the request fails with a
     connection / timeout error, the function retries **once** with a direct
     (no-proxy) connection before raising.  This prevents a non-functional
     macOS system proxy from silently blocking every provider in the fallback
@@ -300,10 +300,10 @@ class SerperWebSearchProvider:
 
 @dataclass(slots=True)
 class TavilyWebSearchProvider:
-    """Tavily provider — uses the ``tavily-python`` SDK.
+    """Tavily provider — uses the tavily-python SDK.
 
-    Proxy support is limited to environment variables (``HTTP_PROXY`` /
-    ``HTTPS_PROXY``) because the Tavily SDK controls its own HTTP client.
+    Proxy support is limited to environment variables (HTTP_PROXY /
+    HTTPS_PROXY) because the Tavily SDK controls its own HTTP client.
     """
 
     name: str = "tavily"
@@ -434,14 +434,14 @@ class SearxNGWebSearchProvider:
 
 @dataclass(slots=True)
 class DuckDuckGoWebSearchProvider:
-    """DuckDuckGo meta-search via the ``ddgs`` library.
+    """DuckDuckGo meta-search via the ddgs library.
 
-    Requires optional dependency: ``pip install 'houyi[websearch-ddg]'``.
-    The dependency check is deferred to ``search()`` so that provider
+    Requires optional dependency: pip install 'houyi[websearch-ddg]'.
+    The dependency check is deferred to search() so that provider
     instances can be created without the library present.
 
-    ``ddgs`` exposes a sync-only ``DDGS`` class; the blocking call is
-    wrapped with ``asyncio.to_thread`` to avoid stalling the event loop.
+    ddgs exposes a sync-only DDGS class; the blocking call is
+    wrapped with asyncio.to_thread to avoid stalling the event loop.
     """
 
     name: str = "ddg"
@@ -515,7 +515,7 @@ class BochaWebSearchProvider:
 
     API docs: https://open.bochaai.com
     Free tier: 100 queries/day.
-    Response: ``{"code": 200, "data": {"webPages": {"value": [...]}}}``.
+    Response: {"code": 200, "data": {"webPages": {"value": [...]}}}.
     """
 
     name: str = "bocha"

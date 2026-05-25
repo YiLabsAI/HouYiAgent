@@ -1,7 +1,7 @@
 """VectorRecallRetriever — recall-layer wrapper tests.
 
  validates the store→recall adapter and verifies the
-orchestrator routing table now includes the ``vector`` slot for every
+orchestrator routing table now includes the vector slot for every
 query type where expects vector evidence.
 """
 
@@ -24,10 +24,10 @@ from houyi.adapters.memory.types import MemoryRecord, MemoryScope
 
 
 class _FakeStoreRetriever:
-    """Minimal stand-in for the store-layer ``VectorRetriever``.
+    """Minimal stand-in for the store-layer VectorRetriever.
 
     Records the captured arguments so tests can assert that the wrapper
-    forwards query text + ``top_k`` correctly, and returns canned hits.
+    forwards query text + top_k correctly, and returns canned hits.
     """
 
     def __init__(self, hits: list[tuple[MemoryRecord, float]]):

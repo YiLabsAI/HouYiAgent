@@ -169,8 +169,8 @@ class Message(BaseModel):
 
         Attachment handling strategy:
 
-        * **Images** – vision models receive ``image_url`` parts; non-vision
-          models get a ``[Image: filename]`` text placeholder.
+        * **Images** – vision models receive image_url parts; non-vision
+          models get a [Image: filename] text placeholder.
         * **Text files** (source code, markdown, CSV, JSON, …) – base64
           payload is decoded to UTF-8 and injected as a text block so the
           model can read the file content.
@@ -180,7 +180,7 @@ class Message(BaseModel):
 
         Args:
             vision: If True, image attachments are sent as OpenAI multimodal
-                ``image_url`` parts.  If False (model does not support vision),
+                image_url parts.  If False (model does not support vision),
                 images are described as text placeholders.
         """
 

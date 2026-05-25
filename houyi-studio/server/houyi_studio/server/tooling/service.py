@@ -1,6 +1,6 @@
 """Tool-call service for console execution engine.
 
-Uses ``ToolCallRunner`` (the full-featured runner with hooks, policy, consent,
+Uses ToolCallRunner (the full-featured runner with hooks, policy, consent,
 and metrics integration) for production tool execution.
 """
 
@@ -58,9 +58,9 @@ logger = logging.getLogger(__name__)
 class ToolCallService:
     """Encapsulates tool-calling execution with internal-first policy.
 
-    The runner is initialized lazily (on first ``execute_tool_calls``) so that
-    governance components from ``SkillService`` (which is set up during
-    ``register_console_skills``) are picked up automatically.
+    The runner is initialized lazily (on first execute_tool_calls) so that
+    governance components from SkillService (which is set up during
+    register_console_skills) are picked up automatically.
     """
 
     def __init__(
@@ -80,7 +80,7 @@ class ToolCallService:
         self._runner: ToolCallRunner | None = None
 
     def _get_runner(self) -> ToolCallRunner:
-        """Lazily build ``ToolCallRunner`` with governance components."""
+        """Lazily build ToolCallRunner with governance components."""
         if self._runner is not None:
             return self._runner
 

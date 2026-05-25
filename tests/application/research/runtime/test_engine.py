@@ -126,7 +126,7 @@ _SEARCHER_RESPONSE = json.dumps(
 
 _QUERY_GEN_RESPONSE = json.dumps(["AI agent framework comparison", "best AI agent tools 2026"])
 _SUFFICIENCY_TRUE = json.dumps({"sufficient": True, "rationale": "Enough sources found"})
-# Padded above ``_SHORT_SECTION_WORD_THRESHOLD`` (350 words) so the engine
+# Padded above _SHORT_SECTION_WORD_THRESHOLD (350 words) so the engine
 # tests do not accidentally trigger the EN-only post-gen expansion pass.
 _SECTION_JSON = json.dumps(
     {
@@ -310,10 +310,10 @@ class TestConfirmPlan:
     async def test_confirm_soft_accepts_shortage(self, caplog):
         """Sub-question floor shortage should warn + proceed, not crash.
 
-        Regression for the houyi-studio ``Planner returned fewer than 5
-        sub-questions`` crash when the LLM occasionally returns a short plan
+        Regression for the houyi-studio Planner returned fewer than 5
+        sub-questions crash when the LLM occasionally returns a short plan
         on deep mode despite the 2-retry loop inside
-        ``ResearchPlanner.generate_plan_draft``.  The confirm flow must stay
+        ResearchPlanner.generate_plan_draft.  The confirm flow must stay
         alive so the user can still execute the (degraded) plan.
         """
         import logging
@@ -358,11 +358,11 @@ class TestConfirmPlan:
     async def test_execute_soft_accepts_shortage(self):
         """execute() must mirror confirm()'s soft-accept of sub-question shortage.
 
-        Regression: the original fix only covered ``PlanningCoordinator.confirm``
-        but ``ResearchRuntime.execute`` re-validated and re-raised, so the
-        houyi-studio crash still surfaced from ``launch_run`` after a plan was
+        Regression: the original fix only covered PlanningCoordinator.confirm
+        but ResearchRuntime.execute re-validated and re-raised, so the
+        houyi-studio crash still surfaced from launch_run after a plan was
         soft-confirmed.  Asserts that execute() does not raise
-        ``fewer than N sub-questions``; any downstream failure is acceptable
+        fewer than N sub-questions; any downstream failure is acceptable
         because it means the validation gate was passed.
         """
         from houyi.application.research.types import (
@@ -934,7 +934,7 @@ class TestBoundaryAndInteraction:
         await session.confirm_plan()
 
         async def _timeout_search(aw, timeout):
-            # Real wait_for drives `aw`; raising immediately would leave the inner
+            # Real wait_for drives aw; raising immediately would leave the inner
             # SearchExecutor.search coroutine un-awaited (RuntimeWarning under xdist).
             if asyncio.iscoroutine(aw):
                 aw.close()

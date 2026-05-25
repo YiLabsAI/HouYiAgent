@@ -16,7 +16,7 @@ class HybridRetriever:
     """Reusable hybrid retriever over protocol-shaped retrieval collaborators.
 
     The retrieval domain owns the fusion/orchestration logic here, while concrete
-    backends may still come from `indexed/` or any other mode as long as they satisfy
+    backends may still come from indexed/ or any other mode as long as they satisfy
     the local retrieval protocols.
     """
 

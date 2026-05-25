@@ -15,7 +15,7 @@ class IndexedRuntimeResources:
 
     This object centralizes mutable runtime state that is shared by search and
     ingest collaborators. Callers may inject prebuilt resources in tests, but
-    production code should prefer the `get_*` accessors so initialization and
+    production code should prefer the get_* accessors so initialization and
     storage location stay consistent.
     """
 

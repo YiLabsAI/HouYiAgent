@@ -382,7 +382,7 @@ class EnvConfig:
 
     @property
     def siliconflow_base_url(self) -> str:
-        """SILICONFLOW_BASE_URL or default ``https://api.siliconflow.cn/v1``."""
+        """SILICONFLOW_BASE_URL or default https://api.siliconflow.cn/v1."""
         return self._siliconflow_base_url
 
     @property
@@ -397,7 +397,7 @@ class EnvConfig:
 
     @property
     def default_llm_provider(self) -> str:
-        """DEFAULT_LLM_PROVIDER or ``"siliconflow"``."""
+        """DEFAULT_LLM_PROVIDER or "siliconflow"."""
         return self._default_llm_provider
 
     # ------------------------------------------------------------------

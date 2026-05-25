@@ -18,11 +18,11 @@ WebSocket command routing from command handling:
     SkillCommandHandler | CommandHandler | ExecutionCommandHandler
 
 **OCP in action**: Adding a new command requires only *registering* a new
-``(command_type, handler)`` pair — no ``if/elif`` chains, no modifications to
+(command_type, handler) pair — no if/elif chains, no modifications to
 existing handlers or dispatcher logic.
 
-**Liskov substitution**: All handlers share the same ``async (command, session_id) -> None``
-signature (the ``CommandHandler`` callable alias), so the dispatcher treats
+**Liskov substitution**: All handlers share the same async (command, session_id) -> None
+signature (the CommandHandler callable alias), so the dispatcher treats
 them uniformly regardless of their concrete type.
 """
 
@@ -59,10 +59,10 @@ def get_command_type_and_id(command: CommandLike) -> tuple[str | None, str | Non
 class CommandDispatcher:
     """Registry-based command router following the Open/Closed Principle.
 
-    Handlers are registered at startup via ``register(command_type, handler)``.
-    At runtime, ``dispatch()`` performs an O(1) lookup by ``command_type`` and
-    delegates to the matching handler, returning ``True`` if a handler was
-    found or ``False`` to let the caller try alternative dispatch paths
+    Handlers are registered at startup via register(command_type, handler).
+    At runtime, dispatch() performs an O(1) lookup by command_type and
+    delegates to the matching handler, returning True if a handler was
+    found or False to let the caller try alternative dispatch paths
     (e.g., isinstance-based routing for typed Pydantic commands).
     """
 

@@ -3,33 +3,33 @@
 Public API
 ----------
 Facade / singleton:
-    :class:`KnowledgeService`
+    KnowledgeService
         Unified facade that delegates to the focused sub-services.
-    :func:`get_knowledge_service`
+    get_knowledge_service
         Module-level singleton accessor.
 
 Sub-services (for direct use when finer control is needed):
-    :class:`LibraryRepository`
+    LibraryRepository
         Library CRUD and JSON persistence.
-    :class:`DocumentService`
+    DocumentService
         Document/chunk management within a library.
-    :class:`IngestService`
+    IngestService
         File ingestion pipeline.
-    :class:`SearchService`
+    SearchService
         RAG query execution.
 
 Embedding helpers:
-    :func:`resolve_embedding_config`
-    :func:`_detect_embedding_config`
-    :func:`_make_embedding_config`
-    :func:`_auto_detect_embedding`
+    resolve_embedding_config
+    _detect_embedding_config
+    _make_embedding_config
+    _auto_detect_embedding
 
 Path / constant helpers:
-    :data:`UPLOADS_SUBDIR`, :data:`INDEX_SUBDIR`, :data:`_LIB_ID_PREFIX`,
-    :data:`KNOWLEDGE_STORAGE_DIR`
-    :func:`_default_storage_dir`, :func:`get_library_storage_dir`,
-    :func:`get_library_upload_dir`, :func:`get_library_index_dir`,
-    :func:`is_index_path`
+    UPLOADS_SUBDIR, INDEX_SUBDIR, _LIB_ID_PREFIX,
+    KNOWLEDGE_STORAGE_DIR
+    _default_storage_dir, get_library_storage_dir,
+    get_library_upload_dir, get_library_index_dir,
+    is_index_path
 """
 
 from .document_service import DocumentService

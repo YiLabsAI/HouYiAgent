@@ -1,11 +1,11 @@
 """Automatic executor binding from SKILL.md runtime contract.
 
 After a skill is loaded from file/URL/directory, RuntimeResolver inspects
-its ``runtime_contract`` and attempts to:
+its runtime_contract and attempts to:
 
-1. Import and bind the ``adapter`` callable as the skill's executor.
-2. Normalize ``hooks_root`` to an absolute path for asset resolution.
-3. Leave skills with ``mode=template`` or no runtime contract unchanged.
+1. Import and bind the adapter callable as the skill's executor.
+2. Normalize hooks_root to an absolute path for asset resolution.
+3. Leave skills with mode=template or no runtime contract unchanged.
 
 Skills that already have an executor bound are never overwritten.
 

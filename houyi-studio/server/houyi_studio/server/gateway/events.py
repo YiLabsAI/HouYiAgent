@@ -797,7 +797,7 @@ class DisclosurePhase(BaseModel):
 class LlmVerificationResult(BaseModel):
     """Result of live LLM verification in a dry-run.
 
-    Includes a ``phases`` timeline for progressive disclosure:
+    Includes a phases timeline for progressive disclosure:
       1. discovery   — skill metadata loaded
       2. activation  — tool definitions built
       3. negotiation — system + user prompt constructed

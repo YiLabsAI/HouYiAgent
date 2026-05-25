@@ -59,8 +59,8 @@ class EmphasisDetector:
     """Detects emphasis patterns in user messages.
 
     Provides both a per-message scanner and a batch analyzer for
-    conversation history. Outputs an ``EmphasisReport`` that the
-    ``ReminderInjector`` can use to elevate priority memories.
+    conversation history. Outputs an EmphasisReport that the
+    ReminderInjector can use to elevate priority memories.
     """
 
     def __init__(

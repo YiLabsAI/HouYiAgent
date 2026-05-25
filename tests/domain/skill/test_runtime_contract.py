@@ -2,7 +2,7 @@
 
 Covers:
 - RuntimeContract model validation (mode, adapter, hooks_root)
-- SkillSpec.from_file() parsing of `runtime` frontmatter field
+- SkillSpec.from_file() parsing of runtime frontmatter field
 - IntegrationLevel computation (metadata / schema / executable)
 - RuntimeStatus computation (ready / degraded / unavailable)
 - Degradation path when frontmatter is missing or malformed

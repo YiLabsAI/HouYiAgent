@@ -280,8 +280,8 @@ class LocalExecutor:
     async def _execute_agent_node(self, node: IRNode, inputs: dict[str, Any]) -> dict[str, Any]:
         """Execute AGENT node by spawning a team agent via AgentTeamManager.
 
-        Requires ``agent_id`` on the node and an ``AgentRegistry`` available
-        via ``self.agent_registry``.  Falls back to a mock result when the
+        Requires agent_id on the node and an AgentRegistry available
+        via self.agent_registry.  Falls back to a mock result when the
         registry is not configured.
         """
         from houyi.application.runtime.agent_team import AgentTeamManager

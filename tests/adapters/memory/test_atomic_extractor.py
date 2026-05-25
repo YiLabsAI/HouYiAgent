@@ -19,7 +19,7 @@ class _StubResponse:
 
 
 class _StubLLM:
-    """Minimal stand-in for the `llm_adapter.chat()` contract.
+    """Minimal stand-in for the llm_adapter.chat() contract.
 
     Tests preload either a single canned content string (returned for
     every call) or a queue of strings (consumed in order).

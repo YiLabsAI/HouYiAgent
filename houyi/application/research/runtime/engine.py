@@ -2,10 +2,10 @@
 
 Three orchestration modes control the search phase:
 
-- **DIRECT** — single ``SearchExecutor``, serial execution, shared context.
-- **DELEGATE** — Supervisor fans out N isolated ``SearchExecutor`` instances
+- **DIRECT** — single SearchExecutor, serial execution, shared context.
+- **DELEGATE** — Supervisor fans out N isolated SearchExecutor instances
   in parallel; each has a clean context with no prior_findings pollution.
-- **AUTONOMOUS** — parallel isolated coordinators with ``SharedState``
+- **AUTONOMOUS** — parallel isolated coordinators with SharedState
   collaboration; agents share discoveries and adjust search strategies.
 
 Pipeline stages (serial): PlannerAgent → *search* →
@@ -272,10 +272,10 @@ class ResearchRuntime:
         from the budget — only remaining questions count.
 
         When **all** sub-questions are checkpointed, remaining search work is 0 — do not use
-        ``max(1, …)`` to inject a fake per-question slot; that mis-accounts wall time vs the
+        max(1, …) to inject a fake per-question slot; that mis-accounts wall time vs the
         report pipeline (the long pole when search is skipped).
 
-        Budget varies by orchestration mode (report budget from ``_report_budget_seconds()``):
+        Budget varies by orchestration mode (report budget from _report_budget_seconds()):
         - DIRECT: remaining × 120s + report budget.
         - DELEGATE / AUTONOMOUS: batch×300s + report budget (+ extras); no batches when remaining=0.
         """
@@ -430,7 +430,7 @@ class ResearchRuntime:
     async def cancel(self, reason: str = "") -> None:
         """Cancel the research runtime.
 
-        Sets the ``_cancelled`` flag which is checked at every search step,
+        Sets the _cancelled flag which is checked at every search step,
         aborting execution as soon as the current agent finishes.
         """
         self._cancelled = True
@@ -452,7 +452,7 @@ class ResearchRuntime:
         """Extract memory candidates from research results.
 
         Builds synthetic messages from report sections and source summaries,
-        then delegates to ``MemoryCandidateExtractor`` if available. Falls
+        then delegates to MemoryCandidateExtractor if available. Falls
         back to a lightweight heuristic when no extractor is configured.
         """
         if not self._report:
@@ -575,7 +575,7 @@ class ResearchRuntime:
           AUTONOMOUS — Parallel isolated SearchExecutors with SharedState
                        collaboration; agents see each other's discoveries.
 
-        Respects ``depends_on``: questions are topologically sorted so
+        Respects depends_on: questions are topologically sorted so
         dependencies are searched first, with priority as tiebreaker.
         """
         assert self._plan is not None
@@ -592,7 +592,7 @@ class ResearchRuntime:
         self._intermediate_ms = result.intermediate_ms
 
     def _check_cancelled(self) -> None:
-        """Raise ``asyncio.CancelledError`` if the runtime was cancelled."""
+        """Raise asyncio.CancelledError if the runtime was cancelled."""
         if self._cancelled:
             raise asyncio.CancelledError("Research runtime cancelled by user")
 

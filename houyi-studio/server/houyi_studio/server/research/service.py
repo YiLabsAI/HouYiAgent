@@ -64,10 +64,10 @@ def _normalize_report_sections(
     Each step is idempotent and safe to re-run. Concrete defect shapes
     handled:
 
-    - ``{"content": "..."`` envelope wrapping the whole body.
-    - ``","citations":`` trailer double-nested into ``content``.
-    - ``[ref_a, ref_b]`` comma-grouped citations.
-    - Unpaired trailing ```` ``` ```` fence marker.
+    - {"content": "..." envelope wrapping the whole body.
+    - ","citations": trailer double-nested into content.
+    - [ref_a, ref_b] comma-grouped citations.
+    - Unpaired trailing markdown fence marker (backticks).
     """
 
     if not isinstance(report_data, dict):
@@ -83,7 +83,7 @@ def _normalize_report_sections(
             continue
         title = section.get("title") or ""
         # First salvage an envelope wrapper when the whole content string
-        # is still a raw ``{"content": "..."}`` fragment. Newer bodies
+        # is still a raw {"content": "..."} fragment. Newer bodies
         # skip this branch and go straight to shared normalization.
         stripped = content.lstrip()
         if stripped.startswith("{") and '"content"' in stripped[:80]:
@@ -97,7 +97,7 @@ def _normalize_report_sections(
 class _ArchivedRun:
     """Lightweight read-only run restored from persisted JSON.
 
-    Not a real ``ResearchRuntime`` — only stores enough data for
+    Not a real ResearchRuntime — only stores enough data for
     list / get / delete operations on historical runs.
     """
 
@@ -389,8 +389,8 @@ class ResearchService:
     def prepare_for_execution(self, run_id: str) -> ResearchRuntime:
         """Ensure run is live (rehydrated if archived) before scheduling.
 
-        Must be called synchronously before ``asyncio.create_task`` so that
-        the ``EventEmitter`` is registered before the frontend connects SSE.
+        Must be called synchronously before asyncio.create_task so that
+        the EventEmitter is registered before the frontend connects SSE.
         """
         runtime = self._require_live_run(run_id)
         # Retry reuses the same run_id, so stale buffered envelopes must be

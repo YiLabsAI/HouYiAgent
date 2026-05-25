@@ -23,11 +23,11 @@ _CLARIFICATION_REPLAN_CONFIDENCE = 0.65
 
 
 def is_soft_plan_validation_error(error: str) -> bool:
-    """Return True when *error* from :func:`validate_research_plan` represents
+    """Return True when *error* from validate_research_plan represents
     a soft quality contract that the runtime can degrade on instead of
     crashing the user-visible confirm/execute flow.
 
-    The sub-question floor (``_MIN_SUB_QUESTIONS_BY_DEPTH``) is driven by the
+    The sub-question floor (_MIN_SUB_QUESTIONS_BY_DEPTH) is driven by the
     planner prompt; bench runs always observed ≥floor outputs, so downgrading
     floor shortages to warnings preserves the leaderboard happy path while
     making the edge case recoverable.
@@ -36,7 +36,7 @@ def is_soft_plan_validation_error(error: str) -> bool:
 
 
 def format_soft_plan_warning(plan: ResearchPlan, error: str) -> str:
-    """Render :func:`is_soft_plan_validation_error` into an operator-readable
+    """Render is_soft_plan_validation_error into an operator-readable
     message that names the depth mode, actual count, and expected floor so
     the cause is obvious without grepping the validator source.
     """

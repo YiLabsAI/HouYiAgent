@@ -48,7 +48,7 @@ def sanitize_error(text: str, max_len: int = 200) -> str:
     """Strip HTML tags and truncate error messages for clean API responses.
 
     Google Cloud 404 pages return full HTML with <style> blocks containing
-    CSS rules like ``*{margin:0;padding:0}`` that leak into the UI if only
+    CSS rules like *{margin:0;padding:0} that leak into the UI if only
     tags are stripped.  We therefore remove <style>/<script> blocks (with
     their content) first, then strip remaining tags.
     """
@@ -155,7 +155,7 @@ class VertexAIProbe(ProviderProbe):
     async def test_connection(self, base_url: str = "", api_key: str = "") -> dict[str, Any]:
         """Test Vertex AI connectivity via a lightweight chat/completions call.
 
-        Sends ``max_tokens=1`` to minimize cost.  Uses the same OpenAI-compatible
+        Sends max_tokens=1 to minimize cost.  Uses the same OpenAI-compatible
         endpoint that VertexAIAdapter.stream_chat() uses, so success here
         guarantees real calls will also authenticate correctly.
         """
@@ -238,8 +238,8 @@ class VertexAIProbe(ProviderProbe):
 class OpenAICompatProbe(ProviderProbe):
     """Health check and model discovery for OpenAI-compatible providers.
 
-    Works with any provider that exposes ``GET /models`` returning
-    ``{ "data": [{ "id": "...", "owned_by": "..." }] }``.
+    Works with any provider that exposes GET /models returning
+    { "data": [{ "id": "...", "owned_by": "..." }] }.
     """
 
     async def test_connection(self, base_url: str = "", api_key: str = "") -> dict[str, Any]:

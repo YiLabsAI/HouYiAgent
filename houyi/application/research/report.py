@@ -1,8 +1,8 @@
 """ReportGenerator — structured Markdown report with citations.
 
 Generates reports section-by-section via LLM, annotating inline citations
-that link back to ``SourceReference`` entries. Supports both batch and
-streaming (``AsyncIterator[ReportChunk]``) output.
+that link back to SourceReference entries. Supports both batch and
+streaming (AsyncIterator[ReportChunk]) output.
 """
 
 from __future__ import annotations
@@ -281,13 +281,13 @@ Respond with plain text (no JSON).
 _EN_QUERY_ASCII_RATIO = 0.8
 
 # Sub-agent retries and tool-layer plumbing occasionally leak raw
-# runtime artifacts into the final section body: orphan ``ref_<hex>``
-# tokens, ``30s`` retry markers, ``sync`` flags, and broken mermaid
+# runtime artifacts into the final section body: orphan ref_<hex>
+# tokens, 30s retry markers, sync flags, and broken mermaid
 # fences can survive upstream cleanup and tank readability.  These
 # regexes are applied as a deterministic last-mile scrubber after the
 # section parse/consolidate pipeline.
 #
-# ``_VALID_REF_CITATION`` keeps legitimate ``[ref_<hex>]`` citations
+# _VALID_REF_CITATION keeps legitimate [ref_<hex>] citations
 # intact during the orphan-token scrub.  Valid citations always appear
 # inside square brackets; bare hex refs in prose are garbage.
 _VALID_REF_CITATION = re.compile(r"\[ref_[a-fA-F0-9]{6,}\]")
@@ -295,13 +295,13 @@ _VALID_REF_CITATION = re.compile(r"\[ref_[a-fA-F0-9]{6,}\]")
 # drop blocks whose contents devolved into junk tokens.  The closing
 # fence is optional so a truncated tail still matches.
 _FENCED_BLOCK_RE = re.compile(r"```[^\n]*\n(.*?)(?:\n```|\Z)", re.DOTALL)
-# Orphan ``ref_<hex>`` fragments that slipped past the citation
+# Orphan ref_<hex> fragments that slipped past the citation
 # renumberer.  Only matches the token itself plus an optional leading
-# ``[`` or trailing ``]`` so the regex cannot swallow neighbouring
-# prose.  Valid ``[ref_<hex>]`` citations are masked out before this
+# [ or trailing ] so the regex cannot swallow neighbouring
+# prose.  Valid [ref_<hex>] citations are masked out before this
 # regex runs so only truly-orphan fragments remain.
 _ORPHAN_REF_RE = re.compile(r"\[?ref_[a-fA-F0-9]{6,}\]?")
-# Multiline ``{"content": "..."}`` envelope that survived the per-
+# Multiline {"content": "..."} envelope that survived the per-
 # paragraph unwrap because it spans paragraph boundaries.  The two
 # patterns below locate the opener and (best-effort) tail so the
 # scrubber can UNWRAP the envelope — extracting the inner prose and
@@ -312,7 +312,7 @@ _ENVELOPE_OPENER_RE = re.compile(
     r"(?ms)^\{\s*\n?\s*\"content\"\s*:\s*\"",
 )
 # Matching tail: closing quote, optional citations array, optional
-# whitespace/newline, closing brace.  ``_ENVELOPE_TAIL_RE.search``
+# whitespace/newline, closing brace.  _ENVELOPE_TAIL_RE.search
 # is anchored after the opener so stray closing braces elsewhere in
 # the body (e.g. inside mermaid diagrams) do not get confused with
 # the envelope tail.
@@ -440,7 +440,7 @@ class ReportGenerator:
         hallucinations.
 
         When *defer_summary* is True, the report is returned with an empty
-        summary.  Call :meth:`complete_summary` later to fill it in.  This
+        summary.  Call complete_summary later to fill it in.  This
         allows the caller to overlap summary generation with other work
         (e.g. URL validation) since that stage does not read the summary
         field.
@@ -653,7 +653,7 @@ class ReportGenerator:
         logic while making the writing contract explicit.
 
         When *section_archetype* is provided (from the planner), it takes
-        precedence over the keyword-based ``_classify_section_archetype``
+        precedence over the keyword-based _classify_section_archetype
         fallback, giving the planner full control over evidence policy.
         """
 
@@ -763,7 +763,7 @@ class ReportGenerator:
             **self._llm_kwargs,
         )
         section = _parse_section(title, resp.content)
-        # Post-generation fix-up chain lives in ``report_postprocess``:
+        # Post-generation fix-up chain lives in report_postprocess:
         # a single flat pipeline covers noise rewrite, paragraph layout,
         # duplicate subheading / paragraph dedup, writer-leak scrubbing,
         # and the query-language gate.  The order there is load-bearing;
@@ -790,8 +790,8 @@ class ReportGenerator:
         """Test-compat shim delegating to the post-processing pipeline.
 
         The real orchestration lives in
-        :func:`houyi.application.research.report_postprocess.clean_noise_step`.
-        A ``ReportSection`` is constructed purely to satisfy the step
+        houyi.application.research.report_postprocess.clean_noise_step.
+        A ReportSection is constructed purely to satisfy the step
         signature; callers keep passing raw content strings.
         """
 
@@ -881,20 +881,20 @@ def _detect_noisy_paragraphs(paragraphs: list[str]) -> list[int]:
 # pass. They are deliberately zero-LLM-cost, topic-agnostic, and idempotent
 # so they can also run in isolation against any Markdown body.
 #
-# * ``_consolidate_short_paragraphs`` merges adjacent short paragraphs so the
+# * _consolidate_short_paragraphs merges adjacent short paragraphs so the
 #   reader sees cohesive multi-sentence blocks instead of fragmented lines.
-#   This is the only helper that mutates ``section.content`` — it performs a
+#   This is the only helper that mutates section.content — it performs a
 #   human-visible layout repair.
-# * ``_analyse_critical_analysis`` checks whether any critical-analysis
+# * _analyse_critical_analysis checks whether any critical-analysis
 #   keyword is present in the body and returns a boolean flag.
-# * ``_analyse_visualization_gaps`` checks whether the body lacks an expected
+# * _analyse_visualization_gaps checks whether the body lacks an expected
 #   table (numeric-dense prose) or mermaid fence (hierarchy/sequence prose)
 #   and returns the gap flags.
 #
-# The ``_analyse_*`` helpers **never mutate the content**. Their signals are
-# collected by ``_compute_section_sidecar_metrics`` and surface through
-# ``section_input_metrics`` for offline bench analysis. Writing the signals
-# into ``section.content`` as HTML comments would leak them into the scored
+# The _analyse_* helpers **never mutate the content**. Their signals are
+# collected by _compute_section_sidecar_metrics and surface through
+# section_input_metrics for offline bench analysis. Writing the signals
+# into section.content as HTML comments would leak them into the scored
 # article text when upstream RACE cleaning falls back to the raw body.
 # ---------------------------------------------------------------------------
 
@@ -956,18 +956,18 @@ def _count_sentences(text: str) -> int:
 def _split_long_paragraph(text: str) -> list[str]:
     """Break an over-long prose paragraph into chunks at sentence boundaries.
 
-    Operates on the same ``_SENTENCE_TERMINATORS`` regex used for the merge
+    Operates on the same _SENTENCE_TERMINATORS regex used for the merge
     threshold, so the behaviour is symmetric across ASCII and CJK prose.
     Never splits structural blocks; callers must pre-filter those via
-    ``_is_structural_paragraph``.
+    _is_structural_paragraph.
 
     Behaviour contract:
 
-    * Paragraphs with ``<= _SPLITTABLE_MAX_SENTENCES`` sentences are
+    * Paragraphs with <= _SPLITTABLE_MAX_SENTENCES sentences are
       returned unchanged (single-element list). This keeps moderate
       8-sentence paragraphs untouched.
     * Above the threshold, text is sliced at every
-      ``_SPLITTABLE_CHUNK_SENTENCES``-th terminator.
+      _SPLITTABLE_CHUNK_SENTENCES-th terminator.
     * A trailing fragment shorter than 2 sentences is folded back into the
       previous chunk to avoid orphan single-sentence paragraphs.
     * No word or character is dropped; only whitespace collapses on the
@@ -998,13 +998,13 @@ def _split_long_paragraph(text: str) -> list[str]:
 
 
 def _expand_long_paragraphs(paragraphs: Iterable[str]) -> list[str]:
-    """Return ``paragraphs`` with non-structural giants split into chunks.
+    """Return paragraphs with non-structural giants split into chunks.
 
     Structural blocks (headings, lists, tables, code fences, HTML
     comments / blockquotes) pass through untouched. Prose paragraphs
-    above ``_SPLITTABLE_MAX_SENTENCES`` are delegated to
-    ``_split_long_paragraph``; shorter ones are returned as-is. Factored
-    out of ``_consolidate_short_paragraphs`` to keep that function's
+    above _SPLITTABLE_MAX_SENTENCES are delegated to
+    _split_long_paragraph; shorter ones are returned as-is. Factored
+    out of _consolidate_short_paragraphs to keep that function's
     control flow under the C901 complexity gate.
     """
     expanded: list[str] = []
@@ -1022,12 +1022,12 @@ def _consolidate_short_paragraphs(content: str) -> str:
     A single post-generation pass handles both sides of the paragraph
     layout contract:
 
-    * ``_expand_long_paragraphs`` calls ``_split_long_paragraph`` on
+    * _expand_long_paragraphs calls _split_long_paragraph on
       non-structural paragraphs whose sentence count exceeds
-      ``_SPLITTABLE_MAX_SENTENCES``, exposing reading structure that EN
+      _SPLITTABLE_MAX_SENTENCES, exposing reading structure that EN
       LLM output collapses into 15-20 sentence monoliths.
     * The merge loop then rejoins adjacent short paragraphs up to
-      ``_MERGEABLE_TARGET_SENTENCES`` sentences.
+      _MERGEABLE_TARGET_SENTENCES sentences.
 
     Both stages ignore structural blocks (headings, lists, tables, code
     fences, HTML comments / blockquotes). All thresholds are expressed in
@@ -1035,9 +1035,9 @@ def _consolidate_short_paragraphs(content: str) -> str:
     """
     if not content:
         return content
-    # Step 0: unwrap per-paragraph ``{"content": "..."}`` envelopes.
+    # Step 0: unwrap per-paragraph {"content": "..."} envelopes.
     # Section writers occasionally emit multiple JSON envelopes in a
-    # single response, which ``_parse_section`` only strips on the first
+    # single response, which _parse_section only strips on the first
     # one; subsequent envelopes survive as raw text paragraphs. Stripping
     # at the paragraph level here catches every such leak regardless of
     # upstream source (main writer, noise rewrite, repair rewrite). The
@@ -1082,18 +1082,18 @@ def _consolidate_short_paragraphs(content: str) -> str:
 
 
 def _deduplicate_subheadings(content: str) -> str:
-    """Collapse duplicate ``### Subheading`` blocks in a single section body.
+    """Collapse duplicate ### Subheading blocks in a single section body.
 
-    The section writer occasionally emits the full ``### Subheading`` tree
+    The section writer occasionally emits the full ### Subheading tree
     twice inside one LLM response.  Empirical inspection of the
-    ``bench2-en5-20260422b-head`` articles across five EN queries shows
+    bench2-en5-20260422b-head articles across five EN queries shows
     pass-2 bodies are either byte-for-byte identical to pass-1 (similarity
     1.000), strictly truncated prefixes of pass-1 (similarity 0.2-0.7 but
     prefix-contained), or overlapping second-drafts that share opening
     sentences.  In every observed pair, pass-2 contributed no unique facts
     beyond pass-1 (or vice-versa).
 
-    Dedup rule: whenever two ``### Subheading`` chunks in the same
+    Dedup rule: whenever two ### Subheading chunks in the same
     section body share the same heading text, keep the chunk with the
     longest body and drop the others.  This is the minimum information
     loss policy: empty / prefix-truncated / near-copy pass-2 bodies all
@@ -1112,8 +1112,8 @@ def _deduplicate_subheadings(content: str) -> str:
 
     if "### " not in content:
         return content
-    # Split on ``### `` at the start of a line.  Keep the prefix preceding
-    # the first subheading intact; each later chunk is ``### title\n<body>``.
+    # Split on ###  at the start of a line.  Keep the prefix preceding
+    # the first subheading intact; each later chunk is ### title\n<body>.
     parts = re.split(r"(?m)(?=^### )", content)
     if len(parts) < 2:
         return content
@@ -1167,15 +1167,15 @@ _PARAGRAPH_DUP_MIN_CHARS = 150
 
 
 # ---------------------------------------------------------------------------
-# Empty / dangling ``### Subheading`` prune.
+# Empty / dangling ### Subheading prune.
 #
-# The writer occasionally emits a ``### Subheading`` whose body is either
+# The writer occasionally emits a ### Subheading whose body is either
 # completely empty or a single "here comes a list" intro sentence ending
 # in a colon, then yields the section without producing the promised
-# content.  Observed live on user session ``rr_d79ddb66a58c`` section 4
-# (two empty ``###`` blocks) and section 5 (two empty plus one 29-char
+# content.  Observed live on user session rr_d79ddb66a58c section 4
+# (two empty ### blocks) and section 5 (two empty plus one 29-char
 # dangling-colon block whose body summarises the analysis and ends in
-# a fullwidth CJK colon ``U+FF1A`` promising an unwritten list).
+# a fullwidth CJK colon U+FF1A promising an unwritten list).
 #
 # Such orphan headings damage six of the sixteen RACE criteria at once
 # (information depth, data support, analysis depth, logical reasoning,
@@ -1196,7 +1196,7 @@ _PRUNE_EMPTY_BODY_THRESHOLD = 5
 # whitespace marks the dangling-intro shape: the body promises a list
 # but the writer never emitted one.
 _DANGLING_COLON_RE = re.compile(r"[\uff1a:]\s*\Z")
-# ``[ref_<hex>]`` tokens are stripped before measuring prose length so
+# [ref_<hex>] tokens are stripped before measuring prose length so
 # a body that is nothing but citations counts as empty.
 _PRUNE_CITATION_TOKEN_RE = re.compile(r"\[ref_[a-fA-F0-9]+\]")
 # Body counts as structural (= substantive regardless of prose length)
@@ -1207,14 +1207,14 @@ _PRUNE_STRUCTURAL_HINT_RE = re.compile(r"(?m)^\s*(?:\||```|[-*+]\s|\d+\.\s|>\s)"
 
 
 def _prune_empty_subheadings(content: str) -> str:
-    """Drop ``### Subheading`` blocks whose body is empty or a dangling intro.
+    """Drop ### Subheading blocks whose body is empty or a dangling intro.
 
     Operates on a single section body.  A block is pruned when:
 
-    1. The body is empty or near-empty (``< _PRUNE_EMPTY_BODY_THRESHOLD``
-       characters after stripping whitespace and ``[ref_xxx]`` tokens),
+    1. The body is empty or near-empty (< _PRUNE_EMPTY_BODY_THRESHOLD
+       characters after stripping whitespace and [ref_xxx] tokens),
        or
-    2. The body is short (``< _PRUNE_MIN_SUBSTANTIVE_CHARS`` after the
+    2. The body is short (< _PRUNE_MIN_SUBSTANTIVE_CHARS after the
        same strip) AND ends with a colon — the writer promised a list
        under this heading but never produced one.
 
@@ -1255,7 +1255,7 @@ def _prune_empty_subheadings(content: str) -> str:
 def _deduplicate_paragraphs(content: str) -> str:
     """Remove paragraphs that appear verbatim more than once in one section.
 
-    After ``_deduplicate_subheadings`` drops pass-2 ``### Subheading``
+    After _deduplicate_subheadings drops pass-2 ### Subheading
     chunks, the transition paragraph that originally sat between pass 1
     and pass 2 remains attached to the tail of the last pass-1 chunk.
     In the bench2 20260422b-head articles this transition paragraph is
@@ -1264,13 +1264,13 @@ def _deduplicate_paragraphs(content: str) -> str:
 
     This pass is the paragraph-granularity companion to the
     subheading-level dedup: identify paragraphs that are at least
-    ``_PARAGRAPH_DUP_MIN_CHARS`` characters long and appear verbatim
+    _PARAGRAPH_DUP_MIN_CHARS characters long and appear verbatim
     more than once inside a single section body; keep only the first
     occurrence.  The minimum length filter avoids collapsing legitimate
     short repetitions (e.g. list item anchors, table cell fragments).
 
     Structural blocks (headings, fenced code, tables) are never dropped
-    because ``_is_structural_paragraph`` reports them as structural and
+    because _is_structural_paragraph reports them as structural and
     they skip the duplicate check.
     """
 
@@ -1304,14 +1304,14 @@ def _analyse_visualization_gaps(content: str) -> dict[str, bool]:
 
     The result carries two boolean flags, both observational only:
 
-    * ``needs_table`` — numeric token density meets
-      ``_VISUALIZATION_NUMERIC_THRESHOLD`` but the body contains no markdown
+    * needs_table — numeric token density meets
+      _VISUALIZATION_NUMERIC_THRESHOLD but the body contains no markdown
       table row, hinting the writer should prefer a compact table;
-    * ``needs_mermaid`` — any hierarchy/sequence keyword from
-      ``SECTION_VISUAL_TRIGGER_KEYWORDS`` is present but the body contains no
-      ``mermaid`` fence, hinting a flowchart could clarify the relationships.
+    * needs_mermaid — any hierarchy/sequence keyword from
+      SECTION_VISUAL_TRIGGER_KEYWORDS is present but the body contains no
+      mermaid fence, hinting a flowchart could clarify the relationships.
 
-    The function never mutates ``content``. Callers emit these flags as
+    The function never mutates content. Callers emit these flags as
     sidecar metrics for offline bench analysis.
     """
     if not content:
@@ -1329,7 +1329,7 @@ def _analyse_visualization_gaps(content: str) -> dict[str, bool]:
 def _analyse_critical_analysis(content: str) -> bool:
     """Return True when at least one critical-analysis keyword is present.
 
-    Keywords come from ``SECTION_CRITICAL_ANALYSIS_KEYWORDS`` (bilingual,
+    Keywords come from SECTION_CRITICAL_ANALYSIS_KEYWORDS (bilingual,
     topic-agnostic). The check is case-insensitive. Absence of any keyword
     is itself a useful signal — surfaced as a sidecar metric, not injected
     back into the narrative.
@@ -1351,31 +1351,31 @@ def _compute_section_sidecar_metrics(
     """Deterministic prompt-compliance metrics for sidecar verification.
 
     Zero LLM cost.  Computed on final section content after noise cleanup.
-    Attached to ``section_input_metrics`` for offline analysis during
+    Attached to section_input_metrics for offline analysis during
     benchmark runs — never enters the main scoring or generation path.
 
     Metrics produced:
 
-    - ``sidecar_bullet_line_ratio``: fraction of non-empty lines that are
+    - sidecar_bullet_line_ratio: fraction of non-empty lines that are
       bullet/list items.  High values (>0.5) indicate the LLM ignored the
       "prefer dense analytical paragraphs" instruction.
-    - ``sidecar_avg_paragraph_sentences``: average sentence count per
+    - sidecar_avg_paragraph_sentences: average sentence count per
       substantive paragraph.  Below 3 indicates shallow paragraphs.
-    - ``sidecar_bold_heading_count``: Markdown ``###`` headings found.
-    - ``sidecar_citation_count`` / ``sidecar_unique_citation_count``:
-      total and unique inline ``[ref_xxx]`` citations.
-    - ``sidecar_uncited_paragraph_count``: substantive paragraphs without
+    - sidecar_bold_heading_count: Markdown ### headings found.
+    - sidecar_citation_count / sidecar_unique_citation_count:
+      total and unique inline [ref_xxx] citations.
+    - sidecar_uncited_paragraph_count: substantive paragraphs without
       any inline citation.
-    - ``sidecar_word_count``: total whitespace-delimited tokens.
-    - ``sidecar_archetype``: the resolved archetype label.
-    - ``sidecar_archetype_compliant``: whether archetype-specific keywords
-      were detected (English-only; CJK content yields ``false``, which is
+    - sidecar_word_count: total whitespace-delimited tokens.
+    - sidecar_archetype: the resolved archetype label.
+    - sidecar_archetype_compliant: whether archetype-specific keywords
+      were detected (English-only; CJK content yields false, which is
       itself a useful diagnostic signal).
-    - ``sidecar_critical_analysis_present``: whether any bilingual
-      critical-analysis keyword (``SECTION_CRITICAL_ANALYSIS_KEYWORDS``) is
+    - sidecar_critical_analysis_present: whether any bilingual
+      critical-analysis keyword (SECTION_CRITICAL_ANALYSIS_KEYWORDS) is
       present in the body.
-    - ``sidecar_visualization_needs_table`` /
-      ``sidecar_visualization_needs_mermaid``: whether the body is dense in
+    - sidecar_visualization_needs_table /
+      sidecar_visualization_needs_mermaid: whether the body is dense in
       numeric tokens without a table, or mentions hierarchy/sequence cues
       without a mermaid fence. Both are observability-only; the signals do
       not mutate the section body so nothing leaks into the scored article.
@@ -1826,7 +1826,7 @@ def _default_section_prompt_context() -> dict[str, str]:
 # sub-agent emits when its diagram rendering loop enters a retry
 # storm.  A paragraph tripping both (a diagram marker *and* multiple
 # junk signals) is functionally un-readable and always hurts the
-# RACE ``read`` score.  See ``_looks_like_junk_paragraph`` for the
+# RACE read score.  See _looks_like_junk_paragraph for the
 # combined heuristic.
 _DIAGRAM_MARKER_RE = re.compile(
     r"\b(?:graph\s+(?:TD|LR|BT|RL)|flowchart|sequenceDiagram|stateDiagram)",
@@ -1835,10 +1835,10 @@ _HASH_FRAGMENT_RE = re.compile(r"\b[a-f]\d{2}-b\d{4}\b|\b[a-f]\d{2}b\d{4,}\b")
 
 
 def _unwrap_envelope_leaks(text: str) -> str:
-    """Unwrap multiline ``{"content": "..."}`` leaks, preserving prose.
+    """Unwrap multiline {"content": "..."} leaks, preserving prose.
 
-    Locates each ``{\\n  "content": "...`` opener, pairs it with the
-    nearest trailing ``"}`` (optionally followed by a citations array)
+    Locates each {\\n  "content": "... opener, pairs it with the
+    nearest trailing "} (optionally followed by a citations array)
     or a fallback boundary (next Markdown heading / end of text), and
     emits the inner prose with JSON string escapes un-escaped.  Both
     closed and malformed envelopes are handled; only the JSON scaffold
@@ -1883,7 +1883,7 @@ def _json_unescape(text: str) -> str:
     except (json.JSONDecodeError, ValueError):
         # Fall back to common escape sequences when the fragment
         # contains unescaped control chars (which the writer often
-        # emits and ``json.loads`` rejects).
+        # emits and json.loads rejects).
         return (
             text.replace("\\\\", "\x00BS\x00")
             .replace('\\"', '"')
@@ -1897,7 +1897,7 @@ def _looks_like_junk_paragraph(paragraph: str) -> bool:
     """True when a paragraph is a diagram/sub-agent retry-storm residue.
 
     Requires BOTH a diagram/code marker AND at least two independent
-    junk signals (``ref_<hex>`` / ``sync`` / ``30s`` / short-hash
+    junk signals (ref_<hex> / sync / 30s / short-hash
     fragment).  The dual-signal requirement protects clean English
     prose that legitimately discusses "synchronous" systems or a
     "30s interval" from being swept up.
@@ -1923,21 +1923,21 @@ def _scrub_generation_artifacts(content: str) -> str:
     """Strip sub-agent / tool-layer junk tokens that outran upstream parsers.
 
     Three failure modes escape the per-paragraph
-    ``_strip_content_envelope`` and the citation renumberer, and this
+    _strip_content_envelope and the citation renumberer, and this
     scrubber handles them as a deterministic last line of defence
     before the section leaves the writer:
 
-    1. Multiline ``{"content": "..."}`` envelope leaked between
+    1. Multiline {"content": "..."} envelope leaked between
        paragraphs.  The per-paragraph unwrap in
-       ``_consolidate_short_paragraphs`` only catches envelopes that
-       fit a single ``\\n\\n``-delimited block; multiline envelopes
+       _consolidate_short_paragraphs only catches envelopes that
+       fit a single \\n\\n-delimited block; multiline envelopes
        survive and show up as literal JSON in the final Markdown.
     2. Fenced code blocks (typically mermaid) whose body devolved into
-       repeated ``ref_<hex>`` / ``sync`` / ``30s`` tokens.  These are
+       repeated ref_<hex> / sync / 30s tokens.  These are
        runtime plumbing artifacts, never valid diagrams; the whole
        block is dropped.
-    3. Orphan ``ref_<hex>`` fragments in prose outside a well-formed
-       ``[ref_<hex>]`` citation.  These never round-trip through the
+    3. Orphan ref_<hex> fragments in prose outside a well-formed
+       [ref_<hex>] citation.  These never round-trip through the
        citation renumberer and always surface as visible garbage.
 
     Idempotent: calling on already-clean prose returns it unchanged
@@ -1947,7 +1947,7 @@ def _scrub_generation_artifacts(content: str) -> str:
     if not content:
         return content
     # Step 1: unwrap multiline JSON envelope leaks.  The envelope
-    # scaffold (``{\n  "content": "..." }``) is removed but the
+    # scaffold ({\n  "content": "..." }) is removed but the
     # inner prose survives with JSON escapes un-escaped.  Pure
     # deletion would strip legitimate prose when the envelope is
     # malformed but still carries body content.
@@ -1955,7 +1955,7 @@ def _scrub_generation_artifacts(content: str) -> str:
 
     # Step 2: wipe fenced blocks whose body is dominated by junk
     # tokens.  Thresholds chosen so a legitimate mermaid or code
-    # sample with a single ``sync`` keyword or citation is retained.
+    # sample with a single sync keyword or citation is retained.
     def _maybe_wipe_fence(match: re.Match[str]) -> str:
         body = match.group(1) or ""
         ref_hits = len(re.findall(r"ref_[a-fA-F0-9]{6,}", body))
@@ -1969,8 +1969,8 @@ def _scrub_generation_artifacts(content: str) -> str:
 
     # Step 2.5: drop *paragraph-level* junk that never got a code fence
     # around it.  Upstream fence loss in the sub-agent occasionally
-    # leaves a "graph TD" stanza plus repeated ``ref_<hex>`` / ``30s``
-    # / ``sync`` fragments sitting in prose form, so the fenced-block
+    # leaves a "graph TD" stanza plus repeated ref_<hex> / 30s
+    # / sync fragments sitting in prose form, so the fenced-block
     # scrub cannot reach them.  We require MULTIPLE independent
     # signals so clean prose that happens to mention "synchronous"
     # or "30 seconds" cannot trip this path.
@@ -1981,7 +1981,7 @@ def _scrub_generation_artifacts(content: str) -> str:
         cleaned_paragraphs.append(paragraph)
     content = "\n\n".join(cleaned_paragraphs)
 
-    # Step 3: scrub orphan ``ref_<hex>`` tokens while preserving valid
+    # Step 3: scrub orphan ref_<hex> tokens while preserving valid
     # bracketed citations.  Mask the valid tokens with a NUL-delimited
     # placeholder so the orphan regex cannot swallow them, then
     # restore after the scrub.
@@ -2005,11 +2005,11 @@ def _scrub_generation_artifacts(content: str) -> str:
 
 
 def _cjk_char_ratio(text: str) -> float:
-    """Return the fraction of letters in ``text`` that are CJK ideographs.
+    """Return the fraction of letters in text that are CJK ideographs.
 
     Counts both CJK characters and ASCII letters; digits, punctuation,
     and whitespace are ignored so structural markup does not bias the
-    ratio.  Returns ``0.0`` for empty or letter-free text.
+    ratio.  Returns 0.0 for empty or letter-free text.
     """
 
     cjk = 0
@@ -2027,13 +2027,13 @@ def _cjk_char_ratio(text: str) -> float:
 
 
 def _query_is_english(query: str) -> bool:
-    """Return True when ``query`` is predominantly English (i.e. not CJK).
+    """Return True when query is predominantly English (i.e. not CJK).
 
     Used to gate English-only post-processing (the translate pass).
     Counts only letters and CJK ideographs so punctuation and digits do
     not bias the ratio.  A query with a handful of CJK chars (e.g. a
     brand name) still counts as English when ASCII letters dominate
-    beyond ``_EN_QUERY_ASCII_RATIO``.
+    beyond _EN_QUERY_ASCII_RATIO.
     """
 
     ascii_letters = 0
@@ -2393,13 +2393,13 @@ def _parse_section(title: str, content: str) -> ReportSection:
 def _extract_translated_title(raw_response: str, *, fallback: str) -> str:
     """Return the translated section title from a translate LLM JSON response.
 
-    The translate prompt asks the model to return ``{"title": "...",
-    "content": "..."}``.  ``_parse_section`` only consumes the
-    ``content`` field, so we extract the optional ``title`` field here
-    to feed back into the caller's ``ReportSection.title``.
+    The translate prompt asks the model to return {"title": "...",
+    "content": "..."}.  _parse_section only consumes the
+    content field, so we extract the optional title field here
+    to feed back into the caller's ReportSection.title.
 
-    Falls back to ``fallback`` whenever the response is unparseable, the
-    ``title`` field is missing / blank, or the translated title still
+    Falls back to fallback whenever the response is unparseable, the
+    title field is missing / blank, or the translated title still
     carries CJK characters (defensive guard against a misbehaving model).
     The fallback keeps the caller safe: a failed title translation never
     regresses the rendered heading below its pre-translation state.
@@ -2407,7 +2407,7 @@ def _extract_translated_title(raw_response: str, *, fallback: str) -> str:
 
     text = raw_response.strip()
     if text.startswith("```"):
-        # Strip fenced code block wrapper, mirroring ``_parse_section``.
+        # Strip fenced code block wrapper, mirroring _parse_section.
         first_nl = text.find("\n")
         last_fence = text.rfind("```")
         if first_nl >= 0 and last_fence > first_nl:
@@ -2446,7 +2446,7 @@ def _normalize_section_body(body: str, title: str) -> str:
 
 # Line-start triple-backtick fence marker. Allows a leading indent so
 # fences nested inside list items still count, and captures any trailing
-# language tag on the same line (``` / ```python / ```mermaid / etc.).
+# language tag on the same line ( / python / ```mermaid / etc.).
 _FENCE_MARKER_RE = re.compile(r"(?m)^[ \t]*```[^\n]*$")
 # Four-space (or tab) leading indent — markdown's rule for an implicit
 # "indented code block". Used to detect an orphan diagram body that
@@ -2454,7 +2454,7 @@ _FENCE_MARKER_RE = re.compile(r"(?m)^[ \t]*```[^\n]*$")
 _INDENTED_CODE_LINE_RE = re.compile(r"^(?: {4,}|\t)")
 # Headers and arrow operators unique to Mermaid. When an orphan code
 # block carries any of these markers we can safely restore the opening
-# fence with a ``mermaid`` language tag so the UI renders a real diagram
+# fence with a mermaid language tag so the UI renders a real diagram
 # instead of a nameless code stub.
 _MERMAID_HEADER_RE = re.compile(
     r"\b(?:sequenceDiagram|flowchart|graph\s+(?:TD|LR|BT|RL)|stateDiagram"
@@ -2466,7 +2466,7 @@ _MERMAID_ARROW_RE = re.compile(r"->>|-->|-\.->|==>")
 def _infer_fence_language(block: str) -> str:
     """Best-effort language tag for an orphan code block.
 
-    Returns ``"mermaid"`` when the block body contains the diagram
+    Returns "mermaid" when the block body contains the diagram
     keywords or arrow operators specific to Mermaid, otherwise an empty
     string to keep the restored fence generic.
     """
@@ -2477,22 +2477,22 @@ def _infer_fence_language(block: str) -> str:
 
 
 def _balance_fence_markers(text: str) -> str:
-    """Pair an orphan trailing ``` fence with a restored opener.
+    """Pair an orphan trailing  fence with a restored opener.
 
-    Writers occasionally emit a closing ``` without a matching opener
+    Writers occasionally emit a closing  without a matching opener
     (observed most often when the intended block was a Mermaid diagram
     and the opener was lost). Two failure modes then appear in the UI:
     the raw closer renders as the *opening* of a fresh code block that
     never closes, or, once the closer is stripped, the indented diagram
     body below it falls back to markdown's implicit indented-code-block
-    rule and renders as a nameless ``code`` stub.
+    rule and renders as a nameless code stub.
 
     When the orphan trailing fence is preceded by a contiguous indented
-    block, restore an opening fence above that block (with a ``mermaid``
+    block, restore an opening fence above that block (with a mermaid
     tag when the body looks like a Mermaid diagram) so the content
     renders as a proper labelled code block. Fall back to dropping the
     orphan fence when no indented block precedes it — that covers
-    truncated ``\u0060\u0060\u0060json`` wrappers whose body was already
+    truncated \u0060\u0060\u0060json wrappers whose body was already
     cut by the citations-trailer stripper upstream.
     """
 
@@ -2546,15 +2546,15 @@ def _balance_fence_markers(text: str) -> str:
 def _strip_envelope_citations_trailer(text: str) -> str:
     """Truncate an escaped citations-array trailer that leaked into content.
 
-    Some writers produce a malformed envelope where the ``citations``
-    array is double-nested: once escaped inside the ``content`` string
-    and once as a sibling JSON field. ``json.loads`` still succeeds on
-    the outer envelope, but the ``content`` value carries the escaped
+    Some writers produce a malformed envelope where the citations
+    array is double-nested: once escaped inside the content string
+    and once as a sibling JSON field. json.loads still succeeds on
+    the outer envelope, but the content value carries the escaped
     trailer verbatim::
 
         ...final sentence.",\n  "citations": [\n    {\n      ...
 
-    Cut the content at the first ``","citations":`` boundary so the
+    Cut the content at the first ","citations": boundary so the
     trailer does not render into the final section. Returns the input
     unchanged when no boundary is found.
     """
@@ -2570,7 +2570,7 @@ def _strip_envelope_citations_trailer(text: str) -> str:
 
 
 # Matches a single bracketed group of two or more comma-separated ref
-# identifiers, e.g. ``[ref_a1b2c3d4, ref_e5f6a7b8]``. Single-ref tokens are
+# identifiers, e.g. [ref_a1b2c3d4, ref_e5f6a7b8]. Single-ref tokens are
 # intentionally excluded so we leave the already-correct form alone.
 _COMMA_GROUP_CITATION_RE = re.compile(r"\[(ref_[a-f0-9]+(?:\s*,\s*ref_[a-f0-9]+)+)\]")
 
@@ -2578,11 +2578,11 @@ _COMMA_GROUP_CITATION_RE = re.compile(r"\[(ref_[a-f0-9]+(?:\s*,\s*ref_[a-f0-9]+)
 def _normalize_citation_groups(text: str) -> str:
     """Expand comma-grouped ref citations into atomic bracketed tokens.
 
-    Writers occasionally emit ``[ref_a, ref_b, ref_c]`` to cite several
+    Writers occasionally emit [ref_a, ref_b, ref_c] to cite several
     references at the same position. The bench exporter and the
     downstream citation resolver only match the single-ref form
-    ``[ref_a]``, so comma groups previously survived into the final
-    article as literal noise. Normalize them to ``[ref_a][ref_b][ref_c]``
+    [ref_a], so comma groups previously survived into the final
+    article as literal noise. Normalize them to [ref_a][ref_b][ref_c]
     so every citation is an atomic resolvable token.
     """
 
@@ -2594,15 +2594,15 @@ def _normalize_citation_groups(text: str) -> str:
 
 
 def _strip_content_envelope(text: str) -> str:
-    """Unwrap a ``{"content": "..."}`` envelope emitted by the rewrite LLM.
+    """Unwrap a {"content": "..."} envelope emitted by the rewrite LLM.
 
     Returns the extracted content when the input looks like a writer
-    envelope (parsable JSON with a ``content`` string, or a malformed
-    envelope recoverable by ``_repair_content_envelope``). Falls back to
+    envelope (parsable JSON with a content string, or a malformed
+    envelope recoverable by _repair_content_envelope). Falls back to
     the original text otherwise. Idempotent on already-plain prose.
 
     Centralises the parse → repair → fallback cascade so
-    ``_parse_section`` and ``_rewrite_noisy_paragraph`` both strip the
+    _parse_section and _rewrite_noisy_paragraph both strip the
     same envelope shape without code duplication.
     """
     stripped = text.strip()
@@ -2646,25 +2646,25 @@ _CONTENT_ENVELOPE_OPEN = re.compile(r"^\s*\{\s*\"content\"\s*:\s*\"", re.DOTALL)
 # Matches the tail of a fully-formed envelope: a quote plus optional
 # whitespace plus the closing brace at end of string.
 _CONTENT_ENVELOPE_TAIL = re.compile(r"\"\s*\}\s*$", re.DOTALL)
-# Matches the boundary preceding a ``"citations"`` field when present.
+# Matches the boundary preceding a "citations" field when present.
 _CITATIONS_SEPARATOR = re.compile(r"\"\s*,\s*\"citations\"\s*:", re.DOTALL)
 
 
 def _repair_content_envelope(text: str) -> str | None:
-    """Salvage the ``content`` field from an unparsable writer envelope.
+    """Salvage the content field from an unparsable writer envelope.
 
-    Writers are prompted to emit ``{"content": "...", "citations": [...]}``.
-    Two failure modes cause ``json.loads`` to reject the output:
+    Writers are prompted to emit {"content": "...", "citations": [...]}.
+    Two failure modes cause json.loads to reject the output:
 
     1. Unescaped double quotes or raw newlines inside a long prose body.
-    2. The writer hit ``max_tokens`` mid-string, leaving no closing quote,
+    2. The writer hit max_tokens mid-string, leaving no closing quote,
        comma, or brace — so neither the tail pattern nor the citations
        separator can be found.
 
     The repair path: detect the opener, find the best available right
     boundary (citations separator, tail brace, or end-of-text for the
     truncation case), and return the enclosed body with minimal unescaping.
-    Returns ``None`` when the envelope shape is not detected so callers can
+    Returns None when the envelope shape is not detected so callers can
     fall back to returning the text unchanged.
     """
 
@@ -2690,7 +2690,7 @@ def _repair_content_envelope(text: str) -> str | None:
         return None
     body = text[body_start:body_end]
     # Undo the minimal escapes a writer might have produced without breaking
-    # markdown. Leave ``\\`` sequences alone because content is plain prose,
+    # markdown. Leave \\ sequences alone because content is plain prose,
     # not regex, and over-unescaping risks corrupting URLs.
     body = body.replace('\\"', '"').replace("\\n", "\n").replace("\\t", "\t")
     cleaned = body.strip()

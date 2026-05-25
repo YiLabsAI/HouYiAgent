@@ -4,9 +4,9 @@ Defines the runtime declaration that ecosystem skills can include in their
 SKILL.md frontmatter to enable automatic executor binding and capability
 reporting:
 
-- ``adapter`` field resolves to a Python callable for executor binding
-- ``CapabilityTier`` reports discovery/validation/execution capability
-- ``RuntimeStatus`` reports operational readiness (ready/degraded/unavailable)
+- adapter field resolves to a Python callable for executor binding
+- CapabilityTier reports discovery/validation/execution capability
+- RuntimeStatus reports operational readiness (ready/degraded/unavailable)
 """
 
 from __future__ import annotations
@@ -45,7 +45,7 @@ class RuntimeStatus(str, Enum):
 
 
 class RuntimeContract(BaseModel):
-    """Parsed ``runtime`` block from SKILL.md frontmatter."""
+    """Parsed runtime block from SKILL.md frontmatter."""
 
     mode: RuntimeMode = Field(
         default=RuntimeMode.TOOL,

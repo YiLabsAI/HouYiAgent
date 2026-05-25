@@ -54,14 +54,14 @@ class AgentMessageBus:
 
     Provides three communication patterns aligned with A2A Pub/Sub draft:
 
-    1. **Point-to-Point**: ``send`` / ``receive`` — for Delegate mode.
-    2. **Pub/Sub**: ``publish`` / ``subscribe`` — for Autonomous mode.
-    3. **Broadcast**: ``broadcast`` — for global orchestrator directives.
+    1. **Point-to-Point**: send / receive — for Delegate mode.
+    2. **Pub/Sub**: publish / subscribe — for Autonomous mode.
+    3. **Broadcast**: broadcast — for global orchestrator directives.
 
-    Current implementation uses ``asyncio.Queue`` for in-process delivery.
+    Current implementation uses asyncio.Queue for in-process delivery.
     For distributed deployments, the queue backend can be replaced with a
     messaging system (e.g. Redis Streams, NATS, Kafka) by implementing a
-    ``MessageBusBackend`` protocol — the public API surface stays identical.
+    MessageBusBackend protocol — the public API surface stays identical.
     """
 
     def __init__(self) -> None:
@@ -105,7 +105,7 @@ class AgentMessageBus:
     ) -> AgentMessage:
         """Receive the next P2P message for *agent_id*.
 
-        Raises ``asyncio.TimeoutError`` if *timeout* elapses.
+        Raises asyncio.TimeoutError if *timeout* elapses.
         """
         q = self._agent_queues.get(agent_id)
         if q is None:

@@ -116,9 +116,9 @@ def _reset_global_cache_for_tests() -> None:
 def get_global_cache_stats() -> dict[str, Any] | None:
     """Return a JSON-serializable snapshot of the shared web-search cache.
 
-    Returns ``None`` when caching is disabled or the cache has never been
+    Returns None when caching is disabled or the cache has never been
     populated, so callers can safely skip the field in their output.  The
-    snapshot format mirrors ``CacheStats`` attributes plus ``hit_rate`` so
+    snapshot format mirrors CacheStats attributes plus hit_rate so
     downstream tooling never needs to recompute it.
     """
     cache = _GLOBAL_CACHE
@@ -329,9 +329,9 @@ class WebSearchService:
     def _resolve_cache_min_results() -> int:
         """Return the minimum provider result count required to cache a response.
 
-        Defaults to ``3``: fewer hits usually indicates a thin or empty
+        Defaults to 3: fewer hits usually indicates a thin or empty
         fallback response that would contaminate the cache.  Set the env
-        var to ``1`` to effectively disable the gate.  Non-positive or
+        var to 1 to effectively disable the gate.  Non-positive or
         unparseable values fall back to the default.
         """
         raw = (os.getenv(ENV_WEB_SEARCH_CACHE_MIN_RESULTS) or "").strip()
@@ -450,9 +450,9 @@ class WebSearchService:
         * Switching the configured primary provider silently invalidated
           the entire cache.
 
-        Keying by ``(query, max_results, include_content)`` removes both
+        Keying by (query, max_results, include_content) removes both
         defects.  The provider that actually served the response is still
-        preserved inside ``WebSearchResponse.provider`` for observability.
+        preserved inside WebSearchResponse.provider for observability.
         """
         return f"{query}|{max_results}|{int(include_content)}"
 

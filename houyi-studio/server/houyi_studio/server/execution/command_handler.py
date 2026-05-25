@@ -1,6 +1,6 @@
 """Execution-lifecycle command handler (Start, Pause, Resume, Abort, Retry, Patch, Restore, LogLevel).
 
-Part of the command-handler hierarchy extracted from ``app.py`` following the
+Part of the command-handler hierarchy extracted from app.py following the
 **Single Responsibility Principle (SRP)** and **Open/Closed Principle (OCP)**:
 
 Architecture
@@ -25,8 +25,8 @@ Design rationale
 *   **SRP**: This class owns *execution-lifecycle* commands — operations that
     directly mutate or query the state machine of a running DAG execution
     (start, pause, resume, abort, retry a specific node, patch the live plan,
-    restore from a checkpoint).  ``SetLogLevel`` is co-located here because it
-    is a typed ``ClientCommand`` that affects the server runtime context rather
+    restore from a checkpoint).  SetLogLevel is co-located here because it
+    is a typed ClientCommand that affects the server runtime context rather
     than a persistent resource.
 
 *   **OCP**: New execution-related commands (e.g., a future "skip-node" or
@@ -37,9 +37,9 @@ Design rationale
     sender, execution engine, plan-patch logic — as constructor-injected
     callables, keeping it fully testable in isolation (no server needed).
 
-*   **Strategy pattern**: ``handle()`` dispatches to private ``_handle_*``
+*   **Strategy pattern**: handle() dispatches to private _handle_*
     methods keyed on command type, mirroring the same pattern used by
-    ``SkillCommandHandler`` and ``CommandHandler`` so the codebase stays
+    SkillCommandHandler and CommandHandler so the codebase stays
     consistent and predictable.
 """
 
@@ -84,24 +84,24 @@ class ExecutionCommandHandler:
 
     Responsibilities
     ----------------
-    - Execution control: start a new execution from a ``PlanIR``, pause / resume /
+    - Execution control: start a new execution from a PlanIR, pause / resume /
       abort an in-flight execution, and retry a single failed node.
-    - Live plan editing: apply ``PlanPatch`` deltas to the execution plan without
+    - Live plan editing: apply PlanPatch deltas to the execution plan without
       interrupting the running DAG (hot-patching).
-    - Checkpoint / restore: delegate ``RestoreCheckpointCommand`` to the engine,
+    - Checkpoint / restore: delegate RestoreCheckpointCommand to the engine,
       enabling deterministic or fresh replay from a prior state.
     - Log-level management: adjust the server-wide log level at runtime via
-      ``SetLogLevelCommand`` and broadcast the change back to all connected clients.
+      SetLogLevelCommand and broadcast the change back to all connected clients.
 
     Integration
     -----------
-    This handler is called directly from ``handle_command()`` in ``app.py`` after
-    ``CommandDispatcher`` returns no match — because these are *typed* Pydantic
-    commands (not dict-based), they use ``can_handle()`` for isinstance dispatch
-    rather than string-based ``command_type`` routing.
+    This handler is called directly from handle_command() in app.py after
+    CommandDispatcher returns no match — because these are *typed* Pydantic
+    commands (not dict-based), they use can_handle() for isinstance dispatch
+    rather than string-based command_type routing.
 
     All heavy lifting (scheduling, state transitions, persistence) is delegated
-    to the injected ``ExecutionEngine``, keeping this class a thin coordination
+    to the injected ExecutionEngine, keeping this class a thin coordination
     layer that translates WebSocket commands into engine API calls.
     """
 

@@ -1,8 +1,8 @@
 """Runtime tools used during research execution.
 
-Each tool is a callable with a ``name`` attribute and an OpenAI-format
-``schema`` dict.  ``AgentRunner`` picks these up automatically via
-``_get_tool_schemas()`` and ``_execute_tool()``.
+Each tool is a callable with a name attribute and an OpenAI-format
+schema dict.  AgentRunner picks these up automatically via
+_get_tool_schemas() and _execute_tool().
 """
 
 from __future__ import annotations
@@ -17,9 +17,9 @@ logger = logging.getLogger(__name__)
 
 
 class WebSearchTool:
-    """Wraps ``WebSearchService`` as a callable runtime tool for ``AgentRunner``.
+    """Wraps WebSearchService as a callable runtime tool for AgentRunner.
 
-    The LLM sees this as ``web_search(query, max_results?, include_content?)``
+    The LLM sees this as web_search(query, max_results?, include_content?)
     and the runner dispatches the call here.
     """
 

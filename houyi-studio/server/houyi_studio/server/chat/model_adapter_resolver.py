@@ -104,8 +104,8 @@ class ModelAdapterResolver:
                 base_url=provider_url,
                 default_model=model,
             )
-        # Any other `/v1` endpoint should use the generic OpenAI-compatible
-        # adapter. Routing all `/v1` providers into SiliconFlowAdapter causes
+        # Any other /v1 endpoint should use the generic OpenAI-compatible
+        # adapter. Routing all /v1 providers into SiliconFlowAdapter causes
         # cross-provider behavior drift (e.g. placeholder/tool-call shaping).
         if provider_url and "/v1" in provider_url:
             return self._openai_compat_adapter_cls(

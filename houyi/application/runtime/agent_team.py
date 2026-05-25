@@ -28,7 +28,7 @@ class TeamAgentStatus(str, Enum):
 
 
 class TeamAgentHandle(BaseModel):
-    """Opaque handle returned by ``spawn``, used to ``join`` later."""
+    """Opaque handle returned by spawn, used to join later."""
 
     handle_id: str = Field(default_factory=lambda: uuid.uuid4().hex[:10])
     agent_id: str = ""
@@ -55,7 +55,7 @@ class TeamAgentResult(BaseModel):
 class AgentTeamManager:
     """Manages team agent lifecycle: spawn, join, parallel, terminate.
 
-    Each spawn creates an isolated ``AgentRunner``; the manager tracks
+    Each spawn creates an isolated AgentRunner; the manager tracks
     handles and collects results on join.  Works for both DELEGATE
     (supervisor-worker) and AUTONOMOUS (peer) topologies.
     """
@@ -75,7 +75,7 @@ class AgentTeamManager:
     def _resolve_llm(self, model_override: str | None) -> Any:
         """Return an LLM adapter, optionally overriding the model.
 
-        When *model_override* is set (from ``AgentTeamConfig.model``), the
+        When *model_override* is set (from AgentTeamConfig.model), the
         parent adapter is cloned with the new model name — avoiding the cost
         of constructing a whole new adapter from scratch.
         """
@@ -105,8 +105,8 @@ class AgentTeamManager:
     ) -> TeamAgentHandle:
         """Spawn a new team agent and start its tool-loop asynchronously.
 
-        *spec* may be an ``AgentSpec``, ``AgentTeamConfig``, or an ``Agent``
-        instance.  When an ``Agent`` is passed, its internal spec, tools, and
+        *spec* may be an AgentSpec, AgentTeamConfig, or an Agent
+        instance.  When an Agent is passed, its internal spec, tools, and
         LLM adapter are used directly.
         """
         from houyi.application.runtime.agent import Agent

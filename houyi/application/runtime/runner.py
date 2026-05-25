@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 
 class AgentResult(BaseModel):
-    """Result returned by ``AgentRunner.run``."""
+    """Result returned by AgentRunner.run."""
 
     agent_id: str = ""
     task: str = ""
@@ -35,13 +35,13 @@ class AgentRunner:
 
     Responsibilities:
 
-    * Run up to ``max_turns`` iterations of LLM → tool-call → result.
-    * Apply ``ContextStrategy`` to truncate / compress conversation context.
-    * Emit ``AgentEvent`` at each lifecycle boundary.
-    * Support both blocking (``run``) and streaming (``run_stream``) APIs.
+    * Run up to max_turns iterations of LLM → tool-call → result.
+    * Apply ContextStrategy to truncate / compress conversation context.
+    * Emit AgentEvent at each lifecycle boundary.
+    * Support both blocking (run) and streaming (run_stream) APIs.
 
     The runner is intentionally decoupled from multi-agent orchestration;
-    ``AgentTeamManager`` and ``AgentOrchestrator`` compose runners.
+    AgentTeamManager and AgentOrchestrator compose runners.
     """
 
     def __init__(
@@ -149,10 +149,10 @@ class AgentRunner:
     ) -> tuple[Any, int]:
         """Execute the agent's LLM → tool-call → result loop.
 
-        When ``llm_adapter`` is a real ``LLMAdapter``, tool schemas are
+        When llm_adapter is a real LLMAdapter, tool schemas are
         forwarded so the model can request tool invocations.  The loop
         continues until the model returns a response without tool_calls
-        or ``max_turns`` is reached.
+        or max_turns is reached.
 
         Falls back to a deterministic mock when no adapter is configured.
         """
@@ -231,7 +231,7 @@ class AgentRunner:
     def _extract_tool_calls(response: Any) -> list[dict[str, Any]]:
         """Extract tool calls from LLM response.  Empty list means "done".
 
-        Handles ``LLMResponse`` objects (via attribute access), raw dicts,
+        Handles LLMResponse objects (via attribute access), raw dicts,
         and plain-string mock responses.
         """
         tc = getattr(response, "tool_calls", None)
@@ -244,8 +244,8 @@ class AgentRunner:
     async def _execute_tool(self, tool_call: dict[str, Any]) -> Any:
         """Execute a tool call against registered tools.
 
-        Supports both OpenAI-style ``{"function": {"name": ..., "arguments": ...}}``
-        and flat ``{"name": ..., "arguments": ...}`` formats.
+        Supports both OpenAI-style {"function": {"name": ..., "arguments": ...}}
+        and flat {"name": ..., "arguments": ...} formats.
         """
         fn = tool_call.get("function", {})
         name = fn.get("name", "") or tool_call.get("name", "")
@@ -280,7 +280,7 @@ class AgentRunner:
         return schemas or None
 
     def _apply_context_strategy(self, messages: list[dict[str, Any]]) -> None:
-        """Apply context truncation per ``ContextStrategy``."""
+        """Apply context truncation per ContextStrategy."""
         keep = self.context_strategy.keep_tool_result
         if keep < 0 or len(messages) <= keep + 1:
             return

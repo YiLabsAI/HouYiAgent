@@ -37,7 +37,7 @@ class ErrorPolicy(BaseModel):
     fallback_strategy: FallbackStrategy = FallbackStrategy.SKIP
 
     def should_retry(self, error: BaseException, attempt: int) -> bool:
-        """Return ``True`` if the error is retryable and we have attempts left."""
+        """Return True if the error is retryable and we have attempts left."""
         if attempt >= self.max_retries:
             return False
         error_type = type(error).__name__.lower()

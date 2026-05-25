@@ -49,8 +49,8 @@ def _model_is_cached() -> bool:
 def _force_offline_hub(monkeypatch: pytest.MonkeyPatch) -> None:
     """Prevent huggingface_hub from making network requests during tests.
 
-    The local model must already be cached (via ``make install-all`` or a
-    prior manual run).  Setting ``HF_HUB_OFFLINE=1`` forces the library to
+    The local model must already be cached (via make install-all or a
+    prior manual run).  Setting HF_HUB_OFFLINE=1 forces the library to
     use only cached files, avoiding hangs when the network is slow or
     sandboxed.
     """

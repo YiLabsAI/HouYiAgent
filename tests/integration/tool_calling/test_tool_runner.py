@@ -2,7 +2,7 @@
 
 These tests cover real collaboration across policy, consent, hooks, metrics,
 and ToolCallRunner orchestration while keeping placement aligned with the
-`tool_calling` integration ownership.
+tool_calling integration ownership.
 """
 
 from __future__ import annotations

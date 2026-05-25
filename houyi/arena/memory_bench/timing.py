@@ -46,7 +46,7 @@ def _percentile(samples: list[float], pct: float) -> float:
 class BenchTimings:
     """Aggregate latency / cost-proxy summary for one or more sessions.
 
-    All time fields are in milliseconds. `extractor_calls` is the number of
+    All time fields are in milliseconds. extractor_calls is the number of
     times the LLM-backed extractor ran during the measurement window — used
     as a cost proxy because each call dominates token spend in the bench.
     """

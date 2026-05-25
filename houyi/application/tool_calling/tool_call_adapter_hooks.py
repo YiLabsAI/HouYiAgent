@@ -4,11 +4,11 @@ Adapter resolution follows a two-stage strategy:
 
 1. **Custom hooks** — user-registered hooks checked first (chain-of-responsibility).
 2. **Factory fallback** — if no custom hook matches, delegates to
-   ``LLMAdapterFactory.create(adapter_name)`` which is the single source of
+   LLMAdapterFactory.create(adapter_name) which is the single source of
    truth for adapter construction.
 
 The only built-in hook is the fake-adapter hook which returns the deterministic
-``FakeToolCallAdapter`` (from ``houyi.testkit``) for E2E testing.
+FakeToolCallAdapter (from houyi.testkit) for E2E testing.
 """
 
 from __future__ import annotations
@@ -56,9 +56,9 @@ def resolve_tool_call_adapter(context: ToolCallAdapterContext) -> Any | None:
 
     Resolution order:
     1. Iterate custom hooks — first non-None result wins.
-    2. If ``adapter_name`` is ``"real"`` (the default), return ``None`` to let
+    2. If adapter_name is "real" (the default), return None to let
        the caller use its own fallback.
-    3. Otherwise delegate to ``LLMAdapterFactory.create(adapter_name)``.
+    3. Otherwise delegate to LLMAdapterFactory.create(adapter_name).
     """
 
     for hook in _ADAPTER_HOOKS:

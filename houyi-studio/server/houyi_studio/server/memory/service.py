@@ -26,7 +26,7 @@ class MemoryService:
     """Server-side memory management service.
 
     Maintains a candidate buffer that receives candidates from
-    ``ResearchRuntime.extract_memories()`` and ``MemoryEngine.process_messages()``.
+    ResearchRuntime.extract_memories() and MemoryEngine.process_messages().
     Provides CRUD for both candidates and records.
     """
 

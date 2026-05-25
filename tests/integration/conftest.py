@@ -17,7 +17,7 @@ def _reset_env_config_singleton() -> Iterator[None]:
     """Reload environment-backed config for each integration test.
 
     Integration tests rely on real env / .env wiring, so they should observe the
-    latest process environment instead of a previously cached ``EnvConfig`` snapshot.
+    latest process environment instead of a previously cached EnvConfig snapshot.
     """
     EnvConfig._reset()
     yield

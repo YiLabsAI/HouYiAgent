@@ -1,6 +1,6 @@
 """Placeholder resolution for tool-call argument chaining.
 
-Supports ``$tool.<name>.<path>`` and ``$call.<id>.<path>`` placeholders that
+Supports $tool.<name>.<path> and $call.<id>.<path> placeholders that
 reference outputs from previously executed tool calls within the same session.
 """
 
@@ -10,11 +10,11 @@ from typing import Any
 
 
 class PlaceholderResolver:
-    """Resolve ``$tool.*`` / ``$call.*`` placeholders in tool arguments."""
+    """Resolve $tool.* / $call.* placeholders in tool arguments."""
 
     @staticmethod
     def contains(value: Any) -> bool:
-        """Return True if ``value`` contains at least one placeholder reference."""
+        """Return True if value contains at least one placeholder reference."""
         if isinstance(value, str):
             return value.startswith("$tool.") or value.startswith("$call.")
         if isinstance(value, dict):
@@ -25,7 +25,7 @@ class PlaceholderResolver:
 
     @staticmethod
     def resolve(value: Any, resolved_outputs: dict[str, Any]) -> Any:
-        """Recursively resolve placeholder references in ``value``."""
+        """Recursively resolve placeholder references in value."""
         if isinstance(value, str):
             parsed = PlaceholderResolver.extract(value)
             if parsed is None:
@@ -46,7 +46,7 @@ class PlaceholderResolver:
 
     @staticmethod
     def extract(value: str) -> tuple[str, list[str]] | None:
-        """Extract ``(root_key, path_segments)`` from a placeholder string."""
+        """Extract (root_key, path_segments) from a placeholder string."""
         if value.startswith("$tool."):
             path = value[len("$tool.") :]
         elif value.startswith("$call."):
@@ -60,7 +60,7 @@ class PlaceholderResolver:
 
     @staticmethod
     def resolve_path(payload: Any, path: list[str]) -> Any:
-        """Walk ``path`` segments into ``payload`` (dict keys or list indices)."""
+        """Walk path segments into payload (dict keys or list indices)."""
         current = payload
         for segment in path:
             if isinstance(current, dict) and segment in current:

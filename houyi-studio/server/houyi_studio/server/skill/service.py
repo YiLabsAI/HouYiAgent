@@ -1,11 +1,11 @@
 """Skill service facade.
 
-``SkillService`` is a **thin facade** that delegates to three single-
+SkillService is a **thin facade** that delegates to three single-
 responsibility collaborators:
 
-- ``SkillLoader``       — loading / unloading / validation
-- ``SkillSerializer``   — SkillSpec → dict conversion
-- ``DryRunValidator``   — static + live invocation checks
+- SkillLoader       — loading / unloading / validation
+- SkillSerializer   — SkillSpec → dict conversion
+- DryRunValidator   — static + live invocation checks
 
 The class itself only adds *metrics*, *consent management*, and
 *configure_skill* — concerns that genuinely cut across the above

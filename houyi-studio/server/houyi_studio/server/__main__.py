@@ -1,4 +1,4 @@
-"""Entry point for ``python -m houyi_studio.server``."""
+"""Entry point for python -m houyi_studio.server."""
 
 from .gateway.app import main
 

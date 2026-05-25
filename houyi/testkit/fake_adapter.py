@@ -1,7 +1,7 @@
 """Deterministic tool-calling adapter for E2E tests.
 
 This adapter replays a fixed tool-call sequence without making real LLM calls.
-It is selected by the hook system when ``HOUYI_TOOLCALL_ADAPTER=fake``.
+It is selected by the hook system when HOUYI_TOOLCALL_ADAPTER=fake.
 """
 
 from __future__ import annotations

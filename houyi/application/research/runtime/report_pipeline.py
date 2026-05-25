@@ -1,8 +1,8 @@
 """Post-search report pipeline: conflicts → report → URL validation → quality.
 
-Extracted from ``ResearchRuntime`` to keep the runtime orchestrator lean.
+Extracted from ResearchRuntime to keep the runtime orchestrator lean.
 The pipeline is stateless — all mutable data flows in/out via parameters
-and the returned ``ReportPipelineResult``.
+and the returned ReportPipelineResult.
 """
 
 from __future__ import annotations
@@ -51,8 +51,8 @@ class ReportPipeline:
     """Runs the post-search stages: conflict detection → report generation →
     URL validation → quality evaluation.
 
-    Stateless: each ``run()`` call receives all required data and returns a
-    ``ReportPipelineResult``.
+    Stateless: each run() call receives all required data and returns a
+    ReportPipelineResult.
     """
 
     def __init__(
@@ -111,7 +111,7 @@ class ReportPipeline:
     ) -> list[IntermediateReport]:
         """Generate intermediate reports per sub-question (parallel, with reuse on retry).
 
-        When ``reuse_by_question_id`` and ``checkpoint_question_ids`` are set,
+        When reuse_by_question_id and checkpoint_question_ids are set,
         sub-questions whose search was **skipped** via checkpoint reuse the
         prior intermediate report — avoids N redundant LLM calls on report-timeout
         retries (root cause of multi-minute report phases).
@@ -371,7 +371,7 @@ class ReportPipeline:
     ) -> list[ConflictRecord]:
         """Detect contradictions between sub-question answers.
 
-        Only runs for ``deep`` mode since sub-questions intentionally cover
+        Only runs for deep mode since sub-questions intentionally cover
         different aspects — pairwise comparison is only warranted when
         thoroughness justifies the cost.  Resolution always uses fast
         source-voting (no LLM call) to avoid the O(n²) latency explosion.

@@ -591,7 +591,7 @@ def _cap_total_payload_chars(
 
 
 def _sanitize_tool_loop_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Return a copy with string ``content`` fields for tool-loop chat calls."""
+    """Return a copy with string content fields for tool-loop chat calls."""
     base_sanitized = LLMAdapter._sanitize_messages(messages)
     sanitized: list[dict[str, Any]] = []
     for original, msg in zip(messages, base_sanitized, strict=False):

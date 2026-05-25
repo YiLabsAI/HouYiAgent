@@ -35,7 +35,7 @@ class SkillSpec(BaseModel):
     """
 
     # All known keys in SKILL.md frontmatter.
-    # Used to collect any unrecognized fields into `extra_frontmatter` for forward compatibility.
+    # Used to collect any unrecognized fields into extra_frontmatter for forward compatibility.
     _KNOWN_FRONTMATTER_KEYS: ClassVar[set[str]] = {
         "name",
         "description",
@@ -161,16 +161,16 @@ class SkillSpec(BaseModel):
     def _sanitize_is_core(cls, v: object) -> bool:
         """Validator runs before Pydantic type conversion.
 
-        ``mode`` parameter:
-        - ``"before"``  runs on the raw input value (may be str/int/None/bool)
+        mode parameter:
+        - "before"  runs on the raw input value (may be str/int/None/bool)
           before Pydantic performs any type coercion. Used here so that
-          even ``is_core='true'`` from an external YAML file is intercepted.
-        - ``"after"``   runs after Pydantic coercion (value is already bool);
-          would miss string inputs like ``'true'``.
+          even is_core='true' from an external YAML file is intercepted.
+        - "after"   runs after Pydantic coercion (value is already bool);
+          would miss string inputs like 'true'.
 
         This validator is intentionally a no-op when called from Host-internal
-        code that explicitly passes ``is_core=True``; the sanitization to
-        ``False`` is applied inside ``from_file()`` and ``from_url()`` by
+        code that explicitly passes is_core=True; the sanitization to
+        False is applied inside from_file() and from_url() by
         removing the key from the parsed data before constructing the object.
         This validator acts as an additional defense-in-depth layer.
         """
@@ -178,7 +178,7 @@ class SkillSpec(BaseModel):
 
     @property
     def qualified_name(self) -> str:
-        """Return ``provider/name`` if provider is set, else plain ``name``."""
+        """Return provider/name if provider is set, else plain name."""
         if self.provider:
             return f"{self.provider}/{self.name}"
         return self.name
@@ -186,15 +186,15 @@ class SkillSpec(BaseModel):
     def to_tool_schema(self) -> dict[str, Any]:
         """Convert to OpenAI function calling schema.
 
-        Applies render-layer annotations to ``description`` to guide LLM
-        tool selection.  ``self.description`` is **never mutated**; the
+        Applies render-layer annotations to description to guide LLM
+        tool selection.  self.description is **never mutated**; the
         annotation exists only in the returned schema dict.
 
         Annotation rules:
-        - ``is_core=True``           → ``[CORE OFFICIAL TOOL] <description>``
-        - ``name`` starts with ext__ → ``[THIRD-PARTY EXTENSION] <description>.
-                                        Prefer [CORE OFFICIAL TOOL] if available.``
-        - otherwise                  → ``<description>`` (unchanged)
+        - is_core=True           → [CORE OFFICIAL TOOL] <description>
+        - name starts with ext__ → [THIRD-PARTY EXTENSION] <description>.
+                                        Prefer [CORE OFFICIAL TOOL] if available.
+        - otherwise                  → <description> (unchanged)
         """
         if self.is_core:
             desc = f"[CORE OFFICIAL TOOL] {self.description}"
@@ -517,7 +517,7 @@ class SkillSpec(BaseModel):
             version: Optional version (e.g., "v1.0.0"), defaults to latest
             cache: Whether to cache the downloaded file (default: True)
             base_url: Optional registry base URL override. If not provided,
-                reads ``HOUYI_SKILL_REGISTRY_BASE_URL``.
+                reads HOUYI_SKILL_REGISTRY_BASE_URL.
 
         Returns:
             SkillSpec instance (executor needs to be bound separately)

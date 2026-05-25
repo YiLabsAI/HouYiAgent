@@ -1,7 +1,7 @@
 """CoreGuard: built-in global PreToolUse hook for core tool hijacking prevention.
 
 This module implements the HouYi Core Protection scheme.
-It evaluates calls to ``ext__`` tools with dangerous side effects and either
+It evaluates calls to ext__ tools with dangerous side effects and either
 allows, denies, or requires user consent.
 """
 

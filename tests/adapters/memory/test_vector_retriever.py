@@ -21,7 +21,7 @@ from houyi.adapters.memory.vector_retriever import (
 @pytest.fixture()
 def backend(tmp_path):
     # File-backed DB rather than ":memory:" so the asyncio worker thread
-    # spawned via ``asyncio.to_thread`` sees the same schema as the test
+    # spawned via asyncio.to_thread sees the same schema as the test
     # thread. SQLite's ":memory:" is per-connection and would otherwise
     # surface as "no such table: memories_fts" inside the worker.
     b = SQLiteMemoryBackend(db_path=tmp_path / "vec.db")

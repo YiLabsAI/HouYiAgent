@@ -31,7 +31,7 @@ def registry():
 def isolate_skill_loader_project_root(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     """Route SkillLoader managed skill installs to test-local tmp roots.
 
-    This keeps generated packages under ``<tmp>/.houyi/skills`` instead of the
+    This keeps generated packages under <tmp>/.houyi/skills instead of the
     workspace root, so tests never leave artifact directories behind.
     """
 

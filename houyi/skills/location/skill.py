@@ -76,7 +76,7 @@ def _sanitize_city_name(city: str | None) -> str:
 
 
 def _split_city_country_code(city: str) -> tuple[str, str | None]:
-    """Split inputs like ``Beijing, CN`` into city + ISO country code."""
+    """Split inputs like Beijing, CN into city + ISO country code."""
     parts = [p.strip() for p in city.split(",") if p.strip()]
     if len(parts) < 2:
         return city, None
