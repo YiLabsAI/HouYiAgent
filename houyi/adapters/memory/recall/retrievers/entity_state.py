@@ -93,6 +93,86 @@ _QUESTION_WORDS: frozenset[str] = frozenset(
     }
 )
 
+# Auxiliary verbs and common active verbs that partition proper nouns from predicates.
+_VERB_BREAKS: frozenset[str] = frozenset(
+    {
+        "go",
+        "goes",
+        "went",
+        "gone",
+        "going",
+        "lose",
+        "loses",
+        "lost",
+        "losing",
+        "have",
+        "has",
+        "had",
+        "having",
+        "join",
+        "joins",
+        "joined",
+        "joining",
+        "do",
+        "does",
+        "did",
+        "done",
+        "doing",
+        "visit",
+        "visits",
+        "visited",
+        "visiting",
+        "meet",
+        "meets",
+        "met",
+        "meeting",
+        "start",
+        "starts",
+        "started",
+        "starting",
+        "get",
+        "gets",
+        "got",
+        "getting",
+        "buy",
+        "buys",
+        "bought",
+        "buying",
+        "sell",
+        "sells",
+        "sold",
+        "selling",
+        "work",
+        "works",
+        "worked",
+        "working",
+        "live",
+        "lives",
+        "lived",
+        "living",
+        "move",
+        "moves",
+        "moved",
+        "moving",
+        "become",
+        "becomes",
+        "became",
+        "becoming",
+    }
+)
+
+
+def _clean_english_entity(entity: str) -> str:
+    """Strip action verbs and trailing predicate content from captured entity."""
+    words = entity.split()
+    cleaned = []
+    for w in words:
+        w_low = w.lower().strip(".,!?:;")
+        if w_low in _VERB_BREAKS:
+            break
+        cleaned.append(w)
+    return " ".join(cleaned)
+
 
 class EntityStateRetriever(Retriever):
     """Retrieve active rows from EntityStateView.
@@ -172,7 +252,7 @@ def _infer_entity_attribute(query: RecallQuery) -> EntityAttributeHint | None:
 
     en_wh = _EN_WH_RE.search(text)
     if en_wh:
-        entity = en_wh.group("entity").strip()
+        entity = _clean_english_entity(en_wh.group("entity").strip())
         # Defensive: even after the regex stripped the leading wh-word and
         # auxiliary, the capture can still start with another question
         # word (rare, but seen in chained queries like "what when X"). A

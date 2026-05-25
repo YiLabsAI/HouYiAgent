@@ -39,11 +39,11 @@ from houyi.adapters.memory.bench.locomo import (
     LoCoMoCase,
     load_locomo_balanced,
 )
+from houyi.adapters.memory.engine import MemoryEngine
 from houyi.adapters.memory.entity_resolver import RoleBasedEntityResolver, TurnContext
 from houyi.adapters.memory.extractor import AtomicFactExtractor
-from houyi.adapters.memory.reasoner import TemporalTurn, answer_from_turn_evidence
 from houyi.adapters.memory.recall.factory import _build_default_recall_orchestrator
-from houyi.adapters.memory.recall.types import RecallQuery, RetrieverContext
+from houyi.adapters.memory.store import MemoryStore
 from houyi.adapters.memory.triggers import all_of
 from houyi.adapters.memory.turn_writer import TurnWriter
 from houyi.adapters.memory.types import RawTurn
@@ -128,12 +128,6 @@ def _parse_args():
         "--base-url",
         default=None,
         help="OpenAI-compatible base URL (e.g. https://dashscope.aliyuncs.com/compatible-mode/v1)",
-    )
-    p.add_argument(
-        "--recall-mode",
-        default="full_active",
-        choices=("full_active", "orchestrator"),
-        help="retrieval mode: full_active (active-state sweep) or orchestrator (recall stack)",
     )
     p.add_argument(
         "--embedding-provider",
@@ -303,91 +297,6 @@ def _format_iso_range(start_iso: str, end_iso: str) -> str:
     return f"between {_format_iso_date(start_iso)} and {_format_iso_date(end_iso)}"
 
 
-def _answer_from_evidence_turns(case: LoCoMoCase) -> str | None:
-    turns = [
-        TemporalTurn(
-            turn_id=t.dia_id,
-            speaker_id=t.speaker,
-            text=t.text,
-            occurred_at=t.session_datetime,
-        )
-        for t in case.sample.turns
-    ]
-    return answer_from_turn_evidence(
-        query=case.question,
-        turns=turns,
-        evidence_ids=case.evidence,
-    )
-
-
-def _answer_with_rules(
-    question: str,
-    rows: list[_BenchRow],
-    anchor_dates: dict[str, str],
-) -> str | None:
-    q = _normalize_surface(question)
-    if not rows:
-        return None
-
-    def row_date(row: _BenchRow) -> str:
-        return anchor_dates.get(row.source_anchor, "")
-
-    if "when did" in q and "support group" in q:
-        for row in rows:
-            hay = _normalize_surface(f"{row.attribute} {row.value}")
-            if "support group" in hay:
-                iso = row_date(row)
-                if iso:
-                    return _format_iso_date(iso)
-
-    if "which year" in q and "adopt" in q and "dog" in q:
-        for row in rows:
-            hay = _normalize_surface(f"{row.attribute} {row.value}")
-            years = re.search(r"(\d+)\s+year", hay)
-            iso = row_date(row)
-            if years and iso:
-                try:
-                    year = int(iso[:4]) - int(years.group(1))
-                except ValueError:
-                    continue
-                return str(year)
-
-    if "what kind of project" in q and "jolene" in q:
-        for row in rows:
-            hay = _normalize_surface(f"{row.entity} {row.attribute} {row.value}")
-            if "project" in hay and "engineering" in hay:
-                if "electric" in hay:
-                    return "electricity engineering project"
-                return row.value
-
-    if "when did" in q and "tokyo" in q and "travel" in q:
-        tokyo_dates: list[str] = []
-        for row in rows:
-            hay = _normalize_surface(f"{row.attribute} {row.value}")
-            if "tokyo" not in hay:
-                continue
-            iso = row_date(row)
-            if iso:
-                tokyo_dates.append(iso)
-        uniq = sorted(set(tokyo_dates))
-        if len(uniq) >= 2:
-            try:
-                start = datetime.date.fromisoformat(uniq[0])
-                end = datetime.date.fromisoformat(uniq[-1])
-                if start.year == end.year:
-                    return (
-                        f"between {start.day} {start.strftime('%B')} "
-                        f"and {end.day} {end.strftime('%B')} {end.year}"
-                    )
-            except ValueError:
-                pass
-            return f"between {_format_iso_date(uniq[0])} and {_format_iso_date(uniq[-1])}"
-        if len(uniq) == 1:
-            return _format_iso_date(uniq[0])
-
-    return None
-
-
 def _normalize_surface(text: str) -> str:
     if not text:
         return ""
@@ -501,68 +410,6 @@ async def _judge(llm_judge: SiliconFlowAdapter, case: LoCoMoCase, answer: Answer
     return {"correct": verdict.correct, "reason": verdict.reason}
 
 
-_ANSWER_SYSTEM_PROMPT = """\
-You answer questions based ONLY on the provided memory facts. Rules:
-- Be concise and direct. No explanations unless the question asks for them.
-- TEMPORAL: When asked "when did X first/last do Y", sort the matching facts by their date qualifier and return the earliest/latest date. When asked "how many times" or "how many X", count the distinct values.
-- PARTIAL MATCH: When the question asks about a specific item (e.g. "Eternal Sunshine") but the only relevant fact has a generic object (e.g. "movie"), use that fact's date if context makes it the clear match.
-- INDIRECT DATE: When a fact has no date but a related event fact for the same entity has a date (e.g. "Dave attended festival [date=2023-03-18]" and "Dave likes_band Aerosmith"), infer the event date applies.
-- COMPARISON: When asked about two people sharing something, look for matching values across both entities.
-- ACCUMULATE: Facts with comma-separated values (e.g. "cafe, park, shelter") are accumulated lists — treat each item as a separate occurrence.
-- If the answer cannot be determined from the facts, say "Unknown".
-"""
-
-
-async def _answer_with_reasoning(
-    llm: SiliconFlowAdapter,
-    question: str,
-    rows: list,
-    case_id: str,
-    anchor_dates: dict[str, str] | None = None,
-) -> AnswerResult:
-    """Use LLM to reason over memories and answer the question."""
-    if not rows:
-        return AnswerResult(answer="", abstained=True, reason="no_memories")
-
-    rule_answer = _answer_with_rules(question, rows, anchor_dates or {})
-    if rule_answer:
-        return AnswerResult(answer=rule_answer, abstained=False, reason="rule_reasoning")
-
-    def _sort_key(r) -> str:
-        if r.qualifiers:
-            return r.qualifiers.get("date") or r.qualifiers.get("since") or ""
-        return ""
-
-    sorted_rows = sorted(rows, key=_sort_key)
-
-    memory_texts = []
-    for r in sorted_rows:
-        if r.qualifiers:
-            q_parts = [f"{k}={v}" for k, v in r.qualifiers.items() if v is not None]
-            q_str = f" [{', '.join(q_parts)}]" if q_parts else ""
-        else:
-            q_str = ""
-        memory_texts.append(f"- {r.entity} | {r.attribute.replace('_', ' ')} | {r.value}{q_str}")
-
-    context = "\n".join(memory_texts)
-    messages = [
-        {"role": "system", "content": _ANSWER_SYSTEM_PROMPT},
-        {
-            "role": "user",
-            "content": f"Memory facts (sorted by date asc):\n{context}\n\nQuestion: {question}\n\nAnswer:",
-        },
-    ]
-    try:
-        response = await llm.chat(messages, temperature=0.0, max_tokens=256)
-        answer_text = getattr(response, "content", "").strip()
-        return AnswerResult(answer=answer_text, abstained=False, reason="llm_reasoning")
-    except Exception as e:
-        logger.warning("[%s] Answer reasoning failed: %s", case_id, e)
-        # Fallback: concatenate memories
-        memories = [f"{r.entity}.{r.attribute} = {r.value}" for r in rows]
-        return AnswerResult(answer="\n".join(memories), abstained=False, reason="fallback_concat")
-
-
 async def _run_case_with_mode(
     case: LoCoMoCase,
     turn_writer: TurnWriter,
@@ -574,7 +421,6 @@ async def _run_case_with_mode(
     llm_answer: SiliconFlowAdapter,
     llm_judge: SiliconFlowAdapter,
     *,
-    recall_mode: str,
     embedding_provider: str = "siliconflow",
     embedding_model: str | None = None,
     embedding_api_key: str | None = None,
@@ -655,136 +501,85 @@ async def _run_case_with_mode(
 
     retrieve_t0 = time.perf_counter()
     rows: list[_BenchRow]
-    if recall_mode == "orchestrator":
-        # Embedding provider for the vector retriever. Errors propagate so
-        # bench failure modes stay loud.
-        _env = EnvConfig.get()
-        _emb_key: str = embedding_api_key or _env.siliconflow_api_key or ""
-        if embedding_provider == "siliconflow":
-            embedding_prov: EmbeddingProvider = SiliconFlowEmbeddingProvider(
-                api_key=_emb_key,
-                model=embedding_model,
-            )
-        elif embedding_provider == "dashscope":
-            _ds_key: str = embedding_api_key or _env.dashscope_api_key or ""
-            embedding_prov = DashScopeEmbeddingProvider(
-                api_key=_ds_key,
-                model=embedding_model,
-            )
-        else:
-            embedding_prov = make_embedding_provider(
-                provider=embedding_provider,
-                model=embedding_model,
-                api_key=embedding_api_key,
-            )
 
-        # Backfill pending embeddings before retrieval so vector search has data.
-        backfill = EmbeddingBackfillWorker(
-            backend=backend,
-            provider=embedding_prov,
-            config=EmbeddingBackfillConfig(batch_size=16),
+    # Embedding provider for the vector retriever. Errors propagate so
+    # bench failure modes stay loud.
+    _env = EnvConfig.get()
+    _emb_key: str = embedding_api_key or _env.siliconflow_api_key or ""
+    if embedding_provider == "siliconflow":
+        embedding_prov: EmbeddingProvider = SiliconFlowEmbeddingProvider(
+            api_key=_emb_key,
+            model=embedding_model,
         )
-        backfill_total = 0
-        while True:
-            filled = await backfill.process_once()
-            if filled == 0:
-                break
-            backfill_total += filled
-        if backfill_total:
-            logger.info("backfilled %d embeddings for vector search", backfill_total)
+    elif embedding_provider == "dashscope":
+        _ds_key: str = embedding_api_key or _env.dashscope_api_key or ""
+        embedding_prov = DashScopeEmbeddingProvider(
+            api_key=_ds_key,
+            model=embedding_model,
+        )
+    else:
+        embedding_prov = make_embedding_provider(
+            provider=embedding_provider,
+            model=embedding_model,
+            api_key=embedding_api_key,
+        )
 
-        # The default recall stack handles entity_state, timeline, iterative,
-        # raw_turn, and (when an embedding provider is supplied) vector
-        # retrieval. The hand-written wh-word entity hint filter is no
-        # longer needed because EntityStateRetriever now drops question
-        # words on every code path.
-        orchestrator = _build_default_recall_orchestrator(
+    # Backfill pending embeddings before retrieval so vector search has data.
+    backfill = EmbeddingBackfillWorker(
+        backend=backend,
+        provider=embedding_prov,
+        config=EmbeddingBackfillConfig(batch_size=16),
+    )
+    backfill_total = 0
+    while True:
+        filled = await backfill.process_once()
+        if filled == 0:
+            break
+        backfill_total += filled
+    if backfill_total:
+        logger.info("backfilled %d embeddings for vector search", backfill_total)
+
+    # The default recall stack handles entity_state, timeline, iterative,
+    # raw_turn, and (when an embedding provider is supplied) vector
+    # retrieval. The hand-written wh-word entity hint filter is no
+    # longer needed because EntityStateRetriever now drops question
+    # words on every code path.
+    # Answer path. Delegates to the SDK MemoryEngine.answer end-to-end.
+    # The SDK runs the wired RecallOrchestrator + reasoning policies
+    # and returns the AnswerResult directly.
+    engine = MemoryEngine(
+        MemoryStore(backend=backend),
+        llm_adapter=llm_answer,
+        recall_orchestrator=_build_default_recall_orchestrator(
             backend=backend,
             entity_state=view,
             embedding_provider=embedding_prov,
-        )
-
-        recall = await orchestrator.recall(
-            RecallQuery(
-                text=case.question,
-                namespace=namespace,
-                top_k=RECALL_TOP_K,
-            ),
-            RetrieverContext(),
-        )
-        # Debug: log which retrievers contributed candidates
-        by_retriever: dict[str, int] = {}
-        for c in recall.candidates:
-            by_retriever[c.retriever_name] = by_retriever.get(c.retriever_name, 0) + 1
-        logger.info(
-            "recall result: reason=%s candidates=%d retrievers=%s",
-            recall.reason.value if recall.reason else None,
-            len(recall.candidates),
-            by_retriever,
-        )
-        rows = [
-            _BenchRow(
-                entity=c.fact.subject,
-                attribute=c.fact.predicate,
-                value=str(c.fact.object),
-                qualifiers=c.fact.qualifiers,
-                source_anchor=c.fact.source_anchor,
-            )
-            for c in recall.candidates
-        ]
-    else:
-        entities = view.list_entities(namespace)
-        rows = []
-        for e in entities:
-            active_rows = view.get_active(namespace, e)
-            for r in active_rows:
-                rows.append(
-                    _BenchRow(
-                        entity=r.entity,
-                        attribute=r.attribute,
-                        value=str(r.value),
-                        qualifiers=r.qualifiers,
-                        source_anchor=r.source_unit_id or "",
-                    )
+        ),
+        embedding_provider=embedding_prov,
+    )
+    answer = await engine.answer(case.question, top_k=RECALL_TOP_K)
+    recalls = answer.extras.get("recalls", [])
+    rows = []
+    for r in recalls:
+        record = engine._find_record(r.memory_id)
+        if record:
+            parts = record.key.split(".", 1)
+            subj = parts[0] if len(parts) > 1 else ""
+            pred = parts[1] if len(parts) > 1 else record.key
+            rows.append(
+                _BenchRow(
+                    entity=subj,
+                    attribute=pred,
+                    value=record.content,
+                    qualifiers=None,
+                    source_anchor=record.provenance.source_ids[0]
+                    if (record.provenance and record.provenance.source_ids)
+                    else "",
                 )
+            )
     retrieve_ms = (time.perf_counter() - retrieve_t0) * 1000.0
 
     recall_at_10, mrr = _recall_hits(rows, case.evidence, top_k=RECALL_TOP_K)
-    if recall_mode == "full_active":
-        sample_rows = [
-            {
-                "entity": r.entity,
-                "attribute": r.attribute,
-                "value": str(r.value)[:80],
-                "source_anchor": r.source_anchor,
-            }
-            for r in rows[: min(5, len(rows))]
-        ]
-        hit_indices = _matched_evidence_indices(rows, case.evidence, top_k=RECALL_TOP_K)
-        logger.info(
-            "  FULL_ACTIVE_DIAG rows=%d sample=%s evidence_total=%d evidence_hit_indices=%s",
-            len(rows),
-            sample_rows,
-            len(case.evidence),
-            hit_indices,
-        )
-    anchor_dates = {
-        f"{case.sample_id}:{t.dia_id}": _normalize_observation_date(t.session_datetime)
-        for t in turns
-    }
-    evidence_rule_answer = _answer_from_evidence_turns(case)
-    if evidence_rule_answer:
-        answer = AnswerResult(
-            answer=evidence_rule_answer, abstained=False, reason="turn_rule_reasoning"
-        )
-    else:
-        answer = await _answer_with_reasoning(
-            llm_answer,
-            case.question,
-            rows,
-            case.sample_id,
-            anchor_dates,
-        )
     logger.info("  Generated answer: %s", answer.answer[:200])
     logger.info("  Expected answer: %s", case.answer[:200])
     verdict = await _judge(llm_judge, case, answer)
@@ -815,7 +610,6 @@ async def _run_all(
     judge_model: str = _MODEL_JUDGE,
     api_key: str | None = None,
     base_url: str | None = None,
-    recall_mode: str = "full_active",
     embedding_provider: str = "siliconflow",
     embedding_model: str | None = None,
     embedding_api_key: str | None = None,
@@ -847,7 +641,7 @@ async def _run_all(
 
     async def _run_one(idx: int, case: LoCoMoCase) -> None:
         async with semaphore:
-            db = Path(f"/tmp/locomo_bench_{run_token}_{recall_mode}_{idx}.db")
+            db = Path(f"/tmp/locomo_bench_{run_token}_orchestrator_{idx}.db")
             backend = SQLiteMemoryBackend(db_path=db)
             try:
                 inbox = SQLiteCandidateInbox(backend)
@@ -874,7 +668,6 @@ async def _run_all(
                     f"locomo:{case.sample_id}:{idx}",
                     llm_answer,
                     llm_judge,
-                    recall_mode=recall_mode,
                     embedding_provider=embedding_provider,
                     embedding_model=embedding_model,
                     embedding_api_key=embedding_api_key,
@@ -924,7 +717,7 @@ async def _run_all(
     ]
     mrr_values = [float(r.get("mrr", 0.0)) for r in results if isinstance(r, dict)]
     report = {
-        "recall_mode": recall_mode,
+        "recall_mode": "orchestrator",
         "total": total,
         "correct": correct,
         "accuracy": round(correct / total, 4) if total else 0,
@@ -1001,7 +794,6 @@ def main():
             judge_model=args.judge_model,
             api_key=args.api_key,
             base_url=args.base_url,
-            recall_mode=args.recall_mode,
             embedding_provider=args.embedding_provider,
             embedding_model=args.embedding_model,
             embedding_api_key=args.embedding_api_key,

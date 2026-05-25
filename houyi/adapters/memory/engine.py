@@ -366,7 +366,10 @@ class MemoryEngine:
             record = self._find_record(recall.memory_id)
             if record is not None:
                 records.append(record)
-        return await self._reasoner.answer(query, recalls, records)
+        res = await self._reasoner.answer(query, recalls, records)
+        import dataclasses
+
+        return dataclasses.replace(res, extras={**res.extras, "recalls": recalls})
 
     def recall_as_context_text(
         self,
@@ -389,7 +392,34 @@ class MemoryEngine:
         for record in self._store.all_records():
             if record.record_id == record_id:
                 return record
+            if record_id.startswith("fact:") and (
+                self._record_to_fact_id(record, "A") == record_id
+                or self._record_to_fact_id(record, "B") == record_id
+            ):
+                return record
         return None
+
+    def _record_to_fact_id(self, record: MemoryRecord, strategy: str = "A") -> str:
+        if strategy == "B":
+            subject = record.key
+            predicate = "content"
+            content = record.content
+            anchor = record.record_id
+        else:
+            parts = record.key.split(".", 1)
+            subject = parts[0] if len(parts) > 1 else ""
+            predicate = parts[1] if len(parts) > 1 else record.key
+            content = record.content
+            anchor = (
+                record.provenance.source_ids[0]
+                if (record.provenance and record.provenance.source_ids)
+                else ""
+            )
+
+        digest = hashlib.sha256(f"{subject}|{predicate}|{content}|{anchor}".encode()).hexdigest()[
+            :24
+        ]
+        return f"fact:{digest}"
 
     # ------------------------------------------------------------------
     # Maintenance
@@ -590,20 +620,10 @@ class MemoryEngine:
 
 
 def _candidate_to_memory_recall(candidate: RecallCandidate) -> MemoryRecall:
-    """Adapt a RecallCandidate (orchestrator output) to a MemoryRecall.
-
-    The legacy MemoryRecall shape carries a memory_id keyed by the
-    underlying MemoryRecord. The orchestrator emits AtomicFact tuples
-    rather than records, so we synthesize a stable id from the fact
-    triple plus its source anchor. Callers that need to look up the
-    backing record should use the source_anchor instead; this id only
-    needs to be stable within a single process.
-    """
     fact = candidate.fact
     anchor = fact.source_anchor or ""
-    digest = hashlib.sha256(
-        f"{fact.subject}|{fact.predicate}|{fact.object}|{anchor}".encode()
-    ).hexdigest()[:24]
+    plain = f"{fact.subject}|{fact.predicate}|{fact.object}|{anchor}"
+    digest = hashlib.sha256(plain.encode()).hexdigest()[:24]
     memory_id = f"fact:{digest}"
     matched_by = _RETRIEVER_KIND_TO_MATCH_METHOD.get(candidate.matched_by, RecallMatchMethod.HYBRID)
     return MemoryRecall(

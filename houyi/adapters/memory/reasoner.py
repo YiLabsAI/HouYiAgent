@@ -11,12 +11,15 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import logging
 import re
 from dataclasses import dataclass
 from typing import Any, Protocol
 
 from houyi.adapters.memory.answerer import DEFAULT_IDK_PHRASE, AnswerResult
 from houyi.adapters.memory.types import MemoryRecall, MemoryRecord
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)

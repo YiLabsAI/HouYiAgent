@@ -164,7 +164,7 @@ test-server:
 # Integration tests (requires studio server deps)
 test-sdk-integration:
 	@uv run python -c "import houyi_studio" 2>/dev/null || (echo '📦 Installing studio server...' && uv pip install -e houyi-studio/server --quiet)
-	uv run pytest tests/integration/ --ignore=tests/integration/live -v
+	uv run pytest tests/integration/ --ignore=tests/integration/live --ignore=tests/integration/benchmark -v
 
 test-server-integration:
 	@uv run python -c "import houyi_studio" 2>/dev/null || (echo '📦 Installing studio server...' && uv pip install -e houyi-studio/server --quiet)

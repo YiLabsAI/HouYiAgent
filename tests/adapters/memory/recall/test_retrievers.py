@@ -224,6 +224,22 @@ async def test_entity_broad_lookup() -> None:
 
 
 @pytest.mark.asyncio
+async def test_entity_trim_greedy() -> None:
+    view = FakeView()
+    retriever = EntityStateRetriever(view)
+
+    # Martin is the entity, followed by a verb break.
+    hits = await retriever.retrieve(
+        RecallQuery(text="When did Martin lose his key?", namespace="n"),
+        RetrieverContext(),
+    )
+
+    # Should match Martin in FakeView even with the trailing lose phrase.
+    assert len(hits) == 2
+    assert view.active_calls[-1][1] == "Martin"
+
+
+@pytest.mark.asyncio
 async def test_entity_no_hint() -> None:
     view = FakeView()
     retriever = EntityStateRetriever(view)

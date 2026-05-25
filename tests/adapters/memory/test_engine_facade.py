@@ -348,3 +348,38 @@ class TestCandidateToMemoryRecall:
         assert _candidate_to_memory_recall(cand_a).memory_id == (
             _candidate_to_memory_recall(cand_b).memory_id
         )
+
+
+class TestEngineFindRecord:
+    def test_find_resolves_fact(self):
+        # Verify that _find_record successfully resolves a synthesized fact:sha256
+        # memory_id back to its backing MemoryRecord in the database.
+        from houyi.adapters.memory.store import MemoryStore
+        from houyi.adapters.memory.types import MemoryProvenance, MemoryRecord
+
+        class FakeBackend:
+            def all_records(self, *, include_expired: bool = False) -> list[MemoryRecord]:
+                return [
+                    MemoryRecord(
+                        record_id="rec-1",
+                        key="alice.likes",
+                        content="tea",
+                        provenance=MemoryProvenance(
+                            source_type="atomic_fact",
+                            source_ids=["src-1"],
+                        ),
+                    )
+                ]
+
+        engine = MemoryEngine(
+            MemoryStore(backend=FakeBackend()),  # type: ignore[arg-type]
+        )
+
+        fact = _make_fact(subject="alice", predicate="likes", obj="tea", anchor="src-1")
+        cand = RecallCandidate(fact=fact, score=1.0, matched_by=RetrieverKind.ENTITY_STATE)
+        recall = _candidate_to_memory_recall(cand)
+
+        resolved = engine._find_record(recall.memory_id)
+        assert resolved is not None
+        assert resolved.record_id == "rec-1"
+        assert resolved.content == "tea"
