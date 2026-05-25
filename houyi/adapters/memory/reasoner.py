@@ -75,6 +75,14 @@ class DeterministicReasoningPolicy:
     async def answer(self, request: MemoryReasoningInput) -> AnswerResult | None:
         if not request.records:
             return None
+
+        # Skip deterministic lexical policy for wh-questions that require reasoning
+        # or extracting specific attributes (time, location, reason, person).
+        wh_words = {"when", "where", "why", "how", "who", "whom"}
+        query_words = set(re.sub(r"[^a-z0-9\s]", " ", request.query.lower()).split())
+        if wh_words.intersection(query_words):
+            return None
+
         tokens = self._query_tokens(request.query)
         if not tokens:
             return None
@@ -124,7 +132,7 @@ class LLMMemoryReasoningPolicy:
         self,
         llm: Any,
         *,
-        timeout_seconds: float = 8.0,
+        timeout_seconds: float = 30.0,
         max_facts: int = 8,
         max_tokens: int = 384,
     ) -> None:
@@ -195,6 +203,7 @@ class LLMMemoryReasoningPolicy:
             )
 
         content = str(getattr(response, "content", "") or "").strip()
+        logger.info("LLMMemoryReasoningPolicy PROMPT:\n%s\nRESPONSE:\n%s", prompt, content)
         if not content or self._IDK_SENTINEL in content:
             return AnswerResult(
                 answer=DEFAULT_IDK_PHRASE,

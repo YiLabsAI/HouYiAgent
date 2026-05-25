@@ -65,8 +65,8 @@ class TestMemoryRecordPromoter:
         pending = backend.list_pending_embeddings(limit=10)
         assert len(pending) == 1
         _, record = pending[0]
-        assert record.key == "alice.likes"
-        assert record.content == "tea"
+        assert record.key.startswith("alice.likes")
+        assert record.content == "alice likes tea"
         assert record.scope is MemoryScope.USER
         assert record.memory_type is MemoryType.FACT
 
@@ -139,7 +139,7 @@ class TestExtractorWorkerWithPromoter:
         pending = backend.list_pending_embeddings(limit=10)
         assert len(pending) == 1
         _, record = pending[0]
-        assert record.key == "alice.likes"
+        assert record.key.startswith("alice.likes")
         assert record.metadata["turn_id"] == turn.turn_id
 
     async def test_promoter_vague_fact(self, backend):

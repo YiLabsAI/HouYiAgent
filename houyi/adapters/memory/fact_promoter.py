@@ -101,9 +101,28 @@ class MemoryRecordPromoter:
             )
 
     def _make_record(self, turn: RawTurn, fact: AtomicFact) -> MemoryRecord:
+        import hashlib
+
+        anchor = fact.source_anchor or ""
+        plain = f"{fact.subject}|{fact.predicate}|{fact.object}|{anchor}"
+        digest = hashlib.sha256(plain.encode()).hexdigest()[:24]
+        record_id = f"fact:{digest}"
+
+        # Build self-contained semantic content so both retrievers and reasoning policies
+        # have full access to subject, predicate, object, and temporal event_time.
+        content = f"{fact.subject} {fact.predicate} {fact.object}"
+        date_val = (
+            fact.event_time
+            or (fact.qualifiers.get("date") if fact.qualifiers else None)
+            or (fact.qualifiers.get("time") if fact.qualifiers else None)
+        )
+        if date_val:
+            content += f" (time: {date_val})"
+
         return MemoryRecord(
-            key=f"{fact.subject}.{fact.predicate}",
-            content=str(fact.object),
+            record_id=record_id,
+            key=f"{fact.subject}.{fact.predicate}.{digest}",
+            content=content,
             scope=self._scope,
             memory_type=self._memory_type,
             confidence=_certainty_to_confidence(fact),

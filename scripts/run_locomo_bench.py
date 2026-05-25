@@ -694,7 +694,7 @@ async def _run_all(
                 }
             finally:
                 backend.close()
-                db.unlink(missing_ok=True)
+                # db.unlink(missing_ok=True)
 
     await asyncio.gather(*[_run_one(i, c) for i, c in enumerate(cases)])
 

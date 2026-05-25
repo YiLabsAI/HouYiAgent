@@ -406,7 +406,7 @@ class MemoryEngine:
             content = record.content
             anchor = record.record_id
         else:
-            parts = record.key.split(".", 1)
+            parts = record.key.split(".", 2)
             subject = parts[0] if len(parts) > 1 else ""
             predicate = parts[1] if len(parts) > 1 else record.key
             content = record.content
