@@ -28,7 +28,7 @@ uv sync --extra dev
 uv sync --extra dev --extra model-adapters
 
 # If you plan to run the full local dev/test stack used by Studio chat + tool loop + RAG + Vertex tests
-uv sync --extra dev --extra studio-server --extra rag-full --extra model-adapters --extra vertex-ai --extra websearch-ddg --extra websearch-tavily --extra websearch-readability
+uv sync --extra dev --extra studio-server --extra rag-full --extra memory --extra model-adapters --extra vertex-ai --extra websearch-ddg --extra websearch-tavily --extra websearch-readability
 ```
 
 ## Quick Start

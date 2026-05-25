@@ -284,6 +284,10 @@ class TestEnvConfigSummary:
             "startup_skills_dir",
             "embedding_provider",
             "embedding_model",
+            "dashscope_api_key",
+            "dashscope_base_url",
+            "dashscope_model",
+            "dashscope_embedding_model",
         }
         assert set(s.keys()) == expected_keys
 

@@ -135,6 +135,12 @@ ENV_RAG_KNOWLEDGE_DIR = "RAG_KNOWLEDGE_DIR"
 ENV_EMBEDDING_PROVIDER = "EMBEDDING_PROVIDER"
 ENV_EMBEDDING_MODEL = "EMBEDDING_MODEL"
 
+# DashScope (Alibaba Cloud Bailian)
+ENV_DASHSCOPE_API_KEY = "DASHSCOPE_API_KEY"
+ENV_DASHSCOPE_MODEL = "DASHSCOPE_MODEL"
+ENV_DASHSCOPE_EMBEDDING_MODEL = "DASHSCOPE_EMBEDDING_MODEL"
+ENV_DASHSCOPE_BASE_URL = "DASHSCOPE_BASE_URL"
+
 # ---------------------------------------------------------------------------
 # Defaults
 # ---------------------------------------------------------------------------
@@ -142,7 +148,13 @@ _DEFAULT_SILICONFLOW_BASE_URL = "https://api.siliconflow.cn/v1"
 _DEFAULT_GOOGLE_LOCATION = "us-central1"
 _DEFAULT_EMBEDDING_PROVIDER = "local"
 _DEFAULT_EMBEDDING_MODEL = "BAAI/bge-small-en-v1.5"
+_DEFAULT_SILICONFLOW_EMBEDDING_MODEL = "BAAI/bge-m3"
 _DEFAULT_RAG_KNOWLEDGE_DIR = "knowledge/"
+
+# DashScope defaults
+_DEFAULT_DASHSCOPE_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+_DEFAULT_DASHSCOPE_MODEL = "glm-5"
+_DEFAULT_DASHSCOPE_EMBEDDING_MODEL = "text-embedding-v2"
 
 
 def _resolve_siliconflow_model(default_model: str) -> str:
@@ -156,7 +168,7 @@ def _resolve_siliconflow_model(default_model: str) -> str:
 class EnvConfig:
     """Centralized environment variable configuration.
 
-    Reads from ``os.environ`` with typed defaults.  Logs warnings when
+    Reads from os.environ with typed defaults.  Logs warnings when
     critical variables are missing.  Thread-safe singleton.
 
     Usage::
@@ -195,6 +207,12 @@ class EnvConfig:
         self._embedding_provider: str = _DEFAULT_EMBEDDING_PROVIDER
         self._embedding_model: str = _DEFAULT_EMBEDDING_MODEL
         self._startup_skills_dir: str | None = None
+
+        # DashScope (Bailian)
+        self._dashscope_api_key: str | None = None
+        self._dashscope_model: str = _DEFAULT_DASHSCOPE_MODEL
+        self._dashscope_embedding_model: str = _DEFAULT_DASHSCOPE_EMBEDDING_MODEL
+        self._dashscope_base_url: str = _DEFAULT_DASHSCOPE_BASE_URL
 
     @classmethod
     def get(cls) -> EnvConfig:
@@ -325,6 +343,14 @@ class EnvConfig:
         self._embedding_provider = os.getenv(ENV_EMBEDDING_PROVIDER, _DEFAULT_EMBEDDING_PROVIDER)
         self._embedding_model = os.getenv(ENV_EMBEDDING_MODEL, _DEFAULT_EMBEDDING_MODEL)
 
+        # --- DashScope (Bailian) ---
+        self._dashscope_api_key = os.getenv(ENV_DASHSCOPE_API_KEY)
+        self._dashscope_model = os.getenv(ENV_DASHSCOPE_MODEL, _DEFAULT_DASHSCOPE_MODEL)
+        self._dashscope_embedding_model = os.getenv(
+            ENV_DASHSCOPE_EMBEDDING_MODEL, _DEFAULT_DASHSCOPE_EMBEDDING_MODEL
+        )
+        self._dashscope_base_url = os.getenv(ENV_DASHSCOPE_BASE_URL, _DEFAULT_DASHSCOPE_BASE_URL)
+
         # --- Skill startup ---
         startup_dir = os.getenv(ENV_STARTUP_SKILLS_DIR, "").strip()
         self._startup_skills_dir = startup_dir or None
@@ -395,18 +421,18 @@ class EnvConfig:
 
     @property
     def google_location(self) -> str:
-        """GOOGLE_CLOUD_LOCATION or ``"us-central1"``."""
+        """GOOGLE_CLOUD_LOCATION or "us-central1"."""
         return self._google_location
 
     @property
     def gemini_model(self) -> str:
-        """GEMINI_MODEL or default ``"gemini-2.5-pro"``."""
+        """GEMINI_MODEL or default "gemini-2.5-pro"."""
         return self._gemini_model
 
     # Backward-compat alias used by VertexAIAdapter
     @property
     def google_project_id(self) -> str | None:
-        """Alias for ``google_project``."""
+        """Alias for google_project."""
         return self._google_project
 
     # ------------------------------------------------------------------
@@ -415,17 +441,17 @@ class EnvConfig:
 
     @property
     def rag_knowledge_dir(self) -> str:
-        """RAG_KNOWLEDGE_DIR or default ``"knowledge/"``."""
+        """RAG_KNOWLEDGE_DIR or default "knowledge/"."""
         return self._rag_knowledge_dir
 
     @property
     def embedding_provider(self) -> str:
-        """EMBEDDING_PROVIDER or default ``"local"``."""
+        """EMBEDDING_PROVIDER or default "local"."""
         return self._embedding_provider
 
     @property
     def embedding_model(self) -> str:
-        """EMBEDDING_MODEL or default ``"BAAI/bge-small-en-v1.5"``."""
+        """EMBEDDING_MODEL or default "BAAI/bge-small-en-v1.5"."""
         return self._embedding_model
 
     @property
@@ -433,9 +459,33 @@ class EnvConfig:
         """JINA_API_KEY or None."""
         return self._jina_api_key
 
+    # ------------------------------------------------------------------
+    # DashScope (Bailian) properties
+    # ------------------------------------------------------------------
+
+    @property
+    def dashscope_api_key(self) -> str | None:
+        """DASHSCOPE_API_KEY or None."""
+        return self._dashscope_api_key
+
+    @property
+    def dashscope_model(self) -> str:
+        """DASHSCOPE_MODEL or default glm-5."""
+        return self._dashscope_model
+
+    @property
+    def dashscope_embedding_model(self) -> str:
+        """DASHSCOPE_EMBEDDING_MODEL or default text-embedding-v2."""
+        return self._dashscope_embedding_model
+
+    @property
+    def dashscope_base_url(self) -> str:
+        """DASHSCOPE_BASE_URL or default https://dashscope.aliyuncs.com/compatible-mode/v1."""
+        return self._dashscope_base_url
+
     @property
     def startup_skills_dir(self) -> str | None:
-        """HOUYI_STARTUP_SKILLS_DIR or ``None`` when unset."""
+        """HOUYI_STARTUP_SKILLS_DIR or None when unset."""
         return self._startup_skills_dir
 
     # ------------------------------------------------------------------
@@ -465,6 +515,10 @@ class EnvConfig:
             "rag_knowledge_dir": self._rag_knowledge_dir,
             "embedding_provider": self._embedding_provider,
             "embedding_model": self._embedding_model,
+            "dashscope_api_key": _mask(self._dashscope_api_key),
+            "dashscope_base_url": self._dashscope_base_url,
+            "dashscope_model": self._dashscope_model,
+            "dashscope_embedding_model": self._dashscope_embedding_model,
             "jina_api_key": _mask(self._jina_api_key),
             "startup_skills_dir": self._startup_skills_dir or "(not set)",
         }

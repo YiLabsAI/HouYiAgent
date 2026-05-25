@@ -11,7 +11,7 @@ import time
 
 import pytest
 
-from houyi.adapters.memory.embedding import EmbeddingProvider, NoOpEmbeddingProvider
+from houyi.adapters.embedding import EmbeddingProvider, NoOpEmbeddingProvider
 from houyi.adapters.memory.retriever import MemoryRetriever
 from houyi.adapters.memory.store import MemoryStore
 from houyi.adapters.memory.types import (

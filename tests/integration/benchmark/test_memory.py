@@ -12,9 +12,9 @@ import time
 
 import pytest
 
+from houyi.adapters.embedding import NoOpEmbeddingProvider
 from houyi.adapters.memory.classifier import MemoryClassifier
 from houyi.adapters.memory.deduplicator import MemoryDeduplicator
-from houyi.adapters.memory.embedding import NoOpEmbeddingProvider
 from houyi.adapters.memory.extractor import MemoryCandidateExtractor
 from houyi.adapters.memory.retriever import MemoryRetriever
 from houyi.adapters.memory.store import MemoryStore

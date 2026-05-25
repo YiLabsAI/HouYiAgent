@@ -221,6 +221,22 @@ install `houyi-studio/server` (it's a separate package). After every `uv sync`,
 you MUST re-run `uv pip install -e houyi-studio/server` if you need the backend.
 The scripts (`dev.sh`, `restart-backend.sh`) handle this automatically.
 
+**Iron rule — never run `uv sync --extra <single-extra>` alone**: `uv sync` is
+declarative and rebuilds the virtualenv to match *exactly* the extras passed on
+the command line. Running `uv sync --extra memory` after the project was set up
+with `make install-all` will silently uninstall `dev`, `rag`, and every other
+extra that is not on the new command line, leaving a half-broken env where
+`pytest`, the Studio server, the LoCoMo bench, etc. fail with
+`ModuleNotFoundError`. Always pass the *full* set of extras the workflow needs.
+
+- For day-to-day development always go through `make install-dev` or
+  `make install-all`; both pass the canonical extras list.
+- When you genuinely need a non-default extra (e.g. heavy ML deps such as
+  `memory`), pass it together with the existing extras:
+  `uv sync --extra dev --extra rag --extra memory`.
+- Single-extra invocations are reserved for CI matrix jobs that explicitly
+  reset the env between steps.
+
 ### HouYi Studio Server
 
 **Policy**:
@@ -398,6 +414,55 @@ HouYi uses a two-tier approach:
 ```bash
 ruff check houyi/ --fix
 ```
+
+### Docstring & Comment Style
+
+All Python docstrings and inline comments MUST be plain prose. Markup languages
+are forbidden inside `.py` sources because they are noise to readers and editors,
+and they bake in a renderer dependency the project does not need.
+
+**Forbidden** (any of these is a style violation, blocked at review):
+
+1. Sphinx / reStructuredText cross-reference roles:
+   - `:class:`Foo``, `:func:`bar``, `:meth:`...``, `:mod:`baz``,
+     `:attr:`...``, `:data:`...``, `:exc:`...``
+2. RST double-backtick inline code: `` ``foo`` ``, `` ``EMBEDDING_PROVIDER`` ``
+3. Markdown single-backtick inline code: `` `make_embedding_provider` ``,
+   `` `siliconflow` ``
+
+**Required**: write the bare identifier as plain text. The reader will recognise
+it as a symbol from context.
+
+Wrong:
+
+```python
+"""Embedding provider factory.
+
+`make_embedding_provider` is the canonical entry point for picking
+an :class:`EmbeddingProvider` from the project-wide ``EMBEDDING_PROVIDER``
+env var or an explicit override.
+"""
+```
+
+Right:
+
+```python
+"""Embedding provider factory.
+
+make_embedding_provider is the canonical entry point for picking
+an EmbeddingProvider from the project-wide EMBEDDING_PROVIDER
+env var or an explicit override.
+"""
+```
+
+Scope:
+- Applies to every `.py` file: module docstrings, class/function docstrings,
+  inline `#` comments.
+- Does NOT apply to Markdown documents under `docs/` — those keep normal
+  Markdown formatting including backticks.
+- AI-generated code MUST follow this rule on first emission. Reviewers
+  should reject any PR that introduces RST roles or backtick formatting in
+  Python sources.
 
 ### API Stability
 

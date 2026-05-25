@@ -28,8 +28,8 @@ import asyncio
 import logging
 from dataclasses import dataclass
 
+from houyi.adapters.embedding import EmbeddingProvider
 from houyi.adapters.memory.backends.base import MemoryBackend
-from houyi.adapters.memory.embedding import EmbeddingProvider
 from houyi.adapters.memory.types import MemoryRecord, MemoryScope
 
 logger = logging.getLogger(__name__)

@@ -69,8 +69,28 @@ _EN_ATTR_OF_RE = re.compile(
     re.IGNORECASE,
 )
 _EN_WH_RE = re.compile(
-    r"^(?:who|what|where|whose|which|why)\b\s+(?:is|are|was|were)?\s*(?P<entity>[^?]+)",
+    r"^(?:who|what|where|when|whose|which|why|how)\b\s+"
+    r"(?:is|are|was|were|did|do|does|has|have|will|would|can|could)?\s*"
+    r"(?P<entity>[^?]+)",
     re.IGNORECASE,
+)
+
+# Words that look like entities to dumb regexes but never refer to a real
+# subject in the entity-state view. Any inferred or caller-provided entity
+# that collapses to one of these is dropped so the retriever returns []
+# instead of running a doomed lookup. Comparison is case-insensitive.
+_QUESTION_WORDS: frozenset[str] = frozenset(
+    {
+        "when",
+        "where",
+        "what",
+        "who",
+        "whom",
+        "whose",
+        "why",
+        "how",
+        "which",
+    }
 )
 
 
@@ -105,11 +125,26 @@ class EntityStateRetriever(Retriever):
         return [_candidate_from_row(row, self.name, hint) for row in rows]
 
 
+def _is_question_word(token: str) -> bool:
+    """Return True when the cleaned token is a wh-question word."""
+    return token.strip().lower() in _QUESTION_WORDS
+
+
 def _infer_entity_attribute(query: RecallQuery) -> EntityAttributeHint | None:
-    """Infer a lookup target using hints first, then simple patterns."""
+    """Infer a lookup target using hints first, then simple patterns.
+
+    Any candidate entity that resolves to a wh-question word (When, Where,
+    What, ...) is rejected because such tokens never refer to a real
+    subject and would silently steer entity-state lookups into empty
+    results. This applies to caller-provided hints as well, so upstream
+    code does not need its own filter.
+    """
     if query.entity_hint:
+        entity = query.entity_hint.strip()
+        if not entity or _is_question_word(entity):
+            return None
         return EntityAttributeHint(
-            entity=query.entity_hint.strip(),
+            entity=entity,
             attribute=query.attribute_hint.strip() if query.attribute_hint else None,
             source="caller_hint",
         )
@@ -117,24 +152,32 @@ def _infer_entity_attribute(query: RecallQuery) -> EntityAttributeHint | None:
     text = query.text.strip()
     zh = _ZH_ATTR_RE.search(text)
     if zh:
-        return EntityAttributeHint(
-            entity=zh.group("entity").strip(),
-            attribute=zh.group("attribute").strip(),
-            source="zh_attribute",
-        )
+        entity = zh.group("entity").strip()
+        if entity and not _is_question_word(entity):
+            return EntityAttributeHint(
+                entity=entity,
+                attribute=zh.group("attribute").strip(),
+                source="zh_attribute",
+            )
 
     en_attr = _EN_ATTR_OF_RE.search(text)
     if en_attr:
-        return EntityAttributeHint(
-            entity=en_attr.group("entity").strip(),
-            attribute=en_attr.group("attribute").lower().strip(),
-            source="en_attribute_of",
-        )
+        entity = en_attr.group("entity").strip()
+        if entity and not _is_question_word(entity):
+            return EntityAttributeHint(
+                entity=entity,
+                attribute=en_attr.group("attribute").lower().strip(),
+                source="en_attribute_of",
+            )
 
     en_wh = _EN_WH_RE.search(text)
     if en_wh:
         entity = en_wh.group("entity").strip()
-        if entity:
+        # Defensive: even after the regex stripped the leading wh-word and
+        # auxiliary, the capture can still start with another question
+        # word (rare, but seen in chained queries like "what when X"). A
+        # single-token entity that itself is a question word is dropped.
+        if entity and not _is_question_word(entity):
             return EntityAttributeHint(entity=entity, source="en_wh_question")
 
     return None

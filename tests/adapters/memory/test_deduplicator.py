@@ -8,8 +8,8 @@ from __future__ import annotations
 
 import pytest
 
+from houyi.adapters.embedding import NoOpEmbeddingProvider
 from houyi.adapters.memory.deduplicator import MemoryDeduplicator
-from houyi.adapters.memory.embedding import NoOpEmbeddingProvider
 from houyi.adapters.memory.types import (
     MemoryCandidate,
     MemoryRecord,

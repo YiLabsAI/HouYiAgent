@@ -29,7 +29,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from houyi.adapters.memory.embedding import EmbeddingProvider
+from houyi.adapters.embedding import EmbeddingProvider
 
 logger = logging.getLogger(__name__)
 

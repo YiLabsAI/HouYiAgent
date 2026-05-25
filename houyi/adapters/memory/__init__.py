@@ -8,13 +8,12 @@ from houyi.adapters.memory.backends import (
 )
 from houyi.adapters.memory.classifier import MemoryClassifier
 from houyi.adapters.memory.deduplicator import MemoryDeduplicator
-from houyi.adapters.memory.embedding import (
-    EmbeddingProvider,
-    NoOpEmbeddingProvider,
-    cosine_similarity,
-)
 from houyi.adapters.memory.engine import MemoryEngine
 from houyi.adapters.memory.extractor import MemoryCandidateExtractor
+from houyi.adapters.memory.factory import (
+    build_memory_engine,
+    build_memory_engine_from_env,
+)
 from houyi.adapters.memory.forgetting import apply_forgetting
 from houyi.adapters.memory.reasoner import (
     DeterministicReasoningPolicy,
@@ -49,7 +48,6 @@ __all__ = [
     "CandidateStatus",
     "DedupMatch",
     "DeterministicReasoningPolicy",
-    "EmbeddingProvider",
     "ExtractionContext",
     "ForgettingPolicy",
     "LLMMemoryReasoningPolicy",
@@ -69,7 +67,6 @@ __all__ = [
     "MemoryScope",
     "MemoryStore",
     "MemoryType",
-    "NoOpEmbeddingProvider",
     "ReasoningPolicy",
     "RecallMatchMethod",
     "RelevanceDetail",
@@ -80,6 +77,7 @@ __all__ = [
     "TurnWriter",
     "WriteResult",
     "apply_forgetting",
-    "cosine_similarity",
+    "build_memory_engine",
+    "build_memory_engine_from_env",
     "create_backend",
 ]

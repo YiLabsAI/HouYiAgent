@@ -12,7 +12,7 @@ Strategies:
 
 from __future__ import annotations
 
-from houyi.adapters.memory.embedding import EmbeddingProvider, cosine_similarity
+from houyi.adapters.embedding import EmbeddingProvider, cosine_similarity
 from houyi.adapters.memory.types import (
     DedupMatch,
     MemoryCandidate,

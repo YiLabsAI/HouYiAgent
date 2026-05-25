@@ -23,6 +23,12 @@ from typing import Any
 
 from dotenv import load_dotenv
 
+from houyi.adapters.embedding import (
+    DashScopeEmbeddingProvider,
+    EmbeddingProvider,
+    SiliconFlowEmbeddingProvider,
+    make_embedding_provider,
+)
 from houyi.adapters.llm.siliconflow_adapter import SiliconFlowAdapter
 from houyi.adapters.memory.answerer import AnswerResult
 from houyi.adapters.memory.backends.sqlite import SQLiteMemoryBackend
@@ -36,17 +42,17 @@ from houyi.adapters.memory.bench.locomo import (
 from houyi.adapters.memory.entity_resolver import RoleBasedEntityResolver, TurnContext
 from houyi.adapters.memory.extractor import AtomicFactExtractor
 from houyi.adapters.memory.reasoner import TemporalTurn, answer_from_turn_evidence
-from houyi.adapters.memory.recall.orchestrator import RecallOrchestrator
-from houyi.adapters.memory.recall.retrievers.entity_state import EntityStateRetriever
-from houyi.adapters.memory.recall.retrievers.iterative import IterativeMultiHopRetriever
-from houyi.adapters.memory.recall.retrievers.raw_turn import RawTurnLogRetriever
-from houyi.adapters.memory.recall.retrievers.timeline import TimelineRetriever
-from houyi.adapters.memory.recall.router import CascadingRouter, Tier0RuleRouter
+from houyi.adapters.memory.recall.factory import _build_default_recall_orchestrator
 from houyi.adapters.memory.recall.types import RecallQuery, RetrieverContext
 from houyi.adapters.memory.triggers import all_of
 from houyi.adapters.memory.turn_writer import TurnWriter
 from houyi.adapters.memory.types import RawTurn
+from houyi.adapters.memory.workers.embedding_backfill import (
+    EmbeddingBackfillConfig,
+    EmbeddingBackfillWorker,
+)
 from houyi.adapters.memory.workers.extractor_worker import ExtractorWorker, ExtractorWorkerConfig
+from houyi.infrastructure.config.env_config import EnvConfig
 
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 _ENV_API_KEY = os.getenv("SILICONFLOW_API_KEY")
@@ -128,6 +134,22 @@ def _parse_args():
         default="full_active",
         choices=("full_active", "orchestrator"),
         help="retrieval mode: full_active (active-state sweep) or orchestrator (recall stack)",
+    )
+    p.add_argument(
+        "--embedding-provider",
+        default="siliconflow",
+        choices=("siliconflow", "dashscope", "local", "noop"),
+        help="embedding provider: siliconflow (default), dashscope (bailian), local, or noop",
+    )
+    p.add_argument(
+        "--embedding-model",
+        default=None,
+        help="embedding model name; defaults to EMBEDDING_MODEL env var or provider default",
+    )
+    p.add_argument(
+        "--embedding-api-key",
+        default=None,
+        help="API key for embedding provider; defaults to provider-specific env var (e.g., SILICONFLOW_API_KEY or DASHSCOPE_API_KEY)",
     )
     return p.parse_args()
 
@@ -547,11 +569,16 @@ async def _run_case_with_mode(
     worker: ExtractorWorker,
     extractor_counter: _CountingBatchExtractor,
     view: SQLiteEntityStateView,
+    backend: SQLiteMemoryBackend,
     namespace: str,
     llm_answer: SiliconFlowAdapter,
     llm_judge: SiliconFlowAdapter,
     *,
     recall_mode: str,
+    embedding_provider: str = "siliconflow",
+    embedding_model: str | None = None,
+    embedding_api_key: str | None = None,
+    base_url: str | None = None,
 ) -> dict[str, Any]:
     t0 = time.perf_counter()
     turns = case.sample.turns
@@ -618,24 +645,65 @@ async def _run_case_with_mode(
         if processed == 0:
             break
     extract_calls_per_case = extractor_counter.calls - calls_before
+    logger.info("  extractor processed %d turns, %d LLM calls", processed, extract_calls_per_case)
+
+    # Debug: inspect entity-state and raw-turn contents
+    _ents = view.list_entities(namespace)
+    logger.info("  entity-state entities: %s (count=%d)", _ents[:10], len(_ents))
+    _pending_emb = len(backend.list_pending_embeddings())
+    logger.info("  pending embeddings: %d", _pending_emb)
 
     retrieve_t0 = time.perf_counter()
     rows: list[_BenchRow]
     if recall_mode == "orchestrator":
-        entity = EntityStateRetriever(view)
-        timeline = TimelineRetriever(view)
-        iterative = IterativeMultiHopRetriever(view, delegate=entity)
-        raw_turn = RawTurnLogRetriever()
-        router = CascadingRouter(tier0=Tier0RuleRouter())
-        orchestrator = RecallOrchestrator(
-            router=router,
-            retrievers={
-                "entity_state": entity,
-                "timeline": timeline,
-                "iterative": iterative,
-                "raw_turn": raw_turn,
-            },
+        # Embedding provider for the vector retriever. Errors propagate so
+        # bench failure modes stay loud.
+        _env = EnvConfig.get()
+        _emb_key: str = embedding_api_key or _env.siliconflow_api_key or ""
+        if embedding_provider == "siliconflow":
+            embedding_prov: EmbeddingProvider = SiliconFlowEmbeddingProvider(
+                api_key=_emb_key,
+                model=embedding_model,
+            )
+        elif embedding_provider == "dashscope":
+            _ds_key: str = embedding_api_key or _env.dashscope_api_key or ""
+            embedding_prov = DashScopeEmbeddingProvider(
+                api_key=_ds_key,
+                model=embedding_model,
+            )
+        else:
+            embedding_prov = make_embedding_provider(
+                provider=embedding_provider,
+                model=embedding_model,
+                api_key=embedding_api_key,
+            )
+
+        # Backfill pending embeddings before retrieval so vector search has data.
+        backfill = EmbeddingBackfillWorker(
+            backend=backend,
+            provider=embedding_prov,
+            config=EmbeddingBackfillConfig(batch_size=16),
         )
+        backfill_total = 0
+        while True:
+            filled = await backfill.process_once()
+            if filled == 0:
+                break
+            backfill_total += filled
+        if backfill_total:
+            logger.info("backfilled %d embeddings for vector search", backfill_total)
+
+        # The default recall stack handles entity_state, timeline, iterative,
+        # raw_turn, and (when an embedding provider is supplied) vector
+        # retrieval. The hand-written wh-word entity hint filter is no
+        # longer needed because EntityStateRetriever now drops question
+        # words on every code path.
+        orchestrator = _build_default_recall_orchestrator(
+            backend=backend,
+            entity_state=view,
+            embedding_provider=embedding_prov,
+        )
+
         recall = await orchestrator.recall(
             RecallQuery(
                 text=case.question,
@@ -643,6 +711,16 @@ async def _run_case_with_mode(
                 top_k=RECALL_TOP_K,
             ),
             RetrieverContext(),
+        )
+        # Debug: log which retrievers contributed candidates
+        by_retriever: dict[str, int] = {}
+        for c in recall.candidates:
+            by_retriever[c.retriever_name] = by_retriever.get(c.retriever_name, 0) + 1
+        logger.info(
+            "recall result: reason=%s candidates=%d retrievers=%s",
+            recall.reason.value if recall.reason else None,
+            len(recall.candidates),
+            by_retriever,
         )
         rows = [
             _BenchRow(
@@ -738,6 +816,9 @@ async def _run_all(
     api_key: str | None = None,
     base_url: str | None = None,
     recall_mode: str = "full_active",
+    embedding_provider: str = "siliconflow",
+    embedding_model: str | None = None,
+    embedding_api_key: str | None = None,
 ) -> dict:
     resolved_key = api_key or _ENV_API_KEY
     if not resolved_key:
@@ -774,6 +855,8 @@ async def _run_all(
                 extractor = AtomicFactExtractor(llm_extract, max_retries=1)
                 counting_extractor = _CountingBatchExtractor(extractor)
                 turn_writer = TurnWriter(backend, extract_trigger=all_of())
+                # The default MemoryRecordPromoter is wired by ExtractorWorker
+                # itself, so no explicit promoter argument is needed.
                 worker = ExtractorWorker(
                     backend=backend,
                     extractor=counting_extractor,
@@ -787,10 +870,15 @@ async def _run_all(
                     worker,
                     counting_extractor,
                     view,
+                    backend,
                     f"locomo:{case.sample_id}:{idx}",
                     llm_answer,
                     llm_judge,
                     recall_mode=recall_mode,
+                    embedding_provider=embedding_provider,
+                    embedding_model=embedding_model,
+                    embedding_api_key=embedding_api_key,
+                    base_url=base_url,
                 )
                 results[idx] = r
                 logger.info(
@@ -914,6 +1002,9 @@ def main():
             api_key=args.api_key,
             base_url=args.base_url,
             recall_mode=args.recall_mode,
+            embedding_provider=args.embedding_provider,
+            embedding_model=args.embedding_model,
+            embedding_api_key=args.embedding_api_key,
         )
     )
     print(

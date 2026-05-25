@@ -24,8 +24,8 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from houyi.adapters.memory.fact_promoter import FactPromoter
-from houyi.adapters.memory.types import AtomicFact, Certainty, RawTurn
+from houyi.adapters.memory.fact_promoter import FactPromoter, MemoryRecordPromoter
+from houyi.adapters.memory.types import AtomicFact, Certainty, MemoryRecord, RawTurn
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +77,7 @@ class _BackendProtocol(Protocol):
     def mark_extract_failed(
         self, queue_id: str, error: str, *, retry: bool, max_attempts: int
     ) -> None: ...
+    def put(self, record: MemoryRecord) -> None: ...
 
 
 class _EntityStateProtocol(Protocol):
@@ -143,11 +144,13 @@ class ExtractorWorker:
         extractor: an AtomicFactExtractor-compatible object.
         entity_state: where certain facts are projected.
         candidate_inbox: where vague / sourceless facts park.
-        promoter: optional L1->L2 projection. When given, each
-        accepted certain fact is also handed to the promoter so a
-        corresponding MemoryRecord is materialized for the vector
-        path. Promoter failures are absorbed (logged + ignored);
-        entity-state remains the source of truth.
+        promoter: L1->L2 projection. Defaults to a MemoryRecordPromoter
+        bound to the same backend so that every accepted certain fact
+        materializes a MemoryRecord for the vector path out of the box.
+        Pass a custom FactPromoter to override the policy, or a noop
+        implementation to disable the projection entirely. Promoter
+        failures are absorbed (logged + ignored); entity-state remains
+        the source of truth.
         config: tunables; defaults from ExtractorWorkerConfig.
         """
         if backend is None or extractor is None:
@@ -158,7 +161,10 @@ class ExtractorWorker:
         self._extractor = extractor
         self._entity_state = entity_state
         self._candidate_inbox = candidate_inbox
-        self._promoter = promoter
+        # Default to MemoryRecordPromoter so the L1 worker materializes
+        # MemoryRecord rows that the vector path can index. Callers that
+        # need to disable promotion pass a noop FactPromoter explicitly.
+        self._promoter: FactPromoter = promoter or MemoryRecordPromoter(backend)
         self._config = config or ExtractorWorkerConfig()
 
         # ------------------------------------------------------------------
@@ -339,12 +345,11 @@ class ExtractorWorker:
                 source_unit_id=fact.source_anchor,
                 qualifiers=fact.qualifiers,
             )
-            if self._promoter is not None:
-                # L1 -> L2 projection. The promoter swallows its own
-                # failures, so no second try/except is needed here.
-                # The call is dispatched off-thread because typical
-                # promoter implementations do blocking I/O.
-                await asyncio.to_thread(self._promoter.promote, turn, fact)
+            # L1 -> L2 projection. The promoter swallows its own
+            # failures, so no second try/except is needed here. The
+            # call is dispatched off-thread because typical promoter
+            # implementations do blocking I/O.
+            await asyncio.to_thread(self._promoter.promote, turn, fact)
 
         for raw in getattr(result, "raw_sourceless", []) or []:
             payload = raw if isinstance(raw, dict) else {"item": str(raw)}

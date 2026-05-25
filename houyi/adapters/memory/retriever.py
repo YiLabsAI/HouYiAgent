@@ -20,8 +20,8 @@ import re
 import time
 from collections import Counter
 
+from houyi.adapters.embedding import EmbeddingProvider, cosine_similarity
 from houyi.adapters.memory.backends.base import MemoryBackend
-from houyi.adapters.memory.embedding import EmbeddingProvider, cosine_similarity
 from houyi.adapters.memory.store import MemoryStore
 from houyi.adapters.memory.types import (
     MemoryPolicy,

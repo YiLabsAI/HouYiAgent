@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import pytest
 
+from houyi.adapters.embedding import NoOpEmbeddingProvider
 from houyi.adapters.memory.backends.sqlite import SQLiteMemoryBackend
-from houyi.adapters.memory.embedding import NoOpEmbeddingProvider
 from houyi.adapters.memory.types import MemoryRecord, MemoryScope
 from houyi.adapters.memory.vector_retriever import (
     VectorRetriever,

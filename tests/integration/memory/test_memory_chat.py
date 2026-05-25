@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from houyi.adapters.memory.embedding import NoOpEmbeddingProvider
+from houyi.adapters.embedding import NoOpEmbeddingProvider
 from houyi.adapters.memory.engine import MemoryEngine
 from houyi.adapters.memory.store import MemoryStore
 from houyi.adapters.memory.types import (

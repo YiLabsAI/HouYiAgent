@@ -1,23 +1,41 @@
-"""MemoryEngine: unified facade for the memory write and recall pipelines.
+"""MemoryEngine: unified industrial-grade memory facade.
 
-Assembles Extractor, Classifier, Deduplicator, Retriever, Store, and
-EmbeddingProvider into a single entry point used by the application layer.
+The engine bundles the write pipeline (turn ingest, extractor and
+embedding-backfill workers), the recall pipeline (RecallOrchestrator),
+and the legacy candidate-extraction pipeline behind a single object
+with a small public API:
 
-Two primary operations:
-- process_messages(): write pipeline (extract → classify → dedup → store)
-- recall(): read pipeline (retrieve → format)
+  - write_turn(turn): fast-path L0 write plus L1 enqueue.
+  - flush(timeout):   wait until all pending L1 extractions and
+                      embedding backfills finish.
+  - recall(query):    return MemoryRecall hits via the orchestrator
+                      when one is wired, falling back to the legacy
+                      MemoryRetriever otherwise.
+  - answer(query):    recall plus reasoning policies.
+  - start(), stop():  manage the background workers.
+  - async with engine: idiomatic lifecycle for callers that do not
+                      want to call start/stop manually.
+
+Direct construction of MemoryEngine is reserved for tests and
+advanced callers. Production code MUST use
+build_memory_engine in houyi.adapters.memory.factory which assembles
+the full default stack (backend, workers, orchestrator, embedding).
 """
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
+import hashlib
 import logging
+import time
 from typing import Any
 
+from houyi.adapters.embedding import EmbeddingProvider
 from houyi.adapters.memory.answerer import AnswerResult
 from houyi.adapters.memory.builder import MemoryCandidateBuilder
 from houyi.adapters.memory.classifier import MemoryClassifier
 from houyi.adapters.memory.deduplicator import MemoryDeduplicator
-from houyi.adapters.memory.embedding import EmbeddingProvider
 from houyi.adapters.memory.event_emitter import MemoryEventEmitter
 from houyi.adapters.memory.extractor import MemoryCandidateExtractor
 from houyi.adapters.memory.forgetting import apply_forgetting
@@ -27,8 +45,16 @@ from houyi.adapters.memory.reasoner import (
     MemoryReasoner,
     ReasoningPolicy,
 )
+from houyi.adapters.memory.recall.orchestrator import RecallOrchestrator
+from houyi.adapters.memory.recall.types import (
+    RecallCandidate,
+    RecallQuery,
+    RetrieverContext,
+    RetrieverKind,
+)
 from houyi.adapters.memory.retriever import MemoryRetriever
 from houyi.adapters.memory.store import MemoryStore
+from houyi.adapters.memory.turn_writer import TurnWriter, WriteResult
 from houyi.adapters.memory.types import (
     CandidateStatus,
     ExtractionContext,
@@ -42,9 +68,26 @@ from houyi.adapters.memory.types import (
     MemoryRecord,
     MemoryScope,
     MemorySourceKind,
+    RawTurn,
+    RecallMatchMethod,
+    RelevanceDetail,
     SessionContext,
 )
+from houyi.adapters.memory.workers.embedding_backfill import EmbeddingBackfillWorker
+from houyi.adapters.memory.workers.extractor_worker import ExtractorWorker
 from houyi.application.evolution.events import EvolutionEventType
+
+# Maps a recall-layer RetrieverKind to the legacy RecallMatchMethod enum
+# carried on MemoryRecall. Both axes are coarse; the mapping favors the
+# closest semantic neighbor and falls back to HYBRID for anything that
+# does not have a clean equivalent.
+_RETRIEVER_KIND_TO_MATCH_METHOD: dict[RetrieverKind, RecallMatchMethod] = {
+    RetrieverKind.ENTITY_STATE: RecallMatchMethod.RULE,
+    RetrieverKind.VECTOR: RecallMatchMethod.EMBEDDING,
+    RetrieverKind.RAW_TURN: RecallMatchMethod.LEXICAL,
+    RetrieverKind.TIMELINE: RecallMatchMethod.RULE,
+    RetrieverKind.ITERATIVE: RecallMatchMethod.HYBRID,
+}
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +117,13 @@ class MemoryEngine:
         policy: MemoryPolicy | None = None,
         forgetting_policy: ForgettingPolicy | None = None,
         emitter: MemoryEventEmitter | None = None,
+        # New facade dependencies. All optional so existing tests and
+        # studio code that build a MemoryEngine by hand still work; the
+        # canonical entry point that fills these in is build_memory_engine.
+        recall_orchestrator: RecallOrchestrator | None = None,
+        turn_writer: TurnWriter | None = None,
+        extractor_worker: ExtractorWorker | None = None,
+        backfill_worker: EmbeddingBackfillWorker | None = None,
     ):
         self._store = store
         self._builder = builder or MemoryCandidateBuilder(llm_adapter=llm_adapter)
@@ -98,6 +148,20 @@ class MemoryEngine:
         # RecallOrchestrator path. Production wiring may share a single
         # MemoryEventEmitter across both surfaces.
         self._emitter = emitter or MemoryEventEmitter()
+
+        # Facade members. The orchestrator wins over the legacy retriever
+        # whenever both are available; the workers are optional and only
+        # affect the lifecycle methods (start, stop, flush, write_turn).
+        self._recall_orchestrator: RecallOrchestrator | None = recall_orchestrator
+        self._turn_writer: TurnWriter | None = turn_writer
+        self._extractor_worker: ExtractorWorker | None = extractor_worker
+        self._backfill_worker: EmbeddingBackfillWorker | None = backfill_worker
+        self._worker_tasks: list[asyncio.Task[Any]] = []
+        self._worker_stops: list[asyncio.Event] = []
+        # The flush implementation needs to query the SQLite-level extract
+        # queue. The legacy MemoryStore wraps the backend via a private
+        # attribute; cache the handle once so the hot path stays cheap.
+        self._backend = getattr(store, "_backend", None)
 
     @staticmethod
     def _build_reasoner(
@@ -246,8 +310,17 @@ class MemoryEngine:
         session_context: SessionContext | None = None,
         top_k: int = 5,
     ) -> list[MemoryRecall]:
-        """Retrieve relevant memories for a query."""
-        recalls = await self._retriever.retrieve(query, session_context, top_k)
+        """Retrieve relevant memories for a query.
+
+        When a RecallOrchestrator is wired into the engine the call is
+        delegated there and the resulting RecallCandidate list is
+        adapted to MemoryRecall so existing callers stay unchanged.
+        Otherwise the legacy MemoryRetriever path is used.
+        """
+        if self._recall_orchestrator is not None:
+            recalls = await self._recall_via_orchestrator(query, top_k)
+        else:
+            recalls = await self._retriever.retrieve(query, session_context, top_k)
         if not recalls:
             # Empty recall = retrieval miss on the legacy path. Surface to
             # the evolution control plane the same way the new orchestrator
@@ -340,3 +413,203 @@ class MemoryEngine:
             logger.info("Forgetting: evicted %d records", evicted)
 
         return evicted
+
+    # ------------------------------------------------------------------
+    # Facade — turn write, lifecycle, flush
+    # ------------------------------------------------------------------
+
+    async def write_turn(
+        self,
+        turn: RawTurn,
+        *,
+        schedule_extract: bool = True,
+    ) -> WriteResult:
+        """Persist one conversation turn through the layered write tiers.
+
+        Delegates to the wired TurnWriter. Returns the WriteResult so
+        callers can read back turn_index and queue_id without reaching
+        for the underlying backend. Raises RuntimeError when no
+        TurnWriter was supplied at construction time.
+        """
+        if self._turn_writer is None:
+            raise RuntimeError(
+                "MemoryEngine has no TurnWriter; build it via "
+                "build_memory_engine or pass turn_writer=... explicitly."
+            )
+        # The fast_path is sync but does blocking SQLite work; dispatch
+        # off-thread so the event loop is not blocked under load.
+        return await asyncio.to_thread(
+            self._turn_writer.fast_path,
+            turn,
+            schedule_extract=schedule_extract,
+        )
+
+    async def start(self) -> None:
+        """Launch the background workers if any are wired. Idempotent.
+
+        Safe to call multiple times. When the engine has no workers the
+        method is a no-op so callers can use the same lifecycle code
+        regardless of how the engine was assembled.
+        """
+        if self._worker_tasks:
+            return
+        if self._extractor_worker is not None:
+            stop = asyncio.Event()
+            self._worker_stops.append(stop)
+            self._worker_tasks.append(
+                asyncio.create_task(
+                    self._extractor_worker.run_forever(stop),
+                    name="memory-extractor-worker",
+                )
+            )
+        if self._backfill_worker is not None:
+            stop = asyncio.Event()
+            self._worker_stops.append(stop)
+            self._worker_tasks.append(
+                asyncio.create_task(
+                    self._backfill_worker.run_forever(stop),
+                    name="memory-backfill-worker",
+                )
+            )
+
+    async def stop(self) -> None:
+        """Signal each running worker to stop and await graceful shutdown.
+
+        Idempotent. Cancels tasks that ignore the stop event so a hung
+        worker cannot block the shutdown path indefinitely.
+        """
+        if not self._worker_tasks:
+            return
+        for stop in self._worker_stops:
+            stop.set()
+        try:
+            await asyncio.wait_for(
+                asyncio.gather(*self._worker_tasks, return_exceptions=True),
+                timeout=5.0,
+            )
+        except TimeoutError:
+            for task in self._worker_tasks:
+                task.cancel()
+            await asyncio.gather(*self._worker_tasks, return_exceptions=True)
+        finally:
+            self._worker_tasks.clear()
+            self._worker_stops.clear()
+
+    async def __aenter__(self) -> MemoryEngine:
+        await self.start()
+        return self
+
+    async def __aexit__(self, exc_type: object, exc: object, tb: object) -> None:
+        await self.stop()
+
+    async def flush(self, *, timeout: float = 60.0) -> dict[str, int]:
+        """Wait until the write pipeline is idle, then return.
+
+        Snapshots the current extract-queue and embedding-pending state
+        on entry, then polls (50ms backing off to 200ms) until both
+        snapshots are fully drained. Returns counts of how many items
+        finished while flush was waiting. Raises asyncio.TimeoutError
+        when the deadline is reached (built-in TimeoutError) so callers
+        can decide whether to retry or surface the failure.
+
+        Safe to call concurrently from multiple tasks: each caller
+        observes its own snapshot and the underlying workers are
+        idempotent against repeated polls.
+        """
+        if self._backend is None:
+            return {"extracted": 0, "backfilled": 0}
+        extract_pending = await asyncio.to_thread(self._extract_pending_count)
+        embedding_pending = await asyncio.to_thread(self._embedding_pending_count)
+        extracted = 0
+        backfilled = 0
+        deadline = time.monotonic() + max(0.0, timeout)
+        sleep_s = 0.05
+        while True:
+            current_extract = await asyncio.to_thread(self._extract_pending_count)
+            current_embedding = await asyncio.to_thread(self._embedding_pending_count)
+            if current_extract == 0 and current_embedding == 0:
+                extracted = max(extracted, extract_pending)
+                backfilled = max(backfilled, embedding_pending)
+                return {"extracted": extracted, "backfilled": backfilled}
+            if time.monotonic() >= deadline:
+                raise TimeoutError(
+                    f"MemoryEngine.flush timed out after {timeout:.1f}s; "
+                    f"extract_pending={current_extract}, "
+                    f"embedding_pending={current_embedding}"
+                )
+            await asyncio.sleep(sleep_s)
+            sleep_s = min(sleep_s * 1.5, 0.2)
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    async def _recall_via_orchestrator(
+        self,
+        query: str,
+        top_k: int,
+    ) -> list[MemoryRecall]:
+        assert self._recall_orchestrator is not None
+        recall_query = RecallQuery(text=query, top_k=top_k)
+        result = await self._recall_orchestrator.recall(recall_query, RetrieverContext())
+        return [_candidate_to_memory_recall(c) for c in result.candidates]
+
+    def _extract_pending_count(self) -> int:
+        """Return the number of extract-queue rows still in flight.
+
+        pending plus in_progress: anything else (done, failed) is final
+        and does not need a flush wait.
+        """
+        if self._backend is None:
+            return 0
+        with contextlib.suppress(Exception):
+            stats = self._backend.extract_queue_stats()
+            return int(stats.get("pending", 0)) + int(stats.get("in_progress", 0))
+        return 0
+
+    def _embedding_pending_count(self) -> int:
+        """Return how many MemoryRecord rows still need a vector backfill.
+
+        Uses a small fetch (limit=128) and a one-shot SELECT count fallback
+        so the hot path stays cheap; the polling cadence keeps the cost
+        bounded even when the backlog is large.
+        """
+        if self._backend is None:
+            return 0
+        with contextlib.suppress(Exception):
+            pending = self._backend.list_pending_embeddings(limit=1)
+            if not pending:
+                return 0
+        with contextlib.suppress(Exception):
+            conn = self._backend._conn()
+            row = conn.execute(
+                "SELECT COUNT(*) AS n FROM memories WHERE embedding_pending = 1"
+            ).fetchone()
+            return int(row["n"]) if row is not None else 0
+        return 0
+
+
+def _candidate_to_memory_recall(candidate: RecallCandidate) -> MemoryRecall:
+    """Adapt a RecallCandidate (orchestrator output) to a MemoryRecall.
+
+    The legacy MemoryRecall shape carries a memory_id keyed by the
+    underlying MemoryRecord. The orchestrator emits AtomicFact tuples
+    rather than records, so we synthesize a stable id from the fact
+    triple plus its source anchor. Callers that need to look up the
+    backing record should use the source_anchor instead; this id only
+    needs to be stable within a single process.
+    """
+    fact = candidate.fact
+    anchor = fact.source_anchor or ""
+    digest = hashlib.sha256(
+        f"{fact.subject}|{fact.predicate}|{fact.object}|{anchor}".encode()
+    ).hexdigest()[:24]
+    memory_id = f"fact:{digest}"
+    matched_by = _RETRIEVER_KIND_TO_MATCH_METHOD.get(candidate.matched_by, RecallMatchMethod.HYBRID)
+    return MemoryRecall(
+        memory_id=memory_id,
+        score=float(candidate.score),
+        matched_by=matched_by,
+        explanation=candidate.explanation or f"{fact.subject} {fact.predicate} {fact.object}",
+        relevance_detail=RelevanceDetail(),
+    )

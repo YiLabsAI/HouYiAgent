@@ -10,9 +10,11 @@ import logging
 import math
 import sqlite3
 import struct
-from typing import Any
+from typing import Any, Literal
 
 from houyi.adapters.memory.types import MemoryRecord, MemoryScope
+
+VectorSearchPath = Literal["vec0", "scan"]
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +45,20 @@ class SQLiteVectorSearch:
     def __init__(self, conn_manager, schema_manager):
         self._conn_manager = conn_manager
         self._schema_manager = schema_manager
+        # Records the path used by the most recent search_vector call.
+        # None until the first call. Useful for bench / health checks
+        # that need to assert which physical path served a query.
+        self._last_search_path: VectorSearchPath | None = None
+
+    @property
+    def last_search_path(self) -> VectorSearchPath | None:
+        """Return the path used by the most recent search_vector call.
+
+        vec0 means the sqlite-vec extension served the query; scan
+        means the Python full-table cosine fallback ran. None before
+        any call.
+        """
+        return self._last_search_path
 
     def search_vector(
         self,
@@ -64,19 +80,29 @@ class SQLiteVectorSearch:
             and self._conn_manager.vec_dim is not None
             and self._conn_manager.vec_dim == len(query_embedding)
         ):
-            with contextlib.suppress(sqlite3.OperationalError):
-                return self._search_vector_vec0(
+            try:
+                result = self._search_vector_vec0(
                     query_embedding,
                     scope=scope,
                     rowid_filter=rowid_filter,
                     limit=limit,
                 )
-        return self._search_vector_python(
+            except sqlite3.OperationalError:
+                # vec0 lookup raised at runtime (e.g. dim mismatch the
+                # cached vec_dim did not catch). Fall through to scan
+                # so the call still returns results.
+                pass
+            else:
+                self._last_search_path = "vec0"
+                return result
+        result = self._search_vector_scan(
             query_embedding,
             scope=scope,
             rowid_filter=rowid_filter,
             limit=limit,
         )
+        self._last_search_path = "scan"
+        return result
 
     def _search_vector_vec0(
         self,
@@ -119,7 +145,7 @@ class SQLiteVectorSearch:
             results.append((record, similarity))
         return results
 
-    def _search_vector_python(
+    def _search_vector_scan(
         self,
         query_embedding: list[float],
         *,
@@ -127,6 +153,15 @@ class SQLiteVectorSearch:
         rowid_filter: list[int] | None,
         limit: int,
     ) -> list[tuple[MemoryRecord, float]]:
+        """O(N) full-table scan fallback for vector recall.
+
+        Used when the sqlite-vec extension is unavailable or when the
+        query embedding's dimension does not match the stored vec0
+        table. Iterates every row with a non-null embedding blob,
+        decodes the vector, and computes cosine similarity in Python.
+        Cost grows linearly with the number of memory rows; acceptable
+        for dev / CI / small datasets but not production-scale recall.
+        """
         sql = "SELECT * FROM memories WHERE embedding IS NOT NULL"
         params: list[Any] = []
         if scope is not None:

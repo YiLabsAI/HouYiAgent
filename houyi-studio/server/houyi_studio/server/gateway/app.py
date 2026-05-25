@@ -318,70 +318,35 @@ async def lifespan(app: FastAPI):
     except Exception:
         logger.warning("LLM adapter init failed — features degraded", exc_info=True)
 
-    # Initialize Memory subsystem first (shared by Chat and Research)
+    # Initialize Memory subsystem (shared by Chat and Research). The full
+    # stack (backend, turn writer, extractor worker, embedding backfill,
+    # recall orchestrator) is assembled by build_memory_engine_from_env.
+    # The lifespan owns the engine's start / stop calls so workers run for
+    # the lifetime of the FastAPI app.
     memory_store = None
     memory_engine = None
     memory_service = None
-    _memory_embedding_provider = None
-    _backfill_stop = asyncio.Event()
-    _backfill_task: asyncio.Task | None = None
     try:
-        from houyi.adapters.memory.embedding import EmbeddingProviderError, make_embedding_provider
-        from houyi.adapters.memory.engine import MemoryEngine
-        from houyi.adapters.memory.store import MemoryStore
+        from houyi.adapters.memory import build_memory_engine_from_env
 
-        memory_store = MemoryStore(
-            data_dir=Path(resolve_chat_data_dir(os.getenv(ENV_CHAT_DATA_DIR))).parent / "memory"
+        memory_data_dir = (
+            Path(resolve_chat_data_dir(os.getenv(ENV_CHAT_DATA_DIR))).parent / "memory"
         )
-
-        # Build the embedding provider from the unified EnvConfig.  Failures
-        # (missing key, unsupported provider, etc.) are caught here so the
-        # memory subsystem starts in lexical-only mode rather than refusing to
-        # start the server.  The backfill worker only starts when a provider is
-        # available.
-        try:
-            _memory_embedding_provider = make_embedding_provider()
-            logger.info(
-                "Memory embedding provider: %s (model=%s)",
-                os.getenv(ENV_EMBEDDING_PROVIDER, "local"),
-                os.getenv(ENV_EMBEDDING_MODEL, "(default)"),
-            )
-        except EmbeddingProviderError as _emb_err:
-            logger.warning(
-                "Memory embedding provider unavailable — lexical-only recall active: %s",
-                _emb_err,
-            )
-
-        memory_engine = MemoryEngine(
-            memory_store,
+        memory_engine = build_memory_engine_from_env(
+            data_dir=memory_data_dir,
             llm_adapter=shared_llm_adapter,
-            embedding_provider=_memory_embedding_provider,
         )
+        memory_store = memory_engine.store
         memory_service = MemoryService(memory_engine)
         app.state.memory_service = memory_service
         app.include_router(memory_router)
 
-        # Start the embedding backfill worker when a provider is available and
-        # the backend exposes the required protocol methods.
-        if _memory_embedding_provider is not None:
-            _raw_backend = getattr(memory_store, "_backend", None)
-            if _raw_backend is not None and hasattr(_raw_backend, "list_pending_embeddings"):
-                from houyi.adapters.memory.workers.embedding_backfill import EmbeddingBackfillWorker
-
-                _backfill_worker = EmbeddingBackfillWorker(
-                    backend=_raw_backend,
-                    provider=_memory_embedding_provider,
-                )
-                _backfill_task = asyncio.create_task(
-                    _backfill_worker.run_forever(stop=_backfill_stop),
-                    name="memory-embedding-backfill",
-                )
-                logger.info("Memory embedding backfill worker started")
-
+        await memory_engine.start()
         logger.info(
-            "Memory subsystem initialized (LLM extraction: %s, embedding: %s)",
+            "Memory subsystem initialized (LLM extraction: %s, provider: %s, model: %s)",
             "enabled" if shared_llm_adapter else "disabled",
-            "enabled" if _memory_embedding_provider else "lexical-only",
+            os.getenv(ENV_EMBEDDING_PROVIDER, "local"),
+            os.getenv(ENV_EMBEDDING_MODEL, "(default)"),
         )
     except Exception:
         logger.warning("Memory subsystem init failed — routes unavailable", exc_info=True)
@@ -535,14 +500,13 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    # Graceful shutdown: signal and await the backfill worker before exit.
-    if _backfill_task is not None and not _backfill_task.done():
-        _backfill_stop.set()
+    # Graceful shutdown: stop background memory workers (extractor +
+    # embedding backfill) before exit.
+    if memory_engine is not None:
         try:
-            await asyncio.wait_for(_backfill_task, timeout=5.0)
-        except (TimeoutError, asyncio.CancelledError):
-            _backfill_task.cancel()
-        logger.debug("Memory embedding backfill worker stopped")
+            await memory_engine.stop()
+        except Exception:
+            logger.warning("Memory engine stop raised", exc_info=True)
 
 
 # Create FastAPI app

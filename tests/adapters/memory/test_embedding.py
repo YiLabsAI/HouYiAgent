@@ -2,7 +2,7 @@
 
 Covers NoOpEmbeddingProvider, cosine_similarity edge cases,
 EmbeddingProvider protocol compliance, the SiliconFlow remote backend
-(mocked), and ``make_embedding_provider`` factory resolution.
+(mocked), and make_embedding_provider factory resolution.
 """
 
 from __future__ import annotations
@@ -11,7 +11,7 @@ import math
 
 import pytest
 
-from houyi.adapters.memory.embedding import (
+from houyi.adapters.embedding import (
     DEFAULT_SILICONFLOW_EMBEDDING_MODEL,
     EmbeddingProviderError,
     NoOpEmbeddingProvider,
@@ -238,3 +238,47 @@ class TestFactory:
         monkeypatch.setenv("EMBEDDING_PROVIDER", "noop")
         provider = make_embedding_provider()
         assert isinstance(provider, NoOpEmbeddingProvider)
+
+    def test_dashscope_requires_key(self, monkeypatch):
+        monkeypatch.delenv("DASHSCOPE_API_KEY", raising=False)
+        with pytest.raises(EmbeddingProviderError):
+            make_embedding_provider(provider="dashscope")
+
+    def test_dashscope_uses_env_key(self, monkeypatch):
+        # Resetting EnvConfig forces it to re-read the env in this test
+        # session; without this the cached singleton from earlier tests
+        # may shadow the DASHSCOPE_API_KEY override.
+        from houyi.infrastructure.config.env_config import EnvConfig
+
+        EnvConfig._reset()
+        monkeypatch.setenv("DASHSCOPE_API_KEY", "sk-dashscope-from-env")
+        from houyi.adapters.embedding import DashScopeEmbeddingProvider
+
+        provider = make_embedding_provider(provider="dashscope")
+        assert isinstance(provider, DashScopeEmbeddingProvider)
+
+    def test_local_returns_provider(self, monkeypatch):
+        # SentenceTransformerEmbeddingProvider eagerly loads the model in
+        # its constructor (HF cache lookup + tokenizer + weights), which
+        # takes ~5s on a warm cache and is not allowed in unit tests.
+        # Mock the SentenceTransformer class itself so the factory branch
+        # runs in microseconds without touching disk or the network.
+        import sys
+        import types
+
+        from houyi.adapters.embedding import SentenceTransformerEmbeddingProvider
+
+        class _StubModel:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            def get_embedding_dimension(self):
+                return 384
+
+        stub_module = types.ModuleType("sentence_transformers")
+        stub_module.SentenceTransformer = _StubModel  # type: ignore[attr-defined]
+        monkeypatch.setitem(sys.modules, "sentence_transformers", stub_module)
+
+        provider = make_embedding_provider(provider="local")
+        assert isinstance(provider, SentenceTransformerEmbeddingProvider)
+        assert provider.dimension() == 384

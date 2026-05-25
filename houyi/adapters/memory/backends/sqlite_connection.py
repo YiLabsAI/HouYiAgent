@@ -13,6 +13,13 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+# Process-level latch so the "sqlite-vec unavailable" notice is emitted at
+# most once per process even if many SQLiteConnectionManager
+# instances are constructed (bench, studio, tests). The flag is set when
+# the first manager observes the unavailable status; subsequent managers
+# stay quiet.
+_VEC_STATUS_LOGGED = False
+
 
 class SQLiteConnectionManager:
     """Manages SQLite connections with thread-local storage and extension loading.
@@ -36,6 +43,10 @@ class SQLiteConnectionManager:
         self._vec_available: bool = False
         self._vec_dim: int | None = None
         self._vec_module_available: bool = self._check_vec_module_available()
+        # Surface the fallback status exactly once per process so bench /
+        # studio operators do not silently consume O(N) scan results while
+        # believing the production ANN path is engaged.
+        self._maybe_log_vec_status()
 
     @staticmethod
     def _check_vec_module_available() -> bool:
@@ -46,6 +57,26 @@ class SQLiteConnectionManager:
             return True
         except ImportError:
             return False
+
+    def _maybe_log_vec_status(self) -> None:
+        """Emit a one-shot INFO line when the sqlite-vec extension is missing.
+
+        Without this, callers cannot tell from the logs whether vector
+        recall is running on the native vec0 path or the Python
+        full-table scan fallback. The check fires only when the
+        sqlite_vec module itself is missing; if the module imports but
+        the runtime extension load fails on a connection, that is
+        reported per-connection in try_load_vec_extension instead.
+        """
+        global _VEC_STATUS_LOGGED
+        if _VEC_STATUS_LOGGED:
+            return
+        if not self._vec_module_available:
+            logger.info(
+                "sqlite-vec extension unavailable; vector search will use "
+                "O(N) scan fallback. Install houyi[memory] for ANN."
+            )
+            _VEC_STATUS_LOGGED = True
 
     def try_load_vec_extension(self, conn: sqlite3.Connection) -> bool:
         """Attempt to load the sqlite-vec extension on conn.

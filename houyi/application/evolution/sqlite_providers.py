@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -16,8 +18,24 @@ class SQLiteEvolutionStore:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._init_schema()
 
-    def _connect(self) -> sqlite3.Connection:
-        return sqlite3.connect(self.path)
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
+        # sqlite3.Connection's native context manager commits on success and
+        # rolls back on error but never closes the underlying connection.
+        # That leaks file descriptors across many short-lived calls and the
+        # leak surfaces as ResourceWarning the moment gc collects the
+        # connection. Wrapping the connection here guarantees commit AND
+        # close while keeping the existing with self._connect() as conn
+        # call sites unchanged.
+        conn = sqlite3.connect(self.path)
+        try:
+            yield conn
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
 
     def _init_schema(self) -> None:
         with self._connect() as conn:
