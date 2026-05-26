@@ -61,7 +61,7 @@ class TestVectorRetriever:
     async def test_two_stage_relevant(self, backend, provider):
         await _populate(backend, provider)
         retriever = VectorRetriever(backend, provider)
-        results = await retriever.retrieve("Python machine learning")
+        results = await retriever.retrieve("Python is great for machine learning")
         assert results
         # FTS5 prefilter narrows to records containing 'python' /
         # 'machine' / 'learning'; vector rerank ranks the python record

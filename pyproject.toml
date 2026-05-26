@@ -263,6 +263,18 @@ module = [
 ignore_errors = true
 
 
+[tool.coverage.run]
+omit = [
+    "houyi/arena/*",
+    "houyi/arena/**/*",
+]
+
+[tool.coverage.report]
+omit = [
+    "houyi/arena/*",
+    "houyi/arena/**/*",
+]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
