@@ -557,7 +557,13 @@ async def _run_case_with_mode(
         ),
         embedding_provider=embedding_prov,
     )
-    answer = await engine.answer(case.question, top_k=RECALL_TOP_K)
+    from houyi.adapters.memory.types import SessionContext
+
+    answer = await engine.answer(
+        case.question,
+        session_context=SessionContext(session_id=namespace),
+        top_k=RECALL_TOP_K,
+    )
     recalls = answer.extras.get("recalls", [])
     rows = []
     for r in recalls:

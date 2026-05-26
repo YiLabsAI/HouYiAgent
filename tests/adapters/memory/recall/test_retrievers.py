@@ -408,3 +408,25 @@ async def test_raw_turn_empty() -> None:
     hits = await RawTurnLogRetriever().retrieve(RecallQuery(text="anything"), RetrieverContext())
 
     assert hits == []
+
+
+def test_clean_entity_possessive() -> None:
+    from houyi.adapters.memory.recall.retrievers.entity_state import _clean_entity
+
+    assert _clean_entity("John's goals with regards to his basketball career") == "John"
+
+
+def test_clean_entity_regular() -> None:
+    from houyi.adapters.memory.recall.retrievers.entity_state import _clean_entity
+
+    assert _clean_entity("Mary's") == "Mary"
+
+
+def test_infer_entity_possessive() -> None:
+    from houyi.adapters.memory.recall.retrievers.entity_state import _infer_entity_attribute
+
+    query = RecallQuery(text="what are John's goals with regards to his basketball career?")
+    hint = _infer_entity_attribute(query)
+    assert hint is not None
+    assert hint.entity == "John"
+    assert hint.source == "en_wh_question"

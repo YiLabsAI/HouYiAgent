@@ -162,8 +162,12 @@ _VERB_BREAKS: frozenset[str] = frozenset(
 )
 
 
-def _clean_english_entity(entity: str) -> str:
+def _clean_entity(entity: str) -> str:
     """Strip action verbs and trailing predicate content from captured entity."""
+    match = re.match(r"^([^\'\s]+)'s\b", entity, re.IGNORECASE)
+    if match:
+        return match.group(1).strip()
+
     words = entity.split()
     cleaned = []
     for w in words:
@@ -196,13 +200,165 @@ class EntityStateRetriever(Retriever):
         if hint is None:
             return []
 
-        rows = await asyncio.to_thread(
-            self._view.get_active,
-            query.namespace,
-            hint.entity,
-            hint.attribute,
+        query_words = _extract_query_words(query.text)
+        is_cumulative = bool(query_words.intersection(_CORE_WORDS)) or (
+            hint.attribute is not None
+            and any(
+                _stemish(w) in _CORE_WORDS
+                for w in re.sub(r"[^a-z0-9\s]", " ", hint.attribute.lower()).split()
+            )
         )
-        return [_candidate_from_row(row, self.name, hint) for row in rows]
+
+        if is_cumulative:
+            rows = await asyncio.to_thread(
+                self._view.get_history,
+                query.namespace,
+                hint.entity,
+                hint.attribute,
+            )
+        else:
+            rows = await asyncio.to_thread(
+                self._view.get_active,
+                query.namespace,
+                hint.entity,
+                hint.attribute,
+            )
+        return [_candidate_from_row(row, self.name, hint, query_words) for row in rows]
+
+
+_STOPWORDS = {
+    "a",
+    "an",
+    "the",
+    "and",
+    "or",
+    "but",
+    "if",
+    "then",
+    "of",
+    "at",
+    "by",
+    "for",
+    "with",
+    "about",
+    "against",
+    "between",
+    "into",
+    "through",
+    "during",
+    "before",
+    "after",
+    "above",
+    "below",
+    "to",
+    "from",
+    "up",
+    "down",
+    "in",
+    "on",
+    "over",
+    "under",
+    "again",
+    "further",
+    "once",
+    "here",
+    "there",
+    "when",
+    "where",
+    "why",
+    "how",
+    "all",
+    "any",
+    "both",
+    "each",
+    "few",
+    "more",
+    "most",
+    "other",
+    "some",
+    "such",
+    "no",
+    "nor",
+    "not",
+    "only",
+    "own",
+    "same",
+    "so",
+    "than",
+    "too",
+    "very",
+    "s",
+    "t",
+    "can",
+    "will",
+    "just",
+    "don",
+    "should",
+    "now",
+    "what",
+    "are",
+    "is",
+    "was",
+    "were",
+    "did",
+    "do",
+    "does",
+    "has",
+    "have",
+    "had",
+    "his",
+    "hi",
+    "her",
+    "my",
+    "your",
+    "its",
+    "their",
+    "our",
+    "me",
+    "you",
+    "him",
+    "them",
+    "us",
+    "i",
+    "we",
+    "he",
+    "she",
+    "it",
+    "they",
+}
+
+_CORE_WORDS = {
+    "goal",
+    "plan",
+    "problem",
+    "issue",
+    "health",
+    "disease",
+    "like",
+    "dislike",
+    "pref",
+    "value",
+    "dream",
+    "wish",
+}
+
+
+def _stemish(token: str) -> str:
+    t = token.strip().lower()
+    if len(t) > 4 and t.endswith("ing"):
+        return t[:-3]
+    if len(t) > 3 and t.endswith("ed"):
+        return t[:-2]
+    if len(t) > 3 and t.endswith("s"):
+        return t[:-1]
+    return t
+
+
+def _extract_query_words(text: str) -> set[str]:
+    normalized = re.sub(r"[^a-z0-9\s]", " ", (text or "").lower())
+    return {
+        _stemish(w) for w in normalized.split() if len(w) >= 2 and _stemish(w) not in _STOPWORDS
+    }
 
 
 def _is_question_word(token: str) -> bool:
@@ -252,7 +408,7 @@ def _infer_entity_attribute(query: RecallQuery) -> EntityAttributeHint | None:
 
     en_wh = _EN_WH_RE.search(text)
     if en_wh:
-        entity = _clean_english_entity(en_wh.group("entity").strip())
+        entity = _clean_entity(en_wh.group("entity").strip())
         # Defensive: even after the regex stripped the leading wh-word and
         # auxiliary, the capture can still start with another question
         # word (rare, but seen in chained queries like "what when X"). A
@@ -267,6 +423,7 @@ def _candidate_from_row(
     row: EntityStateRecord,
     retriever_name: str,
     hint: EntityAttributeHint,
+    query_words: set[str] | None = None,
 ) -> RecallCandidate:
     """Convert an entity-state row back into an atomic recall candidate."""
     fact = AtomicFact(
@@ -281,6 +438,13 @@ def _candidate_from_row(
     )
     exact_attribute = hint.attribute is not None and hint.attribute == row.attribute
     score = 10.0 if exact_attribute else 5.0
+    if query_words:
+        fact_text = f"{row.attribute} {row.value}".lower()
+        fact_words = {_stemish(w) for w in re.sub(r"[^a-z0-9\s]", " ", fact_text).split()}
+        overlap = query_words.intersection(fact_words)
+        for w in overlap:
+            weight = 3.0 if w in _CORE_WORDS else 1.0
+            score += weight * 1.5
     return RecallCandidate(
         fact=fact,
         score=score,

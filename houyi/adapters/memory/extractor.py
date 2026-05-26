@@ -316,6 +316,11 @@ Output:
 _ATOMIC_FACT_BATCH_SYSTEM_PROMPT = """You are an information extraction engine.
 Extract atomic facts from multiple turns. Each turn is prefixed by:
 <<TURN id=...>>
+The turn content is a JSON object with:
+ - text: The conversation turn text.
+ - speaker_name: The canonical name of the speaker (use this as the subject of extracted facts about the speaker).
+ - observation_date: The date when the conversation occurred.
+ - system_date: Today's date.
 
 Return JSON in this shape:
 {
@@ -337,9 +342,94 @@ Return JSON in this shape:
 }
 
 Rules:
-1) Keep each fact under the correct source_anchor.
+1) Keep each fact under the correct source_anchor matching the <<TURN id=...>> prefix.
 2) If no fact is present for a turn, return that source_anchor with an empty facts array.
-3) Return only JSON, no markdown or prose.
+3) Use the person's actual speaker_name if the fact is about the speaker.
+4) Return only JSON, no markdown or prose.
+
+EXAMPLES:
+
+Input:
+<<TURN id=conv-47:D1:27>>
+{"observation_date": "2023-03-16", "system_date": "2024-01-15", "text": "I can't bowl, my fingers are too big. Perhaps I should take up exercise, at least start going for a run in the morning. And I also don't like bowling itself, to be honest.", "speaker_name": "John"}
+
+Output:
+{
+  "items": [
+    {
+      "source_anchor": "conv-47:D1:27",
+      "facts": [
+        {"subject": "John", "predicate": "dislikes", "object": "bowling", "certainty": "certain"},
+        {"subject": "John", "predicate": "has_attribute", "object": "big fingers", "certainty": "certain"},
+        {"subject": "John", "predicate": "considers", "object": "exercise", "certainty": "certain"},
+        {"subject": "John", "predicate": "considers", "object": "running in the morning", "certainty": "certain"},
+        {"subject": "John", "predicate": "suspected_health_issue", "object": "obesity", "certainty": "probable"}
+      ]
+    }
+  ]
+}
+
+Input:
+<<TURN id=conv-43:D1:9>>
+{"observation_date": "2023-01-15", "system_date": "2024-01-15", "text": "Yeah, my goal is to improve my shooting percentage. Been practicing hard and gonna make it happen.", "speaker_name": "John"}
+
+<<TURN id=conv-43:D6:15>>
+{"observation_date": "2023-01-22", "system_date": "2024-01-15", "text": "Yeah! Winning a championship is my number one goal. But I also want to make a difference away from the court, like through charity.", "speaker_name": "John"}
+
+Output:
+{
+  "items": [
+    {
+      "source_anchor": "conv-43:D1:9",
+      "facts": [
+        {"subject": "John", "predicate": "has_goal", "object": "improve shooting percentage", "certainty": "certain"},
+        {"subject": "John", "predicate": "practices", "object": "basketball", "certainty": "certain"}
+      ]
+    },
+    {
+      "source_anchor": "conv-43:D6:15",
+      "facts": [
+        {"subject": "John", "predicate": "primary_goal", "object": "winning a championship", "certainty": "certain"},
+        {"subject": "John", "predicate": "wants_to", "object": "make a difference through charity", "certainty": "certain"}
+      ]
+    }
+  ]
+}
+
+DATE HANDLING:
+Relative time mappings (use observation_date as anchor):
+ - yesterday -> observation_date minus 1 day
+ - today -> observation_date
+ - tomorrow -> observation_date plus 1 day
+ - last week -> observation_date minus 7 days
+ - last weekend -> most recent Saturday/Sunday before observation_date
+ - next week -> observation_date plus 7 days
+ - last Monday -> Most recent Monday before observation_date
+ - next Monday -> First Monday after observation_date
+ - two days ago -> observation_date minus 2 days
+ - N years ago -> observation_date minus N years
+ - N months ago -> observation_date minus N months
+ - for N years -> started at observation_date minus N years; record qualifier since: that computed year
+ - for N months -> started at observation_date minus N months; record qualifier since: that computed year-month
+ - last year -> year of (observation_date minus 1 year); record qualifier date: that year
+ - last month -> year-month of (observation_date minus 1 month); record qualifier date: that year-month
+ - just / recently / no explicit time -> the event happened at observation_date; record qualifier date: observation_date
+
+CERTAINTY RUBRIC:
+ - certain: Direct factual statements without hedging.
+ - probable: Hedged but concrete statements (e.g. I think..., probably).
+ - vague: Non-committal or evasive (kind of stuck, maybe, not sure).
+
+ACCUMULATE FLAG:
+ - accumulate: true - for open-ended sets (visited places, collected items, read books, known bands, past jobs, recurring activities).
+ - accumulate: false - for single current values (current job, current address, current relationship status, name, age).
+
+PREDICATE CONSISTENCY:
+ - Books read/mentioned: always use predicate reads_book
+ - Bands/artists enjoyed: always use predicate likes_band
+ - Places visited: always use predicate visited_place
+ - Items collected: always use predicate collects
+ - Past jobs/roles: always use predicate had_job
 """
 
 _ATOMIC_FACT_SYSTEM_PROMPT = """You are an information extraction engine.

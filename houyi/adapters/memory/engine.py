@@ -28,6 +28,7 @@ import asyncio
 import contextlib
 import hashlib
 import logging
+import re
 import time
 from typing import Any
 
@@ -318,7 +319,7 @@ class MemoryEngine:
         Otherwise the legacy MemoryRetriever path is used.
         """
         if self._recall_orchestrator is not None:
-            recalls = await self._recall_via_orchestrator(query, top_k)
+            recalls = await self._recall_via_orchestrator(query, top_k, session_context)
         else:
             recalls = await self._retriever.retrieve(query, session_context, top_k)
         if not recalls:
@@ -360,7 +361,8 @@ class MemoryEngine:
         top_k: int = 5,
     ) -> AnswerResult:
         """Answer a query directly from memory recall + reasoning policies."""
-        recalls = await self.recall(query, session_context, top_k)
+        adjusted_top_k = max(top_k, 16)
+        recalls = await self.recall(query, session_context, adjusted_top_k)
         records: list[MemoryRecord] = []
         for recall in recalls:
             record = self._find_record(recall.memory_id)
@@ -410,6 +412,18 @@ class MemoryEngine:
             subject = parts[0] if len(parts) > 1 else ""
             predicate = parts[1] if len(parts) > 1 else record.key
             content = record.content
+            # Strip trailing parenthesized qualifiers like (time: ...)
+            content = re.sub(r"\s*\([^)]*\)\s*$", "", content).strip()
+            # Strip subject prefix so content matches AtomicFact.object
+            if subject:
+                prefix = f"{subject} "
+                if content.lower().startswith(prefix.lower()):
+                    content = content[len(prefix) :].lstrip()
+            # Strip predicate prefix so content matches AtomicFact.object
+            if predicate:
+                prefix = f"{predicate} "
+                if content.lower().startswith(prefix.lower()):
+                    content = content[len(prefix) :].lstrip()
             anchor = (
                 record.provenance.source_ids[0]
                 if (record.provenance and record.provenance.source_ids)
@@ -578,9 +592,11 @@ class MemoryEngine:
         self,
         query: str,
         top_k: int,
+        session_context: SessionContext | None = None,
     ) -> list[MemoryRecall]:
         assert self._recall_orchestrator is not None
-        recall_query = RecallQuery(text=query, top_k=top_k)
+        namespace = (session_context.session_id if session_context else None) or "default"
+        recall_query = RecallQuery(text=query, top_k=top_k, namespace=namespace)
         result = await self._recall_orchestrator.recall(recall_query, RetrieverContext())
         return [_candidate_to_memory_recall(c) for c in result.candidates]
 

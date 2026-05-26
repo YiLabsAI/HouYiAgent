@@ -133,7 +133,7 @@ class LLMMemoryReasoningPolicy:
         llm: Any,
         *,
         timeout_seconds: float = 30.0,
-        max_facts: int = 8,
+        max_facts: int = 16,
         max_tokens: int = 384,
     ) -> None:
         self._llm = llm
@@ -158,6 +158,7 @@ class LLMMemoryReasoningPolicy:
             f"{idx}. {record.content} [record_id={record.record_id}]"
             for idx, record in enumerate(records, start=1)
         ]
+        logger.info("REASONER FACTS PASSED: %s", facts)
         prompt = (
             "Answer the question using only the memory facts below.\n\n"
             f"Facts:\n{chr(10).join(facts)}\n\n"
@@ -172,9 +173,11 @@ class LLMMemoryReasoningPolicy:
                     "You are a memory-grounded assistant. Answer the user question using ONLY the provided memory facts.\n"
                     "Follow these strict rules:\n"
                     "1. STRICT GROUNDING: All specific events, names, and key entities in your answer must be directly supported by the facts.\n"
-                    "2. LOGICAL & TEMPORAL DECUCTION: For questions asking about 'suspected' attributes, 'likelihood', 'possibilities', or temporal relative matches (e.g. connecting a relative time like 'last week' or 'yesterday' to the date context in the question), you are permitted to make reasonable one-step deductions from the facts. Prefer answering with a reasonable deduction over abstaining with [IDK].\n"
+                    "2. LOGICAL & TEMPORAL DECUCTION: For questions asking about 'suspected' attributes, 'likelihood', 'possibilities', or temporal relative matches (e.g. connecting a relative time like 'last week' or 'yesterday' to the date context in the question), you are permitted to make reasonable one-step deductions from the facts (e.g. if a person has very big fingers and needs exercise or running, they may be suspected of obesity). Prefer answering with a reasonable deduction over abstaining with [IDK].\n"
                     "3. NO HALLUCINATION: If there are absolutely no relevant facts or clues in memory, or if the facts are completely unrelated to the question, do not make up anything; output exactly [IDK].\n"
-                    "4. STRICT CONCISENESS: Keep your answer short and focused directly on what the question asks."
+                    "4. STRICT CONCISENESS: Keep your answer short and focused directly on what the question asks.\n"
+                    "5. GOAL PRIORITIZATION: When asked about goals or plans, collect and combine ALL explicit target facts (such as winning a championship, improving shooting percentage, improve shooting, etc.) into a single merged response. Do not select only one.\n"
+                    "6. ALL-TIME RETRIEVAL: You must include goals from all different days and times across the entire conversation history (e.g. winning a championship or improving shooting percentage). Do not ignore older goals in favor of only the most recent ones."
                 ),
             },
             {"role": "user", "content": prompt},
