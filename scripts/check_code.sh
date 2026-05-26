@@ -170,7 +170,7 @@ PY
     (
         started_at=$(python3 -c 'import time; print(time.perf_counter())')
         COVERAGE_FILE="${server_cov_dir}/.coverage" uv run pytest houyi-studio/server/tests/ -m "not benchmark" \
-            --ignore=houyi-studio/server/tests/integration -x -n 2 --cov=houyi_studio --cov-report=
+            --ignore=houyi-studio/server/tests/integration -x -n 2 --cov=houyi_studio --cov=houyi --cov-report=
         rc=$?
         elapsed_s=$(python3 - "$started_at" <<'PY'
 import sys, time
@@ -229,7 +229,7 @@ PY
     run_check "Coverage Data Combine" \
         env COVERAGE_FILE="${tmp_dir}/.coverage" uv run coverage combine "${sdk_cov_dir}/.coverage" "${server_cov_dir}/.coverage"
     run_check "SDK Coverage Gate" \
-        env COVERAGE_FILE="${tmp_dir}/.coverage" uv run coverage report --fail-under="$COVERAGE_MIN"
+        env COVERAGE_FILE="${tmp_dir}/.coverage" uv run coverage report --include="houyi/*" --fail-under="$COVERAGE_MIN"
 
     rm -rf "$tmp_dir"
 }

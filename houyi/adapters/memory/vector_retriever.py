@@ -134,13 +134,31 @@ class VectorRetriever:
             and len(prefilter_rowids) >= self._config.min_prefilter_hits
             else None
         )
-        return await asyncio.to_thread(
+        hits = await asyncio.to_thread(
             self._backend.search_vector,
             query_vec,
             scope=scope,
             rowid_filter=rowid_filter,
             limit=wanted,
         )
+
+        # Soft fallback: if we applied FTS prefiltering but got weak/insufficient results (top similarity < 0.8),
+        # run a global unfiltered search to rescue semantic recall from FTS token mismatches.
+        if rowid_filter is not None and (not hits or len(hits) < wanted or hits[0][1] < 0.8):
+            global_hits = await asyncio.to_thread(
+                self._backend.search_vector,
+                query_vec,
+                scope=scope,
+                rowid_filter=None,
+                limit=wanted,
+            )
+            seen_ids = {rec.record_id for rec, _ in hits}
+            for rec, score in global_hits:
+                if rec.record_id not in seen_ids:
+                    hits.append((rec, score))
+            hits = sorted(hits, key=lambda x: x[1], reverse=True)[:wanted]
+
+        return hits
 
         # ------------------------------------------------------------------
         # Stage 1: FTS5 prefilter

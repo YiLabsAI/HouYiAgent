@@ -111,11 +111,12 @@ class MemoryRecordPromoter:
         # Build self-contained semantic content so both retrievers and reasoning policies
         # have full access to subject, predicate, object, and temporal event_time.
         content = f"{fact.subject} {fact.predicate} {fact.object}"
-        date_val = (
-            fact.event_time
-            or (fact.qualifiers.get("date") if fact.qualifiers else None)
-            or (fact.qualifiers.get("time") if fact.qualifiers else None)
-        )
+        date_val = fact.event_time
+        if not date_val and fact.qualifiers:
+            for k in ("date", "time", "when", "since", "occurred", "year"):
+                if fact.qualifiers.get(k):
+                    date_val = fact.qualifiers[k]
+                    break
         if date_val:
             content += f" (time: {date_val})"
 

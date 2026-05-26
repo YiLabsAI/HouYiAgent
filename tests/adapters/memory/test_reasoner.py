@@ -2,11 +2,69 @@ from __future__ import annotations
 
 from houyi.adapters.memory.reasoner import (
     DeterministicReasoningPolicy,
+    LLMMemoryReasoningPolicy,
     MemoryReasoner,
+    MemoryReasoningInput,
     TemporalTurn,
     answer_from_turn_evidence,
 )
 from houyi.adapters.memory.types import MemoryRecall, MemoryRecord
+
+
+class MockLLMAdapter:
+    def __init__(self, response_text: str):
+        self.response_text = response_text
+        self.calls = []
+
+    async def chat(self, messages, temperature=0.0, max_tokens=1024):
+        self.calls.append(messages)
+
+        class Response:
+            content = self.response_text
+
+        return Response()
+
+
+async def test_llm_reasoning_success():
+    llm = MockLLMAdapter("John's suspected health issue is obesity.")
+    policy = LLMMemoryReasoningPolicy(llm)
+    records = [
+        MemoryRecord(key="health", content="John has had busy week and struggles with obesity.")
+    ]
+    recalls = [MemoryRecall(memory_id=records[0].record_id, score=0.9)]
+    request = MemoryReasoningInput(
+        query="What is John's suspected health issue?", recalls=recalls, records=records
+    )
+
+    result = await policy.answer(request)
+    assert result.abstained is False
+    assert "obesity" in result.answer
+
+
+async def test_llm_reasoning_idk():
+    llm = MockLLMAdapter("[IDK]")
+    policy = LLMMemoryReasoningPolicy(llm)
+    records = [MemoryRecord(key="health", content="John has had busy week.")]
+    recalls = [MemoryRecall(memory_id=records[0].record_id, score=0.9)]
+    request = MemoryReasoningInput(
+        query="What is John's suspected health issue?", recalls=recalls, records=records
+    )
+
+    result = await policy.answer(request)
+    assert result.abstained is True
+    assert result.reason == "llm_idk"
+
+
+async def test_llm_reasoning_empty():
+    llm = MockLLMAdapter("doesn't matter")
+    policy = LLMMemoryReasoningPolicy(llm)
+    request = MemoryReasoningInput(
+        query="What is John's suspected health issue?", recalls=[], records=[]
+    )
+
+    result = await policy.answer(request)
+    assert result.abstained is True
+    assert result.reason == "no_candidates"
 
 
 async def test_match_returns_content():

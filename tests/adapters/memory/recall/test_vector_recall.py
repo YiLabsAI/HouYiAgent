@@ -90,10 +90,9 @@ class TestRoutingTable:
     def test_vector_slot_present(self, query_type):
         assert "vector" in _DEFAULT_ROUTE_TABLE[query_type]
 
-    def test_negation_check_excludes_vector(self):
-        # NEGATION_CHECK must rely on entity_state — vector noise here
-        # risks false positives.
-        assert "vector" not in _DEFAULT_ROUTE_TABLE[QueryType.NEGATION_CHECK]
+    def test_negation_check_includes_vector(self):
+        # NEGATION_CHECK now includes vector to rescue semantic mismatch.
+        assert "vector" in _DEFAULT_ROUTE_TABLE[QueryType.NEGATION_CHECK]
 
     def test_thematic_weights_vector(self):
         weights = _DEFAULT_FUSION_WEIGHTS[QueryType.THEMATIC_SUMMARY]

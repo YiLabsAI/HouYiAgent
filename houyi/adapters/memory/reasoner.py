@@ -159,18 +159,22 @@ class LLMMemoryReasoningPolicy:
             for idx, record in enumerate(records, start=1)
         ]
         prompt = (
-            "Answer the question using only the memory facts below. "
-            f"If facts are insufficient, output exactly {self._IDK_SENTINEL}.\n\n"
+            "Answer the question using only the memory facts below.\n\n"
             f"Facts:\n{chr(10).join(facts)}\n\n"
             f"Question: {request.query}\n"
+            f"If the facts are completely insufficient, output exactly {self._IDK_SENTINEL}. Otherwise, answer directly and concisely.\n"
             "Answer:"
         )
         messages = [
             {
                 "role": "system",
                 "content": (
-                    "You are a memory-grounded assistant. "
-                    "Do not invent facts not present in memory records."
+                    "You are a memory-grounded assistant. Answer the user question using ONLY the provided memory facts.\n"
+                    "Follow these strict rules:\n"
+                    "1. STRICT GROUNDING: All specific events, names, and key entities in your answer must be directly supported by the facts.\n"
+                    "2. LOGICAL & TEMPORAL DECUCTION: For questions asking about 'suspected' attributes, 'likelihood', 'possibilities', or temporal relative matches (e.g. connecting a relative time like 'last week' or 'yesterday' to the date context in the question), you are permitted to make reasonable one-step deductions from the facts. Prefer answering with a reasonable deduction over abstaining with [IDK].\n"
+                    "3. NO HALLUCINATION: If there are absolutely no relevant facts or clues in memory, or if the facts are completely unrelated to the question, do not make up anything; output exactly [IDK].\n"
+                    "4. STRICT CONCISENESS: Keep your answer short and focused directly on what the question asks."
                 ),
             },
             {"role": "user", "content": prompt},
@@ -203,7 +207,7 @@ class LLMMemoryReasoningPolicy:
             )
 
         content = str(getattr(response, "content", "") or "").strip()
-        logger.info("LLMMemoryReasoningPolicy PROMPT:\n%s\nRESPONSE:\n%s", prompt, content)
+        logger.debug("LLMMemoryReasoningPolicy PROMPT:\n%s\nRESPONSE:\n%s", prompt, content)
         if not content or self._IDK_SENTINEL in content:
             return AnswerResult(
                 answer=DEFAULT_IDK_PHRASE,

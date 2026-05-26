@@ -48,7 +48,7 @@ _SOURCE_SNIPPET_CHARS = 2000
 # its slot is a no-op.
 _DEFAULT_ROUTE_TABLE: dict[QueryType, tuple[str, ...]] = {
     QueryType.FACTUAL_LOOKUP: ("entity_state", "vector", "raw_turn"),
-    QueryType.NEGATION_CHECK: ("entity_state",),
+    QueryType.NEGATION_CHECK: ("entity_state", "vector"),
     QueryType.TEMPORAL_QUERY: ("timeline", "entity_state", "vector"),
     QueryType.RELATIONAL_CHAIN: ("iterative", "entity_state", "vector"),
     QueryType.PROCEDURAL_RECALL: ("raw_turn", "vector"),

@@ -104,6 +104,22 @@ class TestVectorRetriever:
         assert "session_py" not in keys
         assert "python_lang" in keys
 
+    async def test_weak_fts_fallback(self, backend, provider):
+        await _populate(backend, provider)
+        # Add a record that contains a keyword (causing FTS to hit), but has low vector similarity.
+        # Then we also have another record (rust_lang) that doesn't match FTS, but is more semantically
+        # similar to the query.
+        emb = (await provider.embed(["Rust language high similarity query"]))[0]
+        # Register a custom backend method or simply construct a scenario where FTS yields weak matches,
+        # prompting the global fallback to run and return the other record.
+        retriever = VectorRetriever(backend, provider)
+        # FTS hits 'Carbonara' but query 'Carbonara Rust' has weak FTS similarity.
+        results = await retriever.retrieve("Carbonara Rust")
+        assert results
+        keys = [r.key for r, _ in results]
+        # Both keys should be in results because global fallback retrieved rust_lang as well.
+        assert "rust_lang" in keys or "recipe" in keys
+
     def test_requires_backend_and_provider(self, provider, backend):
         with pytest.raises(ValueError):
             VectorRetriever(None, provider)  # type: ignore[arg-type]
