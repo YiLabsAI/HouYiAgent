@@ -23,7 +23,7 @@ jobs:
       github.actor != 'github-actions[bot]'
     steps:
       - name: Translate and normalize
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         env:
           TRANSLATOR_API_KEY: ${{ secrets.TRANSLATOR_API_KEY }}
           TRANSLATOR_API_URL: ${{ secrets.TRANSLATOR_API_URL }}
