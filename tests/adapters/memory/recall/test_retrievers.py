@@ -422,11 +422,38 @@ def test_clean_entity_regular() -> None:
     assert _clean_entity("Mary's") == "Mary"
 
 
-def test_infer_entity_possessive() -> None:
-    from houyi.adapters.memory.recall.retrievers.entity_state import _infer_entity_attribute
+class TestInferEntity:
+    def test_possessive(self) -> None:
+        from houyi.adapters.memory.recall.retrievers.entity_state import _infer_entity_attribute
 
-    query = RecallQuery(text="what are John's goals with regards to his basketball career?")
-    hint = _infer_entity_attribute(query)
-    assert hint is not None
-    assert hint.entity == "John"
-    assert hint.source == "en_wh_question"
+        query = RecallQuery(text="what are John's goals with regards to his basketball career?")
+        hint = _infer_entity_attribute(query)
+        assert hint is not None
+        assert hint.entity == "John"
+        assert hint.source == "en_wh_question"
+
+    def test_question_hint(self) -> None:
+        from houyi.adapters.memory.recall.retrievers.entity_state import _infer_entity_attribute
+
+        query = RecallQuery(text="who is there", entity_hint="who")
+        assert _infer_entity_attribute(query) is None
+
+    def test_zh_attribute(self) -> None:
+        from houyi.adapters.memory.recall.retrievers.entity_state import _infer_entity_attribute
+
+        # \u7ea6\u7ff0\u7684\u5e74\u9f84 represents Chinese text for John's age
+        query = RecallQuery(text="\u7ea6\u7ff0\u7684\u5e74\u9f84")
+        hint = _infer_entity_attribute(query)
+        assert hint is not None
+        assert hint.entity == "\u7ea6\u7ff0"
+        assert hint.attribute == "\u5e74\u9f84"
+        assert hint.source == "zh_attribute"
+
+
+def test_stemish() -> None:
+    from houyi.adapters.memory.recall.retrievers.entity_state import _stemish
+
+    assert _stemish("wanted") == "want"
+    assert _stemish("dogs") == "dog"
+    assert _stemish("cooking") == "cook"
+    assert _stemish("cat") == "cat"

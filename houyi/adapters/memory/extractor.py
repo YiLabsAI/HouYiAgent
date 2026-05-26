@@ -346,6 +346,8 @@ Rules:
 2) If no fact is present for a turn, return that source_anchor with an empty facts array.
 3) Use the person's actual speaker_name if the fact is about the speaker.
 4) Return only JSON, no markdown or prose.
+5) PROPER NOUN & SPECIFIC DETAIL PRESERVATION: Do not generalize, abstract, or drop specific proper nouns, names, brands, models, objects, or locations. For example, "Ferrari 488 GTB" must NOT be simplified to "new car" or "luxury car"; keep "Ferrari 488 GTB" intact in the "object". Preserve specific names of people, places, and distinct assets (e.g. "mansion", "Karlie") rather than replacing them with generic categories like "friend" or "house".
+6) TEMPORAL LITERAL PRESERVATION: When resolving relative time references (e.g. "the week before March 27, 2023", "last week") and computing standard dates for "qualifiers.date" or "qualifiers.since", you MUST ALSO record the exact original relative/literal time string (e.g., "the week before March 27, 2023") under a key "original_time" inside the "qualifiers" object. Do not lose the literal wording of the temporal event.
 
 EXAMPLES:
 
@@ -501,6 +503,12 @@ DO NOT EXTRACT:
  - Opinions about external topics not related to the speaker
  - Information about other people not connected to the speaker
  - General knowledge facts ("The sky is blue")
+
+PROPER NOUN & SPECIFIC DETAIL PRESERVATION:
+- Do not generalize, abstract, or drop specific proper nouns, names, brands, models, objects, or locations. For example, "Ferrari 488 GTB" must NOT be simplified to "new car" or "luxury car"; keep "Ferrari 488 GTB" intact in the "object" field. Preserve specific names of people, places, and distinct assets (e.g. "mansion", "Karlie") rather than replacing them with generic categories like "friend" or "house".
+
+TEMPORAL LITERAL PRESERVATION:
+- When resolving relative time references (e.g. "the week before March 27, 2023", "last week") and computing standard dates for "qualifiers.date" or "qualifiers.since", you MUST ALSO record the exact original relative/literal time string (e.g., "the week before March 27, 2023") under a key "original_time" inside the "qualifiers" object. Do not lose the literal wording of the temporal event.
 
 ---
 
