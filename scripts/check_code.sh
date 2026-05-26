@@ -230,6 +230,8 @@ PY
         env COVERAGE_FILE="${tmp_dir}/.coverage" uv run coverage combine "${sdk_cov_dir}/.coverage" "${server_cov_dir}/.coverage"
     run_check "SDK Coverage Gate" \
         env COVERAGE_FILE="${tmp_dir}/.coverage" uv run coverage report --include="houyi/*" --fail-under="$COVERAGE_MIN"
+    run_check "Server Coverage Gate" \
+        env COVERAGE_FILE="${tmp_dir}/.coverage" uv run coverage report --include="houyi-studio/*" --fail-under=70
 
     rm -rf "$tmp_dir"
 }
