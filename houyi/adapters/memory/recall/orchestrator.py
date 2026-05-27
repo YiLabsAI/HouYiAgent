@@ -63,7 +63,7 @@ _DEFAULT_ROUTE_TABLE: dict[QueryType, tuple[str, ...]] = {
 _DEFAULT_FUSION_WEIGHTS: dict[QueryType, dict[RetrieverKind, float]] = {
     QueryType.FACTUAL_LOOKUP: {
         RetrieverKind.ENTITY_STATE: 10.0,
-        RetrieverKind.VECTOR: 1.5,
+        RetrieverKind.VECTOR: 8.0,
         RetrieverKind.RAW_TURN: 0.6,
         RetrieverKind.ITERATIVE: 1.0,
         RetrieverKind.TIMELINE: 0.4,

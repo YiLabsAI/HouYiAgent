@@ -137,6 +137,15 @@ def _parse_sample(raw: dict) -> LoCoMoSample:
                 # Skip malformed entries; the bench is graded per
                 # answerable QA so a broken turn is not a fatal error.
                 continue
+
+            text_str = str(text)
+            img_query = turn.get("query")
+            if img_query:
+                text_str += f" [Image: {img_query}]"
+            blip = turn.get("blip_caption")
+            if blip:
+                text_str += f" [Image caption: {blip}]"
+
             turns.append(
                 LoCoMoTurn(
                     sample_id=sample_id,
@@ -144,7 +153,7 @@ def _parse_sample(raw: dict) -> LoCoMoSample:
                     session_datetime=dt,
                     speaker=str(speaker),
                     dia_id=str(dia_id),
-                    text=str(text),
+                    text=text_str,
                 )
             )
     return LoCoMoSample(

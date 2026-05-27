@@ -214,7 +214,12 @@ class MemoryIngestor:
             return raw.strip()
         # Try dateutil if available (best effort)
         try:
-            from dateutil import parser as _du  # type: ignore[import-untyped]
+            from typing import TYPE_CHECKING
+
+            if TYPE_CHECKING:
+                _du: Any = None
+            else:
+                from dateutil import parser as _du
 
             return _du.parse(raw, fuzzy=True).strftime("%Y-%m-%d")
         except Exception:

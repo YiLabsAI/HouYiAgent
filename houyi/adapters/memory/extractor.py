@@ -348,6 +348,9 @@ Rules:
 4) Return only JSON, no markdown or prose.
 5) PROPER NOUN & SPECIFIC DETAIL PRESERVATION: Do not generalize, abstract, or drop specific proper nouns, names, brands, models, objects, or locations. For example, "Ferrari 488 GTB" must NOT be simplified to "new car" or "luxury car"; keep "Ferrari 488 GTB" intact in the "object". Preserve specific names of people, places, and distinct assets (e.g. "mansion", "Karlie") rather than replacing them with generic categories like "friend" or "house".
 6) TEMPORAL LITERAL PRESERVATION: When resolving relative time references (e.g. "the week before March 27, 2023", "last week") and computing standard dates for "qualifiers.date" or "qualifiers.since", you MUST ALSO record the exact original relative/literal time string (e.g., "the week before March 27, 2023") under a key "original_time" inside the "qualifiers" object. Do not lose the literal wording of the temporal event.
+7) JOINT ENTITY RESOLUTION (WE/US/OUR): If the speaker refers to themselves and their partner/friend/family as "we", "us", or "our" when discussing shared interests, activities, preferences, or states (e.g., "We love making desserts"), you MUST extract symmetrical individual facts for BOTH people. Extract one fact with the speaker's name as subject, and another identical fact with the partner's name as subject. Do NOT output a vague subject like "we".
+8) GOALS/CAREER ASPIRATIONS ALIGNMENT: To ensure reliable recall of future intentions, any career goals, life ambitions, or mid-to-long term plans (e.g., "making a difference away from the court through charity", "getting endorsements", "building a brand") MUST be extracted using the predicate "has_goal" or "career_goal", rather than vague predicates like "wants_to", "likes", or "dislikes".
+9) LIFETIME EVENT & TRANSITION PRESERVATION: You MUST explicitly extract active milestone transition actions (e.g. "adopted", "bought", "started_job", "lost_job") and record the exact year/month of occurrence in the qualifiers (e.g., "date: 2020", "date: 2023-03"). Do NOT collapse active transitions into static states (e.g. do not turn "adopted 3 dogs in 2020" into just "owns dogs"). Preserve both the action and its exact date/year.
 
 EXAMPLES:
 
@@ -753,6 +756,7 @@ class AtomicFactExtractor:
         llm_adapter: Any,
         *,
         max_tokens: int = 1024,
+        batch_max_tokens: int = 4096,
         temperature: float = 0.0,
         max_retries: int = 1,
         prefer_json_mode: bool = True,
@@ -763,6 +767,7 @@ class AtomicFactExtractor:
             raise ValueError("max_retries must be >= 0")
         self._llm = llm_adapter
         self._max_tokens = max_tokens
+        self._batch_max_tokens = batch_max_tokens
         self._temperature = temperature
         self._max_retries = max_retries
         self._prefer_json_mode = prefer_json_mode
@@ -963,8 +968,22 @@ class AtomicFactExtractor:
             response = await self._llm.chat(
                 messages,
                 temperature=self._temperature,
-                max_tokens=self._max_tokens,
+                max_tokens=self._batch_max_tokens,
+                **self._json_kwargs(),
             )
+        except TypeError:
+            if not self._prefer_json_mode:
+                logger.warning("AtomicFactExtractor batch LLM call failed", exc_info=True)
+                return None
+            try:
+                response = await self._llm.chat(
+                    messages,
+                    temperature=self._temperature,
+                    max_tokens=self._batch_max_tokens,
+                )
+            except Exception:
+                logger.warning("AtomicFactExtractor batch LLM call failed", exc_info=True)
+                return None
         except Exception:
             logger.warning("AtomicFactExtractor batch LLM call failed", exc_info=True)
             return None

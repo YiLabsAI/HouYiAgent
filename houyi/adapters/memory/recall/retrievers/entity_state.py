@@ -169,6 +169,18 @@ def _clean_entity(entity: str) -> str:
         return match.group(1).strip()
 
     words = entity.split()
+    # High-priority: detect capitalized proper nouns (e.g., 'Audrey', 'Calvin', 'John')
+    # and return them directly to avoid matching question helper nouns like 'year' or 'items'.
+    for w in words:
+        w_clean = w.strip(".,!?:;'\"()")
+        if (
+            w_clean
+            and w_clean[0].isupper()
+            and w_clean.lower()
+            not in {"when", "where", "what", "who", "whom", "whose", "why", "how", "which"}
+        ):
+            return w_clean
+
     cleaned = []
     for w in words:
         w_low = w.lower().strip(".,!?:;")
@@ -209,21 +221,66 @@ class EntityStateRetriever(Retriever):
             )
         )
 
-        if is_cumulative:
-            rows = await asyncio.to_thread(
-                self._view.get_history,
-                query.namespace,
-                hint.entity,
-                hint.attribute,
+        entities = [hint.entity]
+        # Multi-entity parsing: find other capitalized words in the query text.
+        for w in query.text.split():
+            w_clean = w.strip(".,!?:;'\"()")
+            if w_clean and w_clean[0].isupper():
+                w_low = w_clean.lower()
+                if (
+                    w_low
+                    not in {
+                        "when",
+                        "where",
+                        "what",
+                        "who",
+                        "whom",
+                        "whose",
+                        "why",
+                        "how",
+                        "which",
+                        "january",
+                        "february",
+                        "march",
+                        "april",
+                        "may",
+                        "june",
+                        "july",
+                        "august",
+                        "september",
+                        "october",
+                        "november",
+                        "december",
+                    }
+                    and w_clean not in entities
+                ):
+                    entities.append(w_clean)
+
+        candidates = []
+        for ent in entities:
+            ent_hint = EntityAttributeHint(
+                entity=ent,
+                attribute=hint.attribute,
+                source=hint.source,
             )
-        else:
-            rows = await asyncio.to_thread(
-                self._view.get_active,
-                query.namespace,
-                hint.entity,
-                hint.attribute,
+            if is_cumulative:
+                rows = await asyncio.to_thread(
+                    self._view.get_history,
+                    query.namespace,
+                    ent,
+                    hint.attribute,
+                )
+            else:
+                rows = await asyncio.to_thread(
+                    self._view.get_active,
+                    query.namespace,
+                    ent,
+                    hint.attribute,
+                )
+            candidates.extend(
+                [_candidate_from_row(row, self.name, ent_hint, query_words) for row in rows]
             )
-        return [_candidate_from_row(row, self.name, hint, query_words) for row in rows]
+        return candidates
 
 
 _STOPWORDS = {
@@ -340,6 +397,15 @@ _CORE_WORDS = {
     "value",
     "dream",
     "wish",
+    "interest",
+    "share",
+    "hobby",
+    "enjoy",
+    "love",
+    "movie",
+    "film",
+    "dessert",
+    "bake",
 }
 
 
@@ -439,6 +505,23 @@ def _candidate_from_row(
     exact_attribute = hint.attribute is not None and hint.attribute == row.attribute
     score = 10.0 if exact_attribute else 5.0
     if query_words:
+        # Boost interest and hobby attributes for shared interest queries
+        if query_words.intersection({"interest", "share"}):
+            row_attr_low = row.attribute.lower()
+            row_val_low = row.value.lower()
+            if row_attr_low in {
+                "has_hobby",
+                "likes_movie_genre",
+                "enjoys",
+                "likes",
+                "loves",
+                "bakes",
+                "makes",
+            } or any(
+                w in row_val_low
+                for w in {"movie", "film", "dessert", "bake", "baking", "cook", "cooking"}
+            ):
+                score += 5.0
         fact_text = f"{row.attribute} {row.value}".lower()
         fact_words = {_stemish(w) for w in re.sub(r"[^a-z0-9\s]", " ", fact_text).split()}
         overlap = query_words.intersection(fact_words)

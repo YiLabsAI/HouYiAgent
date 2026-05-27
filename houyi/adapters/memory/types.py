@@ -222,6 +222,7 @@ class MemoryRecall(BaseModel):
     injection_slot: str = "memory_recalls"
     explanation: str = ""
     relevance_detail: RelevanceDetail = Field(default_factory=RelevanceDetail)
+    qualifiers: dict[str, Any] = Field(default_factory=dict)
 
 
 class MemoryPolicy(BaseModel):

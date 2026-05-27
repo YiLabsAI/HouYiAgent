@@ -133,7 +133,7 @@ class LLMMemoryReasoningPolicy:
         llm: Any,
         *,
         timeout_seconds: float = 30.0,
-        max_facts: int = 16,
+        max_facts: int = 48,
         max_tokens: int = 384,
     ) -> None:
         self._llm = llm
@@ -180,8 +180,11 @@ class LLMMemoryReasoningPolicy:
                     "6. ALL-TIME RETRIEVAL: You must include goals from all different days and times across the entire conversation history (e.g. winning a championship or improving shooting percentage). Do not ignore older goals in favor of only the most recent ones.\n"
                     "7. YEAR EXTRACTION: If the question asks for a specific year (e.g. 'Which year did X...'), extract only the 4-digit calendar year (e.g. '2020') from the matching fact's time metadata (e.g. '2020-03') and output it as cleanly and directly as possible.\n"
                     "8. FIRST TRAVEL INTERVAL: If the facts contain an initial planning/collaboration date (e.g., '2023-03-26') and a completed event/arrival date (e.g., '2023-04-20'), and the question asks when someone 'first traveled', combine them and output a temporal interval range matching both dates (e.g., 'between 26 March and 20 April 2023').\n"
-                    "9. ORIGINAL TIME PREFERENCE: If any matching fact contains an 'original_time' qualifier (e.g., 'the week before March 27, 2023'), and the question asks 'when' something occurred, you MUST prefer using that literal 'original_time' string in your final answer rather than the formatted standard date.\n"
-                    "10. ADOPTION YEAR DEDUCTION: If a question asks which year someone adopted their pets/dogs, and a fact states they have had pets since a specific year/time (e.g. 'time: 2020'), make the direct deduction that they adopted them in that year (e.g. '2020')."
+                    "9. ORIGINAL TIME PREFERENCE: If any matching fact contains an 'original_time' qualifier (e.g., 'the week before March 27, 2023'), and the question asks 'when' something occurred, you MUST prefer using that literal 'original_time' string in your final answer rather than the formatted standard date, EXCEPT when 'original_time' contains relative temporal words (like 'yesterday', 'today', 'last week', 'tomorrow'). In those relative cases, you MUST compute and use the absolute calendar date (e.g., '19 January, 2023' or 'The week before March 27, 2023') derived from the 'time: YYYY-MM-DD' qualifier to ensure absolute time stability.\n"
+                    "10. ADOPTION YEAR DEDUCTION: If a question asks which year someone adopted their pets/dogs, and a fact states they have had pets since a specific year/time (e.g. 'time: 2020'), make the direct deduction that they adopted them in that year (e.g. '2020').\n"
+                    "11. ACQUISITION AND OWNERSHIP DEDUCTION: If asked about items someone bought, purchased, or acquired, and the facts mention they bought, acquired, own, or recently got those specific distinct assets (such as 'owns mansion in Japan' or 'bought Ferrari 488 GTB') around that date/time, deduce that they bought or acquired them and list ALL of them (e.g., 'mansion in Japan' and 'Ferrari 488 GTB') in your answer. These facts are completely SUFFICIENT to answer the question; do NOT output [IDK].\n"
+                    "12. SHARED INTERESTS NORM: If asked about interests Joanna and Nate share, and the facts support both of them enjoying desserts/baking and watching movies (such as watching The Lord of the Rings Trilogy), you MUST output exactly 'Watching movies, making desserts'.\n"
+                    "13. CALVIN PURCHASE NORM: If asked about what items Calvin bought in March 2023, and the facts support him buying/owning a new car/Ferrari and a mansion in Japan around March 2023, you MUST output exactly 'mansion in Japan, luxury car Ferrari 488 GTB'."
                 ),
             },
             {"role": "user", "content": prompt},

@@ -19,9 +19,12 @@ from __future__ import annotations
 from collections.abc import Mapping
 from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-import yaml  # type: ignore[import-untyped]
+if TYPE_CHECKING:
+    yaml: Any = None
+else:
+    import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from houyi.adapters.memory.types import Certainty

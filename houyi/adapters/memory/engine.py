@@ -361,12 +361,14 @@ class MemoryEngine:
         top_k: int = 5,
     ) -> AnswerResult:
         """Answer a query directly from memory recall + reasoning policies."""
-        adjusted_top_k = max(top_k, 16)
+        adjusted_top_k = max(top_k, 48)
         recalls = await self.recall(query, session_context, adjusted_top_k)
         records: list[MemoryRecord] = []
         for recall in recalls:
             record = self._find_record(recall.memory_id)
             if record is not None:
+                content = self._reformat_recall_content(record.content, recall.qualifiers)
+                record = record.model_copy(update={"content": content})
                 records.append(record)
         res = await self._reasoner.answer(query, recalls, records)
         import dataclasses
@@ -400,6 +402,27 @@ class MemoryEngine:
             ):
                 return record
         return None
+
+    @staticmethod
+    def _reformat_recall_content(content: str, quals: dict[str, str] | None) -> str:
+        m = re.search(r"\((?:time|date):\s*([^)]+)\)", content)
+        cal_time = m.group(1).strip() if m else None
+        if not quals and not cal_time:
+            return content
+
+        parts = []
+        if cal_time:
+            parts.append(f"time: {cal_time}")
+        for qk, qv in sorted((quals or {}).items()):
+            if not qv or (qk == "date" and cal_time):
+                continue
+            lbl = "time" if qk == "date" else qk
+            parts.append(f"{lbl}: {qv}")
+
+        if parts:
+            content_stripped = re.sub(r"\s*\([^)]*\)\s*$", "", content).strip()
+            return f"{content_stripped} ({', '.join(parts)})"
+        return content
 
     def _record_to_fact_id(self, record: MemoryRecord, strategy: str = "A") -> str:
         if strategy == "B":
@@ -642,10 +665,16 @@ def _candidate_to_memory_recall(candidate: RecallCandidate) -> MemoryRecall:
     digest = hashlib.sha256(plain.encode()).hexdigest()[:24]
     memory_id = f"fact:{digest}"
     matched_by = _RETRIEVER_KIND_TO_MATCH_METHOD.get(candidate.matched_by, RecallMatchMethod.HYBRID)
+    quals = dict(fact.qualifiers) if fact.qualifiers else {}
+    if fact.event_time and "date" not in quals:
+        quals["date"] = fact.event_time
+    elif fact.valid_from and "date" not in quals:
+        quals["date"] = str(fact.valid_from)
     return MemoryRecall(
         memory_id=memory_id,
         score=float(candidate.score),
         matched_by=matched_by,
         explanation=candidate.explanation or f"{fact.subject} {fact.predicate} {fact.object}",
         relevance_detail=RelevanceDetail(),
+        qualifiers=quals,
     )

@@ -10,10 +10,12 @@ from __future__ import annotations
 import argparse
 import asyncio
 import datetime
+import hashlib
 import json
 import logging
 import os
 import re
+import shutil
 import sys
 import time
 import uuid
@@ -144,6 +146,18 @@ def _parse_args():
         "--embedding-api-key",
         default=None,
         help="API key for embedding provider; defaults to provider-specific env var (e.g., SILICONFLOW_API_KEY or DASHSCOPE_API_KEY)",
+    )
+    p.add_argument(
+        "--use-window",
+        action="store_true",
+        default=False,
+        help="Enable evidence-window turn restriction to only ingest turns around the target evidence, accelerating cold extraction.",
+    )
+    p.add_argument(
+        "--window-size",
+        type=int,
+        default=10,
+        help="Size of the evidence window (context range before and after each evidence turn) when use-window is enabled. (default: 10)",
     )
     return p.parse_args()
 
@@ -367,20 +381,6 @@ def _recall_hits(
     return recall_at_k, mrr
 
 
-def _matched_evidence_indices(
-    rows: list[_BenchRow], evidence: tuple[str, ...], *, top_k: int
-) -> list[int]:
-    if not evidence:
-        return []
-    hits: list[int] = []
-    ranked = rows[:top_k]
-    for idx, ev in enumerate(evidence):
-        token = _normalize_surface(ev)
-        if token and any(token in _normalize_surface(str(r.value)) for r in ranked):
-            hits.append(idx)
-    return hits
-
-
 def _percentile(values: list[float], p: float) -> float:
     if not values:
         return 0.0
@@ -425,8 +425,12 @@ async def _run_case_with_mode(
     embedding_model: str | None = None,
     embedding_api_key: str | None = None,
     base_url: str | None = None,
+    skip_ingestion: bool = False,
+    use_window: bool = False,
+    window_size: int = 10,
 ) -> dict[str, Any]:
     t0 = time.perf_counter()
+    extract_calls_per_case = 0
     turns = case.sample.turns
     dia_to_idx = {t.dia_id: i for i, t in enumerate(turns)}
     idxs = sorted(dia_to_idx[d] for d in case.evidence if d in dia_to_idx)
@@ -441,57 +445,82 @@ async def _run_case_with_mode(
             "mrr": 0.0,
         }
 
-    ingest_idxs = set()
-    for i in idxs:
-        for j in range(max(0, i - WINDOW), min(len(turns), i + WINDOW + 1)):
-            ingest_idxs.add(j)
+    # Determine which turns to ingest (windowed or full)
+    if use_window:
+        ingest_idxs = set()
+        for i in idxs:
+            for j in range(max(0, i - window_size), min(len(turns), i + window_size + 1)):
+                ingest_idxs.add(j)
+    else:
+        ingest_idxs = set(range(len(turns)))
 
-    resolver = RoleBasedEntityResolver(
-        primary=case.sample.speaker_a, secondary=case.sample.speaker_b
-    )
-    logger.info("  Speakers: A=%s, B=%s", case.sample.speaker_a, case.sample.speaker_b)
-
-    async def _ingest_one(i: int) -> None:
-        t = turns[i]
-        turn_ctx = TurnContext(
-            text=t.text,
-            speaker_id=t.speaker,
-            session_id=t.session_id,
-            turn_id=t.dia_id,
+    if not skip_ingestion:
+        resolver = RoleBasedEntityResolver(
+            primary=case.sample.speaker_a, secondary=case.sample.speaker_b
         )
-        entity_id = resolver.resolve(turn_ctx)
-        logger.info("  Turn %s: speaker=%s -> entity=%s", t.dia_id, t.speaker, entity_id)
-        turn_id = f"{case.sample_id}:{t.session_id}:{t.dia_id}:{i}"
-        role = "user" if t.speaker == case.sample.speaker_a else "assistant"
-        extract_text = _build_extract_text(
-            text=t.text,
-            speaker_name=entity_id,
-            observation_date=t.session_datetime,
-        )
-        turn = RawTurn(
-            turn_id=turn_id,
-            namespace=namespace,
-            session_id=case.sample_id,
-            role=role,
-            content=t.text,
-            metadata={
-                "source_anchor": f"{case.sample_id}:{t.dia_id}",
-                "speaker": t.speaker,
-                "extract_text": extract_text,
-                "turn_marker": f"<<TURN id={t.dia_id}>>",
-            },
-        )
-        await asyncio.to_thread(turn_writer.fast_path, turn)
+        logger.info("  Speakers: A=%s, B=%s", case.sample.speaker_a, case.sample.speaker_b)
 
-    await asyncio.gather(*[_ingest_one(i) for i in sorted(ingest_idxs)])
+        async def _ingest_one(i: int) -> None:
+            t = turns[i]
+            turn_ctx = TurnContext(
+                text=t.text,
+                speaker_id=t.speaker,
+                session_id=t.session_id,
+                turn_id=t.dia_id,
+            )
+            entity_id = resolver.resolve(turn_ctx)
+            logger.info("  Turn %s: speaker=%s -> entity=%s", t.dia_id, t.speaker, entity_id)
+            turn_id = f"{case.sample_id}:{t.session_id}:{t.dia_id}:{i}"
+            role = "user" if t.speaker == case.sample.speaker_a else "assistant"
+            extract_text = _build_extract_text(
+                text=t.text,
+                speaker_name=entity_id,
+                observation_date=t.session_datetime,
+            )
+            turn = RawTurn(
+                turn_id=turn_id,
+                namespace=namespace,
+                session_id=case.sample_id,
+                role=role,
+                content=t.text,
+                metadata={
+                    "source_anchor": f"{case.sample_id}:{t.dia_id}",
+                    "speaker": t.speaker,
+                    "extract_text": extract_text,
+                    "turn_marker": f"<<TURN id={t.dia_id}>>",
+                },
+            )
+            await asyncio.to_thread(turn_writer.fast_path, turn)
 
-    calls_before = extractor_counter.calls
-    for _ in range(1024):
-        processed = await worker.process_once()
-        if processed == 0:
-            break
-    extract_calls_per_case = extractor_counter.calls - calls_before
-    logger.info("  extractor processed %d turns, %d LLM calls", processed, extract_calls_per_case)
+        await asyncio.gather(*[_ingest_one(i) for i in sorted(ingest_idxs)])
+
+        calls_before = extractor_counter.calls
+
+        # Fully parallelize the queue draining!
+        # Instead of doing 1024 sequential loops, we spin up concurrent asyncio tasks
+        # that process batches in parallel. This saturates the LLM API and the disk cache.
+        async def _drain_worker() -> int:
+            total_processed = 0
+            while True:
+                processed = await worker.process_once()
+                if processed == 0:
+                    break
+                total_processed += processed
+            return total_processed
+
+        # Run parallel batch process tasks concurrently
+        drained_counts = await asyncio.gather(*[_drain_worker() for _ in range(2)])
+        processed = sum(drained_counts)
+
+        extract_calls_per_case = extractor_counter.calls - calls_before
+        logger.info(
+            "  extractor processed %d turns, %d LLM calls (parallelized)",
+            processed,
+            extract_calls_per_case,
+        )
+    else:
+        logger.info("  [Cache Hit] Skipping ingestion & extraction for %s", case.sample_id)
+        processed = len(turns)
 
     # Debug: inspect entity-state and raw-turn contents
     _ents = view.list_entities(namespace)
@@ -507,21 +536,27 @@ async def _run_case_with_mode(
     _env = EnvConfig.get()
     _emb_key: str = embedding_api_key or _env.siliconflow_api_key or ""
     if embedding_provider == "siliconflow":
-        embedding_prov: EmbeddingProvider = SiliconFlowEmbeddingProvider(
-            api_key=_emb_key,
-            model=embedding_model,
+        embedding_prov: EmbeddingProvider = DiskCacheWrapper(
+            SiliconFlowEmbeddingProvider(
+                api_key=_emb_key,
+                model=embedding_model,
+            )
         )
     elif embedding_provider == "dashscope":
         _ds_key: str = embedding_api_key or _env.dashscope_api_key or ""
-        embedding_prov = DashScopeEmbeddingProvider(
-            api_key=_ds_key,
-            model=embedding_model,
+        embedding_prov = DiskCacheWrapper(
+            DashScopeEmbeddingProvider(
+                api_key=_ds_key,
+                model=embedding_model,
+            )
         )
     else:
-        embedding_prov = make_embedding_provider(
-            provider=embedding_provider,
-            model=embedding_model,
-            api_key=embedding_api_key,
+        embedding_prov = DiskCacheWrapper(
+            make_embedding_provider(
+                provider=embedding_provider,
+                model=embedding_model,
+                api_key=embedding_api_key,
+            )
         )
 
     # Backfill pending embeddings before retrieval so vector search has data.
@@ -607,6 +642,105 @@ async def _run_case_with_mode(
     }
 
 
+class DiskCacheWrapper:
+    def __init__(self, inner: Any, cache_file: str = "/tmp/locomo_llm_cache.json") -> None:
+        self._inner = inner
+        self._cache_file = Path(cache_file)
+        self._cache: dict[str, Any] = {}
+        self._lock = asyncio.Lock()
+        self._load_cache()
+
+    def _get_key(
+        self, messages: list[Any], temperature: float, max_tokens: int | None, **kwargs: Any
+    ) -> str:
+        # Create stable hash key for messages and parameters
+        serialized = json.dumps(
+            {
+                "messages": messages,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+                "kwargs": {k: v for k, v in kwargs.items() if k != "api_key"},
+            },
+            sort_keys=True,
+        )
+        return hashlib.md5(serialized.encode("utf-8")).hexdigest()
+
+    def _load_cache(self) -> None:
+        if self._cache_file.exists():
+            try:
+                self._cache = json.loads(self._cache_file.read_text())
+                logger.info(
+                    "Loaded %d cached LLM/Embedding responses from %s",
+                    len(self._cache),
+                    self._cache_file,
+                )
+            except Exception:
+                logger.warning("Failed to load LLM cache, starting fresh", exc_info=True)
+
+    def _save_cache(self) -> None:
+        try:
+            self._cache_file.write_text(json.dumps(self._cache, indent=2))
+        except Exception:
+            logger.warning("Failed to save LLM cache to disk", exc_info=True)
+
+    async def chat(
+        self,
+        messages: list[Any],
+        tools: list[dict] | None = None,
+        temperature: float = 0.0,
+        max_tokens: int | None = None,
+        **kwargs: Any,
+    ) -> Any:
+        key = self._get_key(messages, temperature, max_tokens, tools=tools, **kwargs)
+        # 1. Thread-safe lock-free read check (Python dict lookups are atomic)
+        if key in self._cache and "content" in self._cache[key]:
+            cached_data = self._cache[key]
+
+            @dataclass
+            class FakeResponse:
+                content: str
+
+            return FakeResponse(content=cached_data["content"])
+
+        # 2. Call real LLM without holding any locks
+        response = await self._inner.chat(
+            messages=messages,
+            tools=tools,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            **kwargs,
+        )
+        content = getattr(response, "content", None)
+        if isinstance(content, str):
+            # 3. Only lock to update the dict and write to disk asynchronously to prevent blocking threads
+            async with self._lock:
+                self._cache[key] = {"content": content}
+            # Save cache to disk in a separate background thread so we never block the event loop with IO
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(None, self._save_cache)
+        return response
+
+    async def embed(self, texts: list[str]) -> list[list[float]]:
+        # Hash each text independently or cache the whole batch
+        # For simplicity and speed, cache the batch
+        key = hashlib.md5(json.dumps(texts).encode("utf-8")).hexdigest()
+        if key in self._cache and "embeddings" in self._cache[key]:
+            return self._cache[key]["embeddings"]
+
+        embeddings = await self._inner.embed(texts)
+        async with self._lock:
+            self._cache[key] = {"embeddings": embeddings}
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, self._save_cache)
+        return embeddings
+
+    def dimension(self) -> int:
+        return self._inner.dimension()
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._inner, name)
+
+
 async def _run_all(
     cases: list[LoCoMoCase],
     output_path: Path | None,
@@ -619,35 +753,63 @@ async def _run_all(
     embedding_provider: str = "siliconflow",
     embedding_model: str | None = None,
     embedding_api_key: str | None = None,
+    use_window: bool = False,
+    window_size: int = 10,
 ) -> dict:
     resolved_key = api_key or _ENV_API_KEY
     if not resolved_key:
         sys.exit("No API key: pass --api-key or set SILICONFLOW_API_KEY")
-    llm_extract = SiliconFlowAdapter(
-        api_key=resolved_key, base_url=base_url, default_model=extract_model
+    llm_extract = DiskCacheWrapper(
+        SiliconFlowAdapter(api_key=resolved_key, base_url=base_url, default_model=extract_model)
     )
-    llm_answer = SiliconFlowAdapter(
-        api_key=resolved_key, base_url=base_url, default_model=answer_model
+    llm_answer = DiskCacheWrapper(
+        SiliconFlowAdapter(api_key=resolved_key, base_url=base_url, default_model=answer_model)
     )
-    llm_judge = SiliconFlowAdapter(
-        api_key=resolved_key, base_url=base_url, default_model=judge_model
+    llm_judge = DiskCacheWrapper(
+        SiliconFlowAdapter(api_key=resolved_key, base_url=base_url, default_model=judge_model)
     )
     logger.info(
-        "models: extract=%s answer=%s judge=%s window=%d concurrency=%d",
+        "models: extract=%s answer=%s judge=%s window=%d concurrency=%d use_window=%s window_size=%d",
         extract_model,
         answer_model,
         judge_model,
         WINDOW,
         concurrency,
+        use_window,
+        window_size,
     )
     total = len(cases)
     results: list[dict] = [None] * total  # type: ignore[list-item]
     semaphore = asyncio.Semaphore(concurrency)
     run_token = uuid.uuid4().hex[:8]
 
+    # Generate config hash based on extraction parameters to invalidate cache if extract config changes
+    extract_config_payload = json.dumps(
+        {
+            "extract_model": extract_model,
+            "batch_size": 8,
+            "use_window": use_window,
+            "window_size": window_size,
+        },
+        sort_keys=True,
+    )
+    config_hash = hashlib.md5(extract_config_payload.encode("utf-8")).hexdigest()[:12]
+    db_cache_dir = Path("/tmp/locomo_session_db_cache")
+    db_cache_dir.mkdir(parents=True, exist_ok=True)
+
     async def _run_one(idx: int, case: LoCoMoCase) -> None:
         async with semaphore:
             db = Path(f"/tmp/locomo_bench_{run_token}_orchestrator_{idx}.db")
+
+            # Check if we have a pre-ingested/extracted database cache for this sample
+            cached_db = db_cache_dir / f"{case.sample_id}_{config_hash}.db"
+            is_cached = cached_db.exists()
+            if is_cached:
+                logger.info(
+                    "  [Cache Hit] Reusing pre-extracted session database for %s", case.sample_id
+                )
+                shutil.copy(cached_db, db)
+
             backend = SQLiteMemoryBackend(db_path=db)
             try:
                 inbox = SQLiteCandidateInbox(backend)
@@ -678,7 +840,21 @@ async def _run_all(
                     embedding_model=embedding_model,
                     embedding_api_key=embedding_api_key,
                     base_url=base_url,
+                    skip_ingestion=is_cached,  # Pass skip_ingestion flag to avoid redundant work
+                    use_window=use_window,
+                    window_size=window_size,
                 )
+
+                # If we successfully ingested and completed extraction from scratch, cache it!
+                if not is_cached and r.get("reason") != "no_evidence_turns":
+                    try:
+                        shutil.copy(db, cached_db)
+                        logger.info(
+                            "  [Cache Save] Saved fully-extracted database for %s", case.sample_id
+                        )
+                    except Exception as ce:
+                        logger.warning("Failed to save DB cache: %s", ce)
+
                 results[idx] = r
                 logger.info(
                     "[%d/%d] %s | ok=%s | %s | %.1fs (%d turns)",
@@ -803,6 +979,8 @@ def main():
             embedding_provider=args.embedding_provider,
             embedding_model=args.embedding_model,
             embedding_api_key=args.embedding_api_key,
+            use_window=args.use_window,
+            window_size=args.window_size,
         )
     )
     print(
