@@ -406,6 +406,20 @@ _CORE_WORDS = {
     "film",
     "dessert",
     "bake",
+    "pass",
+    "away",
+    "die",
+    "dead",
+    "loss",
+    "break",
+    "broke",
+    "broken",
+    "down",
+    "accident",
+    "damage",
+    "breakdown",
+    "family",
+    "friend",
 }
 
 
