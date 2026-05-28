@@ -1,8 +1,19 @@
 import json
+from unittest.mock import patch
 
+import pytest
+
+from houyi.application.context.token_estimator import TokenEstimator
 from houyi.application.tool_calling.persisted_messages import (
     collect_persisted_tool_message_payloads,
 )
+
+
+@pytest.fixture(autouse=True, scope="module")
+def _mock_tiktoken():
+    """Mock tiktoken to avoid real encoding load, saving ~0.1s per TokenEstimator()."""
+    with patch.object(TokenEstimator, "_try_load_encoding", return_value=None):
+        yield
 
 
 class TestCollectPersistedToolMessagePayloads:

@@ -1,9 +1,20 @@
+from unittest.mock import patch
+
+import pytest
+
 from houyi.application.context.context_recovery import (
     ContextRecoveryPolicy,
     RenderRecoveryPolicy,
 )
 from houyi.application.context.token_estimator import TokenEstimator
 from houyi.application.context.types import PlannedContextUsage
+
+
+@pytest.fixture(autouse=True, scope="module")
+def _mock_tiktoken():
+    """Mock tiktoken to avoid real encoding load, saving ~0.1s per TokenEstimator()."""
+    with patch.object(TokenEstimator, "_try_load_encoding", return_value=None):
+        yield
 
 
 class TestContextRecoveryPolicy:

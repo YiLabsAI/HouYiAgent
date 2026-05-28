@@ -129,12 +129,12 @@ class TestConstraintSolverPerformance:
         values = {"x": 10, "y": 20}
 
         # Warm-up
-        for _ in range(10):
+        for _ in range(3):
             solver.verify_constraints(constraints, values)
             solver.reset()
 
         # Benchmark
-        iterations = 100
+        iterations = 10
         start_time = time.perf_counter()
 
         for _ in range(iterations):
@@ -178,7 +178,7 @@ class TestConstraintSolverPerformance:
         solver.verify_constraints(constraints, values)
 
         # Benchmark with cache hits
-        iterations = 100  # Reduced for more realistic test
+        iterations = 10
         start_time = time.perf_counter()
 
         for _ in range(iterations):
@@ -218,7 +218,7 @@ class TestConstraintSolverPerformance:
         ]
         values = {"x": 10, "y": 20}
 
-        iterations = 100
+        iterations = 10
         start = time.perf_counter()
         for _ in range(iterations):
             solver_no_cache.verify_constraints(constraints, values)

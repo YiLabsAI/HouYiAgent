@@ -1,5 +1,6 @@
 """Tests for LLM adapters."""
 
+from types import ModuleType
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -596,7 +597,10 @@ class TestAnthropicAdapter:
     def test_adapter_with_apikey(self) -> None:
         """Test adapter initialization with API key."""
         pytest.importorskip("anthropic")
-        adapter = AnthropicAdapter(api_key="test-key", model="claude-3-opus")
+        fake_anthropic = ModuleType("anthropic")
+        fake_anthropic.AsyncAnthropic = MagicMock()
+        with patch.dict("sys.modules", {"anthropic": fake_anthropic}):
+            adapter = AnthropicAdapter(api_key="test-key", model="claude-3-opus")
 
         assert adapter.api_key == "test-key"
         assert adapter.model == "claude-3-opus"
@@ -604,21 +608,34 @@ class TestAnthropicAdapter:
     def test_adapter_without_apikey(self) -> None:
         """Test adapter initialization without API key raises error."""
         pytest.importorskip("anthropic")
-        with patch.dict("os.environ", {}, clear=True):
+        fake_anthropic = ModuleType("anthropic")
+        fake_anthropic.AsyncAnthropic = MagicMock()
+        with (
+            patch.dict("os.environ", {}, clear=True),
+            patch.dict("sys.modules", {"anthropic": fake_anthropic}),
+        ):
             with pytest.raises(ValueError, match="Anthropic API key not provided"):
                 AnthropicAdapter()
 
     def test_adapter_from_env(self) -> None:
         """Test adapter initialization from environment variable."""
         pytest.importorskip("anthropic")
-        with patch.dict("os.environ", {"ANTHROPIC_API_KEY": "env-key"}):
+        fake_anthropic = ModuleType("anthropic")
+        fake_anthropic.AsyncAnthropic = MagicMock()
+        with (
+            patch.dict("os.environ", {"ANTHROPIC_API_KEY": "env-key"}),
+            patch.dict("sys.modules", {"anthropic": fake_anthropic}),
+        ):
             adapter = AnthropicAdapter()
             assert adapter.api_key == "env-key"
 
     def test_normalize_messages(self) -> None:
         """Test message normalization."""
         pytest.importorskip("anthropic")
-        adapter = AnthropicAdapter(api_key="test-key")
+        fake_anthropic = ModuleType("anthropic")
+        fake_anthropic.AsyncAnthropic = MagicMock()
+        with patch.dict("sys.modules", {"anthropic": fake_anthropic}):
+            adapter = AnthropicAdapter(api_key="test-key")
 
         # Test with LLMMessage objects
         messages = [

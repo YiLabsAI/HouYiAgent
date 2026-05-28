@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 from houyi.application.research.runtime.search_executor import SearchExecutor, _can_terminate_early
 from houyi.application.research.types import (
@@ -298,6 +298,9 @@ class TestSearch:
         assert any(name == "search.early_termination" for name, _ in events)
 
     async def test_query_cancel(self):
+        from houyi.application.research.runtime import search_budget, search_round_runner
+        from houyi.application.research.runtime.search_budget import BudgetPolicy
+
         llm = MockLLM(
             responses=[
                 '["q1", "q2"]',
@@ -335,16 +338,21 @@ class TestSearch:
         executor._evaluate_sufficiency = AsyncMock(
             return_value=SufficiencyDecision(sufficient=True, rationale="ok")
         )
-        result = await executor.search(
-            SubQuestion(question="AI framework analysis", expected_sources=1),
-            SearchContext(
-                run_id="r1",
-                plan_id="p1",
-                user_query="AI frameworks",
-                max_query_budget_ms=10,
-                salvage_on_cancel=True,
-            ),
-        )
+        with (
+            patch.object(search_round_runner, "_MIN_BUDGET_MS", 1),
+            patch.object(search_budget, "_MIN_BUDGET_MS", 1),
+            patch.object(executor, "_budget_policy", BudgetPolicy(min_budget_ms=1)),
+        ):
+            result = await executor.search(
+                SubQuestion(question="AI framework analysis", expected_sources=1),
+                SearchContext(
+                    run_id="r1",
+                    plan_id="p1",
+                    user_query="AI frameworks",
+                    max_query_budget_ms=10,
+                    salvage_on_cancel=True,
+                ),
+            )
         assert result.rounds[0].cancelled_queries >= 0
         assert result.sources
 
@@ -565,6 +573,9 @@ class TestSearch:
         assert result.rounds[0].reason_code == "low_recency"
 
     async def test_query_budget_timeout(self):
+        from houyi.application.research.runtime import search_budget, search_round_runner
+        from houyi.application.research.runtime.search_budget import BudgetPolicy
+
         llm = MockLLM(
             responses=[
                 '["q1"]',
@@ -574,13 +585,9 @@ class TestSearch:
         ws = make_mock_web_search()
         events: list[tuple[str, dict]] = []
 
+        # Use Event.wait() instead of real sleep; budget will cancel it.
         async def _search(query: str, *, max_results: int, include_content: bool):
-            await asyncio.sleep(0.3)
-            return await make_mock_web_search().search(
-                query,
-                max_results=max_results,
-                include_content=include_content,
-            )
+            await asyncio.Event().wait()
 
         async def _on_event(event_type: str, data: dict) -> None:
             events.append((event_type, data))
@@ -590,21 +597,27 @@ class TestSearch:
             run_id="r1",
             plan_id="p1",
             user_query="AI frameworks",
-            max_query_budget_ms=50,
+            max_query_budget_ms=1,
         )
         executor = SearchExecutor(llm, ws, on_event=_on_event)
-        result = await executor.search(SubQuestion(question="Q?"), ctx)
+        with (
+            patch.object(search_round_runner, "_MIN_BUDGET_MS", 1),
+            patch.object(search_budget, "_MIN_BUDGET_MS", 1),
+            patch.object(executor, "_budget_policy", BudgetPolicy(min_budget_ms=1)),
+        ):
+            result = await executor.search(SubQuestion(question="Q?"), ctx)
         assert result.rounds[0].sufficient is False
         query_events = [data for name, data in events if name == "search.query_timing"]
         assert query_events[0]["reason_code"] == "query_budget_exhausted"
 
     async def test_round_budget_stop(self):
+        from houyi.application.research.runtime import search_round_runner
+
         llm = MockLLM(responses=['["q1", "q2"]'])
         ws = make_mock_web_search()
         events: list[tuple[str, dict]] = []
 
         async def _search(query: str, *, max_results: int, include_content: bool):
-            await asyncio.sleep(0.3)
             return await make_mock_web_search().search(
                 query,
                 max_results=max_results,
@@ -623,7 +636,8 @@ class TestSearch:
             max_query_parallelism=2,
         )
         executor = SearchExecutor(llm, ws, max_query_parallelism=2, on_event=_on_event)
-        result = await executor.search(SubQuestion(question="Q?"), ctx)
+        with patch.object(search_round_runner, "_remaining_budget_ms", return_value=0):
+            result = await executor.search(SubQuestion(question="Q?"), ctx)
         assert result.rounds[0].stop_layer == "round"
         assert result.rounds[0].reason_code == "round_budget_exhausted"
         assert any(name == "search.budget_consumed" for name, _ in events)

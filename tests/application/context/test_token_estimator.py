@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from unittest.mock import patch
+
+import pytest
+
 from houyi.adapters.llm.models import (
     DEFAULT_MODEL,
     MODEL_CONTEXT_WINDOWS,
@@ -9,6 +13,16 @@ from houyi.adapters.llm.models import (
     resolve_model_context_window,
 )
 from houyi.application.context.token_estimator import TokenEstimator
+
+
+@pytest.fixture(autouse=True, scope="module")
+def _mock_tiktoken():
+    """Mock tiktoken to avoid real encoding load, saving ~0.1s per TokenEstimator().
+
+    TokenEstimator tests cover fallback estimation, so tiktoken is not needed.
+    """
+    with patch.object(TokenEstimator, "_try_load_encoding", return_value=None):
+        yield
 
 
 class TestTokenEstimatorInit:

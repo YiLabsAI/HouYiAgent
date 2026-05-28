@@ -176,6 +176,7 @@ async def test_uses_fallback_provider():
     service = WebSearchService(
         provider=_FailingProvider(),
         fallback_providers=[success_provider],
+        retry_policy=WebSearchRetryPolicy(max_retries=0, base_delay=0.0, max_delay=0.0),
     )
     response = await service.search("q", max_results=1)
     assert response.results[0].title == "t"
@@ -541,7 +542,10 @@ async def test_query_error_span():
 
     try:
         provider = _Provider(error=ProviderTimeoutError("timeout"))
-        service = WebSearchService(provider=provider)
+        service = WebSearchService(
+            provider=provider,
+            retry_policy=WebSearchRetryPolicy(max_retries=0, base_delay=0.0, max_delay=0.0),
+        )
         await service.search("q", max_results=1)
     finally:
         TraceContext.pop(token)

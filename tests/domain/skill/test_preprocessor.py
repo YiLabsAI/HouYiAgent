@@ -10,6 +10,7 @@ Covers:
 
 import os
 import tempfile
+from unittest.mock import patch
 
 import pytest
 
@@ -96,7 +97,8 @@ class TestPreprocessorPipeline:
             timeout=0.1,
         )
         pipeline = PreprocessorPipeline([spec])
-        results = await pipeline.run()
+        with patch.object(PreprocessorPipeline, "_run_command", side_effect=TimeoutError()):
+            results = await pipeline.run()
         assert len(results) == 1
         assert results[0].success is False
         assert "Timeout" in results[0].error

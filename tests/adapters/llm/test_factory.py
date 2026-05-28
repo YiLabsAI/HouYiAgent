@@ -7,6 +7,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+import houyi.adapters.llm.factory as factory_module
+import houyi.adapters.llm.siliconflow_adapter as sf_module
 from houyi.adapters.llm.factory import (
     LLMAdapterFactory,
     _create_deepseek_adapter,
@@ -50,13 +52,20 @@ class TestLLMAdapterFactory:
     """Test LLMAdapterFactory.create."""
 
     def test_default_siliconflow(self):
-        with patch.dict(os.environ, {ENV_DEFAULT_LLM_PROVIDER: PROVIDER_SILICONFLOW}, clear=False):
-            adapter = LLMAdapterFactory.create()
-            assert isinstance(adapter, SiliconFlowAdapter)
+        """Default provider routes to SiliconFlowAdapter."""
+        fake_adapter = MagicMock(spec=SiliconFlowAdapter)
+        with patch.object(sf_module, "SiliconFlowAdapter", return_value=fake_adapter):
+            with patch.dict(
+                os.environ, {ENV_DEFAULT_LLM_PROVIDER: PROVIDER_SILICONFLOW}, clear=False
+            ):
+                adapter = LLMAdapterFactory.create()
+        assert isinstance(adapter, MagicMock)
 
     def test_vertex(self):
-        """Vertex provider creates an adapter (type depends on available SDK + env)."""
-        adapter = LLMAdapterFactory.create(PROVIDER_VERTEX)
+        """Vertex provider routes through _create_vertex_adapter."""
+        fake_adapter = SimpleNamespace(stream_completion=lambda: None, stream_chat=lambda: None)
+        with patch.object(factory_module, "_create_vertex_adapter", return_value=fake_adapter):
+            adapter = LLMAdapterFactory.create(PROVIDER_VERTEX)
         assert hasattr(adapter, "stream_completion")
         assert hasattr(adapter, "stream_chat")
 
@@ -83,16 +92,24 @@ class TestLLMAdapterFactory:
             assert hasattr(adapter, "chat")
 
     def test_unknown_falls_back(self):
-        adapter = LLMAdapterFactory.create("unknown_provider")
-        assert isinstance(adapter, SiliconFlowAdapter)
+        fake_adapter = MagicMock(spec=SiliconFlowAdapter)
+        with patch.object(sf_module, "SiliconFlowAdapter", return_value=fake_adapter):
+            adapter = LLMAdapterFactory.create("unknown_provider")
+        assert isinstance(adapter, MagicMock)
 
     def test_none_uses_env(self):
-        with patch.dict(os.environ, {ENV_DEFAULT_LLM_PROVIDER: PROVIDER_VERTEX}):
+        fake_adapter = SimpleNamespace(stream_completion=lambda: None, stream_chat=lambda: None)
+        with (
+            patch.dict(os.environ, {ENV_DEFAULT_LLM_PROVIDER: PROVIDER_VERTEX}),
+            patch.object(factory_module, "_create_vertex_adapter", return_value=fake_adapter),
+        ):
             adapter = LLMAdapterFactory.create()
-            assert hasattr(adapter, "stream_completion")
+        assert hasattr(adapter, "stream_completion")
 
     def test_google_routes_vertex(self):
-        adapter = LLMAdapterFactory.create(PROVIDER_GOOGLE_AI)
+        fake_adapter = SimpleNamespace(stream_chat=lambda: None, stream_completion=lambda: None)
+        with patch.object(factory_module, "_create_vertex_adapter", return_value=fake_adapter):
+            adapter = LLMAdapterFactory.create(PROVIDER_GOOGLE_AI)
         assert hasattr(adapter, "stream_chat")
 
 

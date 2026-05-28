@@ -1,7 +1,9 @@
 """Tests for caching system."""
 
 import time
+from unittest.mock import patch
 
+from houyi.assurance.verification import cache as cache_module
 from houyi.assurance.verification.cache import (
     CacheEntry,
     CacheStats,
@@ -161,30 +163,32 @@ class TestLRUCache:
         """Test TTL-based expiration."""
         cache = LRUCache(max_size=10, default_ttl=0.1)  # 100ms TTL
 
-        cache.put("key1", "value1")
-        assert cache.get("key1") == "value1"
+        base_time = time.time()
+        with patch.object(cache_module.time, "time", return_value=base_time):
+            cache.put("key1", "value1")
+            assert cache.get("key1") == "value1"
 
-        # Wait for expiration
-        time.sleep(0.15)
-
-        assert cache.get("key1") is None  # Expired
+        # Advance time past the TTL threshold
+        with patch.object(cache_module.time, "time", return_value=base_time + 0.2):
+            assert cache.get("key1") is None  # Expired
 
     def test_lru_cache_cleanup_expired(self):
         """Test cleanup of expired entries."""
         cache = LRUCache(max_size=10, default_ttl=0.1)
 
-        cache.put("key1", "value1")
-        cache.put("key2", "value2")
-        cache.put("key3", "value3")
+        base_time = time.time()
+        with patch.object(cache_module.time, "time", return_value=base_time):
+            cache.put("key1", "value1")
+            cache.put("key2", "value2")
+            cache.put("key3", "value3")
 
-        # Wait for expiration
-        time.sleep(0.15)
+        # Advance time past the TTL threshold
+        with patch.object(cache_module.time, "time", return_value=base_time + 0.2):
+            # Cleanup
+            removed = cache.cleanup_expired()
 
-        # Cleanup
-        removed = cache.cleanup_expired()
-
-        assert removed == 3
-        assert cache.get("key1") is None
+            assert removed == 3
+            assert cache.get("key1") is None
 
     def test_lru_cache_invalidate(self):
         """Test invalidating specific entries."""

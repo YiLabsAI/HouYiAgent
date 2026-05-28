@@ -12,12 +12,13 @@ from unittest.mock import patch
 import pytest
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture(autouse=True, scope="module")
 def cleanup_gc():
-    """Clean up garbage after each test to close SQLite connections.
+    """Clean up garbage once per module to close SQLite connections.
 
     bm25s uses Snowball Stemmer which has internal SQLite connections.
-    Force GC after each test to ensure connections are closed.
+    Force GC once per module instead of per-test to reduce teardown overhead
+    from ~0.07s per test to nearly zero.
     """
     yield
     gc.collect()

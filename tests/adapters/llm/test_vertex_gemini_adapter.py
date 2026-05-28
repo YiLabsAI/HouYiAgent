@@ -849,8 +849,6 @@ def test_from_env_auth(monkeypatch) -> None:
 @pytest.mark.asyncio
 async def test_stream_chat() -> None:
     """stream_chat should yield content from streaming response."""
-    pytest.importorskip("google.genai")
-
     adapter = _build_adapter()
 
     class _Chunk:
@@ -898,8 +896,6 @@ async def test_stream_chat() -> None:
 
 @pytest.mark.asyncio
 async def test_no_visible_output(caplog) -> None:
-    pytest.importorskip("google.genai")
-
     adapter = _build_adapter()
 
     class _UsageMetadata:
@@ -1026,8 +1022,6 @@ def test_init_raises() -> None:
 
 @pytest.mark.asyncio
 async def test_chat_wraps_errors() -> None:
-    pytest.importorskip("google.genai")
-
     class _Part:
         @staticmethod
         def from_text(*, text):
@@ -1058,8 +1052,6 @@ async def test_chat_wraps_errors() -> None:
 
 @pytest.mark.asyncio
 async def test_chat_rate_limit_errors() -> None:
-    pytest.importorskip("google.genai")
-
     class _Part:
         @staticmethod
         def from_text(*, text):
@@ -1090,8 +1082,6 @@ async def test_chat_rate_limit_errors() -> None:
 
 @pytest.mark.asyncio
 async def test_stream_wraps_errors() -> None:
-    pytest.importorskip("google.genai")
-
     class _Part:
         @staticmethod
         def from_text(*, text):

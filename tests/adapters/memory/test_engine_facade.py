@@ -226,7 +226,7 @@ class TestMemoryEngineFacade:
             # therefore must time out.
             await engine.write_turn(_make_turn(), schedule_extract=True)
             with pytest.raises(asyncio.TimeoutError):
-                await engine.flush(timeout=0.2)
+                await engine.flush(timeout=0.02)
         finally:
             engine.store.close()
 

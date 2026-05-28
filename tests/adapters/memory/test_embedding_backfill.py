@@ -120,8 +120,11 @@ class TestRunForever:
         )
         stop = asyncio.Event()
         task = asyncio.create_task(worker.run_forever(stop))
-        # Give the worker time to drain.
-        await asyncio.sleep(0.15)
+        # Poll until the backlog is drained instead of a fixed sleep.
+        for _ in range(20):
+            if backend.list_pending_embeddings(limit=10) == []:
+                break
+            await asyncio.sleep(0.01)
         stop.set()
         await asyncio.wait_for(task, timeout=1.0)
         assert backend.list_pending_embeddings(limit=10) == []

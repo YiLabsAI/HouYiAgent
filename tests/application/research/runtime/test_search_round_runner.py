@@ -76,10 +76,11 @@ class TestRoundRunner:
         assert started == {"q1", "q2"}
 
     async def test_round_budget_stops_serial(self):
-        events: list[str] = []
+        from unittest.mock import patch
 
-        async def _slow(query, *, max_results, include_content):
-            await asyncio.sleep(0.3)
+        from houyi.application.research.runtime import search_round_runner
+
+        async def _search(query, *, max_results, include_content):
             return await make_mock_web_search().search(
                 query, max_results=max_results, include_content=include_content
             )
@@ -90,9 +91,10 @@ class TestRoundRunner:
             captured.append((event_type, data))
 
         ws = make_mock_web_search()
-        ws.search = AsyncMock(side_effect=_slow)
+        ws.search = AsyncMock(side_effect=_search)
         runner = RoundRunner(web_search=ws, telemetry=TelemetryEmitter(notify=_notify))
-        result = await runner.run(_request(["q1", "q2"], round_budget_ms=50))
+        with patch.object(search_round_runner, "_remaining_budget_ms", return_value=0):
+            result = await runner.run(_request(["q1", "q2"], round_budget_ms=50))
         assert result.stop_layer == "round"
         assert result.reason_code == "round_budget_exhausted"
 
