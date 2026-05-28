@@ -70,10 +70,10 @@ class TestURLValidator:
         assert report.error_rate == 0.5
 
     async def test_timeout_handled(self):
-        validator = URLValidator(timeout=0.001)
+        validator = URLValidator(timeout=0.05)  # 50ms timeout
 
         async def _slow_check(url: str) -> URLValidationResult:
-            await asyncio.sleep(10)
+            await asyncio.sleep(0.1)  # Sleep 100ms to trigger 50ms timeout
             return URLValidationResult(url=url, reachable=True)
 
         with patch.object(validator, "_head_request", side_effect=_slow_check):

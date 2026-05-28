@@ -34,9 +34,13 @@ from houyi.infrastructure.config.env_config import (
 )
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture(autouse=True, scope="module")
 def _reset_env_config():
-    """Reset EnvConfig singleton before/after each test so env patches take effect."""
+    """Reset EnvConfig singleton once per module for faster test execution.
+
+    Using module scope avoids repeated resets between tests in the same file,
+    saving ~50-100ms per test while still ensuring isolation across modules.
+    """
     EnvConfig._reset()
     yield
     EnvConfig._reset()
