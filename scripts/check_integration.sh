@@ -190,17 +190,17 @@ start_isolated_backend() {
         TAVILY_API_KEY= \
         SERPER_API_KEY= \
         BOCHA_API_KEY= \
-        HOUYI_EMBEDDING_STARTUP_TIMEOUT_SECONDS=${HOUYI_EMBEDDING_STARTUP_TIMEOUT_SECONDS:-1} \
+        HOUYI_EMBEDDING_STARTUP_TIMEOUT_SECONDS=${HOUYI_EMBEDDING_STARTUP_TIMEOUT_SECONDS:-0.5} \
         uv run python -m houyi_studio.server >/tmp/houyi-check-integration-backend.log 2>&1 &
     INTEGRATION_BACKEND_PID=$!
 
-    for _ in $(seq 1 40); do
+    for _ in $(seq 1 80); do
         if lsof -nP -iTCP:${HOUYI_INTEGRATION_BACKEND_PORT} -sTCP:LISTEN >/dev/null 2>&1; then
             echo -e "${GREEN}✓ Isolated integration backend is ready${NC}"
             echo ""
             return
         fi
-        sleep 0.5
+        sleep 0.1
     done
 
     echo -e "${RED}✗ Isolated integration backend did not start in time.${NC}"

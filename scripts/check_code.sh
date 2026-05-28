@@ -170,7 +170,7 @@ PY
     (
         started_at=$(python3 -c 'import time; print(time.perf_counter())')
         COVERAGE_FILE="${server_cov_dir}/.coverage" uv run pytest houyi-studio/server/tests/ -m "not benchmark" \
-            --ignore=houyi-studio/server/tests/integration -x -n 2 --cov=houyi_studio --cov=houyi --cov-report=
+            --ignore=houyi-studio/server/tests/integration -x -n auto --cov=houyi_studio --cov=houyi --cov-report=
         rc=$?
         elapsed_s=$(python3 - "$started_at" <<'PY'
 import sys, time
