@@ -45,11 +45,11 @@ class TestConsentManagement:
         )
 
         async def respond_later():
-            await asyncio.sleep(0.05)
+            await asyncio.sleep(0.01)
             skill_service.respond_to_consent(req_id, granted=True, remember=False)
 
         asyncio.create_task(respond_later())
-        granted, remember = await skill_service.wait_for_consent(req_id, timeout=2.0)
+        granted, remember = await skill_service.wait_for_consent(req_id, timeout=0.5)
         assert granted is True
         assert remember is False
 
@@ -61,7 +61,7 @@ class TestConsentManagement:
             reason="test",
             permissions=[],
         )
-        granted, remember = await skill_service.wait_for_consent(req_id, timeout=0.1)
+        granted, remember = await skill_service.wait_for_consent(req_id, timeout=0.01)
         assert granted is False
         assert remember is False
         assert req_id not in skill_service._pending_consents

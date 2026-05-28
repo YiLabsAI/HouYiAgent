@@ -11,6 +11,7 @@ import io
 import json
 import zipfile
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 from fastapi import FastAPI
@@ -441,7 +442,7 @@ class TestPinnedContextApi:
         assert len(pins) == 1
         assert pins[0]["source_message_id"] == "u1"
 
-    def test_list_pins_returns_active_and_inactive(self, app_and_client):
+    def test_list_pins_active_inactive(self, app_and_client):
         _, client, store = app_and_client
         conversation = Conversation(title="Pinned List")
         conversation.messages = [
@@ -943,12 +944,23 @@ class TestChatApiHelpers:
 
         stream = _SlowStream()
         chunks = []
-        async for chunk in chat_api_module._iter_with_disconnect_guard(
-            request=_Request(),
-            stream=stream,
-            disconnect_log="disconnect",
-        ):
-            chunks.append(chunk)
+
+        # Patch asyncio.wait so the guard polls disconnect every 0.01s
+        # instead of every 0.25s — the 1s stream sleep still ensures
+        # no chunk arrives before disconnect is detected.
+        original_wait = asyncio.wait
+
+        async def _fast_poll_wait(aws, timeout=None):
+            effective_timeout = 0.01 if timeout == 0.25 else timeout
+            return await original_wait(aws, timeout=effective_timeout)
+
+        with patch.object(chat_api_module.asyncio, "wait", _fast_poll_wait):
+            async for chunk in chat_api_module._iter_with_disconnect_guard(
+                request=_Request(),
+                stream=stream,
+                disconnect_log="disconnect",
+            ):
+                chunks.append(chunk)
         assert chunks == []
         assert stream.closed is True
 
@@ -1090,7 +1102,7 @@ class TestAdditionalChatApiRoutes:
         assert usage_resp.status_code == 200
         assert usage_resp.json()["usage"] is not None
 
-    def test_list_compactions_and_not_found(self, app_and_client):
+    def test_list_compactions_not_found(self, app_and_client):
         _, client, store = app_and_client
         conv_id = _create_conversation_id(client, title="Compactions")
         conv = store.get(conv_id)

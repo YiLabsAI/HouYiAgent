@@ -16,17 +16,17 @@ from houyi.application.context.token_estimator import TokenEstimator
 from houyi.application.context.types import ContextBlockType
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def estimator():
     return TokenEstimator()
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def planner(estimator):
     return ContextPlanner(estimator)
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def renderer():
     return ContextRenderer()
 

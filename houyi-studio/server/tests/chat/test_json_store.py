@@ -17,21 +17,21 @@ from houyi_studio.server.chat.types import (
 )
 
 
-def test_resolve_chat_data_dir_default(monkeypatch, tmp_path):
+def test_resolve_dir_default(monkeypatch, tmp_path):
     project_root = tmp_path / "project-root"
     monkeypatch.setattr(json_store_module, "_project_root", lambda: project_root)
     resolved = resolve_chat_data_dir()
     assert resolved == project_root / "data/conversations"
 
 
-def test_resolve_chat_data_dir_relative_path(monkeypatch, tmp_path):
+def test_resolve_dir_relative(monkeypatch, tmp_path):
     project_root = tmp_path / "project-root"
     monkeypatch.setattr(json_store_module, "_project_root", lambda: project_root)
     resolved = resolve_chat_data_dir("custom/chat-data")
     assert resolved == project_root / "custom/chat-data"
 
 
-def test_resolve_chat_data_dir_keeps_absolute_path(tmp_path):
+def test_resolve_dir_absolute(tmp_path):
     absolute = tmp_path / "chat-data"
     resolved = resolve_chat_data_dir(absolute)
     assert resolved == absolute
@@ -128,7 +128,7 @@ class TestJsonStoreList:
         result = store.list_conversations()
         assert len(result) == 3
 
-    def test_list_sorted_by_updated_at(self, store):
+    def test_list_sorted_by_time(self, store):
         for i in range(3):
             conv = Conversation(
                 conversation_id=f"conv{i:03d}",
@@ -206,7 +206,7 @@ class TestJsonStoreAtomicWrite:
         data = json.loads(index_path.read_text())
         assert len(data["conversations"]) == 0
 
-    def test_create_backup_writes_snapshot_and_index(self, store, sample_conversation, tmp_path):
+    def test_backup_writes_snapshot(self, store, sample_conversation, tmp_path):
         store.create(sample_conversation)
         backup = store.create_backup("conv001", trigger="manual")
         backup_path = tmp_path / "conversations" / "_backups" / backup["path"]
@@ -219,7 +219,7 @@ class TestJsonStoreAtomicWrite:
         assert backup_index["backups"][0]["backup_id"] == backup["backup_id"]
         assert backup_index["backups"][0]["trigger"] == "manual"
 
-    def test_attach_backup_record_updates_backup_index(self, store, sample_conversation):
+    def test_attach_record_updates_index(self, store, sample_conversation):
         store.create(sample_conversation)
         backup = store.create_backup("conv001", trigger="manual")
         updated = store.attach_backup_record(backup["backup_id"], record_id="cmp_123")
@@ -227,7 +227,7 @@ class TestJsonStoreAtomicWrite:
         assert updated["record_id"] == "cmp_123"
         assert store.get_backup(backup["backup_id"])["record_id"] == "cmp_123"
 
-    def test_restore_backup_rewrites_conversation_file(self, store, sample_conversation):
+    def test_restore_rewrites_file(self, store, sample_conversation):
         store.create(sample_conversation)
         backup = store.create_backup("conv001", trigger="manual")
         mutated = store.get("conv001")
@@ -266,7 +266,7 @@ class TestJsonStoreAtomicWrite:
         restored_second = store.restore_backup(backup_two["backup_id"])
         assert restored_second.title == "After first mutation"
 
-    def test_restore_backup_is_isolated_per_conversation(self, store, sample_conversation):
+    def test_restore_isolated_per_conv(self, store, sample_conversation):
         store.create(sample_conversation)
         other = Conversation(
             conversation_id="conv002",
@@ -353,14 +353,14 @@ class TestJsonStoreConcurrencyLock:
         assert isinstance(lock, asyncio.Lock)
 
     @pytest.mark.asyncio
-    async def test_same_conversation_gets_same_lock(self, store):
+    async def test_same_conv_same_lock(self, store):
         """Same conversation_id always returns the same Lock object."""
         lock1 = await store.lock("conv001")
         lock2 = await store.lock("conv001")
         assert lock1 is lock2
 
     @pytest.mark.asyncio
-    async def test_different_conversations_get_different_locks(self, store):
+    async def test_diff_conv_diff_locks(self, store):
         """Different conversation_ids get independent locks."""
         lock_a = await store.lock("conv_a")
         lock_b = await store.lock("conv_b")
@@ -392,7 +392,7 @@ class TestJsonStoreConcurrencyLock:
 
         # Launch two concurrent tasks that both modify the same conversation
         await asyncio.gather(
-            append_message("msg_A", 0.05),
+            append_message("msg_A", 0.01),
             append_message("msg_B", 0.01),
         )
 
@@ -421,7 +421,7 @@ class TestJsonStoreConcurrencyLock:
 
         # Both tasks read the same snapshot (0 messages), then each writes 1 message
         await asyncio.gather(
-            append_without_lock("lost_A", 0.05),
+            append_without_lock("lost_A", 0.01),
             append_without_lock("lost_B", 0.01),
         )
 
@@ -451,7 +451,7 @@ class TestJsonStoreConcurrencyLock:
 
         # ind_a takes longer but ind_b should not wait for it
         await asyncio.gather(
-            modify("ind_a", 0.1),
+            modify("ind_a", 0.02),
             modify("ind_b", 0.01),
         )
 

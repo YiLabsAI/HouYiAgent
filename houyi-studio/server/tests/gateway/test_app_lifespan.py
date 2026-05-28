@@ -173,10 +173,10 @@ def test_lifespan_timeout_degrades(monkeypatch, tmp_path, caplog) -> None:
 
     _stub_startup_dependencies(app_module, monkeypatch, tmp_path)
     monkeypatch.delenv(ENV_EMBEDDING_PROVIDER, raising=False)
-    monkeypatch.setenv("HOUYI_EMBEDDING_STARTUP_TIMEOUT_SECONDS", "0.01")
+    monkeypatch.setenv("HOUYI_EMBEDDING_STARTUP_TIMEOUT_SECONDS", "0.005")
 
     def _slow_resolve(*, strict_explicit: bool = False, **kwargs):
-        time.sleep(0.2)
+        time.sleep(0.01)
         return None, "no_provider"
 
     monkeypatch.setattr(app_module, "resolve_embedding_config", _slow_resolve)

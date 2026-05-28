@@ -23,9 +23,14 @@ from houyi.application.context.context_renderer import ContextRenderer
 from houyi.application.context.token_estimator import TokenEstimator
 
 
-@pytest.fixture()
-def engine(tmp_path):
-    """Engine with auto-approve and NoOp embeddings."""
+@pytest.fixture(scope="module")
+def engine(tmp_path_factory):
+    """Engine with auto-approve and NoOp embeddings.
+
+    Module scope avoids repeated MemoryStore/MemoryEngine creation
+    (~0.15s each) while still providing fresh state across modules.
+    """
+    tmp_path = tmp_path_factory.mktemp("memory_chat")
     store = MemoryStore(data_dir=tmp_path)
     emb = NoOpEmbeddingProvider(dim=32)
     policy = MemoryPolicy(auto_approve=True)
@@ -33,7 +38,7 @@ def engine(tmp_path):
     store.close()
 
 
-@pytest.fixture()
+@pytest.fixture(scope="module")
 def planner() -> ContextPlanner:
     estimator = TokenEstimator(model="gpt-4o-mini")
     return ContextPlanner(
@@ -42,7 +47,7 @@ def planner() -> ContextPlanner:
     )
 
 
-@pytest.fixture()
+@pytest.fixture(scope="module")
 def renderer() -> ContextRenderer:
     return ContextRenderer()
 
