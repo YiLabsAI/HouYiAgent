@@ -242,6 +242,7 @@ disable_error_code = [
     "var-annotated",        #  2 errors — runtime/team.py untyped locals
     "valid-type",           #  6 errors — method name shadows builtin / callable as type
     "annotation-unchecked",
+    "import-untyped",       # mypy 2.1.0+ strictness: ignore missing stubs for optional deps (yaml)
 ]
 
 [[tool.mypy.overrides]]

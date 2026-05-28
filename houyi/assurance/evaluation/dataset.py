@@ -121,7 +121,7 @@ class Dataset(BaseModel):
     def _from_yaml(cls, path: Path) -> Dataset:
         """Load dataset from YAML file."""
         try:
-            import yaml  # type: ignore[import-untyped]
+            import yaml
         except ImportError as e:
             raise ImportError(
                 "PyYAML is required to load YAML files. Install with: pip install pyyaml"
