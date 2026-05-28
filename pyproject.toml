@@ -95,7 +95,8 @@ observability = [
 ]
 
 rag = [
-    "numpy>=1.24.0",
+    "numpy>=1.24.0,<2.4.6",
+    "scipy>=1.10.0,<1.17.1",
     "hnswlib>=0.8.0",
     "bm25s>=0.2.0",
 ]
