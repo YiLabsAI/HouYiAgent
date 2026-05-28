@@ -435,6 +435,7 @@ class TestMemoryIntegration:
         assert runtime.status == ResearchStatus.COMPLETED
         candidates = mem_svc.list_candidates()
         assert len(candidates) > 0
+        mem_store.close()
 
     async def test_without_memory_svc(self, tmp_path):
         """Without memory_service, execution still succeeds."""

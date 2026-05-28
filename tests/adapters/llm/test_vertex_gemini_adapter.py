@@ -879,9 +879,16 @@ async def test_stream_chat() -> None:
 
     adapter._client = type("FakeClient", (), {"aio": _Aio()})()
 
-    chunks = []
-    async for chunk in adapter.stream_chat([{"role": "user", "content": "hi"}]):
-        chunks.append((chunk.content_delta, chunk.reasoning_delta))
+    fake_types = types.SimpleNamespace(
+        Content=_FakeTypesContent,
+        Part=_FakeTypesPart,
+        GenerateContentConfig=lambda **kw: types.SimpleNamespace(**kw),
+    )
+    fake_genai = types.SimpleNamespace(types=fake_types)
+    with patch.dict("sys.modules", {"google.genai": fake_genai}):
+        chunks = []
+        async for chunk in adapter.stream_chat([{"role": "user", "content": "hi"}]):
+            chunks.append((chunk.content_delta, chunk.reasoning_delta))
 
     assert chunks == [("hello", None), (" world", None)]
     assert adapter.last_usage == {
@@ -931,8 +938,17 @@ async def test_no_visible_output(caplog) -> None:
 
     adapter._client = type("FakeClient", (), {"aio": _Aio()})()
 
-    with caplog.at_level("WARNING"):
-        chunks = [chunk async for chunk in adapter.stream_chat([{"role": "user", "content": "hi"}])]
+    fake_types = types.SimpleNamespace(
+        Content=_FakeTypesContent,
+        Part=_FakeTypesPart,
+        GenerateContentConfig=lambda **kw: types.SimpleNamespace(**kw),
+    )
+    fake_genai = types.SimpleNamespace(types=fake_types)
+    with patch.dict("sys.modules", {"google.genai": fake_genai}):
+        with caplog.at_level("WARNING"):
+            chunks = [
+                chunk async for chunk in adapter.stream_chat([{"role": "user", "content": "hi"}])
+            ]
 
     assert chunks == []
     assert adapter.last_finish_reason == "stop"

@@ -18,7 +18,8 @@ from houyi.adapters.memory.types import (
 def svc(tmp_path):
     store = MemoryStore(data_dir=str(tmp_path))
     engine = MemoryEngine(store)
-    return MemoryService(engine)
+    yield MemoryService(engine)
+    store.close()
 
 
 class TestCandidates:

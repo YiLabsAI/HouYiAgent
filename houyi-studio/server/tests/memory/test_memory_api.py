@@ -25,7 +25,10 @@ def client(tmp_path):
     app.state.memory_service = svc
     app.state.memory_engine = engine
     app.state._test_candidate = c
-    return TestClient(app)
+    tc = TestClient(app)
+    yield tc
+    tc.close()
+    store.close()
 
 
 class TestCandidateEndpoints:
