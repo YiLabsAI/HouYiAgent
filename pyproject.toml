@@ -187,6 +187,7 @@ ignore = [
     "RUF002", # ambiguous-unicode-character-docstring — false positives on CJK
     "RUF003", # ambiguous-unicode-character-comment — false positives on CJK
     "RUF012", # mutable class variable — too noisy with Pydantic models
+    "UP042",  # StrEnum suggestion — (str, Enum) is functionally identical, no runtime impact
 ]
 
 [tool.ruff.lint.mccabe]
