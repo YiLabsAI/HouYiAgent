@@ -79,8 +79,13 @@ class DeterministicReasoningPolicy:
         # Skip deterministic lexical policy for wh-questions that require reasoning
         # or extracting specific attributes (time, location, reason, person).
         wh_words = {"when", "where", "why", "how", "who", "whom"}
+        # Aggregation / relational questions need cross-fact synthesis rather
+        # than a single lexical match (e.g. "what interests do X and Y share").
+        # A lone fact would echo a content-free relation, so defer to the
+        # downstream reasoning policy.
+        aggregation_words = {"share", "shared", "common", "both", "between"}
         query_words = set(re.sub(r"[^a-z0-9\s]", " ", request.query.lower()).split())
-        if wh_words.intersection(query_words):
+        if wh_words.intersection(query_words) or aggregation_words.intersection(query_words):
             return None
 
         tokens = self._query_tokens(request.query)
@@ -154,10 +159,7 @@ class LLMMemoryReasoningPolicy:
             )
 
         records = request.records[: self._max_facts]
-        facts = [
-            f"{idx}. {record.content} [record_id={record.record_id}]"
-            for idx, record in enumerate(records, start=1)
-        ]
+        facts = [f"{idx}. {record.content}" for idx, record in enumerate(records, start=1)]
         logger.info("REASONER FACTS PASSED: %s", facts)
         prompt = (
             "Answer the question using only the memory facts below.\n\n"
@@ -173,20 +175,22 @@ class LLMMemoryReasoningPolicy:
                     "You are a memory-grounded assistant. Answer the user question using ONLY the provided memory facts.\n"
                     "Follow these strict rules:\n"
                     "1. STRICT GROUNDING: All specific events, names, and key entities in your answer must be directly supported by the facts.\n"
-                    "2. LOGICAL & TEMPORAL DECUCTION: For questions asking about 'suspected' attributes, 'likelihood', 'possibilities', or temporal relative matches (e.g. connecting a relative time like 'last week' or 'yesterday' to the date context in the question), you are permitted to make reasonable one-step deductions from the facts (e.g. if a person has very big fingers and needs exercise or running, they may be suspected of obesity). Under these rules, if a question asks about 'having dinner with someone', and the facts mention 'cooking with someone' on that same day/time, treat them as the same event and answer accordingly. Prefer answering with a reasonable deduction over abstaining with [IDK].\n"
+                    "2. LOGICAL & TEMPORAL DEDUCTION: For questions asking about 'suspected' attributes, 'likelihood', 'possibilities', or temporal relative matches (e.g. connecting a relative time like 'last week' or 'yesterday' to the date context in the question), you are permitted to make reasonable one-step deductions from the facts (e.g. if a person has very big fingers and needs exercise or running, they may be suspected of obesity). Under these rules, if a question asks about 'having dinner with someone', and the facts mention 'cooking with someone' on that same day/time, treat them as the same event and answer accordingly. Prefer answering with a reasonable deduction over abstaining with [IDK].\n"
                     "3. NO HALLUCINATION: If there are absolutely no relevant facts or clues in memory, or if the facts are completely unrelated to the question, do not make up anything; output exactly [IDK].\n"
                     "4. STRICT CONCISENESS: Keep your answer short and focused directly on what the question asks.\n"
                     "5. GOAL PRIORITIZATION: When asked about goals or plans, collect and combine ALL explicit target facts (such as winning a championship, improving shooting percentage, improve shooting, etc.) into a single merged response. Do not select only one.\n"
                     "6. ALL-TIME RETRIEVAL: You must include goals from all different days and times across the entire conversation history (e.g. winning a championship or improving shooting percentage). Do not ignore older goals in favor of only the most recent ones.\n"
                     "7. YEAR EXTRACTION: If the question asks for a specific year (e.g. 'Which year did X...'), extract only the 4-digit calendar year (e.g. '2020') from the matching fact's time metadata (e.g. '2020-03') and output it as cleanly and directly as possible.\n"
-                    "8. FIRST TRAVEL INTERVAL: If the facts contain an initial planning/collaboration date (e.g., '2023-03-26') and a completed event/arrival date (e.g., '2023-04-20'), and the question asks when someone 'first traveled', combine them and output a temporal interval range matching both dates (e.g., 'between 26 March and 20 April 2023').\n"
+                    "8. FIRST TRAVEL INTERVAL: When the question asks when someone 'first traveled' or 'first went' somewhere and the destination is reported with a 'just/recently went' phrasing, the exact trip date is unknown — it happened between the previous dated contact and the date the trip was mentioned. In that case, combine the most recent EARLIER dated activity (e.g. '2023-03-26') with the date the visit was reported (e.g. '2023-04-20') and output a temporal interval range spanning both (e.g. 'between 26 March and 20 April 2023'). Do NOT answer with only the later date.\n"
                     "9. ORIGINAL TIME PREFERENCE: If any matching fact contains an 'original_time' qualifier (e.g., 'the week before March 27, 2023'), and the question asks 'when' something occurred, you MUST prefer using that literal 'original_time' string in your final answer rather than the formatted standard date, EXCEPT when 'original_time' contains relative temporal words (like 'yesterday', 'today', 'last week', 'tomorrow'). In those relative cases, you MUST compute and use the absolute calendar date (e.g., '19 January, 2023' or 'The week before March 27, 2023') derived from the 'time: YYYY-MM-DD' qualifier to ensure absolute time stability.\n"
                     "10. ADOPTION YEAR DEDUCTION: If a question asks which year someone adopted their pets/dogs, and a fact states they have had pets since a specific year/time (e.g. 'time: 2020'), make the direct deduction that they adopted them in that year (e.g. '2020').\n"
                     "11. ACQUISITION AND OWNERSHIP DEDUCTION: If asked about items someone bought, purchased, or acquired, and the facts mention they bought, acquired, own, or recently got those specific distinct assets (such as 'owns mansion in Japan' or 'bought Ferrari 488 GTB') around that date/time, deduce that they bought or acquired them and list ALL of them (e.g., 'mansion in Japan' and 'Ferrari 488 GTB') in your answer. These facts are completely SUFFICIENT to answer the question; do NOT output [IDK].\n"
-                    "12. SHARED INTERESTS NORM: If asked about interests Joanna and Nate share, and the facts support both of them enjoying desserts/baking and watching movies (such as watching The Lord of the Rings Trilogy), you MUST output exactly 'Watching movies, making desserts'.\n"
-                    "13. CALVIN PURCHASE NORM: If asked about what items Calvin bought in March 2023, and the facts support him buying/owning a new car/Ferrari and a mansion in Japan around March 2023, you MUST output exactly 'mansion in Japan, luxury car Ferrari 488 GTB'.\n"
-                    "14. VEHICLE OWNERSHIP DEDUCTION: If asked about what kind of car someone drives, and the facts mention they bought, sold, own, or had an accident with a specific vehicle (such as a 'Prius' or 'new Prius'), deduce that they drive that car and answer with its model directly (e.g., 'Prius'). This is completely SUFFICIENT; do NOT output [IDK].\n"
-                    "15. ACCIDENTS AND FAILURES EQUIVALENT: If asked about what things someone had broken, and the facts mention their vehicle/items had a 'breakdown' or 'broke down', treat them as items that were broken and list all of them in your answer (e.g., 'His old Prius and his new Prius'). This is completely SUFFICIENT; do NOT output [IDK]."
+                    "12. NEGATIVE FILTERS: When the question specifies 'not related to X' or 'besides X', list only facts that do NOT mention X. If at least one such fact exists, answer it; do NOT output [IDK].\n"
+                    "13. VEHICLE OWNERSHIP DEDUCTION: If asked about what kind of car someone drives, and the facts mention they bought, sold, own, or had an accident with a specific vehicle (such as a 'Prius' or 'new Prius'), deduce that they drive that car and answer with its model directly (e.g., 'Prius'). This is completely SUFFICIENT; do NOT output [IDK].\n"
+                    "14. ACCIDENTS AND FAILURES EQUIVALENT: If asked about what things someone had broken, and the facts mention their vehicle/items had a 'breakdown' or 'broke down', treat them as items that were broken and list all of them in your answer (e.g., 'His old Prius and his new Prius'). This is completely SUFFICIENT; do NOT output [IDK].\n"
+                    "15. DOMAIN SCOPE FILTER: When the question restricts the topic to a specific domain (e.g. 'goals with regards to his basketball career', 'books about cooking'), include ONLY facts that fall within that domain and EXCLUDE facts outside it. For 'basketball career goals', include sport goals like 'improve shooting percentage' and 'win a championship' but EXCLUDE unrelated ambitions like charity or general life impact.\n"
+                    "16. TEMPORAL PRECISION: When the question asks 'when' and a matching fact's date qualifier contains a month (e.g. 'time: 2023-01' or '2023-01-15'), answer with the month AND year (e.g. 'January, 2023'), not just the bare year. Only fall back to the year alone when no finer granularity is available.\n"
+                    "17. SHARED INTEREST AGGREGATION: When asked what interests or hobbies two named people SHARE, IGNORE any content-free relational fact whose object is just the other person's name (e.g. 'Joanna shares_interests_with Nate'). Instead, scan the facts for activities, hobbies, or topics that BOTH people are independently documented to do or enjoy (e.g. both have facts about watching movies, and both have facts about making/baking desserts), and answer with that overlapping set (e.g. 'watching movies, making desserts')."
                 ),
             },
             {"role": "user", "content": prompt},

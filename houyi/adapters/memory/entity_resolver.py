@@ -23,6 +23,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from houyi.adapters.memory.backends.base import EntityStateView
+
 
 @dataclass(frozen=True)
 class TurnContext:
@@ -356,6 +358,159 @@ class AliasMappingResolver:
             base = turn.speaker_id or "user"
 
         return self._alias_map.get(base, base if self._passthrough else "user")
+
+
+# Generic words that indicate a vague entity placeholder. When a resolver
+# produces one of these, the EntityStateAwareResolver will try to replace it
+# with a concrete name from the entity-state view.
+_GENERIC_ENTITY_WORDS: frozenset[str] = frozenset(
+    {
+        "ride",
+        "car",
+        "vehicle",
+        "place",
+        "city",
+        "house",
+        "friend",
+        "person",
+        "thing",
+        "item",
+        "job",
+        "pet",
+        "animal",
+    },
+)
+
+
+class EntityStateAwareResolver:
+    """Resolve generic entity placeholders to concrete names via entity state.
+
+    This resolver operates on the recall side: when a prior resolver returns
+    a generic placeholder (e.g. "ride", "car"), it queries the entity-state
+    view for the subject's active rows and attempts to find a specific value
+    whose attribute/predicate context matches the generic word.
+
+    Resolution logic:
+    1. Inner resolver (or fallback) produces a base entity string.
+    2. If the base entity is NOT generic, return it unchanged.
+    3. If generic, look up the turn's subject (speaker_id or "user") in the
+       entity-state view for all active rows.
+    4. Search those rows for a specific value whose attribute loosely matches
+       the generic word (e.g. generic "ride" matches rows with predicate
+       "bought" → value "Ferrari 488 GTB").
+    5. If a match is found, return the specific value; otherwise, return the
+       generic word unchanged (no forced substitution).
+    """
+
+    def __init__(
+        self,
+        entity_state_view: EntityStateView,
+        namespace: str = "default",
+        inner: EntityResolver | None = None,
+        generic_words: frozenset[str] | None = None,
+    ) -> None:
+        self._view = entity_state_view
+        self._namespace = namespace
+        self._inner = inner
+        self._generic_words = generic_words or _GENERIC_ENTITY_WORDS
+
+    def resolve(self, turn: TurnContext) -> str:
+        # Step 1: get base entity from inner resolver or fallback.
+        if self._inner is not None:
+            base = self._inner.resolve(turn)
+        else:
+            base = turn.speaker_id or "user"
+
+        # Step 2: non-generic entity → return unchanged.
+        if base.lower() not in self._generic_words:
+            return base
+
+        # Step 3: look up the subject's active rows in entity state.
+        subject = turn.speaker_id or "user"
+        try:
+            active_rows = self._view.get_active(self._namespace, subject)
+        except Exception:
+            return base
+
+        # Step 4: find a specific value whose attribute loosely matches.
+        for row in active_rows:
+            value_lower = row.value.lower()
+            # Skip if the stored value is itself generic.
+            if value_lower in self._generic_words:
+                continue
+            # Check if the generic word could refer to this specific value
+            # (heuristic: generic "car"/"ride" might match predicates like
+            # "bought", "has_vehicle", "owns_car" etc. that carry a specific
+            # brand/model in the value field).
+            attr_lower = row.attribute.lower()
+            if _generic_matches_attribute(base.lower(), attr_lower):
+                return row.value
+
+        # Step 5: no match found → return generic unchanged.
+        return base
+
+
+def _generic_matches_attribute(generic: str, attribute: str) -> bool:
+    """Heuristic: check whether a generic word could refer to a fact whose
+    attribute (predicate) matches the generic's semantic domain.
+
+    Mapping rules:
+    - "ride"/"car"/"vehicle" → matches predicates containing buy/bought/own/
+      has_vehicle/drive/car
+    - "place"/"city" → matches predicates containing live/lives_in/location/
+      visited/visit_place/hometown
+    - "house"/"home" → matches predicates containing live/lives_in/reside/
+      address/home
+    - "friend"/"person" → matches predicates containing know/friend/
+      relationship/colleague
+    - "pet"/"animal" → matches predicates containing has_pet/adopt/animal
+    - "job"/"work" → matches predicates containing job/work/employer/role/
+      had_job/occupation
+    - "thing"/"item" → matches predicates containing collect/own/have/item
+    """
+    _DOMAIN_MAP: dict[str, frozenset[str]] = {
+        "ride": frozenset({"buy", "bought", "own", "has_vehicle", "drive", "car", "acquire"}),
+        "car": frozenset({"buy", "bought", "own", "has_vehicle", "drive", "car", "acquire"}),
+        "vehicle": frozenset({"buy", "bought", "own", "has_vehicle", "drive", "car", "acquire"}),
+        "place": frozenset(
+            {
+                "live",
+                "lives_in",
+                "location",
+                "visited",
+                "visit_place",
+                "hometown",
+                "reside",
+                "address",
+                "home",
+            }
+        ),
+        "city": frozenset(
+            {
+                "live",
+                "lives_in",
+                "location",
+                "visited",
+                "visit_place",
+                "hometown",
+                "reside",
+                "address",
+                "home",
+            }
+        ),
+        "house": frozenset({"live", "lives_in", "reside", "address", "home", "own"}),
+        "friend": frozenset({"know", "friend", "relationship", "colleague", "met_with"}),
+        "person": frozenset({"know", "friend", "relationship", "colleague", "met_with"}),
+        "thing": frozenset({"collect", "own", "have", "item", "collects"}),
+        "item": frozenset({"collect", "own", "have", "item", "collects"}),
+        "job": frozenset({"job", "work", "employer", "role", "had_job", "occupation", "lost_job"}),
+        "pet": frozenset({"has_pet", "adopt", "animal", "pet", "has_pet_name"}),
+        "animal": frozenset({"has_pet", "adopt", "animal", "pet", "has_pet_name"}),
+    }
+    domain = _DOMAIN_MAP.get(generic)
+    if domain is None:
+        return False
+    return any(keyword in attribute for keyword in domain)
 
 
 # ---------------------------------------------------------------------------

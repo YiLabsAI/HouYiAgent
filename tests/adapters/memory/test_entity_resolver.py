@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+from unittest.mock import MagicMock
+
+from houyi.adapters.memory.backends.base import EntityStateRecord, EntityStateView
 from houyi.adapters.memory.entity_resolver import (
     AliasMappingResolver,
     ConditionalResolver,
     DefaultEntityResolver,
+    EntityStateAwareResolver,
     FirstMatchChain,
     NamespacePrefixedResolver,
     RoleBasedEntityResolver,
@@ -148,3 +152,52 @@ class TestAliasMappingResolver:
     def test_no_inner_uses_speaker(self) -> None:
         r = AliasMappingResolver({})
         assert r.resolve(_turn(speaker=None)) == "user"
+
+
+def _state_record(entity: str, attribute: str, value: str) -> EntityStateRecord:
+    return EntityStateRecord(
+        namespace="default",
+        entity=entity,
+        attribute=attribute,
+        value=value,
+    )
+
+
+class TestEntityStateAwareResolver:
+    """Verify dynamic generic-to-specific alignment via entity state."""
+
+    def test_generic_to_specific(self) -> None:
+        """Generic subject + entity_state has specific entity -> return specific."""
+        view = MagicMock(spec=EntityStateView)
+        view.get_active.return_value = [
+            _state_record("John", "bought", "Ferrari 488 GTB"),
+            _state_record("John", "lives_in", "San Francisco"),
+        ]
+        inner = MagicMock()
+        inner.resolve.return_value = "ride"
+        r = EntityStateAwareResolver(view, namespace="default", inner=inner)
+        result = r.resolve(_turn(speaker="John"))
+        assert result == "Ferrari 488 GTB"
+
+    def test_no_match(self) -> None:
+        """Generic subject + entity_state has no matching attribute -> return generic."""
+        view = MagicMock(spec=EntityStateView)
+        view.get_active.return_value = [
+            _state_record("John", "lives_in", "San Francisco"),
+        ]
+        inner = MagicMock()
+        inner.resolve.return_value = "ride"
+        r = EntityStateAwareResolver(view, namespace="default", inner=inner)
+        result = r.resolve(_turn(speaker="John"))
+        # "ride" doesn't match "lives_in" domain, so return generic unchanged
+        assert result == "ride"
+
+    def test_specific_passthrough(self) -> None:
+        """Specific subject -> return unchanged."""
+        view = MagicMock(spec=EntityStateView)
+        inner = MagicMock()
+        inner.resolve.return_value = "John"
+        r = EntityStateAwareResolver(view, namespace="default", inner=inner)
+        result = r.resolve(_turn(speaker="John"))
+        assert result == "John"
+        view.get_active.assert_not_called()

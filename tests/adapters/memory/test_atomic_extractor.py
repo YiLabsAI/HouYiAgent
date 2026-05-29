@@ -7,8 +7,10 @@ from typing import Any
 import pytest
 
 from houyi.adapters.memory.extractor import (
+    _ATOMIC_FACT_SYSTEM_PROMPT,
     AtomicFactExtractor,
     ExtractionResult,
+    _detect_generic_object,
 )
 from houyi.adapters.memory.types import Certainty
 
@@ -298,3 +300,129 @@ class TestExtractorConstruction:
     def test_retry_bounds(self) -> None:
         with pytest.raises(ValueError, match="max_retries"):
             AtomicFactExtractor(_StubLLM(), max_retries=-1)
+
+
+class TestDetectGenericObject:
+    """Verify _detect_generic_object against the blacklist."""
+
+    def test_detect_generic_hit(self) -> None:
+        assert _detect_generic_object({"object": "ride"})
+        assert _detect_generic_object({"object": "new car"})
+        assert _detect_generic_object({"object": "car"})
+        assert _detect_generic_object({"object": "vehicle"})
+        assert _detect_generic_object({"object": "place"})
+
+    def test_detect_generic_miss(self) -> None:
+        assert not _detect_generic_object({"object": "Ferrari 488 GTB"})
+        assert not _detect_generic_object({"object": "San Francisco"})
+        assert not _detect_generic_object({"object": "Python"})
+        assert not _detect_generic_object({"object": ""})
+
+    def test_detect_generic_case_insensitive(self) -> None:
+        assert _detect_generic_object({"object": "Ride"})
+        assert _detect_generic_object({"object": "CAR"})
+
+
+class TestGenericCertaintyDowngrade:
+    """Verify _build_fact certainty downgrade for generic objects."""
+
+    @pytest.mark.asyncio
+    async def test_build_fact_downgrade_certain(self) -> None:
+        llm = _StubLLM(
+            _items(
+                {
+                    "subject": "John",
+                    "predicate": "bought",
+                    "object": "ride",
+                    "certainty": "certain",
+                }
+            )
+        )
+        result = await AtomicFactExtractor(llm).extract(
+            "I bought a new ride", source_anchor="msg-1"
+        )
+        assert len(result.facts) == 1
+        assert result.facts[0].certainty is Certainty.PROBABLE
+        assert result.generic_dropped == 1
+
+    @pytest.mark.asyncio
+    async def test_build_fact_downgrade_probable(self) -> None:
+        llm = _StubLLM(
+            _items(
+                {
+                    "subject": "John",
+                    "predicate": "bought",
+                    "object": "car",
+                    "certainty": "probable",
+                }
+            )
+        )
+        result = await AtomicFactExtractor(llm).extract(
+            "I probably bought a car", source_anchor="msg-1"
+        )
+        assert len(result.facts) == 1
+        assert result.facts[0].certainty is Certainty.VAGUE
+        assert result.generic_dropped == 1
+
+    @pytest.mark.asyncio
+    async def test_build_fact_keeps_certain(self) -> None:
+        llm = _StubLLM(
+            _items(
+                {
+                    "subject": "John",
+                    "predicate": "bought",
+                    "object": "Ferrari 488 GTB",
+                    "certainty": "certain",
+                }
+            )
+        )
+        result = await AtomicFactExtractor(llm).extract("I bought a Ferrari", source_anchor="msg-1")
+        assert len(result.facts) == 1
+        assert result.facts[0].certainty is Certainty.CERTAIN
+        assert result.generic_dropped == 0
+
+
+class TestGenericDroppedCounter:
+    """Verify ExtractionResult.generic_dropped field."""
+
+    @pytest.mark.asyncio
+    async def test_result_generic_dropped_count(self) -> None:
+        llm = _StubLLM(
+            _items(
+                {
+                    "subject": "John",
+                    "predicate": "bought",
+                    "object": "ride",
+                    "certainty": "certain",
+                },
+                {
+                    "subject": "John",
+                    "predicate": "lives_in",
+                    "object": "city",
+                    "certainty": "certain",
+                },
+                {
+                    "subject": "John",
+                    "predicate": "bought",
+                    "object": "Ferrari 488 GTB",
+                    "certainty": "certain",
+                },
+            )
+        )
+        result = await AtomicFactExtractor(llm).extract("text", source_anchor="msg-1")
+        assert len(result.facts) == 3
+        assert result.generic_dropped == 2  # "ride" and "city" downgraded
+
+    def test_default_zero(self) -> None:
+        result = ExtractionResult()
+        assert result.generic_dropped == 0
+
+
+class TestPromptSpecificityRules:
+    """Verify the prompt contains WRONG/RIGHT examples and generic word list."""
+
+    def test_prompt_specificity_rules(self) -> None:
+        assert "WRONG" in _ATOMIC_FACT_SYSTEM_PROMPT
+        assert "RIGHT" in _ATOMIC_FACT_SYSTEM_PROMPT
+        assert "ride" in _ATOMIC_FACT_SYSTEM_PROMPT
+        assert "Ferrari 488 GTB" in _ATOMIC_FACT_SYSTEM_PROMPT

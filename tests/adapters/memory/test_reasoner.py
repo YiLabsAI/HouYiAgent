@@ -215,3 +215,51 @@ class TestDeterministicPolicy:
         request = MemoryReasoningInput(query="Banana and orange", recalls=[], records=records)
         result = await policy.answer(request)
         assert result is None
+
+
+class TestLLMPromptChanges:
+    """Verify simplified prompt structure and fact formatting."""
+
+    async def test_facts_no_record_id(self):
+        """Facts passed to LLM should not contain [record_id=...] noise."""
+        llm = MockLLMAdapter("Some answer")
+        policy = LLMMemoryReasoningPolicy(llm)
+        records = [MemoryRecord(key="health", content="John struggles with obesity.")]
+        recalls = [MemoryRecall(memory_id=records[0].record_id, score=0.9)]
+        request = MemoryReasoningInput(
+            query="What is John's health issue?", recalls=recalls, records=records
+        )
+        await policy.answer(request)
+        prompt_text = llm.calls[0][1]["content"]
+        assert "[record_id=" not in prompt_text
+
+    async def test_prompt_negative_filter(self):
+        """System prompt must contain the negative filter rule."""
+        llm = MockLLMAdapter("Some answer")
+        policy = LLMMemoryReasoningPolicy(llm)
+        records = [MemoryRecord(key="test", content="test fact")]
+        request = MemoryReasoningInput(query="test question", recalls=[], records=records)
+        await policy.answer(request)
+        system_prompt = llm.calls[0][0]["content"]
+        assert "NEGATIVE FILTERS" in system_prompt
+
+    async def test_prompt_has_year_extraction(self):
+        """System prompt must contain YEAR EXTRACTION rule."""
+        llm = MockLLMAdapter("Some answer")
+        policy = LLMMemoryReasoningPolicy(llm)
+        records = [MemoryRecord(key="test", content="test fact")]
+        request = MemoryReasoningInput(query="test question", recalls=[], records=records)
+        await policy.answer(request)
+        system_prompt = llm.calls[0][0]["content"]
+        assert "YEAR EXTRACTION" in system_prompt
+
+    async def test_prompt_no_benchmark_norms(self):
+        """System prompt should NOT contain hardcoded exact-answer norm rules."""
+        llm = MockLLMAdapter("Some answer")
+        policy = LLMMemoryReasoningPolicy(llm)
+        records = [MemoryRecord(key="test", content="test fact")]
+        request = MemoryReasoningInput(query="test question", recalls=[], records=records)
+        await policy.answer(request)
+        system_prompt = llm.calls[0][0]["content"]
+        assert "SHARED INTERESTS NORM" not in system_prompt
+        assert "CALVIN PURCHASE NORM" not in system_prompt

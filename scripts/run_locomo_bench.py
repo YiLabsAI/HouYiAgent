@@ -783,13 +783,16 @@ async def _run_all(
     semaphore = asyncio.Semaphore(concurrency)
     run_token = uuid.uuid4().hex[:8]
 
-    # Generate config hash based on extraction parameters to invalidate cache if extract config changes
+    # Generate config hash based on extraction AND embedding parameters
+    # to invalidate cache when either config changes (e.g. embedding dim).
     extract_config_payload = json.dumps(
         {
             "extract_model": extract_model,
             "batch_size": 8,
             "use_window": use_window,
             "window_size": window_size,
+            "embedding_provider": embedding_provider,
+            "embedding_model": embedding_model or "",
         },
         sort_keys=True,
     )

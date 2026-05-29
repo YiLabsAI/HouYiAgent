@@ -30,6 +30,11 @@ from houyi.adapters.memory.recall.types import (
 )
 from houyi.adapters.memory.types import AtomicFact, Certainty, MemoryRecord
 
+# Internal metadata keys that should never be exposed as fact qualifiers.
+# These are housekeeping fields (source tracking, turn identification) that
+# add noise to the LLM prompt without providing semantic value.
+_INTERNAL_METADATA_KEYS: frozenset[str] = frozenset({"session_id", "turn_id"})
+
 if TYPE_CHECKING:
     from houyi.adapters.memory.vector_retriever import VectorRetriever
 
@@ -76,11 +81,11 @@ def _candidate_from_record(record: MemoryRecord, score: float) -> RecallCandidat
         certainty=Certainty.CERTAIN,
         source_anchor=record.record_id,
         qualifiers={
-            **(
-                {str(k): str(v) for k, v in record.metadata.items() if isinstance(k, str)}
-                if isinstance(record.metadata, dict)
-                else {}
-            ),
+            k: str(v)
+            for k, v in record.metadata.items()
+            if isinstance(k, str)
+            and isinstance(v, (str, int, float))
+            and k not in _INTERNAL_METADATA_KEYS
         },
     )
     return RecallCandidate(
