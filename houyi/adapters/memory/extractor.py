@@ -55,41 +55,6 @@ _CONSTRAINT_PATTERN = re.compile(
     r"(?i)(?:don't|do not|never|avoid|stop)\s+(.+?)(?:\.|$)",
 )
 
-# Generic words that indicate the LLM replaced a specific term with a vague
-# category.  Matched against the *object* field after extraction.  When a
-# generic word is detected the certainty is downgraded so the fact enters the
-# candidate inbox instead of the main store, reducing noise.
-_GENERIC_OBJECT_WORDS: frozenset[str] = frozenset(
-    {
-        "ride",
-        "car",
-        "vehicle",
-        "place",
-        "city",
-        "house",
-        "friend",
-        "person",
-        "thing",
-        "item",
-        "job",
-        "pet",
-        "animal",
-    },
-)
-
-
-def _detect_generic_object(item: dict[str, Any]) -> bool:
-    """Return True if the *object* field looks like a generic placeholder."""
-    obj = str(item.get("object", "")).strip().lower()
-    if not obj:
-        return False
-    # Exact match against the blacklist (e.g. "ride", "car").
-    if obj in _GENERIC_OBJECT_WORDS:
-        return True
-    # "new car", "my ride" — leading modifier + generic core word.
-    tokens = obj.split()
-    return len(tokens) > 1 and tokens[-1] in _GENERIC_OBJECT_WORDS
-
 
 class MemoryCandidateExtractor:
     """Extract MemoryCandidate rows via LLM (primary) or rules (fallback)."""
@@ -384,12 +349,14 @@ Rules:
 5) PROPER NOUN & SPECIFIC DETAIL PRESERVATION: Do not generalize, abstract, or drop specific proper nouns, names, brands, models, objects, or locations. For example, "Ferrari 488 GTB" must NOT be simplified to "new car" or "luxury car"; keep "Ferrari 488 GTB" intact in the "object". Preserve specific names of people, places, and distinct assets (e.g. "mansion", "Karlie") rather than replacing them with generic categories like "friend" or "house".
 6) OBJECT SPECIFICITY RULE: The "object" field MUST preserve the exact specific term used in the original text. NEVER replace a concrete brand, model, name, or location with a generic category word. Forbidden generic replacements: ride, car, vehicle, place, city, house, friend, person, thing, item, job, pet, animal. WRONG: {"object": "new car"} RIGHT: {"object": "Ferrari 488 GTB"} WRONG: {"object": "ride"} RIGHT: {"object": "new Prius"} WRONG: {"object": "city"} RIGHT: {"object": "San Francisco"}
 7) TEMPORAL LITERAL PRESERVATION: When resolving relative time references (e.g. "the week before March 27, 2023", "last week") and computing standard dates for "qualifiers.date" or "qualifiers.since", you MUST ALSO record the exact original relative/literal time string (e.g., "the week before March 27, 2023") under a key "original_time" inside the "qualifiers" object. Do not lose the literal wording of the temporal event.
-8) JOINT ENTITY RESOLUTION (WE/US/OUR): If the speaker refers to themselves and their partner/friend/family as "we", "us", or "our" when discussing shared interests, activities, preferences, or states (e.g., "We love making desserts"), you MUST extract symmetrical individual facts for BOTH people. Extract one fact with the speaker's name as subject, and another identical fact with the partner's name as subject. Do NOT output a vague subject like "we".
+8) JOINT ENTITY RESOLUTION (WE/US/OUR): If the speaker refers to themselves and their partner/friend/family as "we", "us", or "our" when discussing shared interests, activities, preferences, or states (e.g., "We love making desserts"), you MUST extract symmetrical individual facts for BOTH people. Extract one fact with the speaker's name as subject, and another identical fact with the partner's name as subject. Do NOT output a vague subject like "we". Additionally, when two named participants BOTH engage in or enjoy the same activity (e.g. both watch movies, both make desserts), extract a shared-activity fact: subject = one person, predicate = "shares_interest_with" or "shares_activity_with", object = the other person's name, qualifiers = {"activity": "making desserts"}. This makes shared interests explicitly searchable alongside the individual facts.
 9) GOALS/CAREER ASPIRATIONS ALIGNMENT: To ensure reliable recall of future intentions, any career goals, life ambitions, or mid-to-long term plans (e.g., "making a difference away from the court through charity", "getting endorsements", "building a brand") MUST be extracted using the predicate "has_goal" or "career_goal", rather than vague predicates like "wants_to", "likes", or "dislikes".
 10) LIFETIME EVENT & TRANSITION PRESERVATION: You MUST explicitly extract active milestone transition actions (e.g. "adopted", "bought", "started_job", "lost_job") and record the exact year/month of occurrence in the qualifiers (e.g., "date: 2020", "date: 2023-03"). Do NOT collapse active transitions into static states (e.g. do not turn "adopted 3 dogs in 2020" into just "owns dogs"). Preserve both the action and its exact date/year.
 11) EXHAUSTIVE ENUMERATION: Extract EVERY distinct fact stated in a turn. When a turn names multiple items of the same kind (several books, hobbies, activities, authors, places, foods), emit a SEPARATE fact for EACH item with "accumulate": true. NEVER collapse a list into one representative item, and NEVER drop the "minor" items. If a speaker names five books, output five separate facts — one per book.
-12) LIFE EVENTS ARE MANDATORY: Always extract one-time life events even when stated briefly or in passing, AND even when they concern the speaker's own family member or friend (e.g. a parent's or friend's death, a donation, selling/disposing of an item, acquiring a specific asset, losing a job). Use the named person or the speaker's relative as subject (e.g. subject "Deborah" with predicate "lost_family_member", object "father"). Suggested predicates: lost_family_member, lost_friend, donated, sold, bought, acquired, lost_job. Preserve the proper noun (the named friend, the specific asset) and the date. A relative's or friend's death reported by the speaker is part of the speaker's own life and MUST be extracted — it is NOT "unrelated third-party information".
+12) LIFE EVENTS ARE MANDATORY: Always extract one-time life events even when stated briefly or in passing, AND even when they concern the speaker's own family member or friend (e.g. a parent's or friend's death, a donation, selling/disposing of an item, acquiring a specific asset, losing a job). Trigger keywords include: donated, gave away, disposed of, sold, got rid of, passed away, died, lost (a person). Use the named person or the speaker's relative as subject (e.g. subject "Deborah" with predicate "lost_family_member", object "father"). Suggested predicates: lost_family_member, lost_friend, donated, sold, bought, acquired, lost_job. Preserve the proper noun (the named friend, the specific asset) and the date. A relative's or friend's death reported by the speaker is part of the speaker's own life and MUST be extracted — it is NOT "unrelated third-party information".
 13) DESCRIPTIVE FIDELITY: Reproduce the speaker's exact descriptive words. NEVER replace a term with its opposite or a near-synonym (do not turn "sunrise" into "sunset", "old" into "new", "donated" into "owns"). Keep stated time expressions (e.g. "last year") and ALSO run them through DATE HANDLING to record a qualifier date.
+14) SPEAKER TEXT OVER IMAGE CAPTION: When a speaker explicitly names or describes something that contradicts an image caption in the same turn (e.g. speaker says "sunrise" but image caption says "sunset"), the fact MUST use the speaker's own stated word. The speaker's explicit text is primary evidence; image captions are secondary context only.
+15) SPECIFIC NAME OVERRIDE: When a speaker uses a generic term (e.g. "my ride", "new car", "the house") in one turn, but the SAME speaker previously or later mentions a specific proper name/model for the same referent (e.g. "Ferrari 488 GTB", "Prius", "mansion"), the object MUST use the specific name rather than the generic term. Cross-turn consistency requires the specific name to override generic references within the same batch.
 
 EXAMPLES:
 
@@ -584,6 +551,7 @@ EXTRACT:
  - Preferences: likes, dislikes, habits, preferred tools/methods
  - Events with dates: meetings, appointments, past occurrences
  - Relationships: knows, works with, friends with
+ - Shared activities: when two named participants both enjoy or engage in the same activity (e.g. both watch movies, both make desserts), extract a fact with subject = one person, predicate = "shares_interest_with", object = the other person's name, qualifiers = {"activity": "<the activity>"}
  - Facts about projects, tasks, deadlines
 
 DO NOT EXTRACT:
@@ -594,8 +562,8 @@ DO NOT EXTRACT:
  - General knowledge facts ("The sky is blue")
 
 ALWAYS EXTRACT (these are part of the speaker's own life, never skip them):
- - Life events about the speaker's family or friends (e.g. a parent's or friend's death, marriage, birth) — use the named person or relative as subject (e.g. "Deborah lost_family_member father", "Deborah lost_friend Karlie").
- - One-time transactions: donating, selling, buying, or acquiring a specific item — preserve the specific object and the date.
+ - Life events about the speaker's family or friends (e.g. a parent's or friend's death, marriage, birth) — use the named person or relative as subject (e.g. "Deborah lost_family_member father", "Deborah lost_friend Karlie"). Trigger keywords: passed away, died, lost (a person), donated, gave away, disposed of, sold, got rid of.
+ - One-time transactions: donating, selling, buying, or acquiring a specific item — preserve the specific object and the date. Trigger keywords: donated, gave away, disposed of, sold, got rid of.
  - Every distinct item when the speaker enumerates several of the same kind (books, hobbies, places, foods): emit one fact per item with "accumulate": true; never collapse the list.
 
 PROPER NOUN & SPECIFIC DETAIL PRESERVATION:
@@ -615,6 +583,12 @@ WRONG vs RIGHT examples:
 
   WRONG: {"subject": "Caroline", "predicate": "lives_in", "object": "city"}
   RIGHT: {"subject": "Caroline", "predicate": "lives_in", "object": "San Francisco"}
+
+SPEAKER TEXT OVER IMAGE CAPTION:
+- When a speaker explicitly names or describes something that contradicts an image caption in the same turn (e.g. speaker says "sunrise" but image caption says "sunset"), the fact MUST use the speaker's own stated word. The speaker's explicit text is primary evidence; image captions are secondary context only.
+
+SPECIFIC NAME OVERRIDE:
+- When a speaker uses a generic term (e.g. "my ride", "new car", "the house") in one turn, but the SAME speaker previously or later mentions a specific proper name/model for the same referent (e.g. "Ferrari 488 GTB", "Prius", "mansion"), the object MUST use the specific name rather than the generic term. Cross-turn consistency requires the specific name to override generic references within the same batch.
 
 TEMPORAL LITERAL PRESERVATION:
 - When resolving relative time references (e.g. "the week before March 27, 2023", "last week") and computing standard dates for "qualifiers.date" or "qualifiers.since", you MUST ALSO record the exact original relative/literal time string (e.g., "the week before March 27, 2023") under a key "original_time" inside the "qualifiers" object. Do not lose the literal wording of the temporal event.
@@ -801,15 +775,11 @@ class ExtractionResult:
     but the items themselves are intentionally
     discarded — replaying malformed extractions
     would just recreate the same failure.
-    - generic_dropped - count of facts whose *object* was detected as a
-    generic placeholder word, triggering a certainty
-    downgrade (certain → probable → vague).
     """
 
     facts: list[AtomicFact] = field(default_factory=list)
     raw_sourceless: list[dict[str, Any]] = field(default_factory=list)
     invalid_dropped: int = 0
-    generic_dropped: int = 0
 
 
 _ATOMIC_FENCE_RE = re.compile(r"^`(?:json)?\s*|\s*`\s*$", re.MULTILINE)
@@ -908,18 +878,13 @@ class AtomicFactExtractor:
 
         facts: list[AtomicFact] = []
         invalid = 0
-        generic_dropped = 0
         for item in items:
-            fact, was_generic = self._build_fact(item, anchor)
+            fact = self._build_fact(item, anchor)
             if fact is None:
                 invalid += 1
             else:
-                if was_generic:
-                    generic_dropped += 1
                 facts.append(fact)
-        return ExtractionResult(
-            facts=facts, invalid_dropped=invalid, generic_dropped=generic_dropped
-        )
+        return ExtractionResult(facts=facts, invalid_dropped=invalid)
 
     async def extract_batch(
         self,
@@ -992,20 +957,13 @@ class AtomicFactExtractor:
 
             facts: list[AtomicFact] = []
             invalid = 0
-            generic_dropped = 0
             for item in items:
-                fact, was_generic = self._build_fact(item, anchor)
+                fact = self._build_fact(item, anchor)
                 if fact is None:
                     invalid += 1
                 else:
-                    if was_generic:
-                        generic_dropped += 1
                     facts.append(fact)
-            out.append(
-                ExtractionResult(
-                    facts=facts, invalid_dropped=invalid, generic_dropped=generic_dropped
-                )
-            )
+            out.append(ExtractionResult(facts=facts, invalid_dropped=invalid))
         return out
 
     async def _call_llm(self, text: str) -> list[dict[str, Any]]:
@@ -1151,27 +1109,13 @@ class AtomicFactExtractor:
         return None
 
     @staticmethod
-    def _build_fact(item: dict[str, Any], anchor: str) -> tuple[AtomicFact | None, bool]:
-        """Assemble one validated AtomicFact or None on schema failure.
-
-        Returns (fact, was_generic) where *was_generic* is True when the
-        object field was detected as a generic placeholder and the certainty
-        was downgraded accordingly.
-        """
+    def _build_fact(item: dict[str, Any], anchor: str) -> AtomicFact | None:
+        """Assemble one validated AtomicFact or None on schema failure."""
         try:
             certainty_raw = str(item.get("certainty", "")).strip().lower()
             certainty = Certainty(certainty_raw)
         except ValueError:
-            return None, False
-
-        # Generic-object downgrade: certain → probable, probable → vague.
-        was_generic = False
-        if _detect_generic_object(item):
-            was_generic = True
-            if certainty == Certainty.CERTAIN:
-                certainty = Certainty.PROBABLE
-            elif certainty == Certainty.PROBABLE:
-                certainty = Certainty.VAGUE
+            return None
 
         qualifiers_raw = item.get("qualifiers")
         qualifiers: dict[str, str] | None = None
@@ -1192,9 +1136,9 @@ class AtomicFactExtractor:
                 source_anchor=anchor,
                 qualifiers=qualifiers,
                 accumulate=accumulate,
-            ), was_generic
+            )
         except ValueError:
-            return None, False
+            return None
 
 
 def _json_candidates(content: str) -> list[str]:

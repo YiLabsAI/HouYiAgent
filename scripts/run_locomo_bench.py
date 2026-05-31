@@ -836,7 +836,7 @@ async def _run_all(
                     counting_extractor,
                     view,
                     backend,
-                    f"locomo:{case.sample_id}:{idx}",
+                    f"locomo:{case.sample_id}",
                     llm_answer,
                     llm_judge,
                     embedding_provider=embedding_provider,
