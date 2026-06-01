@@ -496,8 +496,10 @@ Extract discrete factual claims from user messages as structured facts.
 OUTPUT SCHEMA (JSON array):
 Each item MUST have these fields:
  - "subject": the entity the fact is about. Use the person's actual name if known (e.g., "Caroline", "Bob"), otherwise "user" for the speaker, or the entity identifier (e.g., "project_x")
+ - "subject_type": type category of the subject. Choose from: "person", "organization", "vehicle", "location", "activity", "item", "concept", "unknown"
  - "predicate": short snake_case attribute name (e.g., "lives_in", "went_to", "has_meeting")
  - "object": the value as a short string
+ - "object_type": type category of the object. Choose from: "person", "organization", "vehicle", "location", "activity", "item", "concept", "unknown"
  - "certainty": one of "certain", "probable", "vague"
  - "qualifiers": OPTIONAL object with extra attributes like "since", "date", "location"
 
@@ -884,6 +886,7 @@ class AtomicFactExtractor:
                 invalid += 1
             else:
                 facts.append(fact)
+        facts = self._restore_generic_objects(facts)
         return ExtractionResult(facts=facts, invalid_dropped=invalid)
 
     async def extract_batch(
@@ -963,6 +966,8 @@ class AtomicFactExtractor:
                     invalid += 1
                 else:
                     facts.append(fact)
+            # Apply post-extraction restoration
+            facts = self._restore_generic_objects(facts)
             out.append(ExtractionResult(facts=facts, invalid_dropped=invalid))
         return out
 
@@ -1125,6 +1130,16 @@ class AtomicFactExtractor:
             except (TypeError, ValueError):
                 qualifiers = None
 
+        subj_type = item.get("subject_type")
+        obj_type = item.get("object_type")
+        if subj_type or obj_type:
+            if qualifiers is None:
+                qualifiers = {}
+            if subj_type and "subject_type" not in qualifiers:
+                qualifiers["subject_type"] = str(subj_type).strip().lower()
+            if obj_type and "object_type" not in qualifiers:
+                qualifiers["object_type"] = str(obj_type).strip().lower()
+
         accumulate = bool(item.get("accumulate", False))
 
         try:
@@ -1139,6 +1154,94 @@ class AtomicFactExtractor:
             )
         except ValueError:
             return None
+
+    @staticmethod
+    def _is_generic_object(val: str, forbidden: set[str]) -> bool:
+        v_low = val.lower().strip()
+        if v_low in forbidden:
+            return True
+        return bool(set(v_low.split()).intersection(forbidden))
+
+    @staticmethod
+    def _build_type_to_specifics(facts: list[AtomicFact], forbidden: set[str]) -> dict[str, str]:
+        type_to_specifics: dict[str, str] = {}
+        for f in facts:
+            obj_val = f.object.strip()
+            if obj_val and not AtomicFactExtractor._is_generic_object(obj_val, forbidden):
+                obj_type = f.qualifiers.get("object_type") if f.qualifiers else None
+                if obj_type:
+                    type_to_specifics[obj_type.lower().strip()] = obj_val
+
+            subj_val = f.subject.strip()
+            if (
+                subj_val
+                and not AtomicFactExtractor._is_generic_object(subj_val, forbidden)
+                and subj_val.lower() != "user"
+            ):
+                subj_type = f.qualifiers.get("subject_type") if f.qualifiers else None
+                if subj_type:
+                    type_to_specifics[subj_type.lower().strip()] = subj_val
+        return type_to_specifics
+
+    @staticmethod
+    def _restore_generic_objects(facts: list[AtomicFact]) -> list[AtomicFact]:
+        """Look for generic/forbidden words in fact objects and restore them.
+
+        If a fact has a generic object (e.g. "new ride", "city"), we look at
+        other facts in the same turn/list. If there is a fact of matching type
+        with a specific object, we substitute it. If no substitution can be done,
+        we downgrade the certainty to PROBABLE.
+        """
+        forbidden_generics = {
+            "ride",
+            "car",
+            "vehicle",
+            "place",
+            "city",
+            "house",
+            "friend",
+            "person",
+            "thing",
+            "item",
+            "job",
+            "pet",
+            "animal",
+        }
+
+        type_to_specifics = AtomicFactExtractor._build_type_to_specifics(facts, forbidden_generics)
+        restored_facts: list[AtomicFact] = []
+        for f in facts:
+            restored_obj = f.object
+            restored_cert = f.certainty
+
+            obj_type = f.qualifiers.get("object_type") if f.qualifiers else None
+            if AtomicFactExtractor._is_generic_object(f.object, forbidden_generics):
+                matched = False
+                if obj_type:
+                    specific_val = type_to_specifics.get(obj_type.lower().strip())
+                    if specific_val:
+                        restored_obj = specific_val
+                        matched = True
+
+                if not matched and restored_cert == Certainty.CERTAIN:
+                    restored_cert = Certainty.PROBABLE
+
+            if restored_obj != f.object or restored_cert != f.certainty:
+                restored_facts.append(
+                    AtomicFact(
+                        subject=f.subject,
+                        predicate=f.predicate,
+                        object=restored_obj,
+                        certainty=restored_cert,
+                        source_anchor=f.source_anchor,
+                        qualifiers=f.qualifiers,
+                        accumulate=f.accumulate,
+                    )
+                )
+            else:
+                restored_facts.append(f)
+
+        return restored_facts
 
 
 def _json_candidates(content: str) -> list[str]:

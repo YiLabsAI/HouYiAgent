@@ -28,6 +28,26 @@ class SQLiteEntityStateView(EntityStateView):
     def __init__(self, backend) -> None:
         self._backend = backend
 
+    def _get_reconciliation_ts(self, existing: list[Any], ts: float) -> float:
+        exact_match = None
+        for row in existing:
+            if abs(row["valid_from"] - ts) < 1e-9:
+                exact_match = row
+                break
+        if exact_match is not None:
+            return exact_match["valid_from"] + 1e-6
+        return ts
+
+    def _find_prev_next(self, existing: list[Any], ts: float) -> tuple[Any, Any]:
+        prev_record = None
+        next_record = None
+        for row in existing:
+            if row["valid_from"] < ts:
+                prev_record = row
+            elif row["valid_from"] >= ts and next_record is None:
+                next_record = row
+        return prev_record, next_record
+
     # ------------------------------------------------------------------
     # Mutation
     # ------------------------------------------------------------------
@@ -58,41 +78,41 @@ class SQLiteEntityStateView(EntityStateView):
         if not namespace or not entity or not attribute:
             raise ValueError("namespace, entity, attribute must be non-empty")
 
-        explicit_ts = valid_from is not None
         ts: float = valid_from if valid_from is not None else time.time()
         conn = self._backend._conn()
         try:
             with conn:  # Atomic: close-old + insert-new must succeed together.
-                prior = conn.execute(
+                # Query all existing records sorted by valid_from
+                existing = conn.execute(
                     """
- SELECT state_id, valid_from FROM entity_state
- WHERE namespace=? AND entity=? AND attribute=?
- AND valid_to IS NULL
- """,
+                    SELECT state_id, valid_from, valid_to, value FROM entity_state
+                    WHERE namespace=? AND entity=? AND attribute=?
+                    ORDER BY valid_from ASC
+                    """,
                     (namespace, entity, attribute),
-                ).fetchone()
+                ).fetchall()
 
-                if prior is not None:
-                    prior_ts = prior["valid_from"]
-                    # Explicit caller-supplied valid_from must not move
-                    # backward — that signals a real backdating bug we
-                    # want surfaced. Wall-clock writes (valid_from=None)
-                    # are auto-monotonized against the prior row to
-                    # absorb clock granularity (Windows / virtualised
-                    # hosts), repeat time.time() returns inside a single
-                    # tick, and writes that immediately follow a prior
-                    # row that was itself bumped. The UNIQUE
-                    # (namespace, entity, attribute, valid_from)
-                    # constraint requires strict monotonicity per
-                    # triple; bumping by a microsecond keeps the
-                    # closed-open interval contract intact.
-                    if explicit_ts and ts < prior_ts:
-                        raise ValueError("valid_from must be >= existing active row's valid_from")
-                    if ts <= prior_ts:
-                        ts = prior_ts + 1e-6
+                # Avoid UNIQUE constraint collision by auto-bumping duplicate timestamps slightly
+                ts = self._get_reconciliation_ts(existing, ts)
+
+                prev_record, next_record = self._find_prev_next(existing, ts)
+
+                calculated_valid_to = None
+                if next_record is not None:
+                    calculated_valid_to = next_record["valid_from"]
+
+                # Shorten the preceding record if its interval extends past the new entry
+                if prev_record is not None and (
+                    prev_record["valid_to"] is None or prev_record["valid_to"] > ts
+                ):
                     conn.execute(
                         "UPDATE entity_state SET valid_to=? WHERE state_id=?",
-                        (ts, prior["state_id"]),
+                        (ts, prev_record["state_id"]),
+                    )
+                    # Propagate valid_to invalidation to memories table
+                    conn.execute(
+                        "UPDATE memories SET valid_to=? WHERE scope=? AND key LIKE ? AND valid_to IS NULL",
+                        (ts, namespace, f"{entity}.{attribute}.%"),
                     )
 
                 record = EntityStateRecord(
@@ -102,17 +122,18 @@ class SQLiteEntityStateView(EntityStateView):
                     value=value,
                     certainty=certainty,
                     valid_from=ts,
+                    valid_to=calculated_valid_to,
                     source_unit_id=source_unit_id,
                     qualifiers=qualifiers,
                 )
                 conn.execute(
                     """
- INSERT INTO entity_state
- (state_id, namespace, entity, attribute, value,
- certainty, qualifiers, valid_from, valid_to,
- source_unit_id, created_at)
- VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
- """,
+                    INSERT INTO entity_state
+                    (state_id, namespace, entity, attribute, value,
+                    certainty, qualifiers, valid_from, valid_to,
+                    source_unit_id, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
                     (
                         record.state_id,
                         record.namespace,
@@ -124,6 +145,7 @@ class SQLiteEntityStateView(EntityStateView):
                         if record.qualifiers
                         else None,
                         record.valid_from,
+                        record.valid_to,
                         record.source_unit_id,
                         record.created_at,
                     ),
@@ -150,11 +172,16 @@ class SQLiteEntityStateView(EntityStateView):
         conn = self._backend._conn()
         cur = conn.execute(
             """
- UPDATE entity_state SET valid_to=?
- WHERE namespace=? AND entity=? AND attribute=?
- AND valid_to IS NULL
- """,
+            UPDATE entity_state SET valid_to=?
+            WHERE namespace=? AND entity=? AND attribute=?
+            AND valid_to IS NULL
+            """,
             (ts, namespace, entity, attribute),
+        )
+        # Propagate valid_to retraction to memories table
+        conn.execute(
+            "UPDATE memories SET valid_to=? WHERE scope=? AND key LIKE ? AND valid_to IS NULL",
+            (ts, namespace, f"{entity}.{attribute}.%"),
         )
         conn.commit()
         return cur.rowcount > 0

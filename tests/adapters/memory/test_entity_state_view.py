@@ -52,11 +52,6 @@ class TestSQLiteEntityStateViewUpsert:
         assert view.get_active("ws-a", "user", "city")[0].value == "Beijing"
         assert view.get_active("ws-b", "user", "city")[0].value == "Tokyo"
 
-    def test_backdated_upsert_rejected(self, view: SQLiteEntityStateView) -> None:
-        view.upsert("ws", "user", "city", "Beijing", valid_from=200.0)
-        with pytest.raises(ValueError, match="valid_from"):
-            view.upsert("ws", "user", "city", "Shanghai", valid_from=100.0)
-
     @pytest.mark.parametrize(
         "namespace,entity,attribute",
         [("", "u", "a"), ("ws", "", "a"), ("ws", "u", "")],
@@ -166,10 +161,21 @@ class TestSQLiteEntityStateViewQuery:
 class TestSQLiteEntityStateViewMonotonic:
     """Explicit timestamps still raise on backdating; wall-clock ones auto-bump."""
 
-    def test_explicit_backdated_raises(self, view: SQLiteEntityStateView) -> None:
+    def test_explicit_backdated_reconciles(self, view: SQLiteEntityStateView) -> None:
         view.upsert("ws", "user", "city", "Beijing", valid_from=200.0)
-        with pytest.raises(ValueError, match="valid_from must be"):
-            view.upsert("ws", "user", "city", "Shanghai", valid_from=100.0)
+        # Should not raise, but instead reconcile intervals!
+        view.upsert("ws", "user", "city", "Shanghai", valid_from=100.0)
+
+        history = view.get_history("ws", "user", "city")
+        assert len(history) == 2
+        # Shanghai should start at 100.0 and end at 200.0
+        assert history[1].value == "Shanghai"
+        assert history[1].valid_from == 100.0
+        assert history[1].valid_to == 200.0
+        # Beijing should start at 200.0 and be currently active (valid_to=None)
+        assert history[0].value == "Beijing"
+        assert history[0].valid_from == 200.0
+        assert history[0].valid_to is None
 
     def test_explicit_equal_auto_bumps(self, view: SQLiteEntityStateView) -> None:
         view.upsert("ws", "user", "city", "Beijing", valid_from=100.0)
@@ -200,3 +206,61 @@ class TestSQLiteEntityStateViewSourceLink:
             source_unit_id="unit-42",
         )
         assert view.get_active("ws", "user", "city")[0].source_unit_id == "unit-42"
+
+
+class TestSQLiteEntityStateViewCascade:
+    """Cascade valid_to propagation from entity_state to memories."""
+
+    def test_upsert_propagates_valid_to(self, view: SQLiteEntityStateView) -> None:
+        from houyi.adapters.memory.types import MemoryProvenance, MemoryRecord, MemoryScope
+
+        # Pre-seed active memory record in the memories table
+        # Key must follow entity.attribute.digest pattern
+        rec = MemoryRecord(
+            record_id="rec-1",
+            key="user.city.somehash",
+            content="user lives in Beijing",
+            scope=MemoryScope.WORKSPACE,
+            confidence=1.0,
+            valid_from=100.0,
+            valid_to=None,
+            provenance=MemoryProvenance(source_type="test"),
+        )
+        view._backend.put(rec)
+
+        # Pre-seed entity state row
+        view.upsert("workspace", "user", "city", "Beijing", valid_from=100.0)
+
+        # Act: upsert a new value at valid_from=200.0
+        view.upsert("workspace", "user", "city", "Shanghai", valid_from=200.0)
+
+        # Assert: the memories record should now have valid_to = 200.0!
+        stored = view._backend.get("user.city.somehash", MemoryScope.WORKSPACE)
+        assert stored is not None
+        assert stored.valid_to == 200.0
+
+    def test_invalidate_propagates_valid_to(self, view: SQLiteEntityStateView) -> None:
+        from houyi.adapters.memory.types import MemoryProvenance, MemoryRecord, MemoryScope
+
+        rec = MemoryRecord(
+            record_id="rec-2",
+            key="user.city.somehash",
+            content="user lives in Beijing",
+            scope=MemoryScope.WORKSPACE,
+            confidence=1.0,
+            valid_from=100.0,
+            valid_to=None,
+            provenance=MemoryProvenance(source_type="test"),
+        )
+        view._backend.put(rec)
+
+        # Pre-seed entity state row
+        view.upsert("workspace", "user", "city", "Beijing", valid_from=100.0)
+
+        # Act: invalidate at valid_to=300.0
+        view.invalidate("workspace", "user", "city", valid_to=300.0)
+
+        # Assert: the memories record should now have valid_to = 300.0!
+        stored = view._backend.get("user.city.somehash", MemoryScope.WORKSPACE)
+        assert stored is not None
+        assert stored.valid_to == 300.0

@@ -805,7 +805,12 @@ async def _run_all(
             db = Path(f"/tmp/locomo_bench_{run_token}_orchestrator_{idx}.db")
 
             # Check if we have a pre-ingested/extracted database cache for this sample
-            cached_db = db_cache_dir / f"{case.sample_id}_{config_hash}.db"
+            if use_window:
+                evidence_str = ",".join(sorted(case.evidence))
+                evidence_hash = hashlib.md5(evidence_str.encode("utf-8")).hexdigest()[:8]
+                cached_db = db_cache_dir / f"{case.sample_id}_{evidence_hash}_{config_hash}.db"
+            else:
+                cached_db = db_cache_dir / f"{case.sample_id}_{config_hash}.db"
             is_cached = cached_db.exists()
             if is_cached:
                 logger.info(

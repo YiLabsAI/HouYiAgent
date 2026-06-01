@@ -125,3 +125,24 @@ class TestVectorRetriever:
             VectorRetriever(None, provider)  # type: ignore[arg-type]
             with pytest.raises(ValueError):
                 VectorRetriever(backend, None)  # type: ignore[arg-type]
+
+    async def test_lazy_temporal_filtering(self, backend, provider):
+        await _populate(backend, provider)
+        retriever = VectorRetriever(backend, provider)
+        # Verify python_lang is normally returned.
+        results = await retriever.retrieve("Python is great for machine learning")
+        assert len(results) > 0
+        assert results[0][0].key == "python_lang"
+
+        # Update valid_to for 'python_lang' to a past timestamp (e.g. 10 seconds ago).
+        import time
+
+        record = backend.get("python_lang", MemoryScope.USER)
+        assert record is not None
+        record.valid_to = time.time() - 10
+        backend.put(record)
+
+        # Retrieve again and ensure python_lang is NOT returned now!
+        results = await retriever.retrieve("Python is great for machine learning")
+        keys = [r.key for r, _ in results]
+        assert "python_lang" not in keys

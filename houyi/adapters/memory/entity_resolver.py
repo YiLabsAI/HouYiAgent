@@ -421,8 +421,20 @@ class EntityStateAwareResolver:
         else:
             base = turn.speaker_id or "user"
 
-        # Step 2: non-generic entity → return unchanged.
-        if base.lower() not in self._generic_words:
+        base_clean = base.lower().strip()
+
+        # Step 2: find which generic word is contained in the base phrase (multi-word support)
+        matched_generic = None
+        if base_clean in self._generic_words:
+            matched_generic = base_clean
+        else:
+            words = [w.strip() for p in base_clean.split() for w in p.split("-") if w.strip()]
+            for gw in self._generic_words:
+                if gw in words:
+                    matched_generic = gw
+                    break
+
+        if matched_generic is None:
             return base
 
         # Step 3: look up the subject's active rows in entity state.
@@ -436,14 +448,13 @@ class EntityStateAwareResolver:
         for row in active_rows:
             value_lower = row.value.lower()
             # Skip if the stored value is itself generic.
-            if value_lower in self._generic_words:
+            if value_lower in self._generic_words or any(
+                gw in value_lower.split() for gw in self._generic_words
+            ):
                 continue
             # Check if the generic word could refer to this specific value
-            # (heuristic: generic "car"/"ride" might match predicates like
-            # "bought", "has_vehicle", "owns_car" etc. that carry a specific
-            # brand/model in the value field).
             attr_lower = row.attribute.lower()
-            if _generic_matches_attribute(base.lower(), attr_lower):
+            if _generic_matches_attribute(matched_generic, attr_lower):
                 return row.value
 
         # Step 5: no match found → return generic unchanged.

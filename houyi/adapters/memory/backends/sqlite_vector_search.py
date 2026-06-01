@@ -10,6 +10,7 @@ import logging
 import math
 import sqlite3
 import struct
+import time
 from typing import Any, Literal
 
 from houyi.adapters.memory.types import MemoryRecord, MemoryScope
@@ -113,6 +114,7 @@ class SQLiteVectorSearch:
         limit: int,
     ) -> list[tuple[MemoryRecord, float]]:
         conn = self._conn_manager.get_connection()
+        now = time.time()
         params: list[Any] = [_pack_floats(query_embedding), limit]
         sql = (
             "SELECT m.*, v.distance AS vec_distance "
@@ -120,25 +122,27 @@ class SQLiteVectorSearch:
             " WHERE embedding MATCH ? AND k = ?) AS v "
             "JOIN memories m ON m.rowid = v.rowid "
         )
-        where: list[str] = []
+        where: list[str] = ["(m.valid_to IS NULL OR m.valid_to > ?)"]
+        params_suffix: list[Any] = [now]
         if scope is not None:
             where.append("m.scope = ?")
-            params.append(scope.value)
+            params_suffix.append(scope.value)
         if rowid_filter is not None:
             if not rowid_filter:
                 return []
             placeholders = ",".join("?" * len(rowid_filter))
             where.append(f"m.rowid IN ({placeholders})")
-            params.extend(rowid_filter)
+            params_suffix.extend(rowid_filter)
         if where:
             sql += "WHERE " + " AND ".join(where) + " "
         sql += "ORDER BY v.distance ASC"
+        params.extend(params_suffix)
         rows = conn.execute(sql, params).fetchall()
 
         results: list[tuple[MemoryRecord, float]] = []
         for row in rows:
             record = _row_to_record(row)
-            if record.is_expired:
+            if not record.is_active:
                 continue
             distance = float(dict(row).get("vec_distance") or 0.0)
             similarity = max(0.0, min(1.0, 1.0 - distance))
@@ -162,8 +166,9 @@ class SQLiteVectorSearch:
         Cost grows linearly with the number of memory rows; acceptable
         for dev / CI / small datasets but not production-scale recall.
         """
-        sql = "SELECT * FROM memories WHERE embedding IS NOT NULL"
-        params: list[Any] = []
+        now = time.time()
+        sql = "SELECT * FROM memories WHERE embedding IS NOT NULL AND (valid_to IS NULL OR valid_to > ?)"
+        params: list[Any] = [now]
         if scope is not None:
             sql += " AND scope = ?"
             params.append(scope.value)
@@ -178,7 +183,7 @@ class SQLiteVectorSearch:
         scored: list[tuple[MemoryRecord, float]] = []
         for row in rows:
             record = _row_to_record(row)
-            if record.is_expired or record.embedding is None:
+            if not record.is_active or record.embedding is None:
                 continue
             sim = _cosine_sim(query_embedding, record.embedding)
             scored.append((record, sim))

@@ -478,6 +478,18 @@ class SQLiteMemoryBackend(MemoryBackend):
     # Lifecycle
     # ------------------------------------------------------------------
 
+    @contextlib.contextmanager
+    def transaction(self) -> Any:
+        """Return an immediate transaction context spanning the entire backend."""
+        conn = self._conn()
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            yield conn
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+
     def close(self) -> None:
         self._conn_manager.close_all()
 

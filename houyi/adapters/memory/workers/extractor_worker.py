@@ -78,6 +78,7 @@ class _BackendProtocol(Protocol):
         self, queue_id: str, error: str, *, retry: bool, max_attempts: int
     ) -> None: ...
     def put(self, record: MemoryRecord) -> None: ...
+    def transaction(self) -> Any: ...
 
 
 class _EntityStateProtocol(Protocol):
@@ -329,31 +330,31 @@ class ExtractorWorker:
         - facts with certainty == VAGUE -> candidate inbox (vague)
         - raw_sourceless -> candidate inbox (sourceless)
         """
-        ns = turn.namespace
-        for fact in getattr(result, "facts", []) or []:
-            if fact.certainty is Certainty.VAGUE:
-                await asyncio.to_thread(self._candidate_inbox.add, ns, fact)
-                continue
-            await asyncio.to_thread(
-                self._entity_state.upsert,
-                ns,
-                fact.subject,
-                fact.predicate,
-                str(fact.object),
-                certainty=fact.certainty,
-                valid_from=fact.valid_from,
-                source_unit_id=fact.source_anchor,
-                qualifiers=fact.qualifiers,
-            )
-            # L1 -> L2 projection. The promoter swallows its own
-            # failures, so no second try/except is needed here. The
-            # call is dispatched off-thread because typical promoter
-            # implementations do blocking I/O.
-            await asyncio.to_thread(self._promoter.promote, turn, fact)
+        await asyncio.to_thread(self._sync_project_result, turn, result)
 
-        for raw in getattr(result, "raw_sourceless", []) or []:
-            payload = raw if isinstance(raw, dict) else {"item": str(raw)}
-            await asyncio.to_thread(self._candidate_inbox.add_sourceless, ns, payload)
+    def _sync_project_result(self, turn: RawTurn, result: Any) -> None:
+        """Synchronous projection run on a single thread to guarantee atomic transaction."""
+        ns = turn.namespace
+        with self._backend.transaction():
+            for fact in getattr(result, "facts", []) or []:
+                if fact.certainty is Certainty.VAGUE:
+                    self._candidate_inbox.add(ns, fact)
+                    continue
+                self._entity_state.upsert(
+                    ns,
+                    fact.subject,
+                    fact.predicate,
+                    str(fact.object),
+                    certainty=fact.certainty,
+                    valid_from=fact.valid_from,
+                    source_unit_id=fact.source_anchor,
+                    qualifiers=fact.qualifiers,
+                )
+                self._promoter.promote(turn, fact)
+
+            for raw in getattr(result, "raw_sourceless", []) or []:
+                payload = raw if isinstance(raw, dict) else {"item": str(raw)}
+                self._candidate_inbox.add_sourceless(ns, payload)
 
 
 __all__ = ["ExtractorWorker", "ExtractorWorkerConfig"]

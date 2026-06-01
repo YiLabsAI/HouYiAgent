@@ -194,6 +194,12 @@ class MemoryRecord(BaseModel):
             return False
         return time.time() > self.created_at + self.ttl
 
+    @property
+    def is_active(self) -> bool:
+        """Check if this record is currently active (not expired and valid as of now)."""
+        now = time.time()
+        return not self.is_expired and not (self.valid_to is not None and now >= self.valid_to)
+
 
 class MemoryCandidate(BaseModel):
     """A memory extraction candidate awaiting approval."""

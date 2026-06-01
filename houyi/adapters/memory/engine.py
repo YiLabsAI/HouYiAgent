@@ -545,22 +545,26 @@ class MemoryEngine:
         Idempotent. Cancels tasks that ignore the stop event so a hung
         worker cannot block the shutdown path indefinitely.
         """
-        if not self._worker_tasks:
-            return
-        for stop in self._worker_stops:
-            stop.set()
         try:
-            await asyncio.wait_for(
-                asyncio.gather(*self._worker_tasks, return_exceptions=True),
-                timeout=5.0,
-            )
-        except TimeoutError:
-            for task in self._worker_tasks:
-                task.cancel()
-            await asyncio.gather(*self._worker_tasks, return_exceptions=True)
+            if self._worker_tasks:
+                for stop in self._worker_stops:
+                    stop.set()
+                try:
+                    await asyncio.wait_for(
+                        asyncio.gather(*self._worker_tasks, return_exceptions=True),
+                        timeout=5.0,
+                    )
+                except TimeoutError:
+                    for task in self._worker_tasks:
+                        task.cancel()
+                    await asyncio.gather(*self._worker_tasks, return_exceptions=True)
+                finally:
+                    self._worker_tasks.clear()
+                    self._worker_stops.clear()
         finally:
-            self._worker_tasks.clear()
-            self._worker_stops.clear()
+            if self._backend is not None and hasattr(self._backend, "close"):
+                with contextlib.suppress(Exception):
+                    self._backend.close()
 
     async def __aenter__(self) -> MemoryEngine:
         await self.start()

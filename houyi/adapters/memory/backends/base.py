@@ -12,6 +12,7 @@ drivers (Postgres, in-memory) can supply their own implementations.
 
 from __future__ import annotations
 
+import contextlib
 from abc import ABC, abstractmethod
 from typing import Any
 
@@ -137,6 +138,14 @@ class MemoryBackend(ABC):
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
+
+    @contextlib.contextmanager
+    def transaction(self) -> Any:
+        """Return a transaction context manager.
+
+        Default implementation is a no-op; subclasses override as needed.
+        """
+        yield
 
     def close(self) -> None:  # noqa: B027
         """Release resources. Default is a no-op; subclasses override as needed."""

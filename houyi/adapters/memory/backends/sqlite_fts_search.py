@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import time
 from typing import Any
 
 from houyi.adapters.memory.types import MemoryRecord, MemoryScope
@@ -27,19 +28,21 @@ class SQLiteFTSSearch:
         if not fts_query:
             return []
 
+        now = time.time()
         if scope is not None:
             rows = (
                 self._conn_manager.get_connection()
                 .execute(
                     """
- SELECT m.*, bm25(memories_fts) AS fts_rank
- FROM memories_fts f
- JOIN memories m ON f.rowid = m.rowid
- WHERE memories_fts MATCH ? AND m.scope = ?
- ORDER BY bm25(memories_fts)
- LIMIT ?
- """,
-                    (fts_query, scope.value, limit),
+                    SELECT m.*, bm25(memories_fts) AS fts_rank
+                    FROM memories_fts f
+                    JOIN memories m ON f.rowid = m.rowid
+                    WHERE memories_fts MATCH ? AND m.scope = ?
+                      AND (m.valid_to IS NULL OR m.valid_to > ?)
+                    ORDER BY bm25(memories_fts)
+                    LIMIT ?
+                    """,
+                    (fts_query, scope.value, now, limit),
                 )
                 .fetchall()
             )
@@ -48,14 +51,15 @@ class SQLiteFTSSearch:
                 self._conn_manager.get_connection()
                 .execute(
                     """
- SELECT m.*, bm25(memories_fts) AS fts_rank
- FROM memories_fts f
- JOIN memories m ON f.rowid = m.rowid
- WHERE memories_fts MATCH ?
- ORDER BY bm25(memories_fts)
- LIMIT ?
- """,
-                    (fts_query, limit),
+                    SELECT m.*, bm25(memories_fts) AS fts_rank
+                    FROM memories_fts f
+                    JOIN memories m ON f.rowid = m.rowid
+                    WHERE memories_fts MATCH ?
+                      AND (m.valid_to IS NULL OR m.valid_to > ?)
+                    ORDER BY bm25(memories_fts)
+                    LIMIT ?
+                    """,
+                    (fts_query, now, limit),
                 )
                 .fetchall()
             )
@@ -63,7 +67,7 @@ class SQLiteFTSSearch:
         results = []
         for row in rows:
             record = _row_to_record(row)
-            if not record.is_expired:
+            if record.is_active:
                 score = -dict(row)["fts_rank"]
                 results.append((record, score))
         return results
