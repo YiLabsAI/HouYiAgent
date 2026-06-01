@@ -28,15 +28,14 @@ class SQLiteEntityStateView(EntityStateView):
     def __init__(self, backend) -> None:
         self._backend = backend
 
+    _NUDGE = 1e-6
+
     def _get_reconciliation_ts(self, existing: list[Any], ts: float) -> float:
-        exact_match = None
-        for row in existing:
-            if abs(row["valid_from"] - ts) < 1e-9:
-                exact_match = row
-                break
-        if exact_match is not None:
-            return exact_match["valid_from"] + 1e-6
-        return ts
+        candidate = ts
+        taken = {row["valid_from"] for row in existing}
+        while candidate in taken or any(abs(candidate - t) < 1e-9 for t in taken):
+            candidate += self._NUDGE
+        return candidate
 
     def _find_prev_next(self, existing: list[Any], ts: float) -> tuple[Any, Any]:
         prev_record = None

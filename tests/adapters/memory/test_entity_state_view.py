@@ -192,6 +192,18 @@ class TestSQLiteEntityStateViewMonotonic:
         assert len(active) == 1
         assert active[0].value == "c"
 
+    def test_multi_ts_collision(self, view: SQLiteEntityStateView) -> None:
+        # 10 writes at the same explicit ts must all succeed via iterative nudge.
+        ts = 100.0
+        for value in (str(i) for i in range(10)):
+            view.upsert("ws", "user", "tag", value, valid_from=ts)
+        history = view.get_history("ws", "user", "tag")
+        assert len(history) == 10
+        # All valid_from values must be unique and >= ts.
+        timestamps = [r.valid_from for r in history]
+        assert len(set(timestamps)) == 10
+        assert all(t >= ts for t in timestamps)
+
 
 class TestSQLiteEntityStateViewSourceLink:
     """Source unit linkage for provenance lookups."""
