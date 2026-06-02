@@ -38,6 +38,9 @@ class EvidenceRerankConfig:
     source_text_bonus: float = 0.4
     complete_chain_bonus: float = 0.8
     partial_chain_penalty: float = 0.4
+    graph_base_bonus: float = 0.6
+    graph_close_range_bonus: float = 0.2
+    graph_decay_per_depth: float = 0.15
 
 
 class Reranker(ABC):
@@ -125,15 +128,33 @@ class EvidenceAwareReranker(Reranker):
             coverage += self._config.source_anchor_bonus
             if candidate.signals.get("source_rehydrated") or candidate.signals.get("source_text"):
                 coverage += self._config.source_text_bonus
-            if query_type == QueryType.RELATIONAL_CHAIN:
-                chain_member = (
-                    "iteration_round" in candidate.signals or "hop_index" in candidate.signals
+
+        # New Graph Signaling: graph_path_bonus
+        if "bfs_depth" in candidate.signals:
+            depth = int(candidate.signals["bfs_depth"])
+            if depth == 1:
+                bonus = self._config.graph_base_bonus + self._config.graph_close_range_bonus
+            elif depth == 2:
+                bonus = self._config.graph_base_bonus
+            else:
+                bonus = max(
+                    0.0,
+                    self._config.graph_base_bonus
+                    - (depth - 2) * self._config.graph_decay_per_depth,
                 )
-                if chain_member:
-                    if chain_complete:
-                        coverage += self._config.complete_chain_bonus
-                    else:
-                        coverage -= self._config.partial_chain_penalty
+            coverage += bonus
+
+        if query_type == QueryType.RELATIONAL_CHAIN:
+            chain_member = (
+                "iteration_round" in candidate.signals
+                or "hop_index" in candidate.signals
+                or "bfs_depth" in candidate.signals
+            )
+            if chain_member:
+                if chain_complete:
+                    coverage += self._config.complete_chain_bonus
+                else:
+                    coverage -= self._config.partial_chain_penalty
         return max(0.0, min(1.0, coverage))
 
     def _rerank_score(self, candidate: RecallCandidate, *, coverage: float) -> float:
@@ -151,7 +172,16 @@ def _chain_complete(candidates: list[RecallCandidate]) -> bool:
         for candidate in candidates
         if isinstance(candidate.signals.get("hop_index"), int)
     ]
-    return bool(hop_indices) and max(hop_indices) >= 2
+    if bool(hop_indices) and max(hop_indices) >= 2:
+        return True
+
+    # Check graph BFS depth signal for RELATIONAL_CHAIN Query
+    bfs_depths = [
+        int(candidate.signals["bfs_depth"])
+        for candidate in candidates
+        if isinstance(candidate.signals.get("bfs_depth"), int)
+    ]
+    return bool(bfs_depths) and max(bfs_depths) >= 2
 
 
 def _iteration_bonus(candidate: RecallCandidate) -> float:

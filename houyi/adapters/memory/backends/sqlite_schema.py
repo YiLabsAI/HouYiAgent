@@ -11,7 +11,7 @@ import sqlite3
 
 logger = logging.getLogger(__name__)
 
-_SCHEMA_VERSION = 2
+_SCHEMA_VERSION = 3
 
 
 class SQLiteSchemaManager:
@@ -78,6 +78,8 @@ class SQLiteSchemaManager:
             self._create_raw_turn_log(cur)
             self._create_extract_queue(cur)
             self._create_vec_meta(cur)
+            self._create_memory_edges(cur)
+            self._create_community_labels(cur)
             conn.commit()
         except Exception:
             conn.rollback()
@@ -288,3 +290,46 @@ class SQLiteSchemaManager:
                 f" embedding float[{self._conn_manager.vec_dim}]"
                 f")"
             )
+
+    def _create_memory_edges(self, cur: sqlite3.Cursor) -> None:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS memory_edges (
+                edge_id TEXT PRIMARY KEY,
+                namespace TEXT NOT NULL,
+                source_unit_id TEXT NOT NULL,
+                target_unit_id TEXT NOT NULL,
+                source_type TEXT NOT NULL,
+                target_type TEXT NOT NULL,
+                relation TEXT NOT NULL,
+                weight REAL DEFAULT 1.0,
+                valid_from REAL NOT NULL,
+                valid_to REAL,
+                created_at REAL NOT NULL,
+                provenance TEXT
+            )
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_memory_edges_forward
+            ON memory_edges (namespace, source_unit_id, source_type, valid_to, target_unit_id, relation)
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_memory_edges_backward
+            ON memory_edges (namespace, target_unit_id, target_type, valid_to, source_unit_id, relation)
+        """)
+
+    def _create_community_labels(self, cur: sqlite3.Cursor) -> None:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS memory_community_labels (
+                namespace TEXT NOT NULL,
+                node_type TEXT NOT NULL,
+                node_id TEXT NOT NULL,
+                community_id TEXT NOT NULL,
+                weight REAL DEFAULT 1.0,
+                updated_at REAL NOT NULL,
+                PRIMARY KEY (namespace, node_type, node_id)
+            )
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_community_labels_lookup
+            ON memory_community_labels (namespace, community_id, node_type)
+        """)

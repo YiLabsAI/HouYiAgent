@@ -47,10 +47,10 @@ _SOURCE_SNIPPET_CHARS = 2000
 # the caller wires a vector retriever into the orchestrator, otherwise
 # its slot is a no-op.
 _DEFAULT_ROUTE_TABLE: dict[QueryType, tuple[str, ...]] = {
-    QueryType.FACTUAL_LOOKUP: ("entity_state", "vector", "raw_turn"),
+    QueryType.FACTUAL_LOOKUP: ("entity_state", "graph", "vector", "raw_turn"),
     QueryType.NEGATION_CHECK: ("entity_state", "vector"),
-    QueryType.TEMPORAL_QUERY: ("timeline", "entity_state", "vector"),
-    QueryType.RELATIONAL_CHAIN: ("iterative", "entity_state", "vector"),
+    QueryType.TEMPORAL_QUERY: ("timeline", "graph", "entity_state", "vector"),
+    QueryType.RELATIONAL_CHAIN: ("iterative", "graph", "entity_state", "vector"),
     QueryType.PROCEDURAL_RECALL: ("raw_turn", "vector"),
     QueryType.THEMATIC_SUMMARY: ("vector", "raw_turn", "timeline"),
 }
@@ -63,6 +63,7 @@ _DEFAULT_ROUTE_TABLE: dict[QueryType, tuple[str, ...]] = {
 _DEFAULT_FUSION_WEIGHTS: dict[QueryType, dict[RetrieverKind, float]] = {
     QueryType.FACTUAL_LOOKUP: {
         RetrieverKind.ENTITY_STATE: 10.0,
+        RetrieverKind.GRAPH: 9.0,
         RetrieverKind.VECTOR: 8.0,
         RetrieverKind.RAW_TURN: 0.6,
         RetrieverKind.ITERATIVE: 1.0,
@@ -70,6 +71,7 @@ _DEFAULT_FUSION_WEIGHTS: dict[QueryType, dict[RetrieverKind, float]] = {
     },
     QueryType.NEGATION_CHECK: {
         RetrieverKind.ENTITY_STATE: 10.0,
+        RetrieverKind.GRAPH: 0.5,
         RetrieverKind.VECTOR: 0.1,
         RetrieverKind.RAW_TURN: 0.2,
         RetrieverKind.ITERATIVE: 0.5,
@@ -77,6 +79,7 @@ _DEFAULT_FUSION_WEIGHTS: dict[QueryType, dict[RetrieverKind, float]] = {
     },
     QueryType.TEMPORAL_QUERY: {
         RetrieverKind.TIMELINE: 3.0,
+        RetrieverKind.GRAPH: 2.0,
         RetrieverKind.VECTOR: 0.8,
         RetrieverKind.ENTITY_STATE: 1.0,
         RetrieverKind.RAW_TURN: 0.6,
@@ -84,6 +87,7 @@ _DEFAULT_FUSION_WEIGHTS: dict[QueryType, dict[RetrieverKind, float]] = {
     },
     QueryType.RELATIONAL_CHAIN: {
         RetrieverKind.ITERATIVE: 5.0,
+        RetrieverKind.GRAPH: 8.0,
         RetrieverKind.VECTOR: 1.2,
         RetrieverKind.ENTITY_STATE: 1.0,
         RetrieverKind.RAW_TURN: 0.5,
@@ -91,6 +95,7 @@ _DEFAULT_FUSION_WEIGHTS: dict[QueryType, dict[RetrieverKind, float]] = {
     },
     QueryType.THEMATIC_SUMMARY: {
         RetrieverKind.VECTOR: 2.5,
+        RetrieverKind.GRAPH: 1.0,
         RetrieverKind.RAW_TURN: 1.2,
         RetrieverKind.TIMELINE: 0.8,
         RetrieverKind.ENTITY_STATE: 0.5,
@@ -98,6 +103,7 @@ _DEFAULT_FUSION_WEIGHTS: dict[QueryType, dict[RetrieverKind, float]] = {
     },
     QueryType.PROCEDURAL_RECALL: {
         RetrieverKind.RAW_TURN: 2.0,
+        RetrieverKind.GRAPH: 1.0,
         RetrieverKind.VECTOR: 1.0,
         RetrieverKind.ENTITY_STATE: 0.5,
         RetrieverKind.TIMELINE: 0.4,

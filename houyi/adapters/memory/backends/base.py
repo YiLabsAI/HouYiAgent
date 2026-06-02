@@ -20,6 +20,8 @@ from houyi.adapters.memory.types import (
     AtomicFact,
     Certainty,
     EntityStateRecord,
+    GraphTraversalResult,
+    MemoryEdge,
     MemoryRecord,
     MemoryScope,
     MemoryType,
@@ -48,6 +50,10 @@ class MemoryBackend(ABC):
     @abstractmethod
     def get(self, key: str, scope: MemoryScope) -> MemoryRecord | None:
         """Retrieve a single record by (key, scope). Returns None if missing or expired."""
+
+    def get_by_id(self, record_id: str) -> MemoryRecord | None:
+        """Retrieve a single record by record_id. Returns None if missing."""
+        raise NotImplementedError
 
     @abstractmethod
     def list_by_scope(self, scope: MemoryScope) -> list[MemoryRecord]:
@@ -136,6 +142,59 @@ class MemoryBackend(ABC):
         """
 
     # ------------------------------------------------------------------
+    # GraphIndex (HouYi-Mesh)
+    # ------------------------------------------------------------------
+
+    def add_edge(self, edge: MemoryEdge) -> None:
+        """Insert or update a graph edge in memory_edges."""
+        raise NotImplementedError
+
+    def delete_edge(self, edge_id: str) -> bool:
+        """Delete a graph edge. Returns True if deleted."""
+        raise NotImplementedError
+
+    def invalidate_edge(self, edge_id: str, valid_to: float) -> bool:
+        """Close/invalidate an active edge."""
+        raise NotImplementedError
+
+    def get_edge(self, edge_id: str) -> MemoryEdge | None:
+        """Retrieve a graph edge."""
+        raise NotImplementedError
+
+    def get_community_id(
+        self,
+        namespace: str,
+        node_type: str,
+        node_id: str,
+    ) -> str | None:
+        """Retrieve the community_id for a given node."""
+        raise NotImplementedError
+
+    def put_community_label(
+        self,
+        namespace: str,
+        node_type: str,
+        node_id: str,
+        community_id: str,
+        weight: float = 1.0,
+        updated_at: float | None = None,
+    ) -> None:
+        """Insert or update a community label."""
+        raise NotImplementedError
+
+    def traverse_graph(
+        self,
+        *,
+        namespace: str,
+        start_nodes: list[tuple[str, str]],
+        max_depth: int = 3,
+        direction: str = "bidirectional",
+        as_of: float | None = None,
+    ) -> list[GraphTraversalResult]:
+        """Perform a recursive BFS traversal from start_nodes using SQLite CTE."""
+        raise NotImplementedError
+
+    # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
 
@@ -207,6 +266,10 @@ class EntityStateView(ABC):
         attribute: str | None = None,
     ) -> list[EntityStateRecord]:
         """Return all currently active rows for an entity."""
+
+    def get_by_id(self, state_id: str) -> EntityStateRecord | None:
+        """Retrieve a single EntityStateRecord by state_id. Returns None if missing."""
+        raise NotImplementedError
 
     @abstractmethod
     def get_as_of(

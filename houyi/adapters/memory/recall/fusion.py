@@ -18,6 +18,7 @@ _DEFAULT_KIND_WEIGHTS: dict[RetrieverKind, float] = {
     RetrieverKind.TIMELINE: 0.6,
     RetrieverKind.ITERATIVE: 1.0,
     RetrieverKind.RAW_TURN: 0.3,
+    RetrieverKind.GRAPH: 5.0,
 }
 
 

@@ -205,21 +205,32 @@ class SQLiteEntityStateView(EntityStateView):
         if attribute is None:
             rows = conn.execute(
                 """
- SELECT * FROM entity_state
- WHERE namespace=? AND entity=? AND valid_to IS NULL
- ORDER BY attribute ASC
- """,
+                SELECT * FROM entity_state
+                WHERE namespace=? AND entity=? AND valid_to IS NULL
+                ORDER BY attribute ASC
+                """,
                 (namespace, entity),
             ).fetchall()
         else:
             rows = conn.execute(
                 """
- SELECT * FROM entity_state
- WHERE namespace=? AND entity=? AND attribute=? AND valid_to IS NULL
- """,
+                SELECT * FROM entity_state
+                WHERE namespace=? AND entity=? AND attribute=? AND valid_to IS NULL
+                """,
                 (namespace, entity, attribute),
             ).fetchall()
         return [self._row_to_record(r) for r in rows]
+
+    def get_by_id(self, state_id: str) -> EntityStateRecord | None:
+        """Retrieve a single EntityStateRecord by state_id."""
+        conn = self._backend._conn()
+        row = conn.execute(
+            "SELECT * FROM entity_state WHERE state_id=?",
+            (state_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return self._row_to_record(row)
 
     def get_as_of(
         self,

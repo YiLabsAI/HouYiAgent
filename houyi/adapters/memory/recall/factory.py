@@ -34,6 +34,7 @@ from houyi.adapters.memory.recall.orchestrator import (
     RecallPipelineConfig,
 )
 from houyi.adapters.memory.recall.retrievers.entity_state import EntityStateRetriever
+from houyi.adapters.memory.recall.retrievers.graph import GraphRetriever
 from houyi.adapters.memory.recall.retrievers.iterative import IterativeMultiHopRetriever
 from houyi.adapters.memory.recall.retrievers.raw_turn import RawTurnLogRetriever
 from houyi.adapters.memory.recall.retrievers.timeline import TimelineRetriever
@@ -78,6 +79,7 @@ def _build_default_recall_orchestrator(
     entity_state_retriever = EntityStateRetriever(entity_state)
     retrievers: dict[str, Any] = {
         "entity_state": entity_state_retriever,
+        "graph": GraphRetriever(backend, entity_state),
         "timeline": TimelineRetriever(entity_state),
         "iterative": IterativeMultiHopRetriever(
             entity_state,

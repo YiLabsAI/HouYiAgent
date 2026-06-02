@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 import uuid
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -98,6 +98,49 @@ class MemorySourceKind(str, Enum):
     CONVERSATION = "conversation"
     SEARCH = "search"
     AUTO_DREAM = "auto_dream"
+
+
+class MemoryRelation(str, Enum):
+    """Semantic types for graph edges between memory records or entity states."""
+
+    DERIVED_FROM = "derived_from"
+    SOURCE_OF = "source_of"
+    SAME_AS = "same_as"
+    UPDATES = "updates"
+    REPLACES = "replaces"
+    INVALIDATES = "invalidates"
+    SUPPORTS = "supports"
+    CONTRADICTS = "contradicts"
+    PRECEDES = "precedes"
+    CAUSES = "causes"
+    RELATED_TO = "related_to"
+    STRATEGY_FOR = "strategy_for"
+    READABLE_BY = "readable_by"
+
+
+class MemoryEdge(BaseModel):
+    """A directed edge in the lightweight memory index graph."""
+
+    edge_id: str = Field(default_factory=lambda: uuid.uuid4().hex[:12])
+    namespace: str
+    source_unit_id: str
+    target_unit_id: str
+    source_type: Literal["fact", "state"]  # "fact" or "state"
+    target_type: Literal["fact", "state"]  # "fact" or "state"
+    relation: MemoryRelation
+    weight: float = 1.0
+    valid_from: float = Field(default_factory=time.time)
+    valid_to: float | None = None
+    created_at: float = Field(default_factory=time.time)
+    provenance: str | None = None
+
+
+class GraphTraversalResult(BaseModel):
+    """The result of a directed or bidirectional graph traversal."""
+
+    node_id: str
+    node_type: str
+    depth: int
 
 
 # ---------------------------------------------------------------------------

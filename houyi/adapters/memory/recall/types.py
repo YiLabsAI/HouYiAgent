@@ -111,6 +111,7 @@ class RetrieverKind(str, Enum):
     ITERATIVE = "iterative"
     RAW_TURN = "raw_turn"
     VECTOR = "vector"
+    GRAPH = "graph"
 
 
 # ---------------------------------------------------------------------------
