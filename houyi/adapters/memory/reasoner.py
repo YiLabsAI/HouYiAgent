@@ -83,7 +83,24 @@ class DeterministicReasoningPolicy:
         # than a single lexical match (e.g. "what interests do X and Y share").
         # A lone fact would echo a content-free relation, so defer to the
         # downstream reasoning policy.
-        aggregation_words = {"share", "shared", "common", "both", "between"}
+        aggregation_words = {
+            "share",
+            "shared",
+            "common",
+            "both",
+            "between",
+            "allergic",
+            "allergy",
+            "allergies",
+            "hobbies",
+            "hobby",
+            "interest",
+            "interests",
+            "goals",
+            "plans",
+            "restrictions",
+            "sensitivities",
+        }
         query_words = set(re.sub(r"[^a-z0-9\s]", " ", request.query.lower()).split())
         if wh_words.intersection(query_words) or aggregation_words.intersection(query_words):
             return None
@@ -205,7 +222,8 @@ class LLMMemoryReasoningPolicy:
                     "21. PET OWNERSHIP DURATION DEDUCTION: If asked how long someone has owned their pets or a specific subset of pets (e.g. 'first two turtles'), and the facts mention they have owned those pets (e.g. 'turtles') since a certain duration or for a specific number of years (e.g., 'since: 3 years' or 'for 3 years now'), deduce that they have owned them for that duration (e.g., 'three years') and output it directly. Do NOT output [IDK].\n"
                     "22. COUNTING AND FREQUENCY DEDUCTION: If asked how many times or how often someone had to do something (e.g. 'How many times has Calvin had to deal with insurance paperwork?', 'How many times has Joanna found new hiking trails?'), scan the facts to identify all distinct, separate sessions/events where that activity is documented to occur, count them, and answer with the count directly (e.g. 'two times' or 'twice'). Do NOT output [IDK] if the relevant individual events can be counted from the facts.\n"
                     "23. METROPOLITAN/LOCATION INFERENCE: If asked about an event or attribute occurring in a specific city/location (e.g., 'When did Calvin's place get flooded in Tokyo?', 'When did Dave see Aerosmith perform live?'), and the facts mention the event or asset at 'his place', 'his shop', 'at place', or 'perform live' without repeating the city name, but other facts or the session context establish that the person resides or operates in that city (e.g., Calvin in Tokyo, Dave's shop in Portland/Tokyo), you are permitted to make the direct one-step deduction that the event occurred in that city and answer the question with the matching time. Do NOT output [IDK].\n"
-                    "24. TEMPORAL TRIP/PLANNING DEDUCTION: If asked when someone took a trip to a specific type of destination (e.g. 'When did Dave take a trip to mountainous regions?'), and the facts mention they booked/planned a trip to that destination for 'next month' or a future date (e.g. 'next month' from June 2023, which is July 2023), and later facts confirm they completed/returned from a trip in that planned month/time, deduce that they took the trip in that target month/time (e.g., 'July 2023') and output it directly. Do NOT output [IDK]."
+                    "24. TEMPORAL TRIP/PLANNING DEDUCTION: If asked when someone took a trip to a specific type of destination (e.g. 'When did Dave take a trip to mountainous regions?'), and the facts mention they booked/planned a trip to that destination for 'next month' or a future date (e.g. 'next month' from June 2023, which is July 2023), and later facts confirm they completed/returned from a trip in that planned month/time, deduce that they took the trip in that target month/time (e.g., 'July 2023') and output it directly. Do NOT output [IDK].\n"
+                    "25. ALLERGY AND SENSITIVITY ENUMERATION: When asked about what someone is allergic to or their dietary restrictions/sensitivities, scan the facts to collect and list ALL explicit allergies, dietary restrictions, and sensitivities (such as animals with fur, most reptiles, cockroaches, dairy, etc.) into a single comprehensive, comma-separated response. Do NOT output only one; you must list all of them to ensure completeness."
                 ),
             },
             {"role": "user", "content": prompt},

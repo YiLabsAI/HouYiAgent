@@ -234,6 +234,7 @@ class EntityStateView(ABC):
         valid_from: float | None = None,
         source_unit_id: str | None = None,
         qualifiers: dict[str, str] | None = None,
+        accumulate: bool = False,
     ) -> EntityStateRecord:
         """Insert a new active state, closing any prior active row first.
 

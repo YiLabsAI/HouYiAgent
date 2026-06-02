@@ -488,6 +488,11 @@ PREDICATE CONSISTENCY:
  - Places visited: always use predicate visited_place
  - Items collected: always use predicate collects
  - Past jobs/roles: always use predicate had_job
+
+COMPOUND FACTS EXTRACTION (CRITICAL):
+ - When a user's message contains complex relational, causal, or temporal transitions (e.g. "switched/stopped/replaced", future plans/bookings, or multiple connected facts like "switched from almond to oat milk because of sensitivity last month"), you MUST extract one rich COMPOUND fact in addition to individual atomic facts.
+ - A compound fact MUST use the predicate "_compound", the entity as subject, and the complete, contextually-rich text statement (with relative time words like "next month" or "last week" resolved to absolute dates/months based on observation_date) as "object".
+ - The "qualifiers" for a compound fact MUST include "compound_type" (e.g., "causal_transition", "scheduled_plan") and computed absolute "date" or "original_time" (e.g., "July 2023").
 """
 
 _ATOMIC_FACT_SYSTEM_PROMPT = """You are an information extraction engine.
@@ -594,6 +599,11 @@ SPECIFIC NAME OVERRIDE:
 
 TEMPORAL LITERAL PRESERVATION:
 - When resolving relative time references (e.g. "the week before March 27, 2023", "last week") and computing standard dates for "qualifiers.date" or "qualifiers.since", you MUST ALSO record the exact original relative/literal time string (e.g., "the week before March 27, 2023") under a key "original_time" inside the "qualifiers" object. Do not lose the literal wording of the temporal event.
+
+COMPOUND FACTS EXTRACTION (CRITICAL):
+- When a user's message contains complex relational, causal, or temporal transitions (e.g. "switched/stopped/replaced", future plans/bookings, or multiple connected facts like "switched from almond to oat milk because of sensitivity last month"), you MUST extract one rich COMPOUND fact in addition to individual atomic facts.
+- A compound fact MUST use the predicate "_compound", the entity as subject, and the complete, contextually-rich text statement (with relative time words like "next month" or "last week" resolved to absolute dates/months based on observation_date) as "object".
+- The "qualifiers" for a compound fact MUST include "compound_type" (e.g., "causal_transition", "scheduled_plan") and computed absolute "date" or "original_time" (e.g., "July 2023").
 
 ---
 

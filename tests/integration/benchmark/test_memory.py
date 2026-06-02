@@ -105,8 +105,11 @@ class TestDeduplicatorPerformance:
 
 class TestRetrieverPerformance:
     @pytest.fixture()
-    def large_store(self):
-        store = MemoryStore()
+    def large_store(self, tmp_path):
+        from houyi.adapters.memory.backends.sqlite import SQLiteMemoryBackend
+
+        db_file = tmp_path / "large_store.db"
+        store = MemoryStore(SQLiteMemoryBackend(db_path=db_file))
         emb = NoOpEmbeddingProvider(dim=32)
         import asyncio
 

@@ -62,11 +62,12 @@ class SQLiteEntityStateView(EntityStateView):
         valid_from: float | None = None,
         source_unit_id: str | None = None,
         qualifiers: dict[str, str] | None = None,
+        accumulate: bool = False,
     ) -> EntityStateRecord:
-        """Insert a new active state, closing any prior active row first.
+        """Insert a new active state, closing any prior active row first (unless accumulate is True).
 
         Semantics:
-        - If a row with valid_to IS NULL already exists for the
+        - If accumulate is False, and a row with valid_to IS NULL already exists for the
           (namespace, entity, attribute) triple, its valid_to is
           set to the new valid_from (closed-open interval contract).
         - The new row is inserted with valid_to = NULL.
@@ -101,8 +102,10 @@ class SQLiteEntityStateView(EntityStateView):
                     calculated_valid_to = next_record["valid_from"]
 
                 # Shorten the preceding record if its interval extends past the new entry
-                if prev_record is not None and (
-                    prev_record["valid_to"] is None or prev_record["valid_to"] > ts
+                if (
+                    not accumulate
+                    and prev_record is not None
+                    and (prev_record["valid_to"] is None or prev_record["valid_to"] > ts)
                 ):
                     conn.execute(
                         "UPDATE entity_state SET valid_to=? WHERE state_id=?",

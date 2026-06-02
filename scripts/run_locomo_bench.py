@@ -933,7 +933,13 @@ async def _run_all(
 def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
     args = _parse_args()
-    all_cases = load_locomo_balanced()
+
+    if args.case_pair or args.case:
+        from houyi.adapters.memory.bench.locomo import load_locomo_all
+
+        all_cases = load_locomo_all()
+    else:
+        all_cases = load_locomo_balanced()
 
     if args.case_pair:
         wanted: set[tuple[str, str]] = set()

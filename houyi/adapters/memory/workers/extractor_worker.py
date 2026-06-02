@@ -349,6 +349,7 @@ class ExtractorWorker:
                     valid_from=fact.valid_from,
                     source_unit_id=fact.source_anchor,
                     qualifiers=fact.qualifiers,
+                    accumulate=getattr(fact, "accumulate", False),
                 )
                 self._promoter.promote(turn, fact)
 
