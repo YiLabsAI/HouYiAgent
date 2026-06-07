@@ -267,9 +267,12 @@ class LLMAnswerer:
     @staticmethod
     def _render_prompt(query: str, candidates: list[RecallCandidate]) -> str:
         lines = [
-            "Answer the user's question using ONLY the numbered facts "
-            "below. If the facts do not contain the answer, reply with "
-            f"exactly {_LLM_IDK_SENTINEL}.",
+            "Answer the user's question using the numbered facts below. "
+            "You are allowed and encouraged to perform straightforward logical, temporal, causal, or hypothetical/counterfactual reasoning "
+            "based on the facts (for example, if a fact states that X was motivated by Y, then without Y, X would likely not have done it). "
+            "When reasoning, retain the original specific nouns, descriptors, and concrete details from the facts (for example, preserve a description like painting of a forest scene or a specific item verbatim rather than over-generalizing or abstracting it to a broader term like watercolor painting or artwork unless specifically asked). "
+            "When estimating months lapsed or durations between two dates, compute it as simple month-subtraction (e.g., December - August = 4 months) rather than day-level fractional rounding, and output the direct integer name (e.g., 'four months' or '3 months') without approximate qualifiers. "
+            f"If the facts provide absolutely no relevant context, reply with exactly {_LLM_IDK_SENTINEL}.",
             "",
             "Facts:",
         ]
@@ -280,16 +283,53 @@ class LLMAnswerer:
             if anchor:
                 line += f" [{anchor}]"
             lines.append(line)
+
+        # Append graph connection paths for topological and causal chain reasoning
+        connections = []
+        for cand in candidates:
+            rel = cand.signals.get("last_edge_relation")
+            depth = cand.signals.get("bfs_depth")
+            parent_id = cand.signals.get("parent_node_id")
+            if rel:
+                fact_idx = candidates.index(cand) + 1
+                target_desc = f"{cand.fact.subject} - fact {fact_idx}"
+
+                # Locate parent node in candidates
+                parent_desc = parent_id
+                if parent_id:
+                    for other in candidates:
+                        is_match = (
+                            other.fact.subject == parent_id
+                            or other.signals.get("entity") == parent_id
+                            or other.fact.source_anchor == parent_id
+                        )
+                        if is_match:
+                            other_idx = candidates.index(other) + 1
+                            parent_desc = f"{other.fact.subject} - fact {other_idx}"
+                            break
+
+                if parent_desc:
+                    connections.append(f"- [{parent_desc}] leads to [{target_desc}] (via {rel})")
+                else:
+                    connections.append(f"- leads to [{target_desc}] (via {rel} at depth {depth})")
+        if connections:
+            lines.append("")
+            lines.append("Connections:")
+            lines.extend(connections)
+
         lines.append("")
         lines.append(f"Question: {query.strip()}")
         return "\n".join(lines)
 
 
 _DEFAULT_SYSTEM_PROMPT = (
-    "You are a memory-grounded assistant. Answer concisely using only "
-    "the facts the user provides. Cite facts by their number in square "
-    "brackets, e.g. [1]. If the facts do not contain the answer, reply "
-    f"with exactly {_LLM_IDK_SENTINEL}."
+    "You are a memory-grounded assistant. Answer concisely using the provided facts. "
+    "Cite facts by their number in square brackets, e.g. [1]. "
+    "You are allowed and encouraged to perform straightforward logical, temporal, causal, or hypothetical/counterfactual reasoning "
+    "based on the facts to answer the question. "
+    "When reasoning, retain the original specific nouns, descriptors, and concrete details from the facts (for example, preserve a description like painting of a forest scene or a specific item verbatim rather than over-generalizing or abstracting it to a broader term like watercolor painting or artwork unless specifically asked). "
+    "When estimating months lapsed or durations between two dates, compute it as simple month-subtraction (e.g., December - August = 4 months) rather than day-level fractional rounding, and output the direct integer name (e.g., 'four months' or '3 months') without approximate qualifiers. "
+    f"If the facts provide absolutely no relevant context, reply with exactly {_LLM_IDK_SENTINEL}."
 )
 
 

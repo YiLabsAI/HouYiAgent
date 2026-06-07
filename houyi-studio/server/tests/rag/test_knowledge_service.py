@@ -2,6 +2,7 @@ import asyncio
 import os
 import tempfile
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 from houyi_studio.server.rag import KnowledgeService
@@ -174,8 +175,11 @@ class TestDeleteLibrarySafety:
 class TestFileIngest:
     """Tests for file ingestion."""
 
-    def test_ingest_unsupported_file_type(self, knowledge_service):
+    @pytest.mark.asyncio
+    async def test_ingest_unsupported_file_type(self, knowledge_service):
         """Test that unsupported file types are handled gracefully."""
+        from houyi_studio.server.rag import embedding_config as _ec_mod
+
         created = knowledge_service.create_library(
             name="UnsupportedTest", description="", mode="auto"
         )
@@ -185,14 +189,15 @@ class TestFileIngest:
             f.write("Random content")
             temp_path = f.name
 
-        try:
-            result = asyncio.run(knowledge_service.ingest_files(lib_id, [temp_path]))
+        with patch.object(_ec_mod, "_is_provider_runtime_available", return_value=False):
+            try:
+                result = await knowledge_service.ingest_files(lib_id, [temp_path])
 
-            # Should not crash, may return error or empty
-            assert "success" in result
+                # Should not crash, may return error or empty
+                assert "success" in result
 
-        finally:
-            os.unlink(temp_path)
+            finally:
+                os.unlink(temp_path)
 
 
 class TestDataMigration:

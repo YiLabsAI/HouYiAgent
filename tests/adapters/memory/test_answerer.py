@@ -257,16 +257,16 @@ class TestFailureModes:
 
 class TestBudgetPromptSize:
     async def test_oversized_prompt_truncates(self):
-        # 10 facts × ~40 chars = ~400 char body; cap at 200 should
+        # 10 facts × ~40 chars = ~400 char body; cap at 1300 should
         # still keep the first few numbered lines so we DON'T abstain.
         llm = _FakeLLM(content="ok")
         ans = LLMAnswerer(
             llm,
-            budget=AnswerBudget(max_input_chars=200, max_facts_in_prompt=10),
+            budget=AnswerBudget(max_input_chars=1300, max_facts_in_prompt=10),
         )
         cands = [_candidate(_fact(predicate=f"pred{i}_long_padding")) for i in range(10)]
         result = await ans.answer("q", _recall(cands))
         assert result.abstained is False
         body = llm.calls[0][1]["content"]
-        assert len(body) <= 200
+        assert len(body) <= 1300
         assert "1. " in body  # at least one numbered fact survived

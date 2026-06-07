@@ -493,10 +493,18 @@ class TestLLMResponse:
 class TestOpenAIAdapter:
     """Test OpenAIAdapter."""
 
+    def _fake_adapter(self, *, model: str = "gpt-3.5-turbo") -> OpenAIAdapter:
+        """Build adapter with fake openai SDK (avoids heavy real import)."""
+        pytest.importorskip("openai")
+        client = MagicMock()
+        fake_openai = ModuleType("openai")
+        fake_openai.AsyncOpenAI = MagicMock(return_value=client)
+        with patch.dict("sys.modules", {"openai": fake_openai}):
+            return OpenAIAdapter(api_key="test-key", model=model)
+
     def test_adapter_with_apikey(self) -> None:
         """Test adapter initialization with API key."""
-        pytest.importorskip("openai")
-        adapter = OpenAIAdapter(api_key="test-key", model="gpt-3.5-turbo")
+        adapter = self._fake_adapter()
 
         assert adapter.api_key == "test-key"
         assert adapter.model == "gpt-3.5-turbo"
@@ -504,22 +512,31 @@ class TestOpenAIAdapter:
     def test_adapter_without_apikey(self) -> None:
         """Test adapter initialization without API key raises error."""
         pytest.importorskip("openai")
-        with patch.dict("os.environ", {}, clear=True):
+        fake_openai = ModuleType("openai")
+        fake_openai.AsyncOpenAI = MagicMock()
+        with (
+            patch.dict("os.environ", {}, clear=True),
+            patch.dict("sys.modules", {"openai": fake_openai}),
+        ):
             with pytest.raises(ValueError, match="OpenAI API key not provided"):
                 OpenAIAdapter()
 
     def test_adapter_from_env(self) -> None:
         """Test adapter initialization from environment variable."""
         pytest.importorskip("openai")
-        with patch.dict("os.environ", {"OPENAI_API_KEY": "env-key"}):
+        fake_openai = ModuleType("openai")
+        fake_openai.AsyncOpenAI = MagicMock()
+        with (
+            patch.dict("os.environ", {"OPENAI_API_KEY": "env-key"}),
+            patch.dict("sys.modules", {"openai": fake_openai}),
+        ):
             adapter = OpenAIAdapter()
             assert adapter.api_key == "env-key"
 
     @pytest.mark.asyncio
     async def test_chat(self) -> None:
         """Test chat method."""
-        pytest.importorskip("openai")
-        adapter = OpenAIAdapter(api_key="test-key")
+        adapter = self._fake_adapter()
 
         # Mock the client's chat.completions.create method
         mock_response = MagicMock()
@@ -544,8 +561,7 @@ class TestOpenAIAdapter:
     @pytest.mark.asyncio
     async def test_chat_with_tools(self) -> None:
         """Test chat with tools."""
-        pytest.importorskip("openai")
-        adapter = OpenAIAdapter(api_key="test-key")
+        adapter = self._fake_adapter()
 
         mock_response = MagicMock()
         mock_response.choices = [MagicMock()]

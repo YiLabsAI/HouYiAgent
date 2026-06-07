@@ -185,7 +185,8 @@ class SQLiteEntityStateView(EntityStateView):
             "UPDATE memories SET valid_to=? WHERE scope=? AND key LIKE ? AND valid_to IS NULL",
             (ts, namespace, f"{entity}.{attribute}.%"),
         )
-        conn.commit()
+        if not getattr(self._backend._in_transaction, "active", False):
+            conn.commit()
         return cur.rowcount > 0
 
     # ------------------------------------------------------------------

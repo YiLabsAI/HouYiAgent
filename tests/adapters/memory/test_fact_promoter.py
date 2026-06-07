@@ -70,6 +70,17 @@ class TestMemoryRecordPromoter:
         assert record.scope is MemoryScope.USER
         assert record.memory_type is MemoryType.FACT
 
+    def test_writes_compound_fact_unaltered(self, backend):
+        promoter = MemoryRecordPromoter(backend)
+        turn = _turn()
+        fact = _fact(predicate="_compound", obj="Alice likes tea and drinks coffee every morning.")
+        promoter.promote(turn, fact)
+
+        pending = backend.list_pending_embeddings(limit=10)
+        assert len(pending) == 1
+        _, record = pending[0]
+        assert record.content == "Alice likes tea and drinks coffee every morning."
+
     def test_provenance_source_anchor(self, backend):
         promoter = MemoryRecordPromoter(backend, provider_label="unit_test")
         promoter.promote(_turn(), _fact(anchor="turn-XYZ"))

@@ -190,6 +190,7 @@ class MemoryBackend(ABC):
         max_depth: int = 3,
         direction: str = "bidirectional",
         as_of: float | None = None,
+        relation_types: list[str] | None = None,
     ) -> list[GraphTraversalResult]:
         """Perform a recursive BFS traversal from start_nodes using SQLite CTE."""
         raise NotImplementedError

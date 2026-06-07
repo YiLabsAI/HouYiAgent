@@ -121,6 +121,24 @@ class MemoryRelation(str, Enum):
 class MemoryEdge(BaseModel):
     """A directed edge in the lightweight memory index graph."""
 
+    @model_validator(mode="before")
+    @classmethod
+    def populate_deterministic_id(cls, data: Any) -> Any:
+        if (
+            isinstance(data, dict)
+            and not data.get("edge_id")
+            and all(
+                k in data for k in ("namespace", "source_unit_id", "target_unit_id", "relation")
+            )
+        ):
+            import hashlib
+
+            rel = data["relation"]
+            rel_str = rel.value if hasattr(rel, "value") else str(rel)
+            raw = f"{data['namespace']}|{data['source_unit_id']}|{data['target_unit_id']}|{rel_str}"
+            data["edge_id"] = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:12]
+        return data
+
     edge_id: str = Field(default_factory=lambda: uuid.uuid4().hex[:12])
     namespace: str
     source_unit_id: str
@@ -141,6 +159,9 @@ class GraphTraversalResult(BaseModel):
     node_id: str
     node_type: str
     depth: int
+    last_edge_relation: str | None = None
+    last_edge_weight: float | None = None
+    parent_node_id: str | None = None
 
 
 # ---------------------------------------------------------------------------

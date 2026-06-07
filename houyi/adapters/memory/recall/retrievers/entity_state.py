@@ -209,19 +209,23 @@ class EntityStateRetriever(Retriever):
         ctx: RetrieverContext,
     ) -> list[RecallCandidate]:
         hint = _infer_entity_attribute(query)
-        if hint is None:
-            return []
+        entities = []
+        attribute = None
+        source = "heuristics"
+        if hint is not None:
+            entities.append(hint.entity)
+            attribute = hint.attribute
+            source = hint.source
 
         query_words = _extract_query_words(query.text)
         is_cumulative = bool(query_words.intersection(_CORE_WORDS)) or (
-            hint.attribute is not None
+            attribute is not None
             and any(
                 _stemish(w) in _CORE_WORDS
-                for w in re.sub(r"[^a-z0-9\s]", " ", hint.attribute.lower()).split()
+                for w in re.sub(r"[^a-z0-9\s]", " ", attribute.lower()).split()
             )
         )
 
-        entities = [hint.entity]
         # Multi-entity parsing: find other capitalized words in the query text.
         for w in query.text.split():
             w_clean = w.strip(".,!?:;'\"()")
@@ -251,31 +255,74 @@ class EntityStateRetriever(Retriever):
                         "october",
                         "november",
                         "december",
+                        "would",
+                        "should",
+                        "could",
+                        "does",
+                        "doesnt",
+                        "did",
+                        "didnt",
+                        "is",
+                        "isnt",
+                        "are",
+                        "arent",
+                        "was",
+                        "wasnt",
+                        "were",
+                        "werent",
+                        "has",
+                        "hasnt",
+                        "have",
+                        "havent",
+                        "can",
+                        "cant",
+                        "will",
+                        "wont",
+                        "do",
+                        "dont",
+                        "in",
+                        "according",
+                        "the",
+                        "a",
+                        "an",
+                        "if",
+                        "with",
+                        "from",
+                        "to",
+                        "at",
+                        "by",
+                        "for",
+                        "on",
+                        "about",
+                        "into",
                     }
                     and w_clean not in entities
                 ):
                     entities.append(w_clean)
 
+        if not entities:
+            return []
+
         candidates = []
         for ent in entities:
             ent_hint = EntityAttributeHint(
                 entity=ent,
-                attribute=hint.attribute,
-                source=hint.source,
+                attribute=attribute,
+                source=source,
             )
             if is_cumulative:
                 rows = await asyncio.to_thread(
                     self._view.get_history,
                     query.namespace,
                     ent,
-                    hint.attribute,
+                    attribute,
                 )
             else:
                 rows = await asyncio.to_thread(
                     self._view.get_active,
                     query.namespace,
                     ent,
-                    hint.attribute,
+                    attribute,
                 )
             candidates.extend(
                 [_candidate_from_row(row, self.name, ent_hint, query_words) for row in rows]
@@ -420,11 +467,155 @@ _CORE_WORDS = {
     "breakdown",
     "family",
     "friend",
+    "consider",
+    "considers",
+    "career",
+    "pursue",
+    "past",
+    "previous",
+    "previously",
+    "used",
+    "transition",
+    "milestone",
+    "change",
+    "former",
+    "formerly",
+    "counseling",
+}
+
+
+_IRREGULAR_VERB_MAP: dict[str, str] = {
+    # Existing _VERB_BREAKS verbs
+    "goes": "go",
+    "went": "go",
+    "gone": "go",
+    "going": "go",
+    "loses": "lose",
+    "lost": "lose",
+    "losing": "lose",
+    "has": "have",
+    "had": "have",
+    "having": "have",
+    "joins": "join",
+    "joined": "join",
+    "joining": "join",
+    "does": "do",
+    "did": "do",
+    "done": "do",
+    "doing": "do",
+    "visits": "visit",
+    "visited": "visit",
+    "visiting": "visit",
+    "meets": "meet",
+    "met": "meet",
+    "meeting": "meet",
+    "starts": "start",
+    "started": "start",
+    "starting": "start",
+    "gets": "get",
+    "got": "get",
+    "getting": "get",
+    "buys": "buy",
+    "bought": "buy",
+    "buying": "buy",
+    "sells": "sell",
+    "sold": "sell",
+    "selling": "sell",
+    "works": "work",
+    "worked": "work",
+    "working": "work",
+    "lives": "live",
+    "lived": "live",
+    "living": "live",
+    "moves": "move",
+    "moved": "move",
+    "moving": "move",
+    "becomes": "become",
+    "became": "become",
+    "becoming": "become",
+    # Additional common verbs
+    "wins": "win",
+    "won": "win",
+    "winning": "win",
+    "takes": "take",
+    "took": "take",
+    "taking": "take",
+    "makes": "make",
+    "made": "make",
+    "making": "make",
+    "knows": "know",
+    "knew": "know",
+    "knowing": "know",
+    "sees": "see",
+    "saw": "see",
+    "seen": "see",
+    "seeing": "see",
+    "gives": "give",
+    "gave": "give",
+    "given": "give",
+    "giving": "give",
+    "comes": "come",
+    "came": "come",
+    "coming": "come",
+    "tells": "tell",
+    "told": "tell",
+    "telling": "tell",
+    "says": "say",
+    "said": "say",
+    "saying": "say",
+    "writes": "write",
+    "wrote": "write",
+    "written": "write",
+    "writing": "write",
+    "reads": "read",
+    "reading": "read",
+    "feels": "feel",
+    "felt": "feel",
+    "feeling": "feel",
+    "keeps": "keep",
+    "kept": "keep",
+    "keeping": "keep",
+    "thinks": "think",
+    "thought": "think",
+    "thinking": "think",
+    "brings": "bring",
+    "brought": "bring",
+    "bringing": "bring",
+    "finds": "find",
+    "found": "find",
+    "finding": "find",
+    "holds": "hold",
+    "held": "hold",
+    "holding": "hold",
+    "speaks": "speak",
+    "spoke": "speak",
+    "spoken": "speak",
+    "speaking": "speak",
+    "runs": "run",
+    "ran": "run",
+    "running": "run",
+    "eats": "eat",
+    "ate": "eat",
+    "eaten": "eat",
+    "eating": "eat",
+    "drinks": "drink",
+    "drank": "drink",
+    "drunk": "drink",
+    "drinking": "drink",
+    "sleeps": "sleep",
+    "slept": "sleep",
+    "sleeping": "sleep",
+    "begins": "begin",
+    "began": "begin",
+    "begun": "begin",
+    "beginning": "begin",
 }
 
 
 def _stemish(token: str) -> str:
     t = token.strip().lower()
+    if t in _IRREGULAR_VERB_MAP:
+        return _IRREGULAR_VERB_MAP[t]
     if len(t) > 4 and t.endswith("ing"):
         return t[:-3]
     if len(t) > 3 and t.endswith("ed"):

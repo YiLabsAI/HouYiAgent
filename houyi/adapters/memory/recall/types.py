@@ -193,6 +193,9 @@ class RetrieverContext(BaseModel):
     deadline_ms: int | None = None
     """Soft deadline; retrievers SHOULD return early but MAY exceed."""
 
+    query_type: QueryType | None = None
+    """The classified type of the incoming query."""
+
     llm_adapter: Any | None = None
     """Required only by iterative retrievers; others ignore it."""
 

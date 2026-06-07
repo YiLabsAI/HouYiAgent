@@ -163,6 +163,7 @@ class RecallOrchestrator:
     ) -> RecallResult:
         runtime = ctx or RetrieverContext()
         route = await self._router.classify(query)
+        runtime.query_type = route.query_type
         retriever_names = list(self._config.route_table.get(route.query_type, ()))
         retrievers = [
             self._retrievers[name] for name in retriever_names if name in self._retrievers

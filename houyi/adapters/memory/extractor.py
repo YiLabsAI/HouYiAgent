@@ -314,7 +314,7 @@ Output:
 """
 
 _ATOMIC_FACT_BATCH_SYSTEM_PROMPT = """You are an information extraction engine.
-Extract atomic facts from multiple turns. Each turn is prefixed by:
+Extract atomic facts and entity relationship edges from multiple turns. Each turn is prefixed by:
 <<TURN id=...>>
 The turn content is a JSON object with:
  - text: The conversation turn text.
@@ -336,14 +336,23 @@ Return JSON in this shape:
           "accumulate": false,
           "qualifiers": {"k": "v"}
         }
+      ],
+      "edges": [
+        {
+          "source_unit_id": "...",
+          "target_unit_id": "...",
+          "relation": "derived_from|source_of|same_as|updates|replaces|invalidates|supports|contradicts|precedes|causes|related_to|strategy_for|readable_by",
+          "source_type": "state|fact",
+          "target_type": "state|fact"
+        }
       ]
     }
   ]
 }
 
 Rules:
-1) Keep each fact under the correct source_anchor matching the <<TURN id=...>> prefix.
-2) If no fact is present for a turn, return that source_anchor with an empty facts array.
+1) Keep each fact and edge under the correct source_anchor matching the <<TURN id=...>> prefix.
+2) If no fact or edge is present for a turn, return that source_anchor with empty arrays.
 3) Use the person's actual speaker_name if the fact is about the speaker.
 4) Return only JSON, no markdown or prose.
 5) PROPER NOUN & SPECIFIC DETAIL PRESERVATION: Do not generalize, abstract, or drop specific proper nouns, names, brands, models, objects, or locations. For example, "Ferrari 488 GTB" must NOT be simplified to "new car" or "luxury car"; keep "Ferrari 488 GTB" intact in the "object". Preserve specific names of people, places, and distinct assets (e.g. "mansion", "Karlie") rather than replacing them with generic categories like "friend" or "house".
@@ -454,6 +463,57 @@ Output:
   ]
 }
 
+Input:
+<<TURN id=conv-100:D1:1>>
+{"observation_date": "2023-06-15", "system_date": "2024-01-15", "text": "I switched from drinking cow milk to oat milk last month because I developed lactose intolerance.", "speaker_name": "Evan"}
+
+<<TURN id=conv-100:D2:5>>
+{"observation_date": "2023-06-20", "system_date": "2024-01-15", "text": "Joanna works as a Designer. She knows Evan because they went to college together.", "speaker_name": "Sam"}
+
+Output:
+{
+  "items": [
+    {
+      "source_anchor": "conv-100:D1:1",
+      "facts": [
+        {"subject": "Evan", "predicate": "dislikes", "object": "cow milk", "certainty": "certain"},
+        {"subject": "Evan", "predicate": "drinks", "object": "oat milk", "certainty": "certain", "qualifiers": {"since": "2023-05", "original_time": "last month"}},
+        {"subject": "Evan", "predicate": "has_health_issue", "object": "lactose intolerance", "certainty": "certain", "qualifiers": {"since": "2023-05", "original_time": "last month"}},
+        {
+          "subject": "Evan",
+          "predicate": "_compound",
+          "object": "Evan switched from cow milk to oat milk in May 2023 because of developing lactose intolerance.",
+          "certainty": "certain",
+          "qualifiers": {"compound_type": "causal_transition", "date": "2023-05", "original_time": "last month"}
+        }
+      ]
+    },
+    {
+      "source_anchor": "conv-100:D2:5",
+      "facts": [
+        {"subject": "Joanna", "predicate": "job", "object": "Designer", "certainty": "certain"},
+        {"subject": "Joanna", "predicate": "knows", "object": "Evan", "certainty": "certain", "qualifiers": {"reason": "went to college together"}}
+      ],
+      "edges": [
+        {
+          "source_unit_id": "Joanna.job",
+          "target_unit_id": "Joanna",
+          "relation": "derived_from",
+          "source_type": "state",
+          "target_type": "state"
+        },
+        {
+          "source_unit_id": "Joanna",
+          "target_unit_id": "Evan",
+          "relation": "related_to",
+          "source_type": "state",
+          "target_type": "state"
+        }
+      ]
+    }
+  ]
+}
+
 DATE HANDLING:
 Relative time mappings (use observation_date as anchor):
  - yesterday -> observation_date minus 1 day
@@ -493,20 +553,40 @@ COMPOUND FACTS EXTRACTION (CRITICAL):
  - When a user's message contains complex relational, causal, or temporal transitions (e.g. "switched/stopped/replaced", future plans/bookings, or multiple connected facts like "switched from almond to oat milk because of sensitivity last month"), you MUST extract one rich COMPOUND fact in addition to individual atomic facts.
  - A compound fact MUST use the predicate "_compound", the entity as subject, and the complete, contextually-rich text statement (with relative time words like "next month" or "last week" resolved to absolute dates/months based on observation_date) as "object".
  - The "qualifiers" for a compound fact MUST include "compound_type" (e.g., "causal_transition", "scheduled_plan") and computed absolute "date" or "original_time" (e.g., "July 2023").
+
+RELATION EDGE EXTRACTION:
+ - When a turn expresses explicit or strong implicit relationships between extracted facts or entities (e.g., person A works with person B, or person A knows person B, or event A causes state B), you MUST extract a list of directed relation edges under the "edges" array.
+   - Use standard entity names (e.g. "Caroline", "Joanna") or attribute paths (e.g. "Caroline.job") as symbolic source_unit_id and target_unit_id.
+   - Set source_type and target_type to "state" (for entity-attribute states) or "fact" (if referencing a specific content statement).
+   - Use one of these exact relation values: "derived_from", "source_of", "same_as", "updates", "replaces", "invalidates", "supports", "contradicts", "precedes", "causes", "related_to", "strategy_for", "readable_by".
 """
 
 _ATOMIC_FACT_SYSTEM_PROMPT = """You are an information extraction engine.
-Extract discrete factual claims from user messages as structured facts.
+Extract discrete factual claims and explicit/implicit relation edges between them from user messages.
 
-OUTPUT SCHEMA (JSON array):
-Each item MUST have these fields:
- - "subject": the entity the fact is about. Use the person's actual name if known (e.g., "Caroline", "Bob"), otherwise "user" for the speaker, or the entity identifier (e.g., "project_x")
- - "subject_type": type category of the subject. Choose from: "person", "organization", "vehicle", "location", "activity", "item", "concept", "unknown"
- - "predicate": short snake_case attribute name (e.g., "lives_in", "went_to", "has_meeting")
- - "object": the value as a short string
- - "object_type": type category of the object. Choose from: "person", "organization", "vehicle", "location", "activity", "item", "concept", "unknown"
- - "certainty": one of "certain", "probable", "vague"
- - "qualifiers": OPTIONAL object with extra attributes like "since", "date", "location"
+OUTPUT SCHEMA (JSON object):
+{
+  "facts": [
+    {
+      "subject": "the entity the fact is about. Use actual name if known, otherwise 'user'",
+      "subject_type": "person|organization|vehicle|location|activity|item|concept|unknown",
+      "predicate": "snake_case attribute",
+      "object": "value as short string",
+      "object_type": "person|organization|vehicle|location|activity|item|concept|unknown",
+      "certainty": "certain|probable|vague",
+      "qualifiers": {"since": "...", "date": "..."}
+    }
+  ],
+  "edges": [
+    {
+      "source_unit_id": "Caroline",
+      "target_unit_id": "Joanna",
+      "relation": "related_to",
+      "source_type": "state",
+      "target_type": "state"
+    }
+  ]
+}
 
 DATE HANDLING (CRITICAL):
 Two dates are provided in each input:
@@ -758,6 +838,33 @@ Output:
   {"subject": "Jolene", "predicate": "family_loss", "object": "mother", "certainty": "certain", "accumulate": true, "qualifiers": {"date": "2022"}}
 ]
 
+Example 18 - Compound facts and relationship edges:
+Input: {"observation_date": "2023-04-10", "system_date": "2024-01-15", "text": "I switched from drinking cow milk to oat milk last month because of my lactose intolerance.", "speaker_name": "Evan"}
+Output:
+{
+  "facts": [
+    {"subject": "Evan", "predicate": "dislikes", "object": "cow milk", "certainty": "certain"},
+    {"subject": "Evan", "predicate": "drinks", "object": "oat milk", "certainty": "certain", "qualifiers": {"since": "2023-03", "original_time": "last month"}},
+    {"subject": "Evan", "predicate": "has_health_issue", "object": "lactose intolerance", "certainty": "certain", "qualifiers": {"since": "2023-03", "original_time": "last month"}},
+    {
+      "subject": "Evan",
+      "predicate": "_compound",
+      "object": "Evan switched from cow milk to oat milk in March 2023 because of lactose intolerance.",
+      "certainty": "certain",
+      "qualifiers": {"compound_type": "causal_transition", "date": "2023-03", "original_time": "last month"}
+    }
+  ],
+  "edges": [
+    {
+      "source_unit_id": "Evan.dislikes",
+      "target_unit_id": "Evan",
+      "relation": "derived_from",
+      "source_type": "state",
+      "target_type": "state"
+    }
+  ]
+}
+
 ---
 
 INPUT FORMAT:
@@ -766,8 +873,7 @@ INPUT FORMAT:
 Note: speaker_name is optional. When provided, use it as the subject for facts about the speaker (instead of "user").
 
 OUTPUT FORMAT:
-JSON array of fact objects. Return [] if no extractable facts.
-Each fact object fields: subject, predicate, object, certainty, accumulate (bool, default false), qualifiers (optional object).
+JSON object with "facts" (array of facts) and "edges" (array of edges). Return {"facts": [], "edges": []} if no extractable facts/edges.
 """
 
 
@@ -776,6 +882,7 @@ class ExtractionResult:
     """Outcome of a single AtomicFact extraction call.
 
     - facts - successfully validated AtomicFact list.
+    - edges - successfully parsed semantic MemoryEdge candidate relationships.
     - raw_sourceless - LLM items parsed but rejected because the
     caller could not supply a source_anchor;
     the raw payloads are forwarded so the
@@ -790,6 +897,7 @@ class ExtractionResult:
     """
 
     facts: list[AtomicFact] = field(default_factory=list)
+    edges: list[dict[str, Any]] = field(default_factory=list)
     raw_sourceless: list[dict[str, Any]] = field(default_factory=list)
     invalid_dropped: int = 0
 
@@ -823,6 +931,27 @@ _ATOMIC_FACT_RESPONSE_FORMAT: dict[str, Any] = {
                             },
                         },
                         "required": ["subject", "predicate", "object", "certainty"],
+                        "additionalProperties": False,
+                    },
+                },
+                "edges": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "source_unit_id": {"type": "string"},
+                            "target_unit_id": {"type": "string"},
+                            "relation": {"type": "string"},
+                            "source_type": {
+                                "type": "string",
+                                "enum": ["state", "fact"],
+                            },
+                            "target_type": {
+                                "type": "string",
+                                "enum": ["state", "fact"],
+                            },
+                        },
+                        "required": ["source_unit_id", "target_unit_id", "relation"],
                         "additionalProperties": False,
                     },
                 },
@@ -880,24 +1009,24 @@ class AtomicFactExtractor:
         if not text or not text.strip():
             return ExtractionResult()
 
-        items = await self._call_llm(text)
-        if not items:
+        facts_raw, edges_raw = await self._call_llm(text)
+        if not facts_raw:
             return ExtractionResult()
 
         anchor = (source_anchor or "").strip()
         if not anchor:
-            return ExtractionResult(raw_sourceless=list(items))
+            return ExtractionResult(raw_sourceless=list(facts_raw))
 
         facts: list[AtomicFact] = []
         invalid = 0
-        for item in items:
+        for item in facts_raw:
             fact = self._build_fact(item, anchor)
             if fact is None:
                 invalid += 1
             else:
                 facts.append(fact)
         facts = self._restore_generic_objects(facts)
-        return ExtractionResult(facts=facts, invalid_dropped=invalid)
+        return ExtractionResult(facts=facts, edges=list(edges_raw), invalid_dropped=invalid)
 
     async def extract_batch(
         self,
@@ -928,7 +1057,11 @@ class AtomicFactExtractor:
             )
             return await self._fallback_single_turn(normalized)
 
-        by_anchor = {source_anchor: list(items) for source_anchor, items in parsed if source_anchor}
+        by_anchor = {
+            source_anchor: (list(facts), list(edges))
+            for source_anchor, facts, edges in parsed
+            if source_anchor
+        }
         return self._results_from_batch_parse(normalized, by_anchor)
 
     @staticmethod
@@ -956,14 +1089,14 @@ class AtomicFactExtractor:
     def _results_from_batch_parse(
         self,
         normalized: list[tuple[str, str]],
-        by_anchor: dict[str, list[dict[str, Any]]],
+        by_anchor: dict[str, tuple[list[dict[str, Any]], list[dict[str, Any]]]],
     ) -> list[ExtractionResult]:
         out: list[ExtractionResult] = []
         for text, anchor in normalized:
             if not text:
                 out.append(ExtractionResult())
                 continue
-            items = by_anchor.get(anchor, [])
+            items, raw_edges = by_anchor.get(anchor, ([], []))
             if not anchor or anchor.startswith("batch-turn-"):
                 out.append(ExtractionResult(raw_sourceless=list(items)))
                 continue
@@ -978,19 +1111,21 @@ class AtomicFactExtractor:
                     facts.append(fact)
             # Apply post-extraction restoration
             facts = self._restore_generic_objects(facts)
-            out.append(ExtractionResult(facts=facts, invalid_dropped=invalid))
+            out.append(
+                ExtractionResult(facts=facts, edges=list(raw_edges), invalid_dropped=invalid)
+            )
         return out
 
-    async def _call_llm(self, text: str) -> list[dict[str, Any]]:
+    async def _call_llm(self, text: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         attempts = self._max_retries + 1
         for attempt in range(attempts):
             content = await self._request_llm(text, retry=attempt > 0)
             if content is None:
-                return []
-            items = self._parse_json_array(content)
-            if items is not None:
-                return items
-        return []
+                return [], []
+            res = self._parse_json_array(content)
+            if res is not None:
+                return res
+        return [], []
 
     async def _request_llm(self, text: str, *, retry: bool) -> str | None:
         user_content = text
@@ -1037,7 +1172,9 @@ class AtomicFactExtractor:
             return None
         return content
 
-    async def _call_llm_batch(self, text: str) -> list[tuple[str, list[dict[str, Any]]]] | None:
+    async def _call_llm_batch(
+        self, text: str
+    ) -> list[tuple[str, list[dict[str, Any]], list[dict[str, Any]]]] | None:
         attempts = self._max_retries + 1
         for attempt in range(attempts):
             content = await self._request_llm_batch(text, retry=attempt > 0)
@@ -1094,22 +1231,41 @@ class AtomicFactExtractor:
         return {"response_format": _ATOMIC_FACT_RESPONSE_FORMAT}
 
     @staticmethod
-    def _parse_json_array(content: str) -> list[dict[str, Any]] | None:
+    def _parse_json_array(content: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]] | None:
         candidates = _json_candidates(content)
         if not candidates:
-            return []
+            return [], []
         last_candidate = candidates[-1]
         for candidate in candidates:
             try:
                 decoded = json.loads(candidate)
-                return _atomic_items_from_decoded(decoded)
+                if isinstance(decoded, dict):
+                    facts = decoded.get("facts")
+                    edges = decoded.get("edges")
+                    facts_list = (
+                        [item for item in facts if isinstance(item, dict)]
+                        if isinstance(facts, list)
+                        else []
+                    )
+                    edges_list = (
+                        [item for item in edges if isinstance(item, dict)]
+                        if isinstance(edges, list)
+                        else []
+                    )
+                    return facts_list, edges_list
+                elif isinstance(decoded, list):
+                    # Fallback if it returned a flat array of facts
+                    facts_list = [item for item in decoded if isinstance(item, dict)]
+                    return facts_list, []
             except json.JSONDecodeError:
                 continue
         logger.warning("AtomicFactExtractor got non-JSON response: %s", last_candidate[:200])
         return None
 
     @staticmethod
-    def _parse_json_batch(content: str) -> list[tuple[str, list[dict[str, Any]]]] | None:
+    def _parse_json_batch(
+        content: str,
+    ) -> list[tuple[str, list[dict[str, Any]], list[dict[str, Any]]]] | None:
         candidates = _json_candidates(content)
         if not candidates:
             return []
@@ -1291,26 +1447,30 @@ def _atomic_items_from_decoded(decoded: Any) -> list[dict[str, Any]]:
     return [item for item in decoded if isinstance(item, dict)]
 
 
-def _batch_items_from_decoded(decoded: Any) -> list[tuple[str, list[dict[str, Any]]]]:
+def _batch_items_from_decoded(
+    decoded: Any,
+) -> list[tuple[str, list[dict[str, Any]], list[dict[str, Any]]]]:
     if isinstance(decoded, dict):
         items = decoded.get("items")
         if not isinstance(items, list):
             return []
-        out_dict: list[tuple[str, list[dict[str, Any]]]] = []
+        out_dict: list[tuple[str, list[dict[str, Any]], list[dict[str, Any]]]] = []
         for item in items:
             if not isinstance(item, dict):
                 continue
             source_anchor = str(item.get("source_anchor", "")).strip()
             facts = _atomic_items_from_decoded(item.get("facts", []))
-            out_dict.append((source_anchor, facts))
+            edges = [e for e in item.get("edges", []) if isinstance(e, dict)]
+            out_dict.append((source_anchor, facts, edges))
         return out_dict
     if isinstance(decoded, list):
-        out_list: list[tuple[str, list[dict[str, Any]]]] = []
+        out_list: list[tuple[str, list[dict[str, Any]], list[dict[str, Any]]]] = []
         for item in decoded:
             if not isinstance(item, dict):
                 continue
             source_anchor = str(item.get("source_anchor", "")).strip()
             facts = _atomic_items_from_decoded(item.get("facts", []))
-            out_list.append((source_anchor, facts))
+            edges = [e for e in item.get("edges", []) if isinstance(e, dict)]
+            out_list.append((source_anchor, facts, edges))
         return out_list
     return []

@@ -205,3 +205,227 @@ async def test_graph_temporal(test_env) -> None:
     # Should not traverse over the expired edge to Nate
     subjects_expired = {h.fact.subject for h in hits_expired}
     assert "Nate" not in subjects_expired
+
+
+@pytest.mark.asyncio
+async def test_graph_seed_discovery(test_env) -> None:
+    backend, view = test_env
+    retriever = GraphRetriever(backend, view)
+
+    # Verify query with punctuation, possessives, and noise
+    # "Sam's" -> "Sam", trailing question mark, and standard lowercase words or month words ignored
+    query = RecallQuery(
+        text="When did Sam's partner buy the bonsai_tree in January?",
+        namespace="n1",
+    )
+    seeds = await retriever._discover_seeds(query)
+    seed_nodes = {s[0] for s in seeds}
+
+    # "Sam" should be extracted as seed node, but "January", "When", "did", "partner", "buy", "the", "bonsai_tree", "in" should be ignored
+    assert "Sam" in seed_nodes
+    assert "January" not in seed_nodes
+    assert "When" not in seed_nodes
+    assert "buy" not in seed_nodes
+
+
+@pytest.mark.asyncio
+async def test_graph_shortest_path(test_env) -> None:
+    backend, view = test_env
+
+    # Setup states
+    state_a = view.upsert(
+        namespace="n1",
+        entity="A",
+        attribute="attr",
+        value="val_a",
+        certainty=Certainty.CERTAIN,
+        valid_from=100.0,
+    )
+    state_b = view.upsert(
+        namespace="n1",
+        entity="B",
+        attribute="attr",
+        value="val_b",
+        certainty=Certainty.CERTAIN,
+        valid_from=100.0,
+    )
+    state_c = view.upsert(
+        namespace="n1",
+        entity="C",
+        attribute="attr",
+        value="val_c",
+        certainty=Certainty.CERTAIN,
+        valid_from=100.0,
+    )
+
+    # We create paths:
+    # A -> B (depth 1)
+    # A -> C -> B (depth 2)
+    edge_ab = MemoryEdge(
+        edge_id="edge_ab",
+        namespace="n1",
+        source_unit_id=state_a.state_id,
+        target_unit_id=state_b.state_id,
+        source_type="state",
+        target_type="state",
+        relation=MemoryRelation.RELATED_TO,
+        valid_from=100.0,
+    )
+    edge_ac = MemoryEdge(
+        edge_id="edge_ac",
+        namespace="n1",
+        source_unit_id=state_a.state_id,
+        target_unit_id=state_c.state_id,
+        source_type="state",
+        target_type="state",
+        relation=MemoryRelation.RELATED_TO,
+        valid_from=100.0,
+    )
+    edge_cb = MemoryEdge(
+        edge_id="edge_cb",
+        namespace="n1",
+        source_unit_id=state_c.state_id,
+        target_unit_id=state_b.state_id,
+        source_type="state",
+        target_type="state",
+        relation=MemoryRelation.RELATED_TO,
+        valid_from=100.0,
+    )
+
+    backend.add_edge(edge_ab)
+    backend.add_edge(edge_ac)
+    backend.add_edge(edge_cb)
+
+    retriever = GraphRetriever(backend, view)
+    hits = await retriever.retrieve(
+        RecallQuery(text="Who is A?", namespace="n1", entity_hint="A", as_of=150.0),
+        RetrieverContext(),
+    )
+
+    # Find candidate for B
+    b_cand = [h for h in hits if h.fact.subject == "B"]
+    assert len(b_cand) == 1
+    # B should be traversed via direct path (depth 1) instead of A->C->B (depth 2)
+    assert b_cand[0].signals["bfs_depth"] == 1
+
+
+@pytest.mark.asyncio
+async def test_graph_missing_nodes(test_env) -> None:
+    backend, view = test_env
+
+    state_a = view.upsert(
+        namespace="n1",
+        entity="A",
+        attribute="attr",
+        value="val_a",
+        certainty=Certainty.CERTAIN,
+        valid_from=100.0,
+    )
+
+    # Edge targeting nonexistent node
+    edge_hallucinated = MemoryEdge(
+        edge_id="edge_hallucinated",
+        namespace="n1",
+        source_unit_id=state_a.state_id,
+        target_unit_id="nonexistent_state_id",
+        source_type="state",
+        target_type="state",
+        relation=MemoryRelation.RELATED_TO,
+        valid_from=100.0,
+    )
+    backend.add_edge(edge_hallucinated)
+
+    retriever = GraphRetriever(backend, view)
+    # This should run perfectly and not crash when trying to resolve the nonexistent target ID
+    hits = await retriever.retrieve(
+        RecallQuery(text="A information", namespace="n1", entity_hint="A"),
+        RetrieverContext(),
+    )
+    assert len(hits) == 0
+
+
+@pytest.mark.asyncio
+async def test_identity_self_loop_filtered(test_env) -> None:
+    backend, view = test_env
+
+    # Evan is the seed (depth 0, not emitted as a candidate itself).
+    state_evan = view.upsert(
+        namespace="n1",
+        entity="Evan",
+        attribute="painted",
+        value="forest scene",
+        certainty=Certainty.CERTAIN,
+        valid_from=100.0,
+    )
+    # A real neighbor that SHOULD surface via traversal.
+    state_neighbor = view.upsert(
+        namespace="n1",
+        entity="Sam",
+        attribute="hobby",
+        value="hiking",
+        certainty=Certainty.CERTAIN,
+        valid_from=100.0,
+    )
+    # Self-loop identity anchor (auto-derived edge endpoint) — pure noise.
+    state_identity = view.upsert(
+        namespace="n1",
+        entity="art class",
+        attribute="identity",
+        value="art class",
+        certainty=Certainty.CERTAIN,
+        valid_from=100.0,
+    )
+    backend.add_edge(
+        MemoryEdge(
+            edge_id="edge-real",
+            namespace="n1",
+            source_unit_id=state_evan.state_id,
+            target_unit_id=state_neighbor.state_id,
+            source_type="state",
+            target_type="state",
+            relation=MemoryRelation.RELATED_TO,
+            valid_from=100.0,
+        )
+    )
+    backend.add_edge(
+        MemoryEdge(
+            edge_id="edge-id-anchor",
+            namespace="n1",
+            source_unit_id=state_evan.state_id,
+            target_unit_id=state_identity.state_id,
+            source_type="state",
+            target_type="state",
+            relation=MemoryRelation.RELATED_TO,
+            valid_from=100.0,
+        )
+    )
+
+    retriever = GraphRetriever(backend, view)
+    hits = await retriever.retrieve(
+        RecallQuery(text="What did Evan paint?", namespace="n1", entity_hint="Evan"),
+        RetrieverContext(),
+    )
+
+    subjects = {hit.fact.subject for hit in hits}
+    # The real neighbor surfaces; the 'art class | identity | art class' self-loop never does.
+    assert "Sam" in subjects
+    assert "art class" not in subjects
+    for hit in hits:
+        assert not (hit.fact.predicate == "identity" and hit.fact.subject == hit.fact.object)
+
+
+@pytest.mark.asyncio
+async def test_graph_cjk_support(test_env) -> None:
+    backend, view = test_env
+    retriever = GraphRetriever(backend, view)
+
+    # Chinese CJK seeds extraction
+    query = RecallQuery(
+        text="\u674e\u96f7\u548c\u97e9\u6845\u6845\u53bb\u54ea\u91cc\u4e86\uff1f",
+        namespace="n1",
+    )
+    seeds = await retriever._discover_seeds(query)
+    seed_nodes = {s[0] for s in seeds}
+
+    assert "\u674e\u96f7" in seed_nodes
+    assert "\u97e9\u6845\u6845" in seed_nodes

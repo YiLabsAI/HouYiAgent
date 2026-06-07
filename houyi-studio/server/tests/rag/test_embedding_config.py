@@ -51,7 +51,7 @@ class TestResolveEmbeddingConfig:
 
         return resolve_embedding_config(**kwargs)
 
-    def test_explicit_provider_wins_over_everything(self):
+    def test_explicit_provider_overrides(self):
         """Priority 1: explicit override always wins."""
         with (
             patch.dict(os.environ, {"EMBEDDING_PROVIDER": "openai", "OPENAI_API_KEY": "sk-x"}),
@@ -83,7 +83,7 @@ class TestResolveEmbeddingConfig:
             assert name == "openai"
             assert cfg.provider == "openai"
 
-    def test_explicit_local_strict_mode_raises(self):
+    def test_explicit_local_strict_raises(self):
         with patch.object(
             _embedding_config_module(),
             "_is_provider_runtime_available",
@@ -95,7 +95,7 @@ class TestResolveEmbeddingConfig:
             except RuntimeError as exc:
                 assert "Embedding provider 'local'" in str(exc)
 
-    def test_env_local_strict_mode_raises(self):
+    def test_env_local_strict_raises(self):
         with (
             patch.dict(os.environ, {"EMBEDDING_PROVIDER": "local"}, clear=False),
             patch.object(
@@ -110,7 +110,7 @@ class TestResolveEmbeddingConfig:
             except RuntimeError as exc:
                 assert "from env" in str(exc)
 
-    def test_explicit_provider_with_custom_model(self):
+    def test_explicit_provider_custom_model(self):
         """Explicit override can include custom model/dimension."""
         with patch.object(
             _embedding_config_module(),
@@ -131,7 +131,7 @@ class TestResolveEmbeddingConfig:
         {"EMBEDDING_PROVIDER": "gemini", "EMBEDDING_MODEL": "text-embedding-004"},
         clear=False,
     )
-    def test_env_vars_used_when_no_explicit(self):
+    def test_env_vars_without_explicit(self):
         """Priority 2: env vars used when no explicit provider given."""
         with patch.object(
             _embedding_config_module(),
@@ -150,10 +150,17 @@ class TestResolveEmbeddingConfig:
             for k, v in os.environ.items()
             if k not in ("EMBEDDING_PROVIDER", "EMBEDDING_MODEL")
         }
-        with patch.dict(os.environ, env, clear=True):
+        with (
+            patch.dict(os.environ, env, clear=True),
+            patch.object(
+                _embedding_config_module(),
+                "_is_provider_runtime_available",
+                return_value=True,
+            ),
+        ):
             cfg, name = self._resolve()
-            if cfg is not None:
-                assert cfg.provider in ("local", "openai", "gemini")
+            assert cfg is not None
+            assert cfg.provider in ("local", "openai", "gemini")
 
 
 class TestAutoDetectEmbedding:
@@ -169,7 +176,7 @@ class TestAutoDetectEmbedding:
         {"GOOGLE_API_KEY": "test-api-key", "OPENAI_API_KEY": "sk-test"},
         clear=False,
     )
-    def test_gemini_api_key_preferred_over_openai(self):
+    def test_gemini_preferred_over_openai(self):
         """Gemini (GOOGLE_API_KEY) is preferred over OpenAI."""
         detect = self._auto_detect()
         try:
@@ -195,7 +202,7 @@ class TestAutoDetectEmbedding:
         },
         clear=False,
     )
-    def test_vertex_preferred_over_openai(self):
+    def test_vertex_over_openai(self):
         """Gemini (GOOGLE_CLOUD_PROJECT) is preferred over OpenAI."""
         detect = self._auto_detect()
         try:
@@ -222,7 +229,7 @@ class TestAutoDetectEmbedding:
         },
         clear=False,
     )
-    def test_openai_detected_when_api_key_set(self):
+    def test_openai_with_api_key(self):
         """OpenAI provider detected when OPENAI_API_KEY is set."""
         detect = self._auto_detect()
         with patch.object(
@@ -295,7 +302,7 @@ class TestStoragePathHelpers:
         assert upload_dir.name == UPLOADS_SUBDIR
         assert index_dir.name == INDEX_SUBDIR
 
-    def test_is_index_path_detects_internal_locations(self):
+    def test_index_path_detection(self):
         from houyi_studio.server.rag import is_index_path
 
         index_path = Path(
@@ -329,7 +336,7 @@ class TestStoragePathHelpers:
         },
         clear=False,
     )
-    def test_no_provider_when_nothing_available(self):
+    def test_no_provider_available(self):
         """Returns (None, 'no_provider') when nothing is available."""
         detect = self._auto_detect()
         with patch.dict("sys.modules", {"fastembed": None}):
@@ -342,11 +349,16 @@ class TestStoragePathHelpers:
 class TestBackwardCompat:
     """Test legacy _detect_embedding_config still works."""
 
-    def test_legacy_function_exists_and_works(self):
+    def test_legacy_compat(self):
         from houyi_studio.server.rag import _detect_embedding_config
 
-        cfg, name = _detect_embedding_config()
-        assert name in ("local", "openai", "gemini", "no_provider")
+        with patch.object(
+            _embedding_config_module(),
+            "_is_provider_runtime_available",
+            return_value=True,
+        ):
+            cfg, name = _detect_embedding_config()
+        assert name in ("local", "openai", "gemini")
 
 
 # ---------------------------------------------------------------------------
@@ -405,7 +417,7 @@ class TestConfigHash:
         }
         assert self._compute_hash(config) == self._compute_hash(config.copy())
 
-    def test_different_embedding_provider_different_hash(self):
+    def test_provider_hash_diff(self):
         base = {"chunk_size": 512, "chunk_overlap": 50, "chunking_strategy": "recursive"}
         openai_cfg = {
             **base,
@@ -421,7 +433,7 @@ class TestConfigHash:
         }
         assert self._compute_hash(openai_cfg) != self._compute_hash(gemini_cfg)
 
-    def test_different_embedding_model_different_hash(self):
+    def test_model_hash_diff(self):
         base = {
             "chunk_size": 512,
             "chunk_overlap": 50,

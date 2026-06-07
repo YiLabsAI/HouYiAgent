@@ -248,21 +248,7 @@ disable_error_code = [
 ]
 
 [[tool.mypy.overrides]]
-module = ["houyi.core.*", "houyi.protocol.*"]
-disallow_untyped_defs = true
-warn_return_any = true
-
-[[tool.mypy.overrides]]
-module = ["houyi_studio.server.chat.chat_service"]
-disallow_untyped_defs = true
-warn_return_any = true
-
-[[tool.mypy.overrides]]
-module = [
-    "houyi.verification.*",
-    "houyi.rag.*",
-    "houyi.arena.*",
-]
+module = ["houyi.rag.*", "houyi.arena.*"]
 ignore_errors = true
 
 

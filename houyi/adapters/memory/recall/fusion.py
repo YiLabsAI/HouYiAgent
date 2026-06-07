@@ -49,6 +49,27 @@ class WeightedFuser(Fuser):
     def __init__(self, kind_weights: dict[RetrieverKind, float] | None = None) -> None:
         self._weights = dict(kind_weights or _DEFAULT_KIND_WEIGHTS)
 
+    def _normalize_group(self, candidates: list[RecallCandidate]) -> list[RecallCandidate]:
+        if not candidates:
+            return candidates
+        scores = [c.score for c in candidates]
+        s_max = max(scores)
+        if s_max <= 1.0:
+            # Already within the [0.0, 1.0] interval: keep raw scores to avoid inflating weak candidates
+            for c in candidates:
+                c.signals = dict(c.signals)
+                c.signals["raw_score"] = c.score
+            return candidates
+
+        valid_candidates = []
+        for c in candidates:
+            normalized = c.score / s_max
+            c.signals = dict(c.signals)
+            c.signals["raw_score"] = c.score
+            c.score = normalized
+            valid_candidates.append(c)
+        return valid_candidates
+
     def fuse(
         self,
         candidates: Iterable[RecallCandidate],
@@ -58,23 +79,49 @@ class WeightedFuser(Fuser):
         if top_k <= 0:
             return []
 
-        grouped: dict[tuple[str, str, str], list[RecallCandidate]] = defaultdict(list)
+        # 1. Group candidates by their retriever kind to perform min-max normalization per-retriever
+        by_kind: dict[RetrieverKind, list[RecallCandidate]] = defaultdict(list)
         for cand in candidates:
+            by_kind[cand.matched_by].append(cand)
+
+        # 2. Normalize candidates within each retriever kind independently
+        normalized_cands: list[RecallCandidate] = []
+        for _, kind_list in by_kind.items():
+            normalized_cands.extend(self._normalize_group(kind_list))
+
+        # 3. Group normalized candidates by semantic key for deduplication
+        grouped: dict[tuple[str, str, str], list[RecallCandidate]] = defaultdict(list)
+        for cand in normalized_cands:
             grouped[_semantic_key(cand)].append(cand)
 
-        fused: list[RecallCandidate] = []
-        for group in grouped.values():
-            best = max(group, key=lambda c: self._weighted_score(c))
-            final_score = max(self._weighted_score(c) for c in group)
-            contributing = sorted({c.matched_by.value for c in group})
-            best.signals = dict(best.signals)
-            best.signals["fused_score"] = final_score
-            best.signals["contributors"] = contributing
-            best.signals["duplicate_count"] = len(group)
-            fused.append(best)
-
+        fused = [self._fuse_group(group) for group in grouped.values()]
         fused.sort(key=lambda c: c.signals.get("fused_score", c.score), reverse=True)
         return fused[:top_k]
+
+    def _fuse_group(self, group: list[RecallCandidate]) -> RecallCandidate:
+        best = max(group, key=lambda c: self._weighted_score(c))
+        final_score = max(self._weighted_score(c) for c in group)
+
+        # Special merging of contributors list
+        all_contributors = []
+        for c in group:
+            all_contributors.extend(c.signals.get("contributors", [c.matched_by.value]))
+        contributors = sorted(set(all_contributors))
+
+        best.signals = dict(best.signals)
+        best.signals["fused_score"] = final_score
+        best.signals["contributors"] = contributors
+        best.signals["duplicate_count"] = len(group)
+
+        # Non-destructively merge other signals from duplicate candidates (like graph relation tags)
+        for other in group:
+            if other is best:
+                continue
+            for k, v in other.signals.items():
+                if k not in best.signals:
+                    best.signals[k] = v
+
+        return best
 
     def _weighted_score(self, candidate: RecallCandidate) -> float:
         weight = self._weights.get(candidate.matched_by, 1.0)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import time
+from unittest.mock import MagicMock
 
 import pytest
 from fastapi import APIRouter, FastAPI
@@ -44,6 +45,34 @@ def _stub_startup_dependencies(app_module, monkeypatch, tmp_path) -> None:
     from houyi.skills.builtin import deep_research as _dr_mod
 
     monkeypatch.setattr(_dr_mod, "_research_service_ref", None)
+
+    # Stub the inline-imported subsystems that trigger heavy initialization
+    # (model loading, network probes) even inside try/except blocks.
+    # The real calls take 2-5s; stubs reduce to <0.01s.
+    # NOTE: _resolve_startup_embedding_config is NOT stubbed here because
+    # several tests (failfast, auto_embedding, resolver_failfast, timeout)
+    # need to control its behavior.  Simple tests stub it individually.
+
+    # Memory subsystem: build_memory_engine_from_env is inline-imported
+    # inside the lifespan body.  Patch the source module so the import
+    # resolves to our stub before the lifespan executes.
+    from houyi.adapters.memory import factory as _mem_factory_mod
+
+    monkeypatch.setattr(_mem_factory_mod, "build_memory_engine_from_env", lambda *a, **kw: None)
+
+    # LLM adapter factory (also inline-imported inside lifespan).
+    from houyi.adapters.llm import factory as _llm_factory_mod
+
+    monkeypatch.setattr(
+        _llm_factory_mod, "LLMAdapterFactory", MagicMock(create=MagicMock(return_value=None))
+    )
+
+    # Research subsystem: WebSearchService.from_env can probe network.
+    from houyi.skills.web_search import service as _ws_mod
+
+    monkeypatch.setattr(
+        _ws_mod, "WebSearchService", MagicMock(from_env=MagicMock(return_value=MagicMock()))
+    )
 
     monkeypatch.setenv(ENV_CHAT_DATA_DIR, str(tmp_path / "chat-data"))
     monkeypatch.setenv(ENV_CHAT_SETTINGS_PATH, str(tmp_path / "settings.json"))

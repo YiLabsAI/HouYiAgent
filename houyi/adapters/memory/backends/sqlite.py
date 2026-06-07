@@ -77,6 +77,7 @@ class SQLiteMemoryBackend(MemoryBackend):
         self._lock = threading.Lock()
         self._conn_manager = SQLiteConnectionManager(db_path, data_dir)
         self._schema_manager = SQLiteSchemaManager(self._conn_manager)
+        self._in_transaction = threading.local()
         self._schema_manager.init_schema()
 
         self._vector_search = SQLiteVectorSearch(self._conn_manager, self._schema_manager)
@@ -156,7 +157,8 @@ class SQLiteMemoryBackend(MemoryBackend):
             self._vector_search.upsert_vec_row(record.scope, record.key, record.embedding)
         else:
             self._vector_search.delete_vec_row(record.scope, record.key)
-        conn.commit()
+        if not getattr(self._in_transaction, "active", False):
+            conn.commit()
 
     def get(self, key: str, scope: MemoryScope) -> MemoryRecord | None:
         row = (
@@ -254,7 +256,8 @@ class SQLiteMemoryBackend(MemoryBackend):
         ):
             with contextlib.suppress(sqlite3.OperationalError):
                 conn.execute("DELETE FROM memories_vec WHERE rowid=?", (rowid,))
-        conn.commit()
+        if not getattr(self._in_transaction, "active", False):
+            conn.commit()
         return cur.rowcount > 0
 
     def clear(self, scope: MemoryScope | None = None) -> int:
@@ -286,7 +289,8 @@ class SQLiteMemoryBackend(MemoryBackend):
                         f"DELETE FROM memories_vec WHERE rowid IN ({placeholders})",
                         rowids,
                     )
-        conn.commit()
+        if not getattr(self._in_transaction, "active", False):
+            conn.commit()
         return cur.rowcount
 
     # ------------------------------------------------------------------
@@ -429,7 +433,8 @@ class SQLiteMemoryBackend(MemoryBackend):
                     "INSERT INTO memories_vec(rowid, embedding) VALUES (?, ?)",
                     (rowid, _pack_floats(embedding)),
                 )
-        conn.commit()
+        if not getattr(self._in_transaction, "active", False):
+            conn.commit()
 
     # ------------------------------------------------------------------
     # Raw turn log (L0)
@@ -505,12 +510,16 @@ class SQLiteMemoryBackend(MemoryBackend):
         """Return an immediate transaction context spanning the entire backend."""
         conn = self._conn()
         conn.execute("BEGIN IMMEDIATE")
+        was_active = getattr(self._in_transaction, "active", False)
+        self._in_transaction.active = True
         try:
             yield conn
             conn.commit()
         except Exception:
             conn.rollback()
             raise
+        finally:
+            self._in_transaction.active = was_active
 
     def close(self) -> None:
         self._conn_manager.close_all()
@@ -552,12 +561,14 @@ class SQLiteMemoryBackend(MemoryBackend):
                 edge.provenance,
             ),
         )
-        conn.commit()
+        if not getattr(self._in_transaction, "active", False):
+            conn.commit()
 
     def delete_edge(self, edge_id: str) -> bool:
         conn = self._conn()
         cur = conn.execute("DELETE FROM memory_edges WHERE edge_id=?", (edge_id,))
-        conn.commit()
+        if not getattr(self._in_transaction, "active", False):
+            conn.commit()
         return cur.rowcount > 0
 
     def invalidate_edge(self, edge_id: str, valid_to: float) -> bool:
@@ -566,7 +577,8 @@ class SQLiteMemoryBackend(MemoryBackend):
             "UPDATE memory_edges SET valid_to=? WHERE edge_id=? AND valid_to IS NULL",
             (valid_to, edge_id),
         )
-        conn.commit()
+        if not getattr(self._in_transaction, "active", False):
+            conn.commit()
         return cur.rowcount > 0
 
     def get_edge(self, edge_id: str) -> MemoryEdge | None:
@@ -635,7 +647,8 @@ class SQLiteMemoryBackend(MemoryBackend):
             """,
             (namespace, node_type, node_id, community_id, weight, ts),
         )
-        conn.commit()
+        if not getattr(self._in_transaction, "active", False):
+            conn.commit()
 
     def traverse_graph(
         self,
@@ -645,6 +658,7 @@ class SQLiteMemoryBackend(MemoryBackend):
         max_depth: int = 3,
         direction: str = "bidirectional",
         as_of: float | None = None,
+        relation_types: list[str] | None = None,
     ) -> list[GraphTraversalResult]:
         if not start_nodes:
             return []
@@ -652,17 +666,32 @@ class SQLiteMemoryBackend(MemoryBackend):
         ts = as_of if as_of is not None else time.time()
         conn = self._conn()
 
+        relation_filter_clause = ""
+        if relation_types:
+            placeholders = ",".join("?" for _ in relation_types)
+            relation_filter_clause = f"AND e.relation IN ({placeholders})"
+
+        anchor_parts = []
+        anchor_params = []
+        for node_id, node_type in start_nodes:
+            anchor_parts.append("SELECT ?, ?, 0, ',' || ? || ',', NULL, 1.0, NULL")
+            anchor_params.extend([node_id, node_type, node_id])
+        anchor_sql = " UNION ALL ".join(anchor_parts)
+
         # Decide query based on direction
         if direction == "forward":
-            query = """
-                WITH RECURSIVE bfs(node_id, node_type, depth, path) AS (
-                    SELECT ?, ?, 0, ',' || ? || ','
+            query = f"""
+                WITH RECURSIVE bfs(node_id, node_type, depth, path, relation, weight, parent_node_id) AS (
+                    {anchor_sql}
                     UNION ALL
                     SELECT
                         e.target_unit_id,
                         e.target_type,
                         b.depth + 1,
-                        b.path || e.target_unit_id || ','
+                        b.path || e.target_unit_id || ',',
+                        e.relation,
+                        e.weight,
+                        b.node_id
                     FROM memory_edges e
                     JOIN bfs b ON (e.source_unit_id = b.node_id AND e.source_type = b.node_type)
                     WHERE b.depth < ?
@@ -670,19 +699,23 @@ class SQLiteMemoryBackend(MemoryBackend):
                       AND e.valid_from <= ?
                       AND (e.valid_to IS NULL OR e.valid_to > ?)
                       AND instr(b.path, ',' || e.target_unit_id || ',') = 0
+                      {relation_filter_clause}
                 )
-                SELECT DISTINCT node_id, node_type, depth FROM bfs WHERE depth > 0;
+                SELECT node_id, node_type, depth, relation, weight, parent_node_id FROM bfs WHERE depth > 0;
             """
         elif direction == "backward":
-            query = """
-                WITH RECURSIVE bfs(node_id, node_type, depth, path) AS (
-                    SELECT ?, ?, 0, ',' || ? || ','
+            query = f"""
+                WITH RECURSIVE bfs(node_id, node_type, depth, path, relation, weight, parent_node_id) AS (
+                    {anchor_sql}
                     UNION ALL
                     SELECT
                         e.source_unit_id,
                         e.source_type,
                         b.depth + 1,
-                        b.path || e.source_unit_id || ','
+                        b.path || e.source_unit_id || ',',
+                        e.relation,
+                        e.weight,
+                        b.node_id
                     FROM memory_edges e
                     JOIN bfs b ON (e.target_unit_id = b.node_id AND e.target_type = b.node_type)
                     WHERE b.depth < ?
@@ -690,19 +723,23 @@ class SQLiteMemoryBackend(MemoryBackend):
                       AND e.valid_from <= ?
                       AND (e.valid_to IS NULL OR e.valid_to > ?)
                       AND instr(b.path, ',' || e.source_unit_id || ',') = 0
+                      {relation_filter_clause}
                 )
-                SELECT DISTINCT node_id, node_type, depth FROM bfs WHERE depth > 0;
+                SELECT node_id, node_type, depth, relation, weight, parent_node_id FROM bfs WHERE depth > 0;
             """
         else:  # bidirectional
-            query = """
-                WITH RECURSIVE bfs(node_id, node_type, depth, path) AS (
-                    SELECT ?, ?, 0, ',' || ? || ','
+            query = f"""
+                WITH RECURSIVE bfs(node_id, node_type, depth, path, relation, weight, parent_node_id) AS (
+                    {anchor_sql}
                     UNION ALL
                     SELECT
                         CASE WHEN e.source_unit_id = b.node_id THEN e.target_unit_id ELSE e.source_unit_id END,
                         CASE WHEN e.source_unit_id = b.node_id THEN e.target_type ELSE e.source_type END,
                         b.depth + 1,
-                        b.path || (CASE WHEN e.source_unit_id = b.node_id THEN e.target_unit_id ELSE e.source_unit_id END) || ','
+                        b.path || (CASE WHEN e.source_unit_id = b.node_id THEN e.target_unit_id ELSE e.source_unit_id END) || ',',
+                        e.relation,
+                        e.weight,
+                        b.node_id
                     FROM memory_edges e
                     JOIN bfs b ON (
                         (e.source_unit_id = b.node_id AND e.source_type = b.node_type)
@@ -713,22 +750,37 @@ class SQLiteMemoryBackend(MemoryBackend):
                       AND e.valid_from <= ?
                       AND (e.valid_to IS NULL OR e.valid_to > ?)
                       AND instr(b.path, ',' || (CASE WHEN e.source_unit_id = b.node_id THEN e.target_unit_id ELSE e.source_unit_id END) || ',') = 0
+                      {relation_filter_clause}
                 )
-                SELECT DISTINCT node_id, node_type, depth FROM bfs WHERE depth > 0;
+                SELECT node_id, node_type, depth, relation, weight, parent_node_id FROM bfs WHERE depth > 0;
             """
 
-        visited: dict[tuple[str, str], int] = {}
-        for node_id, node_type in start_nodes:
-            params = (node_id, node_type, node_id, max_depth, namespace, ts, ts)
-            rows = conn.execute(query, params).fetchall()
-            for row in rows:
-                key = (row["node_id"], row["node_type"])
-                depth = int(row["depth"])
-                if key not in visited or depth < visited[key]:
-                    visited[key] = depth
+        params: tuple[Any, ...] = (*anchor_params, max_depth, namespace, ts, ts)
+        if relation_types:
+            params = (*params, *relation_types)
+
+        rows = conn.execute(query, params).fetchall()
+
+        visited: dict[tuple[str, str], tuple[int, str | None, float | None, str | None]] = {}
+        for row in rows:
+            key = (row["node_id"], row["node_type"])
+            depth = int(row["depth"])
+            rel = row["relation"]
+            wt = row["weight"]
+            parent = row["parent_node_id"]
+            if key not in visited or depth < visited[key][0]:
+                visited[key] = (depth, rel, wt, parent)
 
         return [
-            GraphTraversalResult(node_id=k[0], node_type=k[1], depth=d) for k, d in visited.items()
+            GraphTraversalResult(
+                node_id=k[0],
+                node_type=k[1],
+                depth=d,
+                last_edge_relation=r,
+                last_edge_weight=w,
+                parent_node_id=p,
+            )
+            for k, (d, r, w, p) in visited.items()
         ]
 
     # ------------------------------------------------------------------
@@ -795,5 +847,6 @@ class SQLiteMemoryBackend(MemoryBackend):
                     "DELETE FROM memories WHERE key=? AND scope=?",
                     (key, scope_val),
                 )
-            conn.commit()
+            if not getattr(self._in_transaction, "active", False):
+                conn.commit()
         return result

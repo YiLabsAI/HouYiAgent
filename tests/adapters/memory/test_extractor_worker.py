@@ -19,6 +19,7 @@ from houyi.adapters.memory.workers import ExtractorWorker, ExtractorWorkerConfig
 @dataclass
 class _FakeResult:
     facts: list = None
+    edges: list = None
     raw_sourceless: list = None
     invalid_dropped: int = 0
 
@@ -123,6 +124,27 @@ class TestProcessOnce:
         assert rows[0].value == "tea"
         assert backend.extract_queue_stats() == {"done": 1}
 
+    async def test_verb_echo_fact_dropped(self, backend, state_view, inbox):
+        wp = _make_tw(backend)
+        turn = _enqueue(wp, "Evan started painting a forest scene")
+        echo = _fact(
+            subject="Evan", predicate="started_painting", obj="painting", anchor=turn.turn_id
+        )
+        real = _fact(subject="Evan", predicate="painted", obj="forest scene", anchor=turn.turn_id)
+        worker = ExtractorWorker(
+            backend=backend,
+            extractor=_FakeExtractor(results=[_FakeResult(facts=[echo, real])]),
+            entity_state=state_view,
+            candidate_inbox=inbox,
+        )
+        processed = await worker.process_once()
+        assert processed == 1
+        rows = state_view.get_active("default", "Evan")
+        values = {r.value for r in rows}
+        # The verb-echo 'painting' must be dropped; the concrete fact kept.
+        assert "forest scene" in values
+        assert "painting" not in values
+
     async def test_vague_fact_to_inbox(self, backend, state_view, inbox):
         wp = _make_tw(backend)
         turn = _enqueue(wp, "maybe alice likes tea")
@@ -178,6 +200,65 @@ class TestProcessOnce:
         assert len(rows) == 1
         assert rows[0].value == "coffee"
         assert backend.extract_queue_stats() == {"done": 2}
+
+    async def test_extractor_persists_edges(self, backend, state_view, inbox):
+        wp = _make_tw(backend)
+        turn = _enqueue(wp, "Caroline works as a Teacher. Joanna knows Bob.")
+
+        extractor = _FakeExtractor(
+            results=[
+                _FakeResult(
+                    facts=[
+                        _fact(
+                            subject="Caroline", predicate="job", obj="Teacher", anchor=turn.turn_id
+                        ),
+                        _fact(subject="Joanna", predicate="knows", obj="Bob", anchor=turn.turn_id),
+                    ],
+                    edges=[
+                        {
+                            "source_unit_id": "Caroline.job",
+                            "target_unit_id": "Joanna.knows",
+                            "relation": "related_to",
+                            "source_type": "state",
+                            "target_type": "state",
+                        }
+                    ],
+                )
+            ]
+        )
+        worker = ExtractorWorker(
+            backend=backend,
+            extractor=extractor,
+            entity_state=state_view,
+            candidate_inbox=inbox,
+        )
+        processed = await worker.process_once()
+        assert processed == 1
+
+        # Verify state records were inserted
+        c_rows = state_view.get_active("default", "Caroline", "job")
+        j_rows = state_view.get_active("default", "Joanna", "knows")
+        assert len(c_rows) == 1
+        assert len(j_rows) == 1
+
+        # Verify edge was resolved and persisted
+        conn = backend._conn()
+        edges = conn.execute("SELECT * FROM memory_edges").fetchall()
+        assert len(edges) == 3
+
+        # Find the specific LLM-extracted edge
+        llm_edge_row = None
+        for edge in edges:
+            row = dict(edge)
+            if (
+                row["source_unit_id"] == c_rows[0].state_id
+                and row["target_unit_id"] == j_rows[0].state_id
+            ):
+                llm_edge_row = row
+                break
+
+        assert llm_edge_row is not None
+        assert llm_edge_row["relation"] == "related_to"
 
 
 class TestFailureHandling:
