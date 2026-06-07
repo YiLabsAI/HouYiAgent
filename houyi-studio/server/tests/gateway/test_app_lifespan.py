@@ -23,7 +23,7 @@ from houyi.infrastructure.config.env_config import (
 )
 
 
-def _stub_startup_dependencies(app_module, monkeypatch, tmp_path) -> None:
+def _stub_startup_dependencies(app_module, monkeypatch, tmp_path) -> dict:
     EnvConfig._reset()
     monkeypatch.setattr(app_module, "get_execution_engine", lambda: object())
     monkeypatch.setattr(app_module, "register_console_skills", lambda: None)
@@ -49,9 +49,15 @@ def _stub_startup_dependencies(app_module, monkeypatch, tmp_path) -> None:
     # Stub the inline-imported subsystems that trigger heavy initialization
     # (model loading, network probes) even inside try/except blocks.
     # The real calls take 2-5s; stubs reduce to <0.01s.
-    # NOTE: _resolve_startup_embedding_config is NOT stubbed here because
-    # several tests (failfast, auto_embedding, resolver_failfast, timeout)
-    # need to control its behavior.  Simple tests stub it individually.
+
+    # Embedding resolution: stub the wrapper to avoid 3s ThreadPoolExecutor timeout.
+    # Tests that need real embedding behavior restore the saved original.
+    captured["_resolve_startup_embedding_config"] = app_module._resolve_startup_embedding_config
+    monkeypatch.setattr(
+        app_module,
+        "_resolve_startup_embedding_config",
+        lambda *, strict_explicit=False: (None, "no_provider"),
+    )
 
     # Memory subsystem: build_memory_engine_from_env is inline-imported
     # inside the lifespan body.  Patch the source module so the import
@@ -82,7 +88,7 @@ def _stub_startup_dependencies(app_module, monkeypatch, tmp_path) -> None:
 def test_lifespan_local_failfast(monkeypatch, tmp_path) -> None:
     from houyi_studio.server.gateway import app as app_module
 
-    _stub_startup_dependencies(app_module, monkeypatch, tmp_path)
+    stubs = _stub_startup_dependencies(app_module, monkeypatch, tmp_path)
     monkeypatch.setenv(ENV_EMBEDDING_PROVIDER, "local")
 
     called: dict[str, bool] = {"strict": False}
@@ -91,7 +97,8 @@ def test_lifespan_local_failfast(monkeypatch, tmp_path) -> None:
         called["strict"] = strict_explicit
         raise RuntimeError("Embedding provider 'local' from env is unavailable at runtime")
 
-    monkeypatch.setattr(app_module, "resolve_embedding_config", _fail_if_strict)
+    # Restore real embedding wrapper and inject our fail function.
+    monkeypatch.setattr(app_module, "_resolve_startup_embedding_config", _fail_if_strict)
 
     app = FastAPI(lifespan=app_module.lifespan)
     try:
@@ -108,7 +115,7 @@ def test_lifespan_local_failfast(monkeypatch, tmp_path) -> None:
 def test_lifespan_auto_embedding(monkeypatch, tmp_path) -> None:
     from houyi_studio.server.gateway import app as app_module
 
-    _stub_startup_dependencies(app_module, monkeypatch, tmp_path)
+    stubs = _stub_startup_dependencies(app_module, monkeypatch, tmp_path)
     monkeypatch.delenv(ENV_EMBEDDING_PROVIDER, raising=False)
 
     called: dict[str, bool] = {"strict": True}
@@ -117,7 +124,7 @@ def test_lifespan_auto_embedding(monkeypatch, tmp_path) -> None:
         called["strict"] = strict_explicit
         return None, "no_provider"
 
-    monkeypatch.setattr(app_module, "resolve_embedding_config", _no_provider)
+    monkeypatch.setattr(app_module, "_resolve_startup_embedding_config", _no_provider)
 
     app = FastAPI(lifespan=app_module.lifespan)
     with TestClient(app):
@@ -129,12 +136,15 @@ def test_lifespan_auto_embedding(monkeypatch, tmp_path) -> None:
 def test_lifespan_resolver_failfast(monkeypatch, tmp_path, caplog) -> None:
     from houyi_studio.server.gateway import app as app_module
 
-    _stub_startup_dependencies(app_module, monkeypatch, tmp_path)
+    stubs = _stub_startup_dependencies(app_module, monkeypatch, tmp_path)
     monkeypatch.setenv(ENV_EMBEDDING_PROVIDER, "local")
     monkeypatch.delenv(ENV_EMBEDDING_MODEL, raising=False)
 
     from houyi_studio.server.rag import embedding_config as embedding_config_module
 
+    # Restore real wrapper so ThreadPoolExecutor timeout is tested.
+    real_resolve = stubs["_resolve_startup_embedding_config"]
+    monkeypatch.setattr(app_module, "_resolve_startup_embedding_config", real_resolve)
     monkeypatch.setattr(
         app_module, "resolve_embedding_config", embedding_config_module.resolve_embedding_config
     )
@@ -164,7 +174,7 @@ def test_lifespan_resolver_failfast(monkeypatch, tmp_path, caplog) -> None:
 def test_lifespan_warns_provider(monkeypatch, tmp_path, caplog) -> None:
     from houyi_studio.server.gateway import app as app_module
 
-    _stub_startup_dependencies(app_module, monkeypatch, tmp_path)
+    stubs = _stub_startup_dependencies(app_module, monkeypatch, tmp_path)
 
     # Ensure true auto mode and no provider hints from host env.
     for env_key in (
@@ -182,6 +192,9 @@ def test_lifespan_warns_provider(monkeypatch, tmp_path, caplog) -> None:
 
     from houyi_studio.server.rag import embedding_config as embedding_config_module
 
+    # Restore real wrapper so it calls resolve_embedding_config.
+    real_resolve = stubs["_resolve_startup_embedding_config"]
+    monkeypatch.setattr(app_module, "_resolve_startup_embedding_config", real_resolve)
     monkeypatch.setattr(
         app_module, "resolve_embedding_config", embedding_config_module.resolve_embedding_config
     )
@@ -200,9 +213,13 @@ def test_lifespan_warns_provider(monkeypatch, tmp_path, caplog) -> None:
 def test_lifespan_timeout_degrades(monkeypatch, tmp_path, caplog) -> None:
     from houyi_studio.server.gateway import app as app_module
 
-    _stub_startup_dependencies(app_module, monkeypatch, tmp_path)
+    stubs = _stub_startup_dependencies(app_module, monkeypatch, tmp_path)
     monkeypatch.delenv(ENV_EMBEDDING_PROVIDER, raising=False)
     monkeypatch.setenv("HOUYI_EMBEDDING_STARTUP_TIMEOUT_SECONDS", "0.005")
+
+    # Restore real wrapper to test ThreadPoolExecutor timeout behavior.
+    real_resolve = stubs["_resolve_startup_embedding_config"]
+    monkeypatch.setattr(app_module, "_resolve_startup_embedding_config", real_resolve)
 
     def _slow_resolve(*, strict_explicit: bool = False, **kwargs):
         time.sleep(0.01)
