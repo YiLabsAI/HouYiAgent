@@ -104,29 +104,41 @@ class SQLiteConnectionManager:
             return False
 
     def get_connection(self) -> sqlite3.Connection:
-        """Get or create a thread-local connection."""
-        if not hasattr(self._local, "conn") or self._local.conn is None:
-            conn = sqlite3.connect(
-                str(self._db_path),
-                check_same_thread=False,
-                timeout=30.0,
-            )
-            conn.row_factory = sqlite3.Row
-            # Extension load must happen before the first PRAGMA / query so
-            # vec0 virtual tables defined later in the schema migration can
-            # be opened on this connection.
-            vec_ok = self.try_load_vec_extension(conn)
+        """Get or create a thread-local connection.
+
+        If close_all() was called from another thread, the cached
+        thread-local reference may be stale (pointing to a closed
+        connection).  Detect this by checking membership in the
+        live _connections set and self-heal by creating a fresh
+        connection.
+        """
+        if hasattr(self._local, "conn") and self._local.conn is not None:
+            # Fast path: cached connection is still live.
             with self._lock:
-                # Latch availability once per process; downgrade should never
-                # flip back on, and upgrade only after a clean restart.
-                if vec_ok:
-                    self._vec_available = True
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA synchronous=NORMAL")
-            conn.execute("PRAGMA foreign_keys=ON")
-            self._local.conn = conn
-            with self._lock:
-                self._connections.add(conn)
+                is_live = self._local.conn in self._connections
+            if is_live:
+                return self._local.conn
+            # Stale — close_all() cleared the set; discard and rebuild.
+            with contextlib.suppress(Exception):
+                self._local.conn.close()
+            self._local.conn = None
+
+        conn = sqlite3.connect(
+            str(self._db_path),
+            check_same_thread=False,
+            timeout=30.0,
+        )
+        conn.row_factory = sqlite3.Row
+        vec_ok = self.try_load_vec_extension(conn)
+        with self._lock:
+            if vec_ok:
+                self._vec_available = True
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA foreign_keys=ON")
+        self._local.conn = conn
+        with self._lock:
+            self._connections.add(conn)
         return self._local.conn
 
     def close_all(self) -> None:

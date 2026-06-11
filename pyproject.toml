@@ -276,6 +276,7 @@ markers = [
     "benchmark: performance benchmark tests",
     "smoke: critical-path smoke tests that must pass before any delivery",
     "integration: integration tests that need external services or long setup",
+    "stress: concurrent/load tests — excluded from make check, run via make test-stress",
 ]
 
 [tool.importlinter]

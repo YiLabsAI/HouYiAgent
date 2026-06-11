@@ -28,6 +28,7 @@ from houyi.adapters.memory.backends.sqlite_connection import SQLiteConnectionMan
 from houyi.adapters.memory.backends.sqlite_embedding_cache import SQLiteEmbeddingCache
 from houyi.adapters.memory.backends.sqlite_extract_queue import SQLiteExtractQueue
 from houyi.adapters.memory.backends.sqlite_fts_search import SQLiteFTSSearch
+from houyi.adapters.memory.backends.sqlite_graph import SQLiteGraphStore
 from houyi.adapters.memory.backends.sqlite_raw_turn_log import SQLiteRawTurnLog
 from houyi.adapters.memory.backends.sqlite_schema import SQLiteSchemaManager
 from houyi.adapters.memory.backends.sqlite_vector_search import SQLiteVectorSearch
@@ -36,7 +37,6 @@ from houyi.adapters.memory.types import (
     MemoryEdge,
     MemoryProvenance,
     MemoryRecord,
-    MemoryRelation,
     MemoryScope,
     MemoryType,
     RawTurn,
@@ -75,6 +75,12 @@ class SQLiteMemoryBackend(MemoryBackend):
         data_dir: str | Path | None = None,
     ):
         self._lock = threading.Lock()
+        # Serialize direct write operations (put, delete, add_edge, etc.)
+        # to prevent SQLite busy_timeout exhaustion under concurrent
+        # multi-write.  Acquired only outside transaction() — inside a
+        # transaction BEGIN IMMEDIATE already holds the SQLite writer
+        # lock so no extra Python-level serialization is needed.
+        self._write_lock = threading.Lock()
         self._conn_manager = SQLiteConnectionManager(db_path, data_dir)
         self._schema_manager = SQLiteSchemaManager(self._conn_manager)
         self._in_transaction = threading.local()
@@ -85,9 +91,26 @@ class SQLiteMemoryBackend(MemoryBackend):
         self._embedding_cache = SQLiteEmbeddingCache(self._conn_manager)
         self._raw_turn_log = SQLiteRawTurnLog(self._conn_manager, self._lock)
         self._extract_queue = SQLiteExtractQueue(self._conn_manager, self._raw_turn_log, self._lock)
+        self._graph_store = SQLiteGraphStore(self._conn_manager)
 
     def _conn(self) -> sqlite3.Connection:
         return self._conn_manager.get_connection()
+
+    @contextlib.contextmanager
+    def _write_serialized(self):
+        """Serialize write operations to prevent SQLite busy_timeout exhaustion.
+
+        Acquires _write_lock outside transaction context; skips it inside
+        because BEGIN IMMEDIATE already holds the SQLite writer lock.
+        """
+        in_tx = getattr(self._in_transaction, "active", False)
+        if not in_tx:
+            self._write_lock.acquire()
+        try:
+            yield
+        finally:
+            if not in_tx:
+                self._write_lock.release()
 
     @property
     def _db_path(self) -> Path:
@@ -103,62 +126,63 @@ class SQLiteMemoryBackend(MemoryBackend):
     # ------------------------------------------------------------------
 
     def put(self, record: MemoryRecord) -> None:
-        conn = self._conn()
-        emb_blob = _pack_floats(record.embedding) if record.embedding else None
-        embedding_pending = 0 if record.embedding else 1
-        conn.execute(
-            """
-                INSERT INTO memories
-                (record_id, scope, key, content, memory_type, tags, confidence,
-                decay, provenance, metadata, created_at, updated_at, ttl,
-                valid_from, valid_to, embedding,
-                embedding_pending, embedding_provider)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(scope, key) DO UPDATE SET
-                content=excluded.content,
-                memory_type=excluded.memory_type,
-                tags=excluded.tags,
-                confidence=excluded.confidence,
-                decay=excluded.decay,
-                provenance=excluded.provenance,
-                metadata=excluded.metadata,
-                updated_at=excluded.updated_at,
-                ttl=excluded.ttl,
-                valid_from=excluded.valid_from,
-                valid_to=excluded.valid_to,
-                embedding=excluded.embedding,
-                embedding_pending=excluded.embedding_pending,
-                embedding_provider=excluded.embedding_provider
-            """,
-            (
-                record.record_id,
-                record.scope.value,
-                record.key,
-                record.content,
-                record.memory_type.value,
-                json.dumps(record.tags, ensure_ascii=False),
-                record.confidence,
-                record.decay,
-                record.provenance.model_dump_json() if record.provenance else None,
-                json.dumps(record.metadata, ensure_ascii=False),
-                record.created_at,
-                record.updated_at,
-                record.ttl,
-                record.valid_from,
-                record.valid_to,
-                emb_blob,
-                embedding_pending,
-                record.metadata.get("embedding_provider")
-                if isinstance(record.metadata, dict)
-                else None,
-            ),
-        )
-        if record.embedding:
-            self._vector_search.upsert_vec_row(record.scope, record.key, record.embedding)
-        else:
-            self._vector_search.delete_vec_row(record.scope, record.key)
-        if not getattr(self._in_transaction, "active", False):
-            conn.commit()
+        with self._write_serialized():
+            conn = self._conn()
+            emb_blob = _pack_floats(record.embedding) if record.embedding else None
+            embedding_pending = 0 if record.embedding else 1
+            conn.execute(
+                """
+                    INSERT INTO memories
+                    (record_id, scope, key, content, memory_type, tags, confidence,
+                    decay, provenance, metadata, created_at, updated_at, ttl,
+                    valid_from, valid_to, embedding,
+                    embedding_pending, embedding_provider)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(scope, key) DO UPDATE SET
+                    content=excluded.content,
+                    memory_type=excluded.memory_type,
+                    tags=excluded.tags,
+                    confidence=excluded.confidence,
+                    decay=excluded.decay,
+                    provenance=excluded.provenance,
+                    metadata=excluded.metadata,
+                    updated_at=excluded.updated_at,
+                    ttl=excluded.ttl,
+                    valid_from=excluded.valid_from,
+                    valid_to=excluded.valid_to,
+                    embedding=excluded.embedding,
+                    embedding_pending=excluded.embedding_pending,
+                    embedding_provider=excluded.embedding_provider
+                """,
+                (
+                    record.record_id,
+                    record.scope.value,
+                    record.key,
+                    record.content,
+                    record.memory_type.value,
+                    json.dumps(record.tags, ensure_ascii=False),
+                    record.confidence,
+                    record.decay,
+                    record.provenance.model_dump_json() if record.provenance else None,
+                    json.dumps(record.metadata, ensure_ascii=False),
+                    record.created_at,
+                    record.updated_at,
+                    record.ttl,
+                    record.valid_from,
+                    record.valid_to,
+                    emb_blob,
+                    embedding_pending,
+                    record.metadata.get("embedding_provider")
+                    if isinstance(record.metadata, dict)
+                    else None,
+                ),
+            )
+            if record.embedding:
+                self._vector_search.upsert_vec_row(record.scope, record.key, record.embedding)
+            else:
+                self._vector_search.delete_vec_row(record.scope, record.key)
+            if not getattr(self._in_transaction, "active", False):
+                conn.commit()
 
     def get(self, key: str, scope: MemoryScope) -> MemoryRecord | None:
         row = (
@@ -243,55 +267,59 @@ class SQLiteMemoryBackend(MemoryBackend):
         return self._filter_expired(rows)
 
     def delete(self, key: str, scope: MemoryScope) -> bool:
-        conn = self._conn()
-        rowid = self._vector_search._rowid_for(scope, key)
-        cur = conn.execute(
-            "DELETE FROM memories WHERE scope=? AND key=?",
-            (scope.value, key),
-        )
-        if (
-            rowid is not None
-            and self._conn_manager.vec_available
-            and self._conn_manager.vec_dim is not None
-        ):
-            with contextlib.suppress(sqlite3.OperationalError):
-                conn.execute("DELETE FROM memories_vec WHERE rowid=?", (rowid,))
-        if not getattr(self._in_transaction, "active", False):
-            conn.commit()
-        return cur.rowcount > 0
-
-    def clear(self, scope: MemoryScope | None = None) -> int:
-        conn = self._conn()
-        if scope is None:
-            cur = conn.execute("DELETE FROM memories")
-            conn.execute("DELETE FROM embedding_cache")
-            conn.execute("DELETE FROM entity_state")
-            conn.execute("DELETE FROM vague_candidates")
-            conn.execute("DELETE FROM memory_edges")
-            conn.execute("DELETE FROM memory_community_labels")
-            if self._conn_manager.vec_available and self._conn_manager.vec_dim is not None:
-                with contextlib.suppress(sqlite3.OperationalError):
-                    conn.execute("DELETE FROM memories_vec")
-        else:
-            rowids: list[int] = [
-                int(r["rowid"])
-                for r in conn.execute("SELECT rowid FROM memories WHERE scope=?", (scope.value,))
-            ]
-            cur = conn.execute("DELETE FROM memories WHERE scope=?", (scope.value,))
+        with self._write_serialized():
+            conn = self._conn()
+            rowid = self._vector_search._rowid_for(scope, key)
+            cur = conn.execute(
+                "DELETE FROM memories WHERE scope=? AND key=?",
+                (scope.value, key),
+            )
             if (
-                rowids
+                rowid is not None
                 and self._conn_manager.vec_available
                 and self._conn_manager.vec_dim is not None
             ):
                 with contextlib.suppress(sqlite3.OperationalError):
-                    placeholders = ",".join("?" * len(rowids))
-                    conn.execute(
-                        f"DELETE FROM memories_vec WHERE rowid IN ({placeholders})",
-                        rowids,
+                    conn.execute("DELETE FROM memories_vec WHERE rowid=?", (rowid,))
+            if not getattr(self._in_transaction, "active", False):
+                conn.commit()
+            return cur.rowcount > 0
+
+    def clear(self, scope: MemoryScope | None = None) -> int:
+        with self._write_serialized():
+            conn = self._conn()
+            if scope is None:
+                cur = conn.execute("DELETE FROM memories")
+                conn.execute("DELETE FROM embedding_cache")
+                conn.execute("DELETE FROM entity_state")
+                conn.execute("DELETE FROM vague_candidates")
+                conn.execute("DELETE FROM memory_edges")
+                conn.execute("DELETE FROM memory_community_labels")
+                if self._conn_manager.vec_available and self._conn_manager.vec_dim is not None:
+                    with contextlib.suppress(sqlite3.OperationalError):
+                        conn.execute("DELETE FROM memories_vec")
+            else:
+                rowids: list[int] = [
+                    int(r["rowid"])
+                    for r in conn.execute(
+                        "SELECT rowid FROM memories WHERE scope=?", (scope.value,)
                     )
-        if not getattr(self._in_transaction, "active", False):
-            conn.commit()
-        return cur.rowcount
+                ]
+                cur = conn.execute("DELETE FROM memories WHERE scope=?", (scope.value,))
+                if (
+                    rowids
+                    and self._conn_manager.vec_available
+                    and self._conn_manager.vec_dim is not None
+                ):
+                    with contextlib.suppress(sqlite3.OperationalError):
+                        placeholders = ",".join("?" * len(rowids))
+                        conn.execute(
+                            f"DELETE FROM memories_vec WHERE rowid IN ({placeholders})",
+                            rowids,
+                        )
+            if not getattr(self._in_transaction, "active", False):
+                conn.commit()
+            return cur.rowcount
 
     # ------------------------------------------------------------------
     # FTS5 full-text search
@@ -528,101 +556,34 @@ class SQLiteMemoryBackend(MemoryBackend):
         self.close()
 
     # ------------------------------------------------------------------
-    # GraphIndex (HouYi-Mesh)
+    # GraphIndex (HouYi-Mesh) — delegates to SQLiteGraphStore
     # ------------------------------------------------------------------
 
     def add_edge(self, edge: MemoryEdge) -> None:
-        conn = self._conn()
-        conn.execute(
-            """
-            INSERT INTO memory_edges
-            (edge_id, namespace, source_unit_id, target_unit_id,
-             source_type, target_type, relation, weight,
-             valid_from, valid_to, created_at, provenance)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(edge_id) DO UPDATE SET
-            weight=excluded.weight,
-            valid_from=excluded.valid_from,
-            valid_to=excluded.valid_to,
-            provenance=excluded.provenance
-            """,
-            (
-                edge.edge_id,
-                edge.namespace,
-                edge.source_unit_id,
-                edge.target_unit_id,
-                edge.source_type,
-                edge.target_type,
-                edge.relation.value,
-                edge.weight,
-                edge.valid_from,
-                edge.valid_to,
-                edge.created_at,
-                edge.provenance,
-            ),
-        )
-        if not getattr(self._in_transaction, "active", False):
-            conn.commit()
+        with self._write_serialized():
+            self._graph_store.add_edge(edge, conn=self._conn())
+            if not getattr(self._in_transaction, "active", False):
+                self._conn().commit()
 
     def delete_edge(self, edge_id: str) -> bool:
-        conn = self._conn()
-        cur = conn.execute("DELETE FROM memory_edges WHERE edge_id=?", (edge_id,))
-        if not getattr(self._in_transaction, "active", False):
-            conn.commit()
-        return cur.rowcount > 0
+        with self._write_serialized():
+            result = self._graph_store.delete_edge(edge_id, conn=self._conn())
+            if not getattr(self._in_transaction, "active", False):
+                self._conn().commit()
+            return result
 
     def invalidate_edge(self, edge_id: str, valid_to: float) -> bool:
-        conn = self._conn()
-        cur = conn.execute(
-            "UPDATE memory_edges SET valid_to=? WHERE edge_id=? AND valid_to IS NULL",
-            (valid_to, edge_id),
-        )
-        if not getattr(self._in_transaction, "active", False):
-            conn.commit()
-        return cur.rowcount > 0
+        with self._write_serialized():
+            result = self._graph_store.invalidate_edge(edge_id, valid_to, conn=self._conn())
+            if not getattr(self._in_transaction, "active", False):
+                self._conn().commit()
+            return result
 
     def get_edge(self, edge_id: str) -> MemoryEdge | None:
-        row = (
-            self._conn()
-            .execute("SELECT * FROM memory_edges WHERE edge_id=?", (edge_id,))
-            .fetchone()
-        )
-        if row is None:
-            return None
-        d = dict(row)
-        return MemoryEdge(
-            edge_id=d["edge_id"],
-            namespace=d["namespace"],
-            source_unit_id=d["source_unit_id"],
-            target_unit_id=d["target_unit_id"],
-            source_type=d["source_type"],
-            target_type=d["target_type"],
-            relation=MemoryRelation(d["relation"]),
-            weight=d["weight"],
-            valid_from=d["valid_from"],
-            valid_to=d.get("valid_to"),
-            created_at=d["created_at"],
-            provenance=d.get("provenance"),
-        )
+        return self._graph_store.get_edge(edge_id)
 
-    def get_community_id(
-        self,
-        namespace: str,
-        node_type: str,
-        node_id: str,
-    ) -> str | None:
-        row = (
-            self._conn()
-            .execute(
-                """
-                SELECT community_id FROM memory_community_labels
-                WHERE namespace=? AND node_type=? AND node_id=?
-                """,
-                (namespace, node_type, node_id),
-            )
-            .fetchone()
-        )
-        return row[0] if row is not None else None
+    def get_community_id(self, namespace: str, node_type: str, node_id: str) -> str | None:
+        return self._graph_store.get_community_id(namespace, node_type, node_id)
 
     def put_community_label(
         self,
@@ -633,22 +594,18 @@ class SQLiteMemoryBackend(MemoryBackend):
         weight: float = 1.0,
         updated_at: float | None = None,
     ) -> None:
-        ts = updated_at if updated_at is not None else time.time()
-        conn = self._conn()
-        conn.execute(
-            """
-            INSERT INTO memory_community_labels
-            (namespace, node_type, node_id, community_id, weight, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?)
-            ON CONFLICT(namespace, node_type, node_id) DO UPDATE SET
-            community_id=excluded.community_id,
-            weight=excluded.weight,
-            updated_at=excluded.updated_at
-            """,
-            (namespace, node_type, node_id, community_id, weight, ts),
-        )
-        if not getattr(self._in_transaction, "active", False):
-            conn.commit()
+        with self._write_serialized():
+            self._graph_store.put_community_label(
+                namespace,
+                node_type,
+                node_id,
+                community_id,
+                weight,
+                updated_at,
+                conn=self._conn(),
+            )
+            if not getattr(self._in_transaction, "active", False):
+                self._conn().commit()
 
     def traverse_graph(
         self,
@@ -660,128 +617,14 @@ class SQLiteMemoryBackend(MemoryBackend):
         as_of: float | None = None,
         relation_types: list[str] | None = None,
     ) -> list[GraphTraversalResult]:
-        if not start_nodes:
-            return []
-
-        ts = as_of if as_of is not None else time.time()
-        conn = self._conn()
-
-        relation_filter_clause = ""
-        if relation_types:
-            placeholders = ",".join("?" for _ in relation_types)
-            relation_filter_clause = f"AND e.relation IN ({placeholders})"
-
-        anchor_parts = []
-        anchor_params = []
-        for node_id, node_type in start_nodes:
-            anchor_parts.append("SELECT ?, ?, 0, ',' || ? || ',', NULL, 1.0, NULL")
-            anchor_params.extend([node_id, node_type, node_id])
-        anchor_sql = " UNION ALL ".join(anchor_parts)
-
-        # Decide query based on direction
-        if direction == "forward":
-            query = f"""
-                WITH RECURSIVE bfs(node_id, node_type, depth, path, relation, weight, parent_node_id) AS (
-                    {anchor_sql}
-                    UNION ALL
-                    SELECT
-                        e.target_unit_id,
-                        e.target_type,
-                        b.depth + 1,
-                        b.path || e.target_unit_id || ',',
-                        e.relation,
-                        e.weight,
-                        b.node_id
-                    FROM memory_edges e
-                    JOIN bfs b ON (e.source_unit_id = b.node_id AND e.source_type = b.node_type)
-                    WHERE b.depth < ?
-                      AND e.namespace = ?
-                      AND e.valid_from <= ?
-                      AND (e.valid_to IS NULL OR e.valid_to > ?)
-                      AND instr(b.path, ',' || e.target_unit_id || ',') = 0
-                      {relation_filter_clause}
-                )
-                SELECT node_id, node_type, depth, relation, weight, parent_node_id FROM bfs WHERE depth > 0;
-            """
-        elif direction == "backward":
-            query = f"""
-                WITH RECURSIVE bfs(node_id, node_type, depth, path, relation, weight, parent_node_id) AS (
-                    {anchor_sql}
-                    UNION ALL
-                    SELECT
-                        e.source_unit_id,
-                        e.source_type,
-                        b.depth + 1,
-                        b.path || e.source_unit_id || ',',
-                        e.relation,
-                        e.weight,
-                        b.node_id
-                    FROM memory_edges e
-                    JOIN bfs b ON (e.target_unit_id = b.node_id AND e.target_type = b.node_type)
-                    WHERE b.depth < ?
-                      AND e.namespace = ?
-                      AND e.valid_from <= ?
-                      AND (e.valid_to IS NULL OR e.valid_to > ?)
-                      AND instr(b.path, ',' || e.source_unit_id || ',') = 0
-                      {relation_filter_clause}
-                )
-                SELECT node_id, node_type, depth, relation, weight, parent_node_id FROM bfs WHERE depth > 0;
-            """
-        else:  # bidirectional
-            query = f"""
-                WITH RECURSIVE bfs(node_id, node_type, depth, path, relation, weight, parent_node_id) AS (
-                    {anchor_sql}
-                    UNION ALL
-                    SELECT
-                        CASE WHEN e.source_unit_id = b.node_id THEN e.target_unit_id ELSE e.source_unit_id END,
-                        CASE WHEN e.source_unit_id = b.node_id THEN e.target_type ELSE e.source_type END,
-                        b.depth + 1,
-                        b.path || (CASE WHEN e.source_unit_id = b.node_id THEN e.target_unit_id ELSE e.source_unit_id END) || ',',
-                        e.relation,
-                        e.weight,
-                        b.node_id
-                    FROM memory_edges e
-                    JOIN bfs b ON (
-                        (e.source_unit_id = b.node_id AND e.source_type = b.node_type)
-                        OR (e.target_unit_id = b.node_id AND e.target_type = b.node_type)
-                    )
-                    WHERE b.depth < ?
-                      AND e.namespace = ?
-                      AND e.valid_from <= ?
-                      AND (e.valid_to IS NULL OR e.valid_to > ?)
-                      AND instr(b.path, ',' || (CASE WHEN e.source_unit_id = b.node_id THEN e.target_unit_id ELSE e.source_unit_id END) || ',') = 0
-                      {relation_filter_clause}
-                )
-                SELECT node_id, node_type, depth, relation, weight, parent_node_id FROM bfs WHERE depth > 0;
-            """
-
-        params: tuple[Any, ...] = (*anchor_params, max_depth, namespace, ts, ts)
-        if relation_types:
-            params = (*params, *relation_types)
-
-        rows = conn.execute(query, params).fetchall()
-
-        visited: dict[tuple[str, str], tuple[int, str | None, float | None, str | None]] = {}
-        for row in rows:
-            key = (row["node_id"], row["node_type"])
-            depth = int(row["depth"])
-            rel = row["relation"]
-            wt = row["weight"]
-            parent = row["parent_node_id"]
-            if key not in visited or depth < visited[key][0]:
-                visited[key] = (depth, rel, wt, parent)
-
-        return [
-            GraphTraversalResult(
-                node_id=k[0],
-                node_type=k[1],
-                depth=d,
-                last_edge_relation=r,
-                last_edge_weight=w,
-                parent_node_id=p,
-            )
-            for k, (d, r, w, p) in visited.items()
-        ]
+        return self._graph_store.traverse_graph(
+            namespace=namespace,
+            start_nodes=start_nodes,
+            max_depth=max_depth,
+            direction=direction,
+            as_of=as_of,
+            relation_types=relation_types,
+        )
 
     # ------------------------------------------------------------------
     # Row mapping

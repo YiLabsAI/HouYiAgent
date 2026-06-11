@@ -83,16 +83,6 @@ def _run_phase(command: list[str], *, cwd: Path, timeout: float, env: dict[str, 
         raise exc
 
 
-def _run_phase_async(command: list[str], *, cwd: Path, env: dict[str, str]) -> subprocess.Popen:
-    """Start a phase as a background process (for parallel execution)."""
-    return subprocess.Popen(
-        command,
-        cwd=cwd,
-        env=env,
-        start_new_session=True,
-    )
-
-
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--budget", type=float, default=60.0)
@@ -101,7 +91,6 @@ def main() -> int:
     root = Path(__file__).resolve().parent.parent
     phases: list[tuple[str, list[str]]] = [
         ("check-unit", ["./scripts/check_code.sh"]),
-        ("check-integration", ["./scripts/check_integration.sh"]),
         ("check-e2e-smoke", ["make", "--no-print-directory", "test-e2e-smoke"]),
     ]
 
@@ -109,109 +98,48 @@ def main() -> int:
     results = [PhaseResult(name=name, elapsed_s=0.0) for name, _ in phases]
 
     try:
-        # Phase 1: check-unit (must run first and succeed)
-        unit_result = results[0]
-        _, unit_command = phases[0]
-        elapsed_before = time.perf_counter() - started_at
-        remaining = args.budget - elapsed_before
-        if remaining <= 0:
-            unit_result.timed_out = True
-            total_s = time.perf_counter() - started_at
-            _print_summary(results, total_s, args.budget)
-            print(f"✗ make check exceeded {args.budget:.0f}s", file=sys.stderr)
-            return 124
-
-        phase_started = time.perf_counter()
-        unit_result.started = True
-        env = os.environ.copy()
-        timing_file = Path(tempfile.mkstemp(prefix="houyi-check-unit-", suffix=".timings")[1])
-        env["HOUYI_CHECK_TIMING_FILE"] = str(timing_file)
-        env["HOUYI_CHECK_SUPPRESS_SUMMARY"] = "1"
-        try:
-            unit_result.returncode = _run_phase(unit_command, cwd=root, timeout=remaining, env=env)
-        except subprocess.TimeoutExpired:
-            unit_result.timed_out = True
-            unit_result.elapsed_s = time.perf_counter() - phase_started
-            unit_result.details = _load_phase_details(timing_file)
-            total_s = time.perf_counter() - started_at
-            _print_summary(results, total_s, args.budget)
-            print(
-                f"✗ make check exceeded {args.budget:.0f}s during {unit_result.name}",
-                file=sys.stderr,
-            )
-            return 124
-
-        unit_result.elapsed_s = time.perf_counter() - phase_started
-        unit_result.details = _load_phase_details(timing_file)
-        if unit_result.returncode != 0:
-            total_s = time.perf_counter() - started_at
-            _print_summary(results, total_s, args.budget)
-            print(f"✗ make check failed in {unit_result.name}", file=sys.stderr)
-            return unit_result.returncode
-
-        # Phases 2 & 3: run check-integration and check-e2e-smoke in parallel
-        elapsed_before = time.perf_counter() - started_at
-        remaining = args.budget - elapsed_before
-        if remaining <= 0:
-            for r in results[1:]:
-                r.timed_out = True
-            total_s = time.perf_counter() - started_at
-            _print_summary(results, total_s, args.budget)
-            print(f"✗ make check exceeded {args.budget:.0f}s", file=sys.stderr)
-            return 124
-
-        parallel_started = time.perf_counter()
-        int_result = results[1]
-        e2e_result = results[2]
-        _, int_command = phases[1]
-        _, e2e_command = phases[2]
-
-        int_result.started = True
-        e2e_result.started = True
-        int_env = os.environ.copy()
-        e2e_env = os.environ.copy()
-
-        # Suppress check_code.sh's own summary for integration phase
-        int_env["HOUYI_CHECK_SUPPRESS_SUMMARY"] = "1"
-
-        int_process = _run_phase_async(int_command, cwd=root, env=int_env)
-        e2e_process = _run_phase_async(e2e_command, cwd=root, env=e2e_env)
-
-        # Wait for both, with budget timeout
-        failed_phase: str | None = None
-        for process, result in [(int_process, int_result), (e2e_process, e2e_result)]:
-            try:
-                result.returncode = process.wait(timeout=remaining)
-            except subprocess.TimeoutExpired:
-                result.timed_out = True
-                with contextlib.suppress(ProcessLookupError):
-                    os.killpg(process.pid, signal.SIGTERM)
-                with contextlib.suppress(subprocess.TimeoutExpired):
-                    process.wait(timeout=5)
-                with contextlib.suppress(ProcessLookupError):
-                    os.killpg(process.pid, signal.SIGKILL)
-                with contextlib.suppress(ChildProcessError):
-                    process.wait(timeout=3)
-                if failed_phase is None:
-                    failed_phase = result.name
-
-            result.elapsed_s = time.perf_counter() - parallel_started
-
-        # Check results of parallel phases
-        for result in [int_result, e2e_result]:
-            if result.timed_out:
+        for idx, (name, command) in enumerate(phases):
+            elapsed_before = time.perf_counter() - started_at
+            remaining = args.budget - elapsed_before
+            if remaining <= 0:
+                results[idx].timed_out = True
                 total_s = time.perf_counter() - started_at
                 _print_summary(results, total_s, args.budget)
-                print(
-                    f"✗ make check exceeded {args.budget:.0f}s during {result.name}",
-                    file=sys.stderr,
-                )
+                print(f"✗ make check exceeded {args.budget:.0f}s", file=sys.stderr)
                 return 124
-            if result.returncode != 0:
+
+            phase_started = time.perf_counter()
+            results[idx].started = True
+            env = os.environ.copy()
+
+            if name == "check-unit":
+                timing_file = Path(
+                    tempfile.mkstemp(prefix="houyi-check-unit-", suffix=".timings")[1]
+                )
+                env["HOUYI_CHECK_TIMING_FILE"] = str(timing_file)
+                env["HOUYI_CHECK_SUPPRESS_SUMMARY"] = "1"
+
+            try:
+                results[idx].returncode = _run_phase(command, cwd=root, timeout=remaining, env=env)
+            except subprocess.TimeoutExpired:
+                results[idx].timed_out = True
+                results[idx].elapsed_s = time.perf_counter() - phase_started
+                if name == "check-unit":
+                    results[idx].details = _load_phase_details(timing_file)
                 total_s = time.perf_counter() - started_at
                 _print_summary(results, total_s, args.budget)
-                print(f"✗ make check failed in {result.name}", file=sys.stderr)
-                return result.returncode
+                print(f"✗ make check exceeded {args.budget:.0f}s during {name}", file=sys.stderr)
+                return 124
+
+            results[idx].elapsed_s = time.perf_counter() - phase_started
+            if name == "check-unit":
+                results[idx].details = _load_phase_details(timing_file)
+
+            if results[idx].returncode != 0:
+                total_s = time.perf_counter() - started_at
+                _print_summary(results, total_s, args.budget)
+                print(f"✗ make check failed in {name}", file=sys.stderr)
+                return results[idx].returncode
 
         total_s = time.perf_counter() - started_at
         if total_s > args.budget:

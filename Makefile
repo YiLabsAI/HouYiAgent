@@ -113,6 +113,9 @@ check-integration:
 check-e2e-smoke:
 	@$(MAKE) test-e2e-smoke
 
+test-stress:
+	@uv run pytest tests/integration/stress/ -m stress -v --tb=short
+
 # Formatting
 format:
 	uv run ruff format houyi/ tests/
