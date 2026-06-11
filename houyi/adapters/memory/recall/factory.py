@@ -29,6 +29,7 @@ from typing import Any, Protocol
 
 from houyi.adapters.embedding import EmbeddingProvider
 from houyi.adapters.memory.backends.base import EntityStateView, MemoryBackend
+from houyi.adapters.memory.recall.enumeration import EnumerationBooster
 from houyi.adapters.memory.recall.orchestrator import (
     RecallOrchestrator,
     RecallPipelineConfig,
@@ -96,6 +97,7 @@ def _build_default_recall_orchestrator(
         router=router,
         retrievers=retrievers,
         config=config,
+        enum_booster=EnumerationBooster(backend),
     )
 
 

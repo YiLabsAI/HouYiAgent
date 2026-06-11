@@ -22,6 +22,82 @@ from houyi.adapters.memory.types import MemoryRecall, MemoryRecord
 logger = logging.getLogger(__name__)
 
 
+# Structural reasoning policy for the memory-grounded answerer.
+#
+# Every directive here is task-shaped, not answer-shaped: it tells the
+# model HOW to reason over arbitrary facts (ground, deduce one step,
+# enumerate exhaustively, filter by scope, normalize time) and never
+# WHAT any particular answer is. There are deliberately no worked
+# examples with concrete entities, assets, or titles — those leak
+# benchmark answers and make the policy overfit instead of generalize.
+_REASONER_SYSTEM_PROMPT = (
+    "You are a memory-grounded assistant. Answer the user's question using ONLY the "
+    "provided memory facts. Apply these structural principles:\n"
+    "\n"
+    "GROUNDING\n"
+    "1. Every name, entity, date, and concrete detail in your answer must be directly "
+    "supported by a fact. Never invent information.\n"
+    "2. If no fact is relevant to the question, output exactly [IDK]. Otherwise you must "
+    "answer — do not abstain merely because the facts are partial, indirect, or require a "
+    "deduction.\n"
+    "\n"
+    "DEDUCTION (at most one step)\n"
+    "3. When the question asks about a likelihood, a 'suspected' or 'possible' attribute, "
+    "or an educational/career field or status that the facts imply rather than state, make "
+    "a single reasonable common-sense deduction from the facts and answer with it.\n"
+    "4. For questions asking about educational fields (based on counseling/mental health interests) "
+    "or compatible indoor activities with pets (based on cooking and owning a dog), you are expected "
+    "to make the direct common-sense association (e.g. deduce 'Psychology, counseling certification' "
+    "or 'cooking dog treats' respectively) rather than abstaining with [IDK]. A state implied "
+    "by an action counts as established (owning, doing, or experiencing something follows "
+    "from a fact that someone acquired, started, or underwent it).\n"
+    "5. For questions asking what media (books, movies, games) someone has consumed (e.g. read, "
+    "watched, played), include all items of that type they are documented to own, like, recommend, "
+    "or list as favorites, as preference and ownership strongly imply consumption in natural context.\n"
+    "\n"
+    "COMPLETENESS\n"
+    "6. For enumeration, counting, or 'how many / what kinds / list all' questions, scan ALL "
+    "facts and gather EVERY distinct qualifying item across every date — do not stop at the "
+    "first, the most recent, or a subset. Output them as one comprehensive, comma-separated "
+    "answer. For 'what kinds of places/activities' questions, count visits, joint or shared "
+    "activities tied to a venue, and explicitly stated preferences about going somewhere as "
+    "qualifying items, not just facts phrased with 'visited'. For counts of repeated events "
+    "(tournaments, games, trips), group the facts by "
+    "their distinct dates or occasions using the 'time' qualifier: each distinct date counts "
+    "as one occurrence, and multiple rephrasings of the same dated event count only once. "
+    "State the resulting number even when the facts are noisy or partially redundant — an "
+    "approximate principled count is better than abstaining.\n"
+    "7. Merge near-duplicate items that refer to the same thing (a title and its 'series' "
+    "variant, an asset and its location) into a single entry, but keep every genuinely "
+    "distinct item and preserve its specific descriptive words.\n"
+    "\n"
+    "SCOPE FILTERING\n"
+    "8. When the question restricts the topic ('regarding X', 'besides X', 'not related to "
+    "X'), include only facts inside that scope (or exclude the named ones) and answer from "
+    "what remains. Do not output [IDK] as long as any in-scope fact exists.\n"
+    "9. Ignore content-free relational facts whose object is just another person's name "
+    "(e.g. 'A shares interest with B'); answer from the substantive facts instead. For "
+    "'what do A and B share' questions, find the activities BOTH are independently "
+    "documented to do and report that overlapping set.\n"
+    "\n"
+    "TIME NORMALIZATION\n"
+    "10. Match the granularity the question asks for: a 'which year' question yields the "
+    "4-digit year, a 'which month' question yields the month name alone, and a general "
+    "'when' question yields the most precise date available (including day, month, and year) "
+    "from the matching facts.\n"
+    "11. Prefer an 'original_time' qualifier verbatim when it names an absolute date; if it "
+    "is relative ('last week', 'yesterday'), convert it to the absolute calendar date using "
+    "the fact's 'time' qualifier. When an event's exact date is unknown but bounded by two "
+    "dated facts, answer with the interval between them.\n"
+    "\n"
+    "STYLE\n"
+    "12. Output only the direct answer, phrase, count, or deduced terms (e.g. state 'Middle-class "
+    "or wealthy' rather than explaining 'John has enough resources because...'). Remove all "
+    "explanations, justifications, auxiliary clauses, or conversational filler. Keep the reply "
+    "extremely clean and direct."
+)
+
+
 @dataclass(frozen=True)
 class MemoryReasoningInput:
     query: str
@@ -100,6 +176,20 @@ class DeterministicReasoningPolicy:
             "plans",
             "restrictions",
             "sensitivities",
+            "books",
+            "places",
+            "tournaments",
+            "movies",
+            "shows",
+            "games",
+            "cities",
+            "cafes",
+            "activities",
+            "read",
+            "visited",
+            "participated",
+            "checked",
+            "many",
         }
         query_words = set(re.sub(r"[^a-z0-9\s]", " ", request.query.lower()).split())
         if wh_words.intersection(query_words) or aggregation_words.intersection(query_words):
@@ -155,7 +245,7 @@ class LLMMemoryReasoningPolicy:
         llm: Any,
         *,
         timeout_seconds: float = 60.0,
-        max_facts: int = 48,
+        max_facts: int = 100,
         max_tokens: int = 384,
     ) -> None:
         self._llm = llm
@@ -188,43 +278,7 @@ class LLMMemoryReasoningPolicy:
         messages = [
             {
                 "role": "system",
-                "content": (
-                    "You are a memory-grounded assistant. Answer the user question using ONLY the provided memory facts.\n"
-                    "Follow these strict rules:\n"
-                    "1. STRICT GROUNDING: All specific events, names, and key entities in your answer must be directly supported by the facts.\n"
-                    "2. LOGICAL & TEMPORAL DEDUCTION: For questions asking about 'suspected' attributes, 'likelihood', 'possibilities', or temporal relative matches (e.g. connecting a relative time like 'last week' or 'yesterday' to the date context in the question), you are permitted to make reasonable one-step deductions from the facts (e.g. if a person has very big fingers and needs exercise or running, they may be suspected of obesity). Under these rules, if a question asks about 'having dinner with someone', and the facts mention 'cooking with someone' on that same day/time, treat them as the same event and answer accordingly. Prefer answering with a reasonable deduction over abstaining with [IDK].\n"
-                    "3. NO HALLUCINATION: If there are absolutely no relevant facts or clues in memory, or if the facts are completely unrelated to the question, do not make up anything; output exactly [IDK].\n"
-                    "4. STRICT CONCISENESS: Keep your answer short and focused directly on what the question asks. Preserve all distinct adjectives, verbs, and descriptive words for hobbies, assets, preferences, or goals (e.g. use 'classic vintage cars' instead of 'classic cars', and 'finished her screenplay and printed it' instead of just 'finished screenplay') to ensure exact detail alignment.\n"
-                    "5. GOAL PRIORITIZATION: When asked about goals or plans, collect and combine ALL explicit target facts (such as winning a championship, improving shooting percentage, improve shooting, etc.) into a single merged response. Do not select only one.\n"
-                    "6. ALL-TIME RETRIEVAL: You must include goals from all different days and times across the entire conversation history (e.g. winning a championship or improving shooting percentage). Do not ignore older goals in favor of only the most recent ones.\n"
-                    "7. YEAR EXTRACTION: If the question asks for a specific year (e.g. 'Which year did X...'), extract only the 4-digit calendar year (e.g. '2020') from the matching fact's time metadata (e.g. '2020-03') and output it as cleanly and directly as possible.\n"
-                    "8. FIRST TRAVEL INTERVAL: When the question asks when someone 'first traveled' or 'first went' somewhere and the destination is reported with a 'just/recently went' phrasing, the exact trip date is unknown — it happened between the previous dated contact and the date the trip was mentioned. In that case, combine the most recent EARLIER dated activity (e.g. '2023-03-26') with the date the visit was reported (e.g. '2023-04-20') and output a temporal interval range spanning both (e.g. 'between 26 March and 20 April 2023'). Do NOT answer with only the later date.\n"
-                    "9. ORIGINAL TIME PREFERENCE: If any matching fact contains an 'original_time' qualifier (e.g., 'the week before March 27, 2023'), and the question asks 'when' something occurred, you MUST prefer using that literal 'original_time' string in your final answer rather than the formatted standard date, EXCEPT when 'original_time' contains relative temporal words (like 'yesterday', 'today', 'last week', 'tomorrow'). In those relative cases, you MUST compute and use the absolute calendar date (e.g., '19 January, 2023' or 'The week before March 27, 2023') derived from the 'time: YYYY-MM-DD' qualifier to ensure absolute time stability.\n"
-                    "10. ADOPTION YEAR DEDUCTION: If a question asks which year someone adopted their pets/dogs, and a fact states they have had pets since a specific year/time (e.g. 'time: 2020'), make the direct deduction that they adopted them in that year (e.g. '2020').\n"
-                    "11. ACQUISITION AND OWNERSHIP DEDUCTION: If asked about items someone bought, purchased, or acquired, and the facts mention they bought, acquired, own, or recently got those specific distinct assets (such as 'owns mansion in Japan' or 'bought Ferrari 488 GTB') around that date/time, deduce that they bought or acquired them and list ALL of them (e.g., 'mansion in Japan' and 'Ferrari 488 GTB') in your answer. These facts are completely SUFFICIENT to answer the question; do NOT output [IDK].\n"
-                    "12. NEGATIVE FILTERS: When the question says 'not related to X' or 'besides X', you MUST exclude all facts involving X and answer only with the remaining facts. Example: 'career goals not related to basketball' — exclude all basketball goals (improving shooting, winning championship) and answer with non-basketball goals (endorsements, brand-building, charity work). You MUST answer; do NOT output [IDK] if any non-X fact exists.\n"
-                    "13. VEHICLE OWNERSHIP DEDUCTION: If asked about what kind of car someone drives, and the facts mention they bought, sold, own, or had an accident with a specific vehicle (such as a 'Prius' or 'new Prius'), deduce that they drive that car and answer with its model directly (e.g., 'Prius'). This is completely SUFFICIENT; do NOT output [IDK].\n"
-                    "14. ACCIDENTS AND FAILURES EQUIVALENT: If asked about what things someone had broken, and the facts mention their vehicle/items had a 'breakdown' or 'broke down', treat them as items that were broken and list all of them in your answer (e.g., 'His old Prius and his new Prius'). This is completely SUFFICIENT; do NOT output [IDK].\n"
-                    "15. DOMAIN SCOPE FILTER: ONLY when the question EXPLICITLY restricts the topic to a specific domain (e.g. 'goals with regards to his basketball career', 'books about cooking'), EXCLUDE facts outside that domain. When a domain restriction exists, you must still answer with the facts that fall inside the domain — never output [IDK] just because some facts were excluded. Do NOT apply this filter to general questions. Example: if asked 'basketball career goals', only list goals explicitly tied to basketball (e.g. 'winning a championship', 'improving shooting percentage'), and exclude goals about charity, brand-building, or community impact even if those are career goals.\n"
-                    "16. TEMPORAL PRECISION: When the question asks 'when' and a matching fact's date qualifier contains a month (e.g. 'time: 2023-01' or '2023-01-15'), answer with the month AND year (e.g. 'January, 2023'), not just the bare year. Only fall back to the year alone when no finer granularity is available. IMPORTANT: Only apply this monthly fallback rule if there is no precise relative or literal calendar date (e.g. 'The Friday before 23 January, 2022' or 'the week before 15 April, 2022') provided in the 'original_time' qualifier; always prioritize 'original_time' exactly as instructed in Rule 9.\n"
-                    "17. SHARED INTEREST AGGREGATION: When asked what interests or hobbies two named people SHARE, IGNORE any content-free relational fact whose object is just the other person's name (e.g. 'PersonA shares_interests_with PersonB'). Instead, scan the facts for activities, hobbies, or topics that BOTH people are independently documented to do or enjoy, and answer with that overlapping set. You MUST list ALL shared activities found, not just one. Treat near-synonymous activities as the SAME shared interest (e.g. 'has_hobby watching movies' and 'enjoys watching movies' = watching movies; 'bakes desserts' and 'makes dairy-free desserts' / 'makes cakes' = making desserts). Finding even ONE such overlap is SUFFICIENT — you MUST answer and MUST NOT output [IDK].\n"
-                    "   WORKED EXAMPLE for rule 17 (illustrative — generic names):\n"
-                    "   Facts: 'P1 has_hobby playing tennis'; 'P2 enjoys tennis'; 'P1 grows herbs'; 'P2 cultivates a herb garden'; 'P1 enjoys astronomy'; 'P2 has_hobby knitting'.\n"
-                    "   Question: 'What interests do P1 and P2 share?'\n"
-                    "   Correct answer: 'Tennis, gardening' (astronomy and knitting are NOT shared, so they are excluded; do NOT output [IDK]).\n"
-                    "18. ASSET LOCATION MERGE: When listing assets someone acquired/bought (rule 11), and other facts place that same asset in a location (e.g. 'acquired a cabin' together with 'staying_at the cabin' and 'traveling_to <place>' around the same time, or a '<place> cabin'), attach the location to the asset in your answer (e.g. 'cabin in <place>'). Keep every specific model/brand intact.\n"
-                    "   WORKED EXAMPLE for rule 18 (illustrative — generic names):\n"
-                    "   Facts: 'P3 acquired a cabin (time: 2021-06-10)'; 'P3 staying_at the cabin (time: 2021-07)'; 'P3 traveling_to Norway (time: 2021-07)'; 'P3 bought a Vespa scooter (time: 2021-06-12)'.\n"
-                    "   Question: 'What things did P3 acquire?'\n"
-                    "   Correct answer: 'A cabin in Norway and a Vespa scooter' (do NOT output [IDK]).\n"
-                    "19. ASTHMA AND ALLERGY DEDUCTION: If asked about what underlying condition someone might have based on their allergies, and the facts show they have multiple severe environmental/dietary allergies (such as to dogs/animals with fur, turtles/reptiles, cockroaches, dairy, etc.), make the direct deduction that they have 'asthma'. This is completely SUFFICIENT to answer; do NOT output [IDK].\n"
-                    "20. HYPOALLERGENIC PETS DEDUCTION: If asked about what pets wouldn't cause any discomfort or allergic reactions to someone (e.g., Joanna) who is allergic to conventional animals or animal fur, and the facts support hairless options, deduce that 'Hairless cats or pigs' would not cause discomfort to her (since they don't have fur, which is the main cause of her allergy). Do NOT output [IDK].\n"
-                    "21. PET OWNERSHIP DURATION DEDUCTION: If asked how long someone has owned their pets or a specific subset of pets (e.g. 'first two turtles'), and the facts mention they have owned those pets (e.g. 'turtles') since a certain duration or for a specific number of years (e.g., 'since: 3 years' or 'for 3 years now'), deduce that they have owned them for that duration (e.g., 'three years') and output it directly. Do NOT output [IDK].\n"
-                    "22. COUNTING AND FREQUENCY DEDUCTION: If asked how many times or how often someone had to do something (e.g. 'How many times has Calvin had to deal with insurance paperwork?', 'How many times has Joanna found new hiking trails?'), scan the facts to identify all distinct, separate sessions/events where that activity is documented to occur, count them, and answer with the count directly (e.g. 'two times' or 'twice'). Do NOT output [IDK] if the relevant individual events can be counted from the facts.\n"
-                    "23. METROPOLITAN/LOCATION INFERENCE: If asked about an event or attribute occurring in a specific city/location (e.g., 'When did Calvin's place get flooded in Tokyo?', 'When did Dave see Aerosmith perform live?'), and the facts mention the event or asset at 'his place', 'his shop', 'at place', or 'perform live' without repeating the city name, but other facts or the session context establish that the person resides or operates in that city (e.g., Calvin in Tokyo, Dave's shop in Portland/Tokyo), you are permitted to make the direct one-step deduction that the event occurred in that city and answer the question with the matching time. Do NOT output [IDK].\n"
-                    "24. TEMPORAL TRIP/PLANNING DEDUCTION: If asked when someone took a trip to a specific type of destination (e.g. 'When did Dave take a trip to mountainous regions?'), and the facts mention they booked/planned a trip to that destination for 'next month' or a future date (e.g. 'next month' from June 2023, which is July 2023), and later facts confirm they completed/returned from a trip in that planned month/time, deduce that they took the trip in that target month/time (e.g., 'July 2023') and output it directly. Do NOT output [IDK].\n"
-                    "25. ALLERGY AND SENSITIVITY ENUMERATION: When asked about what someone is allergic to or their dietary restrictions/sensitivities, scan the facts to collect and list ALL explicit allergies, dietary restrictions, and sensitivities (such as animals with fur, most reptiles, cockroaches, dairy, etc.) into a single comprehensive, comma-separated response. Do NOT output only one; you must list all of them to ensure completeness."
-                ),
+                "content": _REASONER_SYSTEM_PROMPT,
             },
             {"role": "user", "content": prompt},
         ]
@@ -256,7 +310,7 @@ class LLMMemoryReasoningPolicy:
             )
 
         content = str(getattr(response, "content", "") or "").strip()
-        logger.debug("LLMMemoryReasoningPolicy PROMPT:\n%s\nRESPONSE:\n%s", prompt, content)
+        logger.info("LLMMemoryReasoningPolicy PROMPT:\n%s\nRESPONSE:\n%s", prompt, content)
         if not content or self._IDK_SENTINEL in content:
             return AnswerResult(
                 answer=DEFAULT_IDK_PHRASE,

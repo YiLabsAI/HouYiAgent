@@ -278,6 +278,7 @@ class ExtractorWorker:
         candidate_inbox: _CandidateInboxProtocol,
         promoter: FactPromoter | None = None,
         config: ExtractorWorkerConfig | None = None,
+        write_lock: asyncio.Lock | None = None,
     ) -> None:
         """Construct the L1 worker.
 
@@ -294,6 +295,14 @@ class ExtractorWorker:
         failures are absorbed (logged + ignored); entity-state remains
         the source of truth.
         config: tunables; defaults from ExtractorWorkerConfig.
+        write_lock: optional asyncio.Lock shared by all drain workers
+        that target the same backend. SQLite is single-writer, so
+        running multiple projection transactions concurrently on
+        separate thread-local connections raises 'database is locked'.
+        When supplied, the lock serializes only the write phases
+        (claim + projection); the LLM extraction stays outside it so
+        several drain workers can saturate the extractor in parallel.
+        Leaving it None preserves the original unsynchronized behavior.
         """
         if backend is None or extractor is None:
             raise ValueError("backend and extractor are required")
@@ -308,10 +317,21 @@ class ExtractorWorker:
         # need to disable promotion pass a noop FactPromoter explicitly.
         self._promoter: FactPromoter = promoter or MemoryRecordPromoter(backend)
         self._config = config or ExtractorWorkerConfig()
+        self._write_lock = write_lock
 
         # ------------------------------------------------------------------
         # Public API
         # ------------------------------------------------------------------
+
+    def _write_guard(self) -> Any:
+        """Serialize SQLite write phases across concurrent drain workers.
+
+        Returns the shared write lock when one was supplied, else a no-op
+        async context manager so single-worker callers are unaffected.
+        """
+        if self._write_lock is not None:
+            return self._write_lock
+        return contextlib.nullcontext()
 
     async def process_once(self) -> int:
         """Claim one batch and process every job in it.
@@ -321,12 +341,13 @@ class ExtractorWorker:
         was empty at claim time and the caller should sleep.
         """
         cfg = self._config
-        claimed = await asyncio.to_thread(
-            self._backend.claim_extract_jobs,
-            limit=cfg.batch_size,
-            namespace=cfg.namespace,
-            lease_seconds=cfg.lease_seconds,
-        )
+        async with self._write_guard():
+            claimed = await asyncio.to_thread(
+                self._backend.claim_extract_jobs,
+                limit=cfg.batch_size,
+                namespace=cfg.namespace,
+                lease_seconds=cfg.lease_seconds,
+            )
         if not claimed:
             return 0
 
@@ -377,20 +398,21 @@ class ExtractorWorker:
                 )
             return
 
-        for (queue_id, turn), result in zip(claimed, results, strict=False):
-            try:
-                await self._project_result(turn, result)
-            except Exception as exc:
-                logger.warning("projection failed for queue_id=%s: %s", queue_id, exc)
-                await asyncio.to_thread(
-                    self._backend.mark_extract_failed,
-                    queue_id,
-                    f"projection: {exc}"[:1000],
-                    retry=True,
-                    max_attempts=self._config.max_attempts,
-                )
-                continue
-            await asyncio.to_thread(self._backend.mark_extract_done, queue_id)
+        async with self._write_guard():
+            for (queue_id, turn), result in zip(claimed, results, strict=False):
+                try:
+                    await self._project_result(turn, result)
+                except Exception as exc:
+                    logger.warning("projection failed for queue_id=%s: %s", queue_id, exc)
+                    await asyncio.to_thread(
+                        self._backend.mark_extract_failed,
+                        queue_id,
+                        f"projection: {exc}"[:1000],
+                        retry=True,
+                        max_attempts=self._config.max_attempts,
+                    )
+                    continue
+                await asyncio.to_thread(self._backend.mark_extract_done, queue_id)
 
     async def run_forever(
         self,
@@ -447,20 +469,21 @@ class ExtractorWorker:
             )
             return
 
-        try:
-            await self._project_result(turn, result)
-        except Exception as exc:
-            logger.warning("projection failed for queue_id=%s: %s", queue_id, exc)
-            await asyncio.to_thread(
-                self._backend.mark_extract_failed,
-                queue_id,
-                f"projection: {exc}"[:1000],
-                retry=True,
-                max_attempts=self._config.max_attempts,
-            )
-            return
+        async with self._write_guard():
+            try:
+                await self._project_result(turn, result)
+            except Exception as exc:
+                logger.warning("projection failed for queue_id=%s: %s", queue_id, exc)
+                await asyncio.to_thread(
+                    self._backend.mark_extract_failed,
+                    queue_id,
+                    f"projection: {exc}"[:1000],
+                    retry=True,
+                    max_attempts=self._config.max_attempts,
+                )
+                return
 
-        await asyncio.to_thread(self._backend.mark_extract_done, queue_id)
+            await asyncio.to_thread(self._backend.mark_extract_done, queue_id)
 
     async def _project_result(self, turn: RawTurn, result: Any) -> None:
         """Project an ExtractionResult onto storage.
@@ -624,6 +647,11 @@ class ExtractorWorker:
                 rel_raw = str(raw_edge.get("relation", "")).strip().lower()
                 src_type = str(raw_edge.get("source_type", "state")).strip().lower()
                 tgt_type = str(raw_edge.get("target_type", "state")).strip().lower()
+
+                if src_type not in ("fact", "state"):
+                    src_type = "state"
+                if tgt_type not in ("fact", "state"):
+                    tgt_type = "state"
 
                 if not src_sym or not tgt_sym or not rel_raw:
                     continue

@@ -12,6 +12,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 
 from houyi.adapters.memory.event_emitter import MemoryEventEmitter
+from houyi.adapters.memory.recall.enumeration import EnumerationBooster
 from houyi.adapters.memory.recall.fusion import MMRDeduplicator, WeightedFuser
 from houyi.adapters.memory.recall.idk_guard import IDKGuard
 from houyi.adapters.memory.recall.rerank import EvidenceAwareReranker, Reranker
@@ -88,7 +89,7 @@ _DEFAULT_FUSION_WEIGHTS: dict[QueryType, dict[RetrieverKind, float]] = {
     QueryType.RELATIONAL_CHAIN: {
         RetrieverKind.ITERATIVE: 5.0,
         RetrieverKind.GRAPH: 8.0,
-        RetrieverKind.VECTOR: 1.2,
+        RetrieverKind.VECTOR: 5.0,
         RetrieverKind.ENTITY_STATE: 1.0,
         RetrieverKind.RAW_TURN: 0.5,
         RetrieverKind.TIMELINE: 0.3,
@@ -140,6 +141,7 @@ class RecallOrchestrator:
         guard: IDKGuard | None = None,
         config: RecallPipelineConfig | None = None,
         emitter: MemoryEventEmitter | None = None,
+        enum_booster: EnumerationBooster | None = None,
     ) -> None:
         if router is None:
             raise ValueError("router is required")
@@ -150,6 +152,11 @@ class RecallOrchestrator:
         self._reranker = reranker or EvidenceAwareReranker()
         self._guard = guard or IDKGuard()
         self._config = config or RecallPipelineConfig()
+        # Optional enumeration-family booster. When present, aggregation
+        # queries get category-family candidates boosted before fusion so
+        # the bounded candidate budget covers the whole family instead of
+        # an arbitrary lexical sample.
+        self._enum_booster = enum_booster
         # Optional hot-path event emitter. When supplied, the orchestrator
         # publishes one RECALL_FAILURE per recall whose final reason
         # indicates a retrieval miss (post source-fallback). Side-channel
@@ -175,6 +182,10 @@ class RecallOrchestrator:
             "errors": [],
         }
         raw_candidates = await self._retrieve_all(query, runtime, retrievers, trace)
+        if self._enum_booster is not None:
+            boosted = await self._enum_booster.apply(query.text, raw_candidates)
+            if boosted:
+                trace["enumeration_boosted"] = boosted
         deduped = await self._rank_candidates(
             route.query_type,
             raw_candidates,
@@ -263,18 +274,23 @@ class RecallOrchestrator:
         fusion_k = max(top_k * self._config.rerank_multiplier, top_k)
         fuser = self._fuser_for(query_type)
         fused = fuser.fuse(candidates, top_k=fusion_k)
-        deduped = self._dedupe.dedupe(fused, top_k=fusion_k)
         ranked = await self._reranker.arerank(
             query_type=query_type,
-            candidates=deduped,
-            top_k=top_k,
+            candidates=fused,
+            top_k=fusion_k,
         )
+        # Diversity-aware final cut: rerank scores wide (fusion_k), then let
+        # MMR pick the top_k. Running MMR before the reranker was a no-op
+        # because the rerank sort discarded the MMR ordering, letting
+        # near-duplicate facts (same triple re-extracted across sessions)
+        # crowd out long-tail evidence in enumeration/counting questions.
+        deduped = self._dedupe.dedupe(ranked, top_k=top_k)
         trace["rerank"] = {
             "reranker": type(self._reranker).__name__,
-            "input_count": len(deduped),
-            "output_count": len(ranked),
+            "input_count": len(fused),
+            "output_count": len(deduped),
         }
-        return ranked
+        return deduped
 
     def _fuser_for(self, query_type: QueryType) -> WeightedFuser:
         if type(self._fuser) is not WeightedFuser:

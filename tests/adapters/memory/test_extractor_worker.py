@@ -332,6 +332,53 @@ class TestRunForever:
         assert backend.extract_queue_stats() == {"done": 3}
 
 
+class TestWriteLock:
+    async def test_lock_preserves_projection(self, backend, state_view, inbox):
+        wp = _make_tw(backend)
+        turn = _enqueue(wp, "alice likes tea")
+        fact = _fact(anchor=turn.turn_id)
+        worker = ExtractorWorker(
+            backend=backend,
+            extractor=_FakeExtractor(results=[_FakeResult(facts=[fact])]),
+            entity_state=state_view,
+            candidate_inbox=inbox,
+            write_lock=asyncio.Lock(),
+        )
+        assert await worker.process_once() == 1
+        rows = state_view.get_active("default", "alice")
+        assert len(rows) == 1
+        assert rows[0].value == "tea"
+        assert backend.extract_queue_stats() == {"done": 1}
+
+    async def test_concurrent_drain_safe(self, backend, state_view, inbox):
+        wp = _make_tw(backend)
+        results = []
+        for i in range(12):
+            turn = _enqueue(wp, f"person{i} likes item{i}")
+            results.append(
+                _FakeResult(
+                    facts=[_fact(subject=f"person{i}", obj=f"item{i}", anchor=turn.turn_id)]
+                )
+            )
+        worker = ExtractorWorker(
+            backend=backend,
+            extractor=_BatchFakeExtractor(results=results),
+            entity_state=state_view,
+            candidate_inbox=inbox,
+            config=ExtractorWorkerConfig(batch_size=3),
+            write_lock=asyncio.Lock(),
+        )
+
+        async def drain() -> None:
+            while await worker.process_once() > 0:
+                pass
+
+        await asyncio.gather(*[drain() for _ in range(4)])
+        stats = backend.extract_queue_stats()
+        assert stats.get("done") == 12
+        assert "failed" not in stats
+
+
 class TestConstruction:
     def test_requires_dependencies(self, backend, state_view, inbox):
         with pytest.raises(ValueError):

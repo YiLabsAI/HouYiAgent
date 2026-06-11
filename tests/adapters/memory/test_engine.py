@@ -230,6 +230,60 @@ class TestAnswer:
         assert result.abstained is True
 
 
+class TestPrepareReasonerRecords:
+    """_prepare_reasoner_records dedups and demotes content-free relations."""
+
+    def _records(self, *contents: str):
+        from houyi.adapters.memory.types import MemoryRecord
+
+        return [MemoryRecord(key=f"k{i}", content=c) for i, c in enumerate(contents)]
+
+    def test_duplicates_dropped(self):
+        """Duplicate contents collapse to the highest-ranked copy."""
+        records = self._records(
+            "John has attribute has kids",
+            "John shares interest with Maria",
+            "John shares interest with Maria",
+            "John  shares INTEREST with Maria",
+        )
+        out = MemoryEngine._prepare_reasoner_records(records)
+        assert [r.content for r in out] == [
+            "John has attribute has kids",
+            "John shares interest with Maria",
+        ]
+
+    def test_relations_demoted(self):
+        """Content-free relational facts move behind substantive facts."""
+        records = self._records(
+            "John shares interest with Maria",
+            "John has value looking out for others",
+            "Maria related to John",
+            "John believes others don't have enough",
+        )
+        out = MemoryEngine._prepare_reasoner_records(records)
+        assert [r.content for r in out] == [
+            "John has value looking out for others",
+            "John believes others don't have enough",
+            "John shares interest with Maria",
+            "Maria related to John",
+        ]
+
+    def test_detailed_relation_kept(self):
+        """A relational fact carrying extra detail is not demoted."""
+        records = self._records(
+            "John shares interest with Maria in making desserts",
+            "John shares interest with Maria",
+        )
+        out = MemoryEngine._prepare_reasoner_records(records)
+        assert out[0].content == "John shares interest with Maria in making desserts"
+
+    def test_order_preserved(self):
+        """Distinct substantive facts keep their ranked order."""
+        records = self._records("fact one", "fact two", "fact three")
+        out = MemoryEngine._prepare_reasoner_records(records)
+        assert [r.content for r in out] == ["fact one", "fact two", "fact three"]
+
+
 class TestRecallContextText:
     """Test recall_as_context_text formatting."""
 
@@ -244,6 +298,54 @@ class TestRecallContextText:
     async def test_empty_recalls(self, engine: MemoryEngine):
         text = engine.recall_as_context_text([])
         assert text == ""
+
+
+class TestRecordIndex:
+    """_build_record_index resolves exact record_ids and fact-id aliases."""
+
+    async def test_exact_ids(self, engine: MemoryEngine):
+        engine.store.put("editor.preferred", "neovim", memory_type=MemoryType.PREFERENCE)
+        engine.store.put("server.port", "8080", memory_type=MemoryType.FACT)
+        index = engine._build_record_index()
+        for record in engine.store.all_records():
+            found = index.get(record.record_id)
+            assert found is not None
+            assert found.record_id == record.record_id
+
+    async def test_fact_id_aliases(self, engine: MemoryEngine):
+        engine.store.put("editor.preferred", "neovim", memory_type=MemoryType.PREFERENCE)
+        engine.store.put("server.port", "8080", memory_type=MemoryType.FACT)
+        index = engine._build_record_index()
+        for record in engine.store.all_records():
+            for strategy in ("A", "B"):
+                fid = engine._record_to_fact_id(record, strategy)
+                indexed = index.get(fid)
+                assert indexed is not None
+                assert indexed.record_id == record.record_id
+
+    async def test_unknown_id_none(self, engine: MemoryEngine):
+        engine.store.put("x.y", "z", memory_type=MemoryType.FACT)
+        index = engine._build_record_index()
+        assert index.get("fact:doesnotexist") is None
+
+
+class TestAnswerTopK:
+    """engine.answer must honor the caller's top_k verbatim (no forced floor)."""
+
+    async def test_top_k_passthrough(self, engine: MemoryEngine, monkeypatch):
+        await engine.process_messages(
+            [{"role": "user", "content": "Remember that the API uses v2."}]
+        )
+        captured: dict[str, int] = {}
+        original_recall = engine.recall
+
+        async def spy(query, session_context=None, top_k=5):
+            captured["top_k"] = top_k
+            return await original_recall(query, session_context, top_k)
+
+        monkeypatch.setattr(engine, "recall", spy)
+        await engine.answer("API version", top_k=7)
+        assert captured["top_k"] == 7
 
 
 class TestEmbeddingWritePath:

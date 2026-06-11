@@ -21,6 +21,7 @@ from houyi.adapters.memory.recall.retrievers.base import Retriever
 from houyi.adapters.memory.recall.retrievers.entity_state import (
     EntityAttributeHint,
     _infer_entity_attribute,
+    _is_identity_anchor,
 )
 from houyi.adapters.memory.recall.types import (
     RecallCandidate,
@@ -62,7 +63,11 @@ class TimelineRetriever(Retriever):
                 query.as_of,
                 hint.attribute,
             )
-            return [_candidate_from_row(row, self.name, hint, mode="as_of") for row in rows]
+            return [
+                _candidate_from_row(row, self.name, hint, mode="as_of")
+                for row in rows
+                if not _is_identity_anchor(row)
+            ]
 
         rows = await asyncio.to_thread(
             self._view.get_history,
@@ -70,7 +75,11 @@ class TimelineRetriever(Retriever):
             hint.entity,
             hint.attribute,
         )
-        return [_candidate_from_row(row, self.name, hint, mode="history") for row in rows]
+        return [
+            _candidate_from_row(row, self.name, hint, mode="history")
+            for row in rows
+            if not _is_identity_anchor(row)
+        ]
 
 
 def _candidate_from_row(

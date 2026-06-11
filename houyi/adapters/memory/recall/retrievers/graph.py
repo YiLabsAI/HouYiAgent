@@ -68,20 +68,59 @@ class GraphRetriever(Retriever):
 
         from houyi.adapters.memory.recall.types import QueryType
 
-        relation_types = None
+        # Per-query-type traversal profile: (relation_types, max_depth).
+        #
+        # factual_lookup is intentionally shallow and relation-restricted.
+        # A single-entity attribute answer lives on the seed's own row or a
+        # direct equivalence/support edge; the seed set already contains every
+        # active state row for the entity (see _discover_seeds), so a deep
+        # bidirectional related_to fan-out only drags in the entity's unrelated
+        # attributes (e.g. "apple pie", "boot camp") that crowd the true
+        # evidence out of the fused top-k. Keeping same_as/supports preserves
+        # graph's unique value here — coreference/alias resolution — without
+        # the flooding. Multi-hop and temporal query types keep the full
+        # depth-3 traversal where deep chains are the whole point.
+        relation_types: list[str] | None = None
+        max_depth = 3
         if ctx.query_type == QueryType.TEMPORAL_QUERY:
             relation_types = ["precedes", "causes", "same_as", "related_to", "supports"]
         elif ctx.query_type == QueryType.RELATIONAL_CHAIN:
             relation_types = ["causes", "related_to", "same_as", "supports"]
         elif ctx.query_type == QueryType.NEGATION_CHECK:
             relation_types = ["related_to", "same_as", "supports"]
+        elif ctx.query_type == QueryType.FACTUAL_LOOKUP:
+            # If the query asks for lists, quantities, or plural attributes (e.g. books, places, tournaments),
+            # allow deep RELATED_TO traversal to retrieve all connected items, otherwise restrict to depth-1 same_as.
+            query_lower = (query.text or "").lower()
+            is_aggregation = any(
+                kw in query_lower
+                for kw in [
+                    "books",
+                    "places",
+                    "tournaments",
+                    "hobbies",
+                    "interests",
+                    "movies",
+                    "how many",
+                    "how often",
+                    "list of",
+                    "kind of",
+                    "types of",
+                ]
+            )
+            if is_aggregation:
+                relation_types = ["causes", "related_to", "same_as", "supports"]
+                max_depth = 3
+            else:
+                relation_types = ["same_as", "supports"]
+                max_depth = 1
 
         # 2. SQLite CTE Graph Traversal (Offloaded to a background thread)
         traversed_nodes = await asyncio.to_thread(
             self._backend.traverse_graph,
             namespace=query.namespace,
             start_nodes=seed_nodes[:20],
-            max_depth=3,
+            max_depth=max_depth,
             direction="bidirectional",
             as_of=query.as_of,
             relation_types=relation_types,

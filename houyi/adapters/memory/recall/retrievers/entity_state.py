@@ -24,6 +24,18 @@ from houyi.adapters.memory.recall.types import (
 from houyi.adapters.memory.types import AtomicFact, EntityStateRecord
 
 
+def _is_identity_anchor(row: EntityStateRecord) -> bool:
+    """Return True for self-loop identity anchor rows (e.g. 'X | identity | X').
+
+    These rows exist purely as graph edge endpoints and carry no answer
+    value; surfacing them wastes recall slots and inflates coverage scores.
+    """
+    return (
+        row.attribute == "identity"
+        and row.entity.strip().casefold() == row.value.strip().casefold()
+    )
+
+
 @dataclass(frozen=True)
 class EntityAttributeHint:
     """Best-effort parsed entity and optional attribute."""
@@ -325,7 +337,11 @@ class EntityStateRetriever(Retriever):
                     attribute,
                 )
             candidates.extend(
-                [_candidate_from_row(row, self.name, ent_hint, query_words) for row in rows]
+                [
+                    _candidate_from_row(row, self.name, ent_hint, query_words)
+                    for row in rows
+                    if not _is_identity_anchor(row)
+                ]
             )
         return candidates
 

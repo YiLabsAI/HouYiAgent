@@ -32,6 +32,30 @@ async def test_rule_router_classifies() -> None:
 
 
 @pytest.mark.asyncio
+async def test_rule_router_timeunit_question() -> None:
+    """ "(in) which/what <time-unit>" routes to temporal, not factual/default.
+
+    "In which month did X happen" asks for a point on the timeline; without
+    the dedicated pattern the wh-stem fell to the generic factual rule (or the
+    thematic default) and lost the timeline-priority route. Single-fact and
+    aggregation wh-questions without a time-unit must stay factual_lookup.
+    """
+    router = Tier0RuleRouter()
+
+    cases = [
+        ("In which month's game did John achieve a career-high score?", QueryType.TEMPORAL_QUERY),
+        ("Which year did Caroline graduate?", QueryType.TEMPORAL_QUERY),
+        # No time-unit: stay factual_lookup.
+        ("What might John's financial status be?", QueryType.FACTUAL_LOOKUP),
+        ("What books has Tim read?", QueryType.FACTUAL_LOOKUP),
+    ]
+
+    for text, expected in cases:
+        decision = await router.classify(RecallQuery(text=text))
+        assert decision.query_type == expected, f"{text!r} -> {decision.query_type}"
+
+
+@pytest.mark.asyncio
 async def test_cascade_defaults() -> None:
     router = CascadingRouter(Tier0RuleRouter())
 

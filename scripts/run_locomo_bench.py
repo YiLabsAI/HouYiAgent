@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import copy
 import datetime
 import hashlib
 import json
@@ -60,6 +61,20 @@ load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 _ENV_API_KEY = os.getenv("SILICONFLOW_API_KEY")
 WINDOW = 3  # turns before/after evidence
 RECALL_TOP_K = 10
+# Extraction throughput knobs. Larger batches cut LLM round-trips (the
+# dominant latency). Drain workers parallelize the LLM extraction across
+# batches; a shared asyncio write-lock (passed to ExtractorWorker)
+# serializes only the SQLite write phases, so higher drain concurrency no
+# longer triggers "database is locked". Big conversations (15+ extract
+# batches) benefit most from running several batches in flight.
+EXTRACT_BATCH_SIZE = 16
+DRAIN_WORKERS = 4
+_ABLATE_RETRIEVERS: set[str] = set()
+"""Retriever registry keys to strip from the route table for ablation runs.
+
+Populated from --ablate-retrievers in main(); empty by default so normal
+runs use the unmodified default route table.
+"""
 
 _MODEL_EXTRACT = "Qwen/Qwen2.5-14B-Instruct"  # structured JSON extraction
 _MODEL_ANSWER = "Qwen/Qwen2.5-72B-Instruct"  # reasoning over retrieved facts
@@ -81,11 +96,22 @@ def _parse_args():
     p.add_argument(
         "--case-pair",
         nargs="+",
+        action="append",
         default=None,
         metavar="CONV_ID::QUESTION",
         help=(
             "run exact case-question pairs, e.g. "
             "--case-pair 'conv-48::What kind of project was Jolene working on in the beginning '"
+        ),
+    )
+    p.add_argument(
+        "--ablate-retrievers",
+        nargs="+",
+        default=None,
+        metavar="RETRIEVER",
+        help=(
+            "strip these retriever registry keys from the route table for "
+            "ablation, e.g. --ablate-retrievers graph"
         ),
     )
     p.add_argument(
@@ -179,23 +205,56 @@ class _JudgeLLM:
         return response
 
 
+# Per-turn extraction cache shared across all cases in a single bench run.
+# With --use-window, the DB cache is fragmented by evidence_hash, so the
+# same conversation is re-extracted once per question. The bench log shows
+# conv-44/43/41 each fully extracted twice. Keying extraction results by
+# (anchor, text) lets the second question reuse the first's facts and skip
+# the LLM call entirely. Results are deep-copied on hit because downstream
+# promotion writes them into each case's own backend.
+_TURN_EXTRACT_CACHE: dict[str, Any] = {}
+
+
+def _turn_cache_key(text: str, source_anchor: str | None) -> str:
+    return hashlib.md5(f"{source_anchor or ''}\x00{text}".encode()).hexdigest()
+
+
 class _CountingBatchExtractor:
     def __init__(self, inner: AtomicFactExtractor) -> None:
         self._inner = inner
         self.calls = 0
 
     async def extract(self, text: str, source_anchor: str | None) -> Any:
+        key = _turn_cache_key(text, source_anchor)
+        cached = _TURN_EXTRACT_CACHE.get(key)
+        if cached is not None:
+            return copy.deepcopy(cached)
         self.calls += 1
-        return await self._inner.extract(text, source_anchor)
+        result = await self._inner.extract(text, source_anchor)
+        _TURN_EXTRACT_CACHE[key] = result
+        return result
 
     async def extract_batch(self, turns: list[tuple[str, str | None]]) -> list[Any]:
-        self.calls += 1
-        if hasattr(self._inner, "extract_batch"):
-            return await self._inner.extract_batch(turns)
-        out = []
-        for text, source_anchor in turns:
-            out.append(await self._inner.extract(text, source_anchor))
-        return out
+        results: list[Any] = [None] * len(turns)
+        uncached: list[tuple[int, tuple[str, str | None]]] = []
+        for i, (text, anchor) in enumerate(turns):
+            hit = _TURN_EXTRACT_CACHE.get(_turn_cache_key(text, anchor))
+            if hit is not None:
+                results[i] = copy.deepcopy(hit)
+            else:
+                uncached.append((i, (text, anchor)))
+
+        if uncached:
+            self.calls += 1
+            sub = [turn for _, turn in uncached]
+            if hasattr(self._inner, "extract_batch"):
+                out = await self._inner.extract_batch(sub)
+            else:
+                out = [await self._inner.extract(text, anchor) for text, anchor in sub]
+            for (i, (text, anchor)), res in zip(uncached, out, strict=True):
+                _TURN_EXTRACT_CACHE[_turn_cache_key(text, anchor)] = res
+                results[i] = res
+        return results
 
 
 @dataclass(frozen=True)
@@ -509,7 +568,7 @@ async def _run_case_with_mode(
             return total_processed
 
         # Run parallel batch process tasks concurrently
-        drained_counts = await asyncio.gather(*[_drain_worker() for _ in range(2)])
+        drained_counts = await asyncio.gather(*[_drain_worker() for _ in range(DRAIN_WORKERS)])
         processed = sum(drained_counts)
 
         extract_calls_per_case = extractor_counter.calls - calls_before
@@ -589,6 +648,7 @@ async def _run_case_with_mode(
             backend=backend,
             entity_state=view,
             embedding_provider=embedding_prov,
+            config=_ablated_recall_config(),
         ),
         embedding_provider=embedding_prov,
     )
@@ -601,8 +661,9 @@ async def _run_case_with_mode(
     )
     recalls = answer.extras.get("recalls", [])
     rows = []
+    record_index = engine._build_record_index()
     for r in recalls:
-        record = engine._find_record(r.memory_id)
+        record = record_index.get(r.memory_id)
         if record:
             parts = record.key.split(".", 1)
             subj = parts[0] if len(parts) > 1 else ""
@@ -618,7 +679,12 @@ async def _run_case_with_mode(
                     else "",
                 )
             )
-    retrieve_ms = (time.perf_counter() - retrieve_t0) * 1000.0
+    # Pure retrieval latency self-reported by the engine. The previous
+    # wall-clock span here also covered embedding-provider construction,
+    # backfill, and the answer-LLM generation, inflating P50/P95 by an
+    # order of magnitude.
+    answer_pipeline_ms = (time.perf_counter() - retrieve_t0) * 1000.0
+    retrieve_ms = float(answer.extras.get("recall_ms", answer_pipeline_ms))
 
     recall_at_10, mrr = _recall_hits(rows, case.evidence, top_k=RECALL_TOP_K)
     logger.info("  Generated answer: %s", answer.answer[:200])
@@ -635,6 +701,7 @@ async def _run_case_with_mode(
         "memories_count": len(rows),
         "turns_ingested": len(ingest_idxs),
         "retrieve_ms": round(retrieve_ms, 2),
+        "answer_pipeline_ms": round(answer_pipeline_ms, 2),
         "recall_at_10": round(recall_at_10, 4),
         "mrr": round(mrr, 4),
         "extract_calls_per_case": int(max(extract_calls_per_case, 0)),
@@ -741,6 +808,42 @@ class DiskCacheWrapper:
         return getattr(self._inner, name)
 
 
+def _ablated_recall_config():
+    """Return a RecallPipelineConfig with _ABLATE_RETRIEVERS stripped or weights lowered.
+
+    Returns None when no ablation is requested so the factory uses its
+    own default config unchanged. Used to measure each retriever's
+    marginal contribution without permanently editing the route table.
+    """
+    if not _ABLATE_RETRIEVERS:
+        return None
+    from houyi.adapters.memory.recall.orchestrator import (
+        _DEFAULT_FUSION_WEIGHTS,
+        _DEFAULT_ROUTE_TABLE,
+        RecallPipelineConfig,
+    )
+    from houyi.adapters.memory.recall.types import QueryType, RetrieverKind
+
+    # Handle weight-lowering ablation (e.g. graph_low)
+    custom_weights = None
+    strip_keys = set(_ABLATE_RETRIEVERS)
+    if "graph_low" in strip_keys:
+        strip_keys.remove("graph_low")
+        # Build modified fusion weights dict
+        custom_weights = {qt: dict(weights) for qt, weights in _DEFAULT_FUSION_WEIGHTS.items()}
+        if QueryType.FACTUAL_LOOKUP in custom_weights:
+            custom_weights[QueryType.FACTUAL_LOOKUP][RetrieverKind.GRAPH] = 2.0
+
+    pruned_route = {
+        qt: tuple(name for name in names if name not in strip_keys)
+        for qt, names in _DEFAULT_ROUTE_TABLE.items()
+    }
+
+    if custom_weights:
+        return RecallPipelineConfig(route_table=pruned_route, fusion_weights=custom_weights)
+    return RecallPipelineConfig(route_table=pruned_route)
+
+
 async def _run_all(
     cases: list[LoCoMoCase],
     output_path: Path | None,
@@ -788,7 +891,7 @@ async def _run_all(
     extract_config_payload = json.dumps(
         {
             "extract_model": extract_model,
-            "batch_size": 8,
+            "batch_size": EXTRACT_BATCH_SIZE,
             "use_window": use_window,
             "window_size": window_size,
             "embedding_provider": embedding_provider,
@@ -811,7 +914,31 @@ async def _run_all(
                 cached_db = db_cache_dir / f"{case.sample_id}_{evidence_hash}_{config_hash}.db"
             else:
                 cached_db = db_cache_dir / f"{case.sample_id}_{config_hash}.db"
-            is_cached = cached_db.exists()
+
+            is_cached = False
+            if cached_db.exists():
+                import sqlite3
+
+                try:
+                    conn = sqlite3.connect(cached_db)
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT COUNT(*) FROM memories")
+                    count = cursor.fetchone()[0]
+                    conn.close()
+                    if count > 0:
+                        is_cached = True
+                    else:
+                        logger.warning(
+                            "Cache DB %s exists but has 0 memories, ignoring and rebuilding...",
+                            cached_db.name,
+                        )
+                        cached_db.unlink(missing_ok=True)
+                except Exception as e:
+                    logger.warning(
+                        "Failed to verify cache DB %s: %s, rebuilding...", cached_db.name, e
+                    )
+                    cached_db.unlink(missing_ok=True)
+
             if is_cached:
                 logger.info(
                     "  [Cache Hit] Reusing pre-extracted session database for %s", case.sample_id
@@ -822,7 +949,7 @@ async def _run_all(
             try:
                 inbox = SQLiteCandidateInbox(backend)
                 view = SQLiteEntityStateView(backend)
-                extractor = AtomicFactExtractor(llm_extract, max_retries=1)
+                extractor = AtomicFactExtractor(llm_extract, max_retries=1, batch_max_tokens=8192)
                 counting_extractor = _CountingBatchExtractor(extractor)
                 turn_writer = TurnWriter(backend, extract_trigger=all_of())
                 # The default MemoryRecordPromoter is wired by ExtractorWorker
@@ -832,7 +959,8 @@ async def _run_all(
                     extractor=counting_extractor,
                     entity_state=view,
                     candidate_inbox=inbox,
-                    config=ExtractorWorkerConfig(batch_size=8),
+                    config=ExtractorWorkerConfig(batch_size=EXTRACT_BATCH_SIZE),
+                    write_lock=asyncio.Lock(),
                 )
                 r = await _run_case_with_mode(
                     case,
@@ -852,6 +980,9 @@ async def _run_all(
                     use_window=use_window,
                     window_size=window_size,
                 )
+
+                # Close the backend connection first to checkpoint and flush WAL records.
+                backend.close()
 
                 # If we successfully ingested and completed extraction from scratch, cache it!
                 if not is_cached and r.get("reason") != "no_evidence_turns":
@@ -932,7 +1063,22 @@ async def _run_all(
 
 def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+    # Cap tokenizer/math-lib threads before the lazy torch + sentence_transformers
+    # import. With --embedding-provider local and several cases encoding
+    # concurrently via asyncio.to_thread, tokenizers' Rust parallelism and torch
+    # thread pools oversubscribe, surfacing on macOS as "leaked semaphore"
+    # warnings and intermittent SIGSEGV (exit 139). setdefault keeps any operator
+    # override intact.
+    os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+    os.environ.setdefault("OMP_NUM_THREADS", "1")
+    os.environ.setdefault("MKL_NUM_THREADS", "1")
     args = _parse_args()
+
+    if args.ablate_retrievers:
+        _ABLATE_RETRIEVERS.update(args.ablate_retrievers)
+        logger.info(
+            "ABLATION: stripping retrievers from route table: %s", sorted(_ABLATE_RETRIEVERS)
+        )
 
     if args.case_pair or args.case:
         from houyi.adapters.memory.bench.locomo import load_locomo_all
@@ -943,7 +1089,8 @@ def main():
 
     if args.case_pair:
         wanted: set[tuple[str, str]] = set()
-        for raw in args.case_pair:
+        raw_pairs = [item for group in args.case_pair for item in group]
+        for raw in raw_pairs:
             if "::" not in raw:
                 sys.exit(f"Invalid --case-pair entry (missing '::'): {raw!r}")
             conv_id, question = raw.split("::", 1)
@@ -957,7 +1104,7 @@ def main():
             c for c in all_cases if (c.sample_id.lower(), c.question.strip().lower()) in wanted
         ]
         if not cases:
-            sys.exit(f"No cases found for --case-pair entries: {args.case_pair}")
+            sys.exit(f"No cases found for --case-pair entries: {raw_pairs}")
     elif args.case:
         filter_ids = set(args.case)
         cases = [c for c in all_cases if c.sample_id in filter_ids]

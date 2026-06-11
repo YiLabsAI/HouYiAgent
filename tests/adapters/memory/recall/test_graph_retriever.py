@@ -8,6 +8,7 @@ from houyi.adapters.memory.backends.sqlite import SQLiteMemoryBackend
 from houyi.adapters.memory.backends.sqlite_entity_state import SQLiteEntityStateView
 from houyi.adapters.memory.recall.retrievers.graph import GraphRetriever
 from houyi.adapters.memory.recall.types import (
+    QueryType,
     RecallQuery,
     RetrieverContext,
     RetrieverKind,
@@ -429,3 +430,109 @@ async def test_graph_cjk_support(test_env) -> None:
 
     assert "\u674e\u96f7" in seed_nodes
     assert "\u97e9\u6845\u6845" in seed_nodes
+
+
+@pytest.mark.asyncio
+async def test_factual_lookup_narrows_traversal(test_env) -> None:
+    """factual_lookup must keep same_as aliases but drop related_to fan-out.
+
+    Regression for graph flooding: under FACTUAL_LOOKUP the deep
+    bidirectional related_to traversal dragged the seed entity's unrelated
+    attributes into the fused top-k and crowded out the true evidence. The
+    retriever now restricts factual_lookup to depth-1 same_as/supports edges
+    so coreference still resolves while the noise is gone. Other query types
+    keep the full depth-3 related_to traversal.
+    """
+    backend, view = test_env
+
+    seed = view.upsert(
+        namespace="n1",
+        entity="John",
+        attribute="job",
+        value="banker",
+        certainty=Certainty.CERTAIN,
+        valid_from=100.0,
+    )
+    # Alias of the seed reachable via a same_as edge — graph's unique value.
+    alias = view.upsert(
+        namespace="n1",
+        entity="Johnny",
+        attribute="job",
+        value="banker",
+        certainty=Certainty.CERTAIN,
+        valid_from=100.0,
+    )
+    # An unrelated attribute reachable only via related_to (the flooding kind).
+    noise = view.upsert(
+        namespace="n1",
+        entity="apple pie",
+        attribute="made_by",
+        value="John",
+        certainty=Certainty.CERTAIN,
+        valid_from=100.0,
+    )
+    # Depth-2 node behind the noise; must never surface under factual_lookup.
+    deep_noise = view.upsert(
+        namespace="n1",
+        entity="boot camp",
+        attribute="kind",
+        value="fitness",
+        certainty=Certainty.CERTAIN,
+        valid_from=100.0,
+    )
+
+    backend.add_edge(
+        MemoryEdge(
+            edge_id="edge-alias",
+            namespace="n1",
+            source_unit_id=seed.state_id,
+            target_unit_id=alias.state_id,
+            source_type="state",
+            target_type="state",
+            relation=MemoryRelation.SAME_AS,
+            valid_from=100.0,
+        )
+    )
+    backend.add_edge(
+        MemoryEdge(
+            edge_id="edge-noise",
+            namespace="n1",
+            source_unit_id=seed.state_id,
+            target_unit_id=noise.state_id,
+            source_type="state",
+            target_type="state",
+            relation=MemoryRelation.RELATED_TO,
+            valid_from=100.0,
+        )
+    )
+    backend.add_edge(
+        MemoryEdge(
+            edge_id="edge-deep",
+            namespace="n1",
+            source_unit_id=noise.state_id,
+            target_unit_id=deep_noise.state_id,
+            source_type="state",
+            target_type="state",
+            relation=MemoryRelation.RELATED_TO,
+            valid_from=100.0,
+        )
+    )
+
+    retriever = GraphRetriever(backend, view)
+    query = RecallQuery(text="What is John's job?", namespace="n1", entity_hint="John", as_of=150.0)
+
+    # factual_lookup: same_as alias surfaces, related_to flood is suppressed.
+    factual_hits = await retriever.retrieve(
+        query, RetrieverContext(query_type=QueryType.FACTUAL_LOOKUP)
+    )
+    factual_subjects = {h.fact.subject for h in factual_hits}
+    assert "Johnny" in factual_subjects  # same_as alias kept
+    assert "apple pie" not in factual_subjects  # related_to flood dropped
+    assert "boot camp" not in factual_subjects  # depth-2 never reached
+
+    # Default (unrouted) context keeps the full related_to traversal so the
+    # narrowing is scoped strictly to factual_lookup.
+    default_hits = await retriever.retrieve(query, RetrieverContext())
+    default_subjects = {h.fact.subject for h in default_hits}
+    assert "apple pie" in default_subjects
+    assert "boot camp" in default_subjects

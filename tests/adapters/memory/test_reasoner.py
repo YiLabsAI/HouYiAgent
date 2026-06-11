@@ -233,33 +233,43 @@ class TestLLMPromptChanges:
         prompt_text = llm.calls[0][1]["content"]
         assert "[record_id=" not in prompt_text
 
-    async def test_prompt_negative_filter(self):
-        """System prompt must contain the negative filter rule."""
+    async def test_prompt_scope_filtering(self):
+        """System prompt must carry the scope-filtering principle."""
         llm = MockLLMAdapter("Some answer")
         policy = LLMMemoryReasoningPolicy(llm)
         records = [MemoryRecord(key="test", content="test fact")]
         request = MemoryReasoningInput(query="test question", recalls=[], records=records)
         await policy.answer(request)
         system_prompt = llm.calls[0][0]["content"]
-        assert "NEGATIVE FILTERS" in system_prompt
+        assert "SCOPE FILTERING" in system_prompt
+        assert "not related to" in system_prompt
 
-    async def test_prompt_has_year_extraction(self):
-        """System prompt must contain YEAR EXTRACTION rule."""
+    async def test_prompt_time_normalization(self):
+        """System prompt must carry the time-normalization principle."""
         llm = MockLLMAdapter("Some answer")
         policy = LLMMemoryReasoningPolicy(llm)
         records = [MemoryRecord(key="test", content="test fact")]
         request = MemoryReasoningInput(query="test question", recalls=[], records=records)
         await policy.answer(request)
         system_prompt = llm.calls[0][0]["content"]
-        assert "YEAR EXTRACTION" in system_prompt
+        assert "TIME NORMALIZATION" in system_prompt
+        assert "which year" in system_prompt
 
-    async def test_prompt_no_benchmark_norms(self):
-        """System prompt should NOT contain hardcoded exact-answer norm rules."""
+    async def test_prompt_no_concrete_answers(self):
+        """System prompt must hold zero concrete benchmark answer data."""
         llm = MockLLMAdapter("Some answer")
         policy = LLMMemoryReasoningPolicy(llm)
         records = [MemoryRecord(key="test", content="test fact")]
         request = MemoryReasoningInput(query="test question", recalls=[], records=records)
         await policy.answer(request)
         system_prompt = llm.calls[0][0]["content"]
-        assert "SHARED INTERESTS NORM" not in system_prompt
-        assert "CALVIN PURCHASE NORM" not in system_prompt
+        for leaked in (
+            "Ferrari",
+            "mansion in Japan",
+            "Norway",
+            "Vespa",
+            "tennis",
+            "WORKED EXAMPLE",
+            "basketball",
+        ):
+            assert leaked not in system_prompt

@@ -7,9 +7,11 @@ preserving original per-retriever signals for traceability.
 
 from __future__ import annotations
 
+import re
 from abc import ABC, abstractmethod
 from collections import defaultdict
 from collections.abc import Iterable
+from datetime import UTC, datetime
 
 from houyi.adapters.memory.recall.types import RecallCandidate, RetrieverKind
 
@@ -89,12 +91,10 @@ class WeightedFuser(Fuser):
         for _, kind_list in by_kind.items():
             normalized_cands.extend(self._normalize_group(kind_list))
 
-        # 3. Group normalized candidates by semantic key for deduplication
-        grouped: dict[tuple[str, str, str], list[RecallCandidate]] = defaultdict(list)
-        for cand in normalized_cands:
-            grouped[_semantic_key(cand)].append(cand)
+        # 3. Group normalized candidates by near-duplicate detection
+        grouped = _group_near_duplicates(normalized_cands)
 
-        fused = [self._fuse_group(group) for group in grouped.values()]
+        fused = [self._fuse_group(group) for group in grouped]
         fused.sort(key=lambda c: c.signals.get("fused_score", c.score), reverse=True)
         return fused[:top_k]
 
@@ -151,21 +151,32 @@ class ReciprocalRankFuser(Fuser):
         if top_k <= 0:
             return []
 
-        scores: dict[tuple[str, str, str], float] = defaultdict(float)
-        best: dict[tuple[str, str, str], RecallCandidate] = {}
-        for idx, cand in enumerate(candidates, start=1):
-            key = _semantic_key(cand)
-            scores[key] += 1.0 / (self._k + idx)
-            if key not in best or cand.score > best[key].score:
-                best[key] = cand
+        # Group candidates by near-duplicate detection
+        grouped = _group_near_duplicates(candidates)
 
-        result = []
-        for key, cand in best.items():
+        scores: dict[int, float] = defaultdict(float)
+        best: dict[int, RecallCandidate] = {}
+        cand_to_group_id = {}
+        for group_id, group in enumerate(grouped):
+            for cand in group:
+                cand_to_group_id[id(cand)] = group_id
+
+        for idx, cand in enumerate(candidates, start=1):
+            mapped_group_id = cand_to_group_id.get(id(cand))
+            if mapped_group_id is not None:
+                scores[mapped_group_id] += 1.0 / (self._k + idx)
+                if mapped_group_id not in best or cand.score > best[mapped_group_id].score:
+                    best[mapped_group_id] = cand
+
+        fused = []
+        for group_id, score in scores.items():
+            cand = best[group_id]
             cand.signals = dict(cand.signals)
-            cand.signals["fused_score"] = scores[key]
-            result.append(cand)
-        result.sort(key=lambda c: c.signals["fused_score"], reverse=True)
-        return result[:top_k]
+            cand.signals["fused_score"] = score
+            fused.append(cand)
+
+        fused.sort(key=lambda c: c.signals["fused_score"], reverse=True)
+        return fused[:top_k]
 
 
 class MMRDeduplicator:
@@ -200,7 +211,11 @@ class MMRDeduplicator:
         candidate: RecallCandidate,
         selected: list[RecallCandidate],
     ) -> float:
-        fused_score = float(candidate.signals.get("fused_score", candidate.score))
+        fused_score = float(
+            candidate.signals.get(
+                "rerank_score", candidate.signals.get("fused_score", candidate.score)
+            )
+        )
         if not selected:
             return fused_score
         max_similarity = max(
@@ -211,13 +226,91 @@ class MMRDeduplicator:
         ) * fused_score - self._diversity_weight * max_similarity
 
 
-def _semantic_key(candidate: RecallCandidate) -> tuple[str, str, str]:
+def _light_stem(word: str) -> str:
+    w = word.strip().lower()
+    if len(w) <= 3:
+        return w
+    if w.endswith("ies"):
+        w = w[:-3] + "y"
+    elif w.endswith("es"):
+        w = w[:-2]
+    elif w.endswith("ing"):
+        w = w[:-3]
+    elif w.endswith("ed"):
+        w = w[:-2]
+    elif w.endswith("s") and not w.endswith("ss"):
+        w = w[:-1]
+    return w
+
+
+def _stemmed_words(text: str) -> set[str]:
+    cleaned = re.sub(r"[^a-z0-9\s]", " ", (text or "").lower())
+    return {_light_stem(w) for w in cleaned.split() if w}
+
+
+def _valid_day(valid_from: float | None) -> str:
+    """Reduce an epoch valid_from to day granularity for identity.
+
+    Day granularity separates genuine event occurrences (distinct
+    dates) while merging re-extractions of the same fact: overlapping
+    ingestion windows re-extract identical facts seconds apart, and a
+    sub-day key component would let those duplicates crowd the budget.
+    """
+    if not valid_from:
+        return ""
+    try:
+        return datetime.fromtimestamp(float(valid_from), tz=UTC).date().isoformat()
+    except (OverflowError, OSError, ValueError):
+        return ""
+
+
+def _semantic_key(candidate: RecallCandidate) -> tuple[str, str, str, str]:
+    """Identity key for cross-retriever fusion.
+
+    Includes temporal validity at day granularity: the same triple
+    asserted on different days is a *different event occurrence*
+    (e.g. one tournament entry per date). Collapsing those breaks
+    counting and enumeration questions, while same-day duplicates
+    (same row via different retrievers, or window re-extractions)
+    still merge.
+    """
     fact = candidate.fact
     return (
         fact.subject.strip().casefold(),
         fact.predicate.strip().casefold(),
         fact.object.strip().casefold(),
+        _valid_day(fact.valid_from),
     )
+
+
+def _group_near_duplicates(candidates: Iterable[RecallCandidate]) -> list[list[RecallCandidate]]:
+    """Group candidates by (subject, valid_day) exact matches, then Jaccard similarity."""
+    by_subj_day: dict[tuple[str, str], list[RecallCandidate]] = defaultdict(list)
+    for cand in candidates:
+        key = (cand.fact.subject.strip().casefold(), _valid_day(cand.fact.valid_from))
+        by_subj_day[key].append(cand)
+
+    grouped: list[list[RecallCandidate]] = []
+    for subj_day_list in by_subj_day.values():
+        sub_groups: list[list[RecallCandidate]] = []
+        for cand in subj_day_list:
+            found_group = False
+            for group in sub_groups:
+                rep = group[0]
+                words_cand = _stemmed_words(f"{cand.fact.predicate} {cand.fact.object}")
+                words_rep = _stemmed_words(f"{rep.fact.predicate} {rep.fact.object}")
+                intersection = words_cand.intersection(words_rep)
+                union = words_cand.union(words_rep)
+                jaccard = len(intersection) / len(union) if union else 1.0
+
+                if jaccard >= 0.6:
+                    group.append(cand)
+                    found_group = True
+                    break
+            if not found_group:
+                sub_groups.append([cand])
+        grouped.extend(sub_groups)
+    return grouped
 
 
 def _candidate_text(candidate: RecallCandidate) -> str:

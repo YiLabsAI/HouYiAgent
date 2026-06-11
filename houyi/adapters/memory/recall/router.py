@@ -188,6 +188,19 @@ _TIER_0_PATTERNS: list[_Pattern] = [
         0.95,
         "date_literal",
     ),
+    _Pattern(
+        QueryType.TEMPORAL_QUERY,
+        # "(in) which/what <time-unit>" — the answer is a point on the
+        # timeline ("in which month did X happen"). Without this the wh-stem
+        # falls to the generic factual pattern (or default) and loses the
+        # timeline-priority route. Strength edges out en_wh_question (0.85).
+        re.compile(
+            r"\b(?:in\s+)?(?:which|what)\s+(?:month|year|day|week|date|season)\b",
+            re.IGNORECASE,
+        ),
+        0.90,
+        "en_which_timeunit",
+    ),
     # RELATIONAL_CHAIN - multi-hop ownership/attribute chains.
     _Pattern(
         QueryType.RELATIONAL_CHAIN,

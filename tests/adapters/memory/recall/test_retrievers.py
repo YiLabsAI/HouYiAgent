@@ -55,6 +55,15 @@ class FakeView:
             EntityStateRecord(
                 namespace="n",
                 entity="Martin",
+                attribute="identity",
+                value="Martin",
+                certainty=Certainty.CERTAIN,
+                valid_from=0.0,
+                source_unit_id="u5",
+            ),
+            EntityStateRecord(
+                namespace="n",
+                entity="Martin",
                 attribute="city",
                 value="Paris",
                 certainty=Certainty.CERTAIN,
@@ -253,6 +262,20 @@ async def test_entity_no_hint() -> None:
 def test_entity_requires_view() -> None:
     with pytest.raises(ValueError):
         EntityStateRetriever(None)  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_entity_filters_identity_anchor() -> None:
+    retriever = EntityStateRetriever(FakeView())
+
+    hits = await retriever.retrieve(
+        RecallQuery(text="phone of Martin", namespace="n"),
+        RetrieverContext(),
+    )
+
+    predicates = [h.fact.predicate for h in hits]
+    assert "identity" not in predicates
+    assert "phone" in predicates
 
 
 @pytest.mark.asyncio
