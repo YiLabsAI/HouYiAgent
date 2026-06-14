@@ -254,6 +254,7 @@ class TestLLMPromptChanges:
         system_prompt = llm.calls[0][0]["content"]
         assert "TIME NORMALIZATION" in system_prompt
         assert "which year" in system_prompt
+        assert "semantic category" in system_prompt
 
     async def test_prompt_no_concrete_answers(self):
         """System prompt must hold zero concrete benchmark answer data."""

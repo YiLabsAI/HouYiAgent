@@ -633,9 +633,18 @@ def _stemish(token: str) -> str:
     if t in _IRREGULAR_VERB_MAP:
         return _IRREGULAR_VERB_MAP[t]
     if len(t) > 4 and t.endswith("ing"):
-        return t[:-3]
+        base = t[:-3]
+        # Undo consonant doubling from the CVC doubling rule:
+        # e.g. "planning" -> "plann" (wrong) -> "plan" (correct)
+        if len(base) >= 2 and base[-1] == base[-2] and base[-1] not in "aeiouy":
+            base = base[:-1]
+        return base
     if len(t) > 3 and t.endswith("ed"):
-        return t[:-2]
+        base = t[:-2]
+        # Undo consonant doubling: "planned" -> "plann" -> "plan"
+        if len(base) >= 2 and base[-1] == base[-2] and base[-1] not in "aeiouy":
+            base = base[:-1]
+        return base
     if len(t) > 3 and t.endswith("s"):
         return t[:-1]
     return t
@@ -706,6 +715,20 @@ def _infer_entity_attribute(query: RecallQuery) -> EntityAttributeHint | None:
     return None
 
 
+def _extract_event_time(qualifiers: dict[str, str] | None) -> str | None:
+    """Extract the fact-relevant time from qualifiers.
+
+    The qualifiers may contain a 'date' key (ISO date like "2023-01-19"
+    or "2020-03") or a 'since' key (acquisition/ongoing start date).
+    These are fact-relevant times that should be carried in
+    AtomicFact.event_time so they are rendered meaningfully to the
+    LLM, not as Unix epoch timestamps from valid_from.
+    """
+    if not qualifiers:
+        return None
+    return qualifiers.get("date") or qualifiers.get("since") or None
+
+
 def _candidate_from_row(
     row: EntityStateRecord,
     retriever_name: str,
@@ -722,6 +745,7 @@ def _candidate_from_row(
         certainty=row.certainty,
         source_anchor=row.source_unit_id or row.state_id,
         qualifiers=row.qualifiers,
+        event_time=_extract_event_time(row.qualifiers),
     )
     exact_attribute = hint.attribute is not None and hint.attribute == row.attribute
     score = 10.0 if exact_attribute else 5.0

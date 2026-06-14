@@ -1197,11 +1197,20 @@ class AtomicFactExtractor:
             {"role": "user", "content": user_content},
         ]
         try:
+            # Batch extraction must NOT pass response_format. The schema
+            # defined in _ATOMIC_FACT_RESPONSE_FORMAT specifies single-turn
+            # extraction output ({facts, edges} without source_anchor
+            # grouping). Batch extraction requires a different structure
+            # ({items: [{source_anchor, facts, edges}]}). Passing the
+            # single-turn schema forces the LLM to output flat {facts,
+            # edges} instead of the batch {items} wrapper, causing all
+            # facts to be silently dropped by _parse_json_batch. The batch
+            # system prompt already instructs the LLM to return JSON, so
+            # omitting response_format does not reduce reliability.
             response = await self._llm.chat(
                 messages,
                 temperature=self._temperature,
                 max_tokens=self._batch_max_tokens,
-                **self._json_kwargs(),
             )
         except TypeError:
             if not self._prefer_json_mode:

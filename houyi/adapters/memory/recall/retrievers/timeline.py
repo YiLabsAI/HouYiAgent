@@ -20,6 +20,7 @@ from houyi.adapters.memory.backends.base import EntityStateView
 from houyi.adapters.memory.recall.retrievers.base import Retriever
 from houyi.adapters.memory.recall.retrievers.entity_state import (
     EntityAttributeHint,
+    _extract_event_time,
     _infer_entity_attribute,
     _is_identity_anchor,
 )
@@ -99,6 +100,7 @@ def _candidate_from_row(
         certainty=row.certainty,
         source_anchor=row.source_unit_id or row.state_id,
         qualifiers=row.qualifiers,
+        event_time=_extract_event_time(row.qualifiers),
     )
     score = _timeline_score(row, hint, mode=mode)
     return RecallCandidate(

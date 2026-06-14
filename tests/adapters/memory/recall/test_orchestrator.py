@@ -313,3 +313,71 @@ async def test_source_errors_traced() -> None:
     assert result.trace["source_reads"] == [
         {"source_anchor": "s-coffee", "error": "source unavailable"}
     ]
+
+
+def _timed_candidate(score: float, *, obj: str, event_time: str | None) -> RecallCandidate:
+    return RecallCandidate(
+        fact=AtomicFact(
+            subject="Audrey",
+            predicate="owns_dog" if event_time else "loves",
+            object=obj,
+            event_time=event_time,
+            certainty=Certainty.CERTAIN,
+            source_anchor=f"s-{obj}",
+        ),
+        score=score,
+        matched_by=RetrieverKind.ENTITY_STATE,
+        retriever_name="fake",
+    )
+
+
+def test_infer_answer_type() -> None:
+    """Classifies temporal ('when/which year') and numeric ('how many') asks."""
+    from houyi.adapters.memory.recall.orchestrator import _infer_answer_type
+
+    assert "temporal" in _infer_answer_type("Which year did Audrey adopt her dogs?")
+    assert "temporal" in _infer_answer_type("When did Calvin travel to Tokyo?")
+    assert "numeric" in _infer_answer_type("How many dogs does Audrey own?")
+    # A plain what/who lookup asks for neither a date nor a count.
+    assert _infer_answer_type("What kind of car does Evan drive?") == frozenset()
+
+
+def test_answer_type_boost() -> None:
+    """Temporal boost lifts a dated fact above a generic higher-scored one."""
+    from houyi.adapters.memory.recall.orchestrator import _apply_answer_type_boost
+
+    # A generic, qualifier-less fact starts higher than the answer-bearing
+    # one. After the temporal boost the dated fact must overtake it so it
+    # survives the top_k cut for a 'which year' question.
+    generic = _timed_candidate(10.0, obj="dogs", event_time=None)
+    dated = _timed_candidate(8.0, obj="dog Pepper", event_time="2020")
+    _apply_answer_type_boost([generic, dated], frozenset({"temporal"}), ["Audrey"])
+
+    assert dated.signals["rerank_score"] > generic.signals.get("rerank_score", generic.score)
+    assert "answer_type_boost" not in generic.signals
+
+
+def test_boost_entity_gated() -> None:
+    """A dated fact about another person is NOT boosted for the query entity.
+
+    Guards the conv-48 regression: 'when did Deborah's mother pass away'
+    must not elevate an unrelated dated 'Jolene lost mother (2022)' over
+    the relevant but undated Deborah fact.
+    """
+    from houyi.adapters.memory.recall.orchestrator import _apply_answer_type_boost
+
+    other = RecallCandidate(
+        fact=AtomicFact(
+            subject="Jolene",
+            predicate="lost_family_member",
+            object="mother",
+            event_time="2022",
+            certainty=Certainty.CERTAIN,
+            source_anchor="s-jolene",
+        ),
+        score=5.0,
+        matched_by=RetrieverKind.ENTITY_STATE,
+        retriever_name="fake",
+    )
+    _apply_answer_type_boost([other], frozenset({"temporal"}), ["Deborah"])
+    assert "answer_type_boost" not in other.signals

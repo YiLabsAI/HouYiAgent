@@ -165,7 +165,23 @@ class ReciprocalRankFuser(Fuser):
             mapped_group_id = cand_to_group_id.get(id(cand))
             if mapped_group_id is not None:
                 scores[mapped_group_id] += 1.0 / (self._k + idx)
-                if mapped_group_id not in best or cand.score > best[mapped_group_id].score:
+                # When multiple retrievers return the same fact, prefer the
+                # candidate that carries event_time (fact-relevant time) over
+                # one that only has valid_from (system timestamp). event_time
+                # contains the human-readable date the LLM needs for temporal
+                # questions. Without this tie-breaker, the fuser may pick a
+                # Timeline candidate (event_time=None) over an EntityState
+                # candidate (event_time="2020-03") solely because the
+                # Timeline score is marginally higher, discarding the answer-
+                # relevant date information.
+                should_replace = False
+                if (
+                    mapped_group_id not in best
+                    or (cand.fact.event_time and not best[mapped_group_id].fact.event_time)
+                    or cand.score > best[mapped_group_id].score
+                ):
+                    should_replace = True
+                if should_replace:
                     best[mapped_group_id] = cand
 
         fused = []
@@ -197,33 +213,80 @@ class MMRDeduplicator:
         candidates: Iterable[RecallCandidate],
         *,
         top_k: int,
+        diversity: float | None = None,
     ) -> list[RecallCandidate]:
+        """Select top_k via max-marginal-relevance.
+
+        The 'diversity' argument overrides the instance diversity weight for this
+        call. Enumeration/aggregation queries ("what activities/items
+        has X") pass a high value so the budget spreads across distinct
+        facts (coverage) instead of being decided by arbitrary tie-order
+        among same-scored candidates. Single-answer lookups keep the low
+        default so relevance dominates.
+        """
+        weight = self._diversity_weight if diversity is None else diversity
+        weight = min(1.0, max(0.0, weight))
         remaining = list(candidates)
+        if not remaining:
+            return []
+        # Normalize relevance to [0, 1] across the candidate pool so the
+        # diversity penalty (also in [0, 1]) is on a comparable scale. With
+        # raw rerank/fused scores (range ~0-15) the penalty was negligible,
+        # making MMR a near-pure score sort that let many rephrasings of one
+        # fact (or one entity) crowd out diverse evidence.
+        relevance = {id(c): self._relevance(c) for c in remaining}
+        lo = min(relevance.values())
+        hi = max(relevance.values())
+        span = hi - lo
+        norm = {cid: ((val - lo) / span if span > 0 else 1.0) for cid, val in relevance.items()}
         selected: list[RecallCandidate] = []
         while remaining and len(selected) < top_k:
-            best = max(remaining, key=lambda c: self._mmr_score(c, selected))
+            best = max(remaining, key=lambda c: self._mmr_score(c, selected, norm, weight))
             selected.append(best)
             remaining.remove(best)
         return selected
+
+    @staticmethod
+    def _relevance(candidate: RecallCandidate) -> float:
+        return float(
+            candidate.signals.get(
+                "rerank_score", candidate.signals.get("fused_score", candidate.score)
+            )
+        )
 
     def _mmr_score(
         self,
         candidate: RecallCandidate,
         selected: list[RecallCandidate],
+        norm: dict[int, float],
+        diversity_weight: float,
     ) -> float:
-        fused_score = float(
-            candidate.signals.get(
-                "rerank_score", candidate.signals.get("fused_score", candidate.score)
-            )
-        )
+        relevance = norm[id(candidate)]
         if not selected:
-            return fused_score
-        max_similarity = max(
-            _jaccard(_candidate_text(candidate), _candidate_text(s)) for s in selected
-        )
-        return (
-            1.0 - self._diversity_weight
-        ) * fused_score - self._diversity_weight * max_similarity
+            return relevance
+        redundancy = max(self._redundancy(candidate, s) for s in selected)
+        return (1.0 - diversity_weight) * relevance - diversity_weight * redundancy
+
+    @staticmethod
+    def _redundancy(a: RecallCandidate, b: RecallCandidate) -> float:
+        # Redundancy is keyed on *semantic fact identity*, not source
+        # anchor. Two facts about the same subject that point at the same
+        # concrete object ("Andrew has_relationship girlfriend" vs
+        # "Andrew shares_activity_with girlfriend") rephrase one evidence
+        # point, so they are fully redundant and one must yield its budget
+        # slot. Distinct objects ("played board games" vs "went_to wine
+        # tasting") are different members of the asked-about category and
+        # must both survive — exactly what enumeration coverage needs.
+        # Anchor-based keys failed here: vector candidates carry a UUID
+        # anchor (not a turn id), and same-turn facts are often distinct
+        # members. Fall back to lexical overlap when objects are absent.
+        subj_a = a.fact.subject.strip().casefold()
+        subj_b = b.fact.subject.strip().casefold()
+        obj_a = _object_head(a.fact.object)
+        obj_b = _object_head(b.fact.object)
+        if subj_a == subj_b and obj_a and obj_a == obj_b:
+            return 1.0
+        return _jaccard(_candidate_text(a), _candidate_text(b))
 
 
 def _light_stem(word: str) -> str:
@@ -246,6 +309,20 @@ def _light_stem(word: str) -> str:
 def _stemmed_words(text: str) -> set[str]:
     cleaned = re.sub(r"[^a-z0-9\s]", " ", (text or "").lower())
     return {_light_stem(w) for w in cleaned.split() if w}
+
+
+def _object_head(obj: str | None) -> str:
+    """Normalize a fact object to an order-independent identity key.
+
+    Two facts about the same subject that resolve to the same concrete
+    object are one evidence point regardless of predicate wording, so
+    their objects must compare equal. Light-stemming plus a sorted token
+    join makes "board games" == "board game" and "watching movies" ==
+    "watch movie" while keeping distinct members ("wine tasting") apart.
+    Returns "" for empty objects so callers can skip the equality test.
+    """
+    words = _stemmed_words(obj or "")
+    return " ".join(sorted(words))
 
 
 def _valid_day(valid_from: float | None) -> str:

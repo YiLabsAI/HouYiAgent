@@ -15,6 +15,7 @@ from typing import Protocol
 
 from houyi.adapters.memory.backends.base import EntityStateView
 from houyi.adapters.memory.recall.retrievers.base import Retriever
+from houyi.adapters.memory.recall.retrievers.entity_state import _extract_event_time
 from houyi.adapters.memory.recall.types import (
     RecallCandidate,
     RecallQuery,
@@ -223,6 +224,7 @@ def _candidate_from_row(
         certainty=row.certainty,
         source_anchor=row.source_unit_id or row.state_id,
         qualifiers=row.qualifiers,
+        event_time=_extract_event_time(row.qualifiers),
     )
     return RecallCandidate(
         fact=fact,

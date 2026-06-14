@@ -1089,6 +1089,13 @@ def main():
 
     if args.case_pair:
         wanted: set[tuple[str, str]] = set()
+
+        def _norm(s: str) -> str:
+            # Normalize backtick (U+0060) and curly quotes to plain
+            # apostrophe (U+0027) so shell quoting mismatches do not
+            # prevent matching dataset questions that use backticks.
+            return s.lower().replace("`", "'").replace("‘", "'").replace("’", "'")
+
         raw_pairs = [item for group in args.case_pair for item in group]
         for raw in raw_pairs:
             if "::" not in raw:
@@ -1098,11 +1105,9 @@ def main():
             question = question.strip()
             if not conv_id or not question:
                 sys.exit(f"Invalid --case-pair entry (empty side): {raw!r}")
-            wanted.add((conv_id.lower(), question.lower()))
+            wanted.add((_norm(conv_id), _norm(question)))
 
-        cases = [
-            c for c in all_cases if (c.sample_id.lower(), c.question.strip().lower()) in wanted
-        ]
+        cases = [c for c in all_cases if (_norm(c.sample_id), _norm(c.question.strip())) in wanted]
         if not cases:
             sys.exit(f"No cases found for --case-pair entries: {raw_pairs}")
     elif args.case:

@@ -58,7 +58,7 @@ _ENUM_PATTERNS: tuple[re.Pattern[str], ...] = (
 # Head nouns too generic to define a useful category. Structural
 # filler words only — never benchmark answer data.
 _GENERIC_HEADS: frozenset[str] = frozenset(
-    {"thing", "one", "item", "time", "way", "kind", "sort", "type", "people", "person"}
+    {"thing", "one", "time", "way", "kind", "sort", "type", "people", "person"}
 )
 
 _MIN_OBJECT_CHARS = 4

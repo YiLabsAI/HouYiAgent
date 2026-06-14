@@ -404,3 +404,28 @@ class TestForgetting:
     async def test_forgetting_empty_store(self, engine: MemoryEngine):
         evicted = await engine.run_forgetting()
         assert evicted == 0
+
+
+class TestReformatRecallContent:
+    """_reformat_recall_content renders only answer-relevant qualifiers."""
+
+    def test_strips_internal_qualifiers(self):
+        content = "Calvin took his Ferrari for a ride (time: 2023-03-25)"
+        quals = {
+            "date": "2023-03-25",
+            "compound_type": "emotional_transition",
+            "original_time": "yesterday",
+            "fact_object": "Calvin took his Ferrari",
+        }
+        out = MemoryEngine._reformat_recall_content(content, quals)
+        assert "compound_type" not in out
+        assert "original_time" not in out
+        assert "fact_object" not in out
+        assert "time: 2023-03-25" in out
+
+    def test_keeps_meaningful_qualifiers(self):
+        content = "Maria had dinner"
+        quals = {"location": "Rome", "co_agent": "her mother"}
+        out = MemoryEngine._reformat_recall_content(content, quals)
+        assert "location: Rome" in out
+        assert "co_agent: her mother" in out

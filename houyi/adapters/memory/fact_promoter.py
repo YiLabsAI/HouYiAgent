@@ -139,7 +139,13 @@ class MemoryRecordPromoter:
                 extracted_by=self._provider_label,
             ),
             embedding=None,
-            metadata={"session_id": turn.session_id, "turn_id": turn.turn_id},
+            metadata={
+                "session_id": turn.session_id,
+                "turn_id": turn.turn_id,
+                "fact_subject": fact.subject,
+                "fact_predicate": fact.predicate,
+                "fact_object": fact.object,
+            },
         )
 
 

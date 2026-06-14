@@ -46,6 +46,7 @@ from houyi.adapters.memory.reasoner import (
     MemoryReasoner,
     ReasoningPolicy,
 )
+from houyi.adapters.memory.recall.enumeration import detect_enumeration_category
 from houyi.adapters.memory.recall.orchestrator import RecallOrchestrator
 from houyi.adapters.memory.recall.types import (
     RecallCandidate,
@@ -89,6 +90,23 @@ _RETRIEVER_KIND_TO_MATCH_METHOD: dict[RetrieverKind, RecallMatchMethod] = {
     RetrieverKind.TIMELINE: RecallMatchMethod.RULE,
     RetrieverKind.ITERATIVE: RecallMatchMethod.HYBRID,
 }
+
+# Qualifier keys that are internal bookkeeping, not answer evidence. They
+# must never be rendered into the answerer prompt: the LLM echoes whatever
+# parenthetical metadata it sees, so leaking these produces answers like
+# "... (time: 2023-03-25, compound_type: emotional_transition)". The
+# extractor stamps compound facts with compound_type/original_time and the
+# promoter copies the raw triple into fact_subject/predicate/object; none of
+# these help answer a question and are stripped before prompting.
+_INTERNAL_QUALIFIER_KEYS: frozenset[str] = frozenset(
+    {
+        "compound_type",
+        "original_time",
+        "fact_subject",
+        "fact_predicate",
+        "fact_object",
+    }
+)
 
 logger = logging.getLogger(__name__)
 
@@ -362,41 +380,31 @@ class MemoryEngine:
     ) -> AnswerResult:
         """Answer a query directly from memory recall + reasoning policies.
 
-        The caller's ``top_k`` is honored verbatim: it is both the recall
-        breadth and the ``recall@k`` metric basis. The reasoner applies
-        its own ``max_facts`` cap downstream, so the facts the LLM reads
+        The caller's top_k is honored verbatim: it is both the recall
+        breadth and the recall@k metric basis. The reasoner applies
+        its own max_facts cap downstream, so the facts the LLM reads
         are a prefix of the same ranked set the caller measured.
         """
         recall_t0 = time.perf_counter()
 
         # Dynamic Recall Scaling for aggregation/enumeration queries
-        # (e.g. how many, what books, list all). We temporarily expand the underlying
-        # recall bandwidth to up to 30 candidates so that we retrieve the full predicate
-        # family for the subject, but we slice the returned recalls back to top_k to keep
-        # evaluation metrics (recall@k, mrr) strictly clean and unmodified.
-        is_agg = any(
+        # (e.g. how many, what books, list all). We temporarily expand the
+        # underlying recall bandwidth so the full member set for the subject
+        # reaches fusion/coverage selection, but we slice the returned recalls
+        # back to top_k to keep evaluation metrics (recall@k, mrr) clean.
+        #
+        # Enumeration intent is detected structurally (subject + plural
+        # category, "kinds/types of", "how many", "list ...") by the same
+        # detector the recall coverage path uses, so the budget and the
+        # coverage selector stay in lockstep instead of drifting apart on two
+        # separate keyword lists. The remaining literals are NOT category
+        # enumerations and therefore have no plural category head for the
+        # structural detector to find ("dietary restrictions", "allergies",
+        # frequency "how often"); they stay as explicit fallbacks.
+        is_agg = detect_enumeration_category(query) is not None or any(
             w in query.lower()
             for w in (
-                "how many",
                 "how often",
-                "how many times",
-                "what books",
-                "which books",
-                "what places",
-                "which places",
-                "what kind of places",
-                "what types of",
-                "list all",
-                "list of",
-                "all goals",
-                "all interests",
-                "all the books",
-                "all the places",
-                "all the things",
-                "all the activities",
-                "what interests do",
-                "what hobbies",
-                "which hobbies",
                 "dietary restrictions",
                 "allergic to",
                 "allergies",
@@ -515,6 +523,11 @@ class MemoryEngine:
         for qk, qv in sorted((quals or {}).items()):
             if not qv or (qk == "date" and cal_time):
                 continue
+            if qk in _INTERNAL_QUALIFIER_KEYS:
+                # Internal bookkeeping (compound_type, original_time, raw
+                # triple copies) is never answer evidence; rendering it only
+                # leaks metadata into the LLM's echoed answer.
+                continue
             lbl = "time" if qk == "date" else qk
             parts.append(f"{lbl}: {qv}")
 
@@ -525,27 +538,49 @@ class MemoryEngine:
 
     def _record_to_fact_id(self, record: MemoryRecord, strategy: str = "A") -> str:
         if strategy == "B":
+            # Strategy B uses key as subject, "content" as predicate,
+            # full content as object — a coarse fallback.
             subject = record.key
             predicate = "content"
             content = record.content
             anchor = record.record_id
         else:
-            parts = record.key.split(".", 2)
-            subject = parts[0] if len(parts) > 1 else ""
-            predicate = parts[1] if len(parts) > 1 else record.key
-            content = record.content
-            # Strip trailing parenthesized qualifiers like (time: ...)
-            content = re.sub(r"\s*\([^)]*\)\s*$", "", content).strip()
-            # Strip subject prefix so content matches AtomicFact.object
-            if subject:
-                prefix = f"{subject} "
-                if content.lower().startswith(prefix.lower()):
-                    content = content[len(prefix) :].lstrip()
-            # Strip predicate prefix so content matches AtomicFact.object
-            if predicate:
-                prefix = f"{predicate} "
-                if content.lower().startswith(prefix.lower()):
-                    content = content[len(prefix) :].lstrip()
+            # Strategy A: derive subject|predicate|object|anchor from
+            # the record to match the hash format used by
+            # _candidate_to_memory_recall. When fact_promoter stored
+            # the original AtomicFact fields in metadata, use those
+            # directly — they are the authoritative source and avoid
+            # fragile content-prefix-stripping heuristics.
+            meta = record.metadata or {}
+            if meta.get("fact_subject") and meta.get("fact_predicate") and meta.get("fact_object"):
+                subject = meta["fact_subject"]
+                predicate = meta["fact_predicate"]
+                content = meta["fact_object"]
+            else:
+                # Fallback: reconstruct from key and content for
+                # records created by _store_candidate (UUID record_id)
+                # that lack metadata fact fields.
+                parts = record.key.split(".", 2)
+                subject = parts[0] if len(parts) > 1 else ""
+                predicate = parts[1] if len(parts) > 1 else record.key
+                content = record.content
+                # Strip trailing parenthesized qualifiers like (time: ...)
+                content = re.sub(r"\s*\([^)]*\)\s*$", "", content).strip()
+                # Strip subject prefix so content matches AtomicFact.object
+                if subject:
+                    prefix = f"{subject} "
+                    if content.lower().startswith(prefix.lower()):
+                        content = content[len(prefix) :].lstrip()
+                # Strip predicate prefix so content matches AtomicFact.object.
+                # The predicate in the key uses underscores (e.g. lost_job)
+                # but the content renders them as spaces (e.g. lost job).
+                # Replace underscores before prefix matching so the strip
+                # succeeds for multi-word predicates.
+                if predicate:
+                    display_pred = predicate.replace("_", " ")
+                    prefix = f"{display_pred} "
+                    if content.lower().startswith(prefix.lower()):
+                        content = content[len(prefix) :].lstrip()
             anchor = (
                 record.provenance.source_ids[0]
                 if (record.provenance and record.provenance.source_ids)
@@ -771,8 +806,13 @@ def _candidate_to_memory_recall(candidate: RecallCandidate) -> MemoryRecall:
     quals = dict(fact.qualifiers) if fact.qualifiers else {}
     if fact.event_time and "date" not in quals:
         quals["date"] = fact.event_time
-    elif fact.valid_from and "date" not in quals:
-        quals["date"] = str(fact.valid_from)
+    # NOTE: deliberately no valid_from fallback here. valid_from is a
+    # system timestamp (when the fact was recorded), not a fact-relevant
+    # time (when the event occurred). Rendering a Unix epoch as a date
+    # qualifier produces meaningless values like (time: 1781184471.94)
+    # that the LLM cannot interpret. If no event_time is available, the
+    # fact simply has no date qualifier — correct and better than
+    # misleading the LLM.
     return MemoryRecall(
         memory_id=memory_id,
         score=float(candidate.score),

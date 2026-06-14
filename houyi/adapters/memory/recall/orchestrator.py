@@ -8,11 +8,15 @@ guard. Each component remains independently testable and replaceable.
 from __future__ import annotations
 
 import asyncio
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 
 from houyi.adapters.memory.event_emitter import MemoryEventEmitter
-from houyi.adapters.memory.recall.enumeration import EnumerationBooster
+from houyi.adapters.memory.recall.enumeration import (
+    EnumerationBooster,
+    detect_enumeration_category,
+)
 from houyi.adapters.memory.recall.fusion import MMRDeduplicator, WeightedFuser
 from houyi.adapters.memory.recall.idk_guard import IDKGuard
 from houyi.adapters.memory.recall.rerank import EvidenceAwareReranker, Reranker
@@ -42,6 +46,32 @@ _FAILURE_REASONS: frozenset[RecallReason] = frozenset(
 
 _SOURCE_FALLBACK_SCORE = 2.0
 _SOURCE_SNIPPET_CHARS = 2000
+
+# Coverage mode for enumeration queries ("what activities/items/places
+# has X"). Such queries score every member fact at the same lexical
+# floor, so relevance ranking is uninformative and a normal narrow cut
+# drops members by arbitrary tie-order. Coverage mode widens the pre-MMR
+# pool (so no member is truncated before diversity selection) and raises
+# the MMR diversity weight (so the budget spreads across distinct member
+# facts rather than rephrasings of one).
+_ENUMERATION_DIVERSITY = 0.7
+_ENUMERATION_FUSION_FLOOR = 150
+
+# Answer-type relevance boost. A question that asks for a date ("when did
+# X", "which year did X") should prefer facts that actually carry a date,
+# and a "how many/how much/how often" question should prefer facts whose
+# object contains a number. Without this, multiple facts share one source
+# turn and the generic, qualifier-less rephrasings ("X loves dogs") outrank
+# the one fact that carries the answer ("X owns dog Pepper (time: 2020)"),
+# so the answer-bearing fact is cut before the reasoner ever reads it.
+# The boost encodes a universal retrieval prior (match the evidence type to
+# the question's answer type); it is not tied to any specific dataset.
+_ANSWER_TYPE_BOOST = 3.0
+_ANSWER_TYPE_TEMPORAL_RE = re.compile(
+    r"\bwhen\b|\b(?:what|which)\s+(?:year|date|month|day|time)\b", re.IGNORECASE
+)
+_ANSWER_TYPE_NUMERIC_RE = re.compile(r"\bhow\s+(?:many|much|often)\b", re.IGNORECASE)
+_DIGIT_RE = re.compile(r"\d")
 
 # ROUTING_TABLE — names map 1:1 to the retriever registry keys in the
 # RecallOrchestrator constructor. vector is opt-in: it only fires when
@@ -186,11 +216,17 @@ class RecallOrchestrator:
             boosted = await self._enum_booster.apply(query.text, raw_candidates)
             if boosted:
                 trace["enumeration_boosted"] = boosted
+        query_entities = _infer_query_entities(query)
+        is_enumeration = detect_enumeration_category(query.text) is not None
+        answer_types = _infer_answer_type(query.text)
         deduped = await self._rank_candidates(
             route.query_type,
             raw_candidates,
             top_k=query.top_k,
             trace=trace,
+            query_entities=query_entities,
+            is_enumeration=is_enumeration,
+            answer_types=answer_types,
         )
         result = self._guard.evaluate(
             query_type=route.query_type,
@@ -218,6 +254,9 @@ class RecallOrchestrator:
             [*deduped, *source_candidates],
             top_k=query.top_k,
             trace=trace,
+            query_entities=query_entities,
+            is_enumeration=is_enumeration,
+            answer_types=answer_types,
         )
         final_result = self._guard.evaluate(
             query_type=route.query_type,
@@ -270,8 +309,17 @@ class RecallOrchestrator:
         *,
         top_k: int,
         trace: dict[str, object],
+        query_entities: list[str] | None = None,
+        is_enumeration: bool = False,
+        answer_types: frozenset[str] = frozenset(),
     ) -> list[RecallCandidate]:
-        fusion_k = max(top_k * self._config.rerank_multiplier, top_k)
+        # Enumeration coverage needs a wide pre-MMR pool: member facts sit
+        # at the same lexical floor score, so a narrow fusion_k would drop
+        # them by arbitrary tie-order before diversity selection runs.
+        if is_enumeration:
+            fusion_k = max(top_k * self._config.rerank_multiplier, _ENUMERATION_FUSION_FLOOR)
+        else:
+            fusion_k = max(top_k * self._config.rerank_multiplier, top_k)
         fuser = self._fuser_for(query_type)
         fused = fuser.fuse(candidates, top_k=fusion_k)
         ranked = await self._reranker.arerank(
@@ -279,17 +327,37 @@ class RecallOrchestrator:
             candidates=fused,
             top_k=fusion_k,
         )
+        # Entity relevance boost: candidates whose subject matches ANY
+        # entity named in the query get an equal score boost so they
+        # survive MMR deduplication. Without it, cross-entity score
+        # stacking (e.g. Andrew's facts outranking Audrey's when the
+        # question is about Audrey) squeezes out answer-relevant facts.
+        # Boosting EVERY query entity equally is essential for multi-
+        # entity questions ("what do A and B share"): boosting only the
+        # first entity starves the second and zeroes its recall.
+        if query_entities:
+            _apply_entity_relevance_boost(ranked, query_entities)
+        # Answer-type boost: lift facts that carry the evidence type the
+        # question asks for (a date for "when/which year", a number for
+        # "how many"). Stacks additively with the entity boost so a fact
+        # that is both about the right entity AND carries the answer type
+        # rises above same-entity rephrasings that lack the qualifier.
+        if answer_types:
+            _apply_answer_type_boost(ranked, answer_types, query_entities)
         # Diversity-aware final cut: rerank scores wide (fusion_k), then let
-        # MMR pick the top_k. Running MMR before the reranker was a no-op
-        # because the rerank sort discarded the MMR ordering, letting
-        # near-duplicate facts (same triple re-extracted across sessions)
-        # crowd out long-tail evidence in enumeration/counting questions.
-        deduped = self._dedupe.dedupe(ranked, top_k=top_k)
+        # MMR pick the top_k. Enumeration queries use coverage diversity so
+        # the budget spreads across distinct member facts.
+        diversity = _ENUMERATION_DIVERSITY if is_enumeration else None
+        deduped = self._dedupe.dedupe(ranked, top_k=top_k, diversity=diversity)
         trace["rerank"] = {
             "reranker": type(self._reranker).__name__,
             "input_count": len(fused),
             "output_count": len(deduped),
         }
+        if query_entities:
+            trace["query_entities"] = query_entities
+        if is_enumeration:
+            trace["enumeration_coverage"] = True
         return deduped
 
     def _fuser_for(self, query_type: QueryType) -> WeightedFuser:
@@ -379,6 +447,192 @@ def _source_candidate(candidate: RecallCandidate, text: str) -> RecallCandidate:
     source_candidate.signals["source_text"] = text[:_SOURCE_SNIPPET_CHARS]
     source_candidate.explanation = "source chunk confirms candidate evidence"
     return source_candidate
+
+
+def _apply_entity_relevance_boost(
+    candidates: list[RecallCandidate],
+    entities: list[str],
+    boost: float = 5.0,
+) -> None:
+    """Add an equal rerank_score boost to every query-entity candidate.
+
+    MMR selects candidates by score, not position. Reordering does not
+    change which ones MMR picks — it prefers high-score facts. The root
+    fix is to boost candidates whose subject matches ANY query entity so
+    they compete with cross-entity score-stacked facts.
+
+    Crucially, every query entity is boosted by the SAME amount. For
+    multi-entity questions ("what do A and B share") boosting only the
+    first entity starves the second and zeroes its recall; equal boosts
+    keep both entities' facts in contention so the diversity selector
+    can cover both.
+
+    The boost amount (5.0) overcomes the typical score gap between a
+    single-retriever entity-state fact (~2) and a multi-retriever
+    score-stacked fact (~10), giving entity facts enough margin to
+    survive MMR selection.
+    """
+    targets = {e.lower() for e in entities if e and e.strip()}
+    if not targets:
+        return
+    for candidate in candidates:
+        if candidate.fact.subject.lower() in targets:
+            candidate.signals = dict(candidate.signals)
+            old_score = float(candidate.signals.get("rerank_score", candidate.score))
+            candidate.signals["rerank_score"] = old_score + boost
+            candidate.signals["entity_relevance_boost"] = boost
+
+
+def _infer_answer_type(text: str) -> frozenset[str]:
+    """Classify the answer type a question asks for.
+
+    Returns a set drawn from {'temporal', 'numeric'}. Empty for questions
+    whose answer type is not a date or a count (most 'what/who/where'
+    lookups), in which case no answer-type boost is applied and ranking
+    falls back to entity relevance plus rerank score.
+    """
+    types: set[str] = set()
+    if _ANSWER_TYPE_TEMPORAL_RE.search(text):
+        types.add("temporal")
+    if _ANSWER_TYPE_NUMERIC_RE.search(text):
+        types.add("numeric")
+    return frozenset(types)
+
+
+def _fact_has_time(fact: object) -> bool:
+    """True when a fact carries an explicit time, via event_time or a
+    date/time qualifier. These are the facts that can answer a 'when' query.
+    """
+    if getattr(fact, "event_time", None):
+        return True
+    quals = getattr(fact, "qualifiers", None) or {}
+    return any(key in quals for key in ("date", "time", "when"))
+
+
+def _fact_has_number(fact: object) -> bool:
+    """True when a fact's object contains a digit, the minimal signal that
+    it can answer a 'how many/how much' query.
+    """
+    obj = getattr(fact, "object", "") or ""
+    return bool(_DIGIT_RE.search(obj))
+
+
+def _apply_answer_type_boost(
+    candidates: list[RecallCandidate],
+    answer_types: frozenset[str],
+    query_entities: list[str] | None,
+    boost: float = _ANSWER_TYPE_BOOST,
+) -> None:
+    """Boost facts that BOTH belong to a query entity AND carry the
+    evidence type the question asks for (a date for 'when/which year', a
+    number for 'how many').
+
+    The entity gate is essential. An ungated temporal boost lifts every
+    dated fact, including ones about other people: for 'when did Deborah's
+    mother pass away' it would elevate an unrelated 'Jolene lost mother
+    (2022)' over the relevant but undated 'Deborah lost mother', adding
+    temporal noise that makes the answerer abstain. Gating to query
+    entities keeps the boost a within-entity tiebreaker that favours the
+    dated member fact without overriding cross-entity relevance. When no
+    query entity is identified (broad/thematic questions) the boost is
+    skipped entirely rather than applied blindly.
+    """
+    if not answer_types:
+        return
+    targets = {e.lower() for e in (query_entities or []) if e and e.strip()}
+    if not targets:
+        return
+    for candidate in candidates:
+        fact = candidate.fact
+        if fact.subject.lower() not in targets:
+            continue
+        matched = ("temporal" in answer_types and _fact_has_time(fact)) or (
+            "numeric" in answer_types and _fact_has_number(fact)
+        )
+        if matched:
+            candidate.signals = dict(candidate.signals)
+            old_score = float(candidate.signals.get("rerank_score", candidate.score))
+            candidate.signals["rerank_score"] = old_score + boost
+            candidate.signals["answer_type_boost"] = boost
+
+
+def _infer_query_entities(query: RecallQuery) -> list[str]:
+    """Derive the entities the query is about, if identifiable.
+
+    Uses caller-supplied entity_hint when available, otherwise applies
+    lightweight heuristics to extract likely entity names from the
+    question text. Returns ALL detected entities (one for single-entity
+    questions, two-plus for "what do A and B share"). Returns an empty
+    list for broad/thematic questions where no entity dominates.
+    """
+    if query.entity_hint:
+        return [query.entity_hint.strip()]
+
+    text = query.text.strip()
+    # Skip thematic/broad questions that have no clear entity anchor.
+    broad_words = {"many", "often", "all", "kinds", "types", "list", "field", "fields"}
+    query_lower = text.lower()
+    if any(w in query_lower for w in broad_words) and not query.entity_hint:
+        # These often require cross-entity synthesis with no anchor entity.
+        return []
+
+    # Extract capitalized words (likely entity names), excluding common
+    # question words, months, and auxiliaries.
+    _skip = {
+        "what",
+        "which",
+        "when",
+        "where",
+        "who",
+        "how",
+        "why",
+        "did",
+        "does",
+        "has",
+        "is",
+        "was",
+        "were",
+        "are",
+        "can",
+        "the",
+        "a",
+        "an",
+        "this",
+        "that",
+        "his",
+        "her",
+        "their",
+        "my",
+        "your",
+        "our",
+        "first",
+        "last",
+        "new",
+        "old",
+        "january",
+        "february",
+        "march",
+        "april",
+        "may",
+        "june",
+        "july",
+        "august",
+        "september",
+        "october",
+        "november",
+        "december",
+    }
+    words = re.findall(r"[A-Z][a-z]+(?:'[a-z]+)?", text)
+    entities: list[str] = []
+    seen: set[str] = set()
+    for w in words:
+        if w.lower() in _skip or len(w) < 2:
+            continue
+        if w.lower() in seen:
+            continue
+        seen.add(w.lower())
+        entities.append(w)
+    return entities
 
 
 __all__ = ["RecallOrchestrator", "RecallPipelineConfig"]
