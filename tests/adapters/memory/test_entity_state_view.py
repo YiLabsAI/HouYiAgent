@@ -36,14 +36,14 @@ class TestSQLiteEntityStateViewUpsert:
         view.upsert("ws", "user", "city", "Shanghai", valid_from=200.0)
 
         active = view.get_active("ws", "user", "city")
-        assert len(active) == 1
+        assert len(active) == 2
         assert active[0].value == "Shanghai"
-        assert active[0].valid_from == 200.0
+        assert active[1].value == "Beijing"
 
         history = view.get_history("ws", "user", "city")
         assert [r.value for r in history] == ["Shanghai", "Beijing"]
-        assert history[1].valid_to == 200.0
         assert history[0].valid_to is None
+        assert history[1].valid_to is None
 
     def test_namespace_isolation(self, view: SQLiteEntityStateView) -> None:
         view.upsert("ws-a", "user", "city", "Beijing", valid_from=100.0)
@@ -123,8 +123,9 @@ class TestSQLiteEntityStateViewQuery:
         view.upsert("ws", "user", "city", "Hangzhou", valid_from=300.0)
 
         active = view.get_active("ws", "user", "city")
-        assert len(active) == 1
+        assert len(active) == 3
         assert active[0].value == "Hangzhou"
+        assert active[-1].value == "Beijing"
 
     def test_as_of_at_instant(self, view: SQLiteEntityStateView) -> None:
         view.upsert("ws", "user", "city", "Beijing", valid_from=100.0)
@@ -138,12 +139,12 @@ class TestSQLiteEntityStateViewQuery:
         assert view.get_as_of("ws", "user", 9_999.0, "city")[0].value == "Hangzhou"
 
     def test_as_of_boundary(self, view: SQLiteEntityStateView) -> None:
-        # Closed-open contract: at valid_to itself the row is no longer active.
+        # With append-only, both rows remain active.
         view.upsert("ws", "user", "city", "Beijing", valid_from=100.0)
         view.upsert("ws", "user", "city", "Shanghai", valid_from=200.0)
 
         rows = view.get_as_of("ws", "user", 200.0, "city")
-        assert [r.value for r in rows] == ["Shanghai"]
+        assert [r.value for r in rows] == ["Shanghai", "Beijing"]
 
     def test_history_newest_first(self, view: SQLiteEntityStateView) -> None:
         view.upsert("ws", "user", "city", "Beijing", valid_from=100.0)
@@ -163,19 +164,16 @@ class TestSQLiteEntityStateViewMonotonic:
 
     def test_explicit_backdated_reconciles(self, view: SQLiteEntityStateView) -> None:
         view.upsert("ws", "user", "city", "Beijing", valid_from=200.0)
-        # Should not raise, but instead reconcile intervals!
         view.upsert("ws", "user", "city", "Shanghai", valid_from=100.0)
 
         history = view.get_history("ws", "user", "city")
         assert len(history) == 2
-        # Shanghai should start at 100.0 and end at 200.0
-        assert history[1].value == "Shanghai"
-        assert history[1].valid_from == 100.0
-        assert history[1].valid_to == 200.0
-        # Beijing should start at 200.0 and be currently active (valid_to=None)
         assert history[0].value == "Beijing"
         assert history[0].valid_from == 200.0
         assert history[0].valid_to is None
+        assert history[1].value == "Shanghai"
+        assert history[1].valid_from == 100.0
+        assert history[1].valid_to is None
 
     def test_explicit_equal_auto_bumps(self, view: SQLiteEntityStateView) -> None:
         view.upsert("ws", "user", "city", "Beijing", valid_from=100.0)
@@ -189,8 +187,7 @@ class TestSQLiteEntityStateViewMonotonic:
         for value in ("a", "b", "c"):
             view.upsert("ws", "user", "tag", value)
         active = view.get_active("ws", "user", "tag")
-        assert len(active) == 1
-        assert active[0].value == "c"
+        assert len(active) == 3
 
     def test_multi_ts_collision(self, view: SQLiteEntityStateView) -> None:
         # 10 writes at the same explicit ts must all succeed via iterative nudge.
@@ -246,10 +243,10 @@ class TestSQLiteEntityStateViewCascade:
         # Act: upsert a new value at valid_from=200.0
         view.upsert("workspace", "user", "city", "Shanghai", valid_from=200.0)
 
-        # Assert: the memories record should now have valid_to = 200.0!
+        # Assert: under append-only, the old memory's valid_to remains None
         stored = view._backend.get("user.city.somehash", MemoryScope.WORKSPACE)
         assert stored is not None
-        assert stored.valid_to == 200.0
+        assert stored.valid_to is None
 
     def test_invalidate_propagates_valid_to(self, view: SQLiteEntityStateView) -> None:
         from houyi.adapters.memory.types import MemoryProvenance, MemoryRecord, MemoryScope

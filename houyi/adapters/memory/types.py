@@ -364,6 +364,8 @@ class SessionContext(BaseModel):
     workspace_id: str = ""
     recent_topics: list[str] = Field(default_factory=list)
     active_tags: list[str] = Field(default_factory=list)
+    current_observation_date: str | None = None
+    current_system_date: str | None = None
 
 
 # ---------------------------------------------------------------------------

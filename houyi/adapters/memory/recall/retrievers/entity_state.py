@@ -230,13 +230,6 @@ class EntityStateRetriever(Retriever):
             source = hint.source
 
         query_words = _extract_query_words(query.text)
-        is_cumulative = bool(query_words.intersection(_CORE_WORDS)) or (
-            attribute is not None
-            and any(
-                _stemish(w) in _CORE_WORDS
-                for w in re.sub(r"[^a-z0-9\s]", " ", attribute.lower()).split()
-            )
-        )
 
         # Multi-entity parsing: find other capitalized words in the query text.
         for w in query.text.split():
@@ -322,20 +315,12 @@ class EntityStateRetriever(Retriever):
                 attribute=attribute,
                 source=source,
             )
-            if is_cumulative:
-                rows = await asyncio.to_thread(
-                    self._view.get_history,
-                    query.namespace,
-                    ent,
-                    attribute,
-                )
-            else:
-                rows = await asyncio.to_thread(
-                    self._view.get_active,
-                    query.namespace,
-                    ent,
-                    attribute,
-                )
+            rows = await asyncio.to_thread(
+                self._view.get_active,
+                query.namespace,
+                ent,
+                attribute,
+            )
             candidates.extend(
                 [
                     _candidate_from_row(row, self.name, ent_hint, query_words)
@@ -446,59 +431,6 @@ _STOPWORDS = {
     "it",
     "they",
 }
-
-_CORE_WORDS = {
-    "goal",
-    "plan",
-    "problem",
-    "issue",
-    "health",
-    "disease",
-    "like",
-    "dislike",
-    "pref",
-    "value",
-    "dream",
-    "wish",
-    "interest",
-    "share",
-    "hobby",
-    "enjoy",
-    "love",
-    "movie",
-    "film",
-    "dessert",
-    "bake",
-    "pass",
-    "away",
-    "die",
-    "dead",
-    "loss",
-    "break",
-    "broke",
-    "broken",
-    "down",
-    "accident",
-    "damage",
-    "breakdown",
-    "family",
-    "friend",
-    "consider",
-    "considers",
-    "career",
-    "pursue",
-    "past",
-    "previous",
-    "previously",
-    "used",
-    "transition",
-    "milestone",
-    "change",
-    "former",
-    "formerly",
-    "counseling",
-}
-
 
 _IRREGULAR_VERB_MAP: dict[str, str] = {
     # Existing _VERB_BREAKS verbs
@@ -770,9 +702,7 @@ def _candidate_from_row(
         fact_text = f"{row.attribute} {row.value}".lower()
         fact_words = {_stemish(w) for w in re.sub(r"[^a-z0-9\s]", " ", fact_text).split()}
         overlap = query_words.intersection(fact_words)
-        for w in overlap:
-            weight = 3.0 if w in _CORE_WORDS else 1.0
-            score += weight * 1.5
+        score += len(overlap) * 1.5
     return RecallCandidate(
         fact=fact,
         score=score,

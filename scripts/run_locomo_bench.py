@@ -44,7 +44,10 @@ from houyi.adapters.memory.bench.locomo import (
 )
 from houyi.adapters.memory.engine import MemoryEngine
 from houyi.adapters.memory.entity_resolver import RoleBasedEntityResolver, TurnContext
-from houyi.adapters.memory.extractor import AtomicFactExtractor
+from houyi.adapters.memory.extractor import (
+    _ATOMIC_FACT_BATCH_SYSTEM_PROMPT,
+    AtomicFactExtractor,
+)
 from houyi.adapters.memory.recall.factory import _build_default_recall_orchestrator
 from houyi.adapters.memory.store import MemoryStore
 from houyi.adapters.memory.triggers import all_of
@@ -654,9 +657,17 @@ async def _run_case_with_mode(
     )
     from houyi.adapters.memory.types import SessionContext
 
+    last_turn = case.sample.turns[-1] if case.sample.turns else None
+    obs_date = _normalize_observation_date(last_turn.session_datetime) if last_turn else None
+    if not obs_date:
+        obs_date = datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%d")
+    sys_date = datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%d")
+
     answer = await engine.answer(
         case.question,
-        session_context=SessionContext(session_id=namespace),
+        session_context=SessionContext(
+            session_id=namespace, current_observation_date=obs_date, current_system_date=sys_date
+        ),
         top_k=RECALL_TOP_K,
     )
     recalls = answer.extras.get("recalls", [])
@@ -694,8 +705,8 @@ async def _run_case_with_mode(
     return {
         "case_id": f"{case.sample_id}:{case.question[:60]}",
         "category": case.category,
-        "answer": answer.answer[:300],
-        "expected": case.answer[:300],
+        "answer": answer.answer,
+        "expected": case.answer,
         "correct": verdict["correct"],
         "reason": verdict["reason"],
         "memories_count": len(rows),
@@ -888,6 +899,10 @@ async def _run_all(
 
     # Generate config hash based on extraction AND embedding parameters
     # to invalidate cache when either config changes (e.g. embedding dim).
+    # The extraction prompt is hashed in too: a prompt change alters what
+    # facts get extracted, so the pre-extracted session DB must rebuild.
+    # Without this, a prompt fix would be silently masked by stale cached
+    # extractions and the bench would validate against the old behavior.
     extract_config_payload = json.dumps(
         {
             "extract_model": extract_model,
@@ -896,6 +911,9 @@ async def _run_all(
             "window_size": window_size,
             "embedding_provider": embedding_provider,
             "embedding_model": embedding_model or "",
+            "extract_prompt_hash": hashlib.md5(
+                _ATOMIC_FACT_BATCH_SYSTEM_PROMPT.encode("utf-8")
+            ).hexdigest(),
         },
         sort_keys=True,
     )

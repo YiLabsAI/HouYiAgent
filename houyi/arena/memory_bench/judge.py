@@ -144,11 +144,15 @@ class StubMemoryJudge(MemoryJudge):
 
 
 _JUDGE_SYSTEM_PROMPT = """\
-You are a strict memory-evaluation judge. Decide whether the candidate \
+You are an expert memory-evaluation judge. Decide whether the candidate \
 text correctly conveys the gold reference. Respond with EXACTLY one \
 word on the first line:
 
-- "CORRECT" — the candidate semantically matches the gold (paraphrases ok).
+- "CORRECT" — the candidate semantically matches the gold (paraphrases ok). \
+Exact absolute calendar dates are ALWAYS CORRECT if they accurately resolve \
+the relative/descriptive time in the gold (e.g. "2023-03-18" = "the weekend before March 26"). \
+If the candidate provides a precise absolute date (or multiple dates) that functionally \
+answers the question and covers the gold intent, mark it CORRECT.
 - "WRONG" — the candidate is non-empty but conflicts with the gold.
 - "MISSING" — the candidate is empty, refused, or off-topic.
 

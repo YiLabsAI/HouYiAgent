@@ -426,7 +426,17 @@ class MemoryEngine:
                 record = record.model_copy(update={"content": content})
                 records.append(record)
         records = self._prepare_reasoner_records(records)
-        res = await self._reasoner.answer(query, recalls, records)
+
+        obs_date = (
+            getattr(session_context, "current_observation_date", None) if session_context else None
+        )
+        sys_date = (
+            getattr(session_context, "current_system_date", None) if session_context else None
+        )
+
+        res = await self._reasoner.answer(
+            query, recalls, records, current_observation_date=obs_date, current_system_date=sys_date
+        )
         import dataclasses
 
         # Strictly slice the recalls back to standard top_k to keep evaluation clean

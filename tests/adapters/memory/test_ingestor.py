@@ -269,13 +269,14 @@ class TestCellU1UpdateAccCorrect:
         await env.pipeline.ingest_turn("I moved to Shanghai", source_anchor="m2")
 
         active = env.view.get_active("ws", "user", "city")
-        assert len(active) == 1
-        assert active[0].value == "Shanghai"
+        assert len(active) == 2
+        assert {a.value for a in active} == {"Shanghai", "Beijing"}
 
         history = env.view.get_history("ws", "user", "city")
         assert [h.value for h in history] == ["Shanghai", "Beijing"]
-        # Closed-open contract: the older row got a valid_to.
-        assert history[1].valid_to is not None
+        # Closed-open contract removed: both remain active (valid_to is None).
+        assert history[0].valid_to is None
+        assert history[1].valid_to is None
 
 
 class TestCellU2ConflictResolution:
@@ -307,12 +308,11 @@ class TestCellU2ConflictResolution:
         await env.pipeline.ingest_turn("I'm now a manager", source_anchor="m2")
 
         active = env.view.get_active("ws", "user", "job")
-        assert len(active) == 1
-        assert active[0].value == "manager"
-        # Prior row was closed in the same conflict-handling write.
+        assert len(active) == 2
+        assert {a.value for a in active} == {"manager", "engineer"}
         history = env.view.get_history("ws", "user", "job")
         prior = next(h for h in history if h.value == "engineer")
-        assert prior.valid_to is not None
+        assert prior.valid_to is None
 
 
 class TestCellU3BiTemporalValidity:

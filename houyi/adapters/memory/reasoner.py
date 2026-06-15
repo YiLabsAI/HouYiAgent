@@ -101,16 +101,24 @@ _REASONER_SYSTEM_PROMPT = (
     "4-digit year, a question about which month yields the month name alone, and a general "
     "when question yields the most precise date available (including day, month, and year) "
     "from the matching facts.\n"
-    "13. Prefer the original_time qualifier verbatim when it names an absolute date; if it "
-    "is relative (e.g. last week, yesterday), convert it to the absolute calendar date using "
-    "the fact time qualifier. When an event exact date is unknown but bounded by two "
-    "dated facts, answer with the interval between them.\n"
+    "13. When resolving relative time references (e.g., 'a few years ago', 'last week', "
+    "'yesterday') found in the facts, you MUST use the Current Reference Date provided below "
+    "as 'now' to compute the actual calendar date or year. Prefer the original_time qualifier "
+    "verbatim only when it names an absolute date. When an event's exact date is unknown but "
+    "bounded by two dated facts, answer with the interval between them.\n"
     "\n"
-    "STYLE\n"
-    "14. Output only the direct answer, phrase, count, or deduced terms — for instance, "
-    "output Middle-class or wealthy rather than explaining why John has enough resources. Remove all "
-    "explanations, justifications, auxiliary clauses, or conversational filler. Keep the reply "
-    "extremely clean and direct."
+    "STYLE & FORMAT\n"
+    "14. You MUST structure your response strictly using XML tags:\n"
+    "<Analysis>\n"
+    "First, briefly evaluate the facts against the question. Identify all matching items, "
+    "especially for enumeration or counting questions. Ensure you don't miss any qualifying "
+    "members.\n"
+    "</Analysis>\n"
+    "<Answer>\n"
+    "The final direct answer, phrase, count, or deduced terms. Remove all explanations, "
+    "justifications, or conversational filler from this section. If completely insufficient, "
+    "output exactly [IDK].\n"
+    "</Answer>"
 )
 
 
@@ -119,6 +127,8 @@ class MemoryReasoningInput:
     query: str
     recalls: list[MemoryRecall]
     records: list[MemoryRecord]
+    current_observation_date: str | None = None
+    current_system_date: str | None = None
 
 
 class ReasoningPolicy(Protocol):
@@ -262,7 +272,7 @@ class LLMMemoryReasoningPolicy:
         *,
         timeout_seconds: float = 60.0,
         max_facts: int = 100,
-        max_tokens: int = 384,
+        max_tokens: int = 2048,
     ) -> None:
         self._llm = llm
         self._timeout = timeout_seconds
@@ -284,12 +294,16 @@ class LLMMemoryReasoningPolicy:
         records = request.records[: self._max_facts]
         facts = [f"{idx}. {record.content}" for idx, record in enumerate(records, start=1)]
         logger.info("REASONER FACTS PASSED: %s", facts)
+
+        date_context = ""
+        if request.current_observation_date:
+            date_context = f"\n\nCurrent Reference Date (for resolving relative times like 'a few years ago'): {request.current_observation_date}"
+
         prompt = (
             "Answer the question using only the memory facts below.\n\n"
-            f"Facts:\n{chr(10).join(facts)}\n\n"
+            f"Facts:\n{chr(10).join(facts)}{date_context}\n\n"
             f"Question: {request.query}\n"
-            f"If the facts are completely insufficient, output exactly {self._IDK_SENTINEL}. Otherwise, answer directly and concisely.\n"
-            "Answer:"
+            "Remember to structure your response with <Analysis> and <Answer> tags."
         )
         messages = [
             {
@@ -327,7 +341,13 @@ class LLMMemoryReasoningPolicy:
 
         content = str(getattr(response, "content", "") or "").strip()
         logger.info("LLMMemoryReasoningPolicy PROMPT:\n%s\nRESPONSE:\n%s", prompt, content)
-        if not content or self._IDK_SENTINEL in content:
+
+        answer_match = re.search(
+            r"<Answer>\s*(.*?)\s*</Answer>", content, re.DOTALL | re.IGNORECASE
+        )
+        final_answer = answer_match.group(1).strip() if answer_match else content.strip()
+
+        if not final_answer or self._IDK_SENTINEL in final_answer:
             return AnswerResult(
                 answer=DEFAULT_IDK_PHRASE,
                 abstained=True,
@@ -339,7 +359,7 @@ class LLMMemoryReasoningPolicy:
             )
 
         return AnswerResult(
-            answer=content,
+            answer=final_answer,
             abstained=False,
             reason="llm_memory_answer",
             citations=tuple(record.record_id for record in records),
@@ -360,8 +380,16 @@ class MemoryReasoner:
         query: str,
         recalls: list[MemoryRecall],
         records: list[MemoryRecord],
+        current_observation_date: str | None = None,
+        current_system_date: str | None = None,
     ) -> AnswerResult:
-        request = MemoryReasoningInput(query=query, recalls=recalls, records=records)
+        request = MemoryReasoningInput(
+            query=query,
+            recalls=recalls,
+            records=records,
+            current_observation_date=current_observation_date,
+            current_system_date=current_system_date,
+        )
         for policy in self._policies:
             result = await policy.answer(request)
             if result is not None:

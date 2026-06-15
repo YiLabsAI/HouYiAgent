@@ -85,8 +85,8 @@ class TestUpdateUnit:
         decision = tools.update_unit(_fact(obj="Shanghai", valid_from=200.0))
         assert decision.decision == "admitted"
         active = tools.read_entity_state("user", "city")
-        assert len(active) == 1
-        assert active[0].value == "Shanghai"
+        assert len(active) == 2
+        assert {a.value for a in active} == {"Shanghai", "Beijing"}
 
     def test_missing_when_empty(self, tools: MemoryWriterTools) -> None:
         with pytest.raises(MissingActiveError, match="no active row"):
@@ -202,7 +202,8 @@ class TestAccumulate:
         for place in ["cafe", "park", "shelter"]:
             tools.ingest_fact(_fact(predicate="visited", obj=place, accumulate=True))
         active = tools.read_entity_state("user", "visited")
-        assert len(active) == 1
+        assert len(active) == 3
+        # The latest one has the full accumulated list
         assert active[0].value == "cafe, park, shelter"
 
     def test_false_flag_supersedes(self, tools: MemoryWriterTools) -> None:

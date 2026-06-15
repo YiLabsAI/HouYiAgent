@@ -197,8 +197,8 @@ class TestProcessOnce:
         payload = batch.batch_calls[0]
         assert [anchor for _, anchor in payload] == [t1.turn_id, t2.turn_id]
         rows = state_view.get_active("default", "alice", "likes")
-        assert len(rows) == 1
-        assert rows[0].value == "coffee"
+        assert len(rows) == 2
+        assert {r.value for r in rows} == {"tea", "coffee"}
         assert backend.extract_queue_stats() == {"done": 2}
 
     async def test_extractor_persists_edges(self, backend, state_view, inbox):

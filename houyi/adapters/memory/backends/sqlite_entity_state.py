@@ -95,27 +95,7 @@ class SQLiteEntityStateView(EntityStateView):
                 # Avoid UNIQUE constraint collision by auto-bumping duplicate timestamps slightly
                 ts = self._get_reconciliation_ts(existing, ts)
 
-                prev_record, next_record = self._find_prev_next(existing, ts)
-
                 calculated_valid_to = None
-                if next_record is not None:
-                    calculated_valid_to = next_record["valid_from"]
-
-                # Shorten the preceding record if its interval extends past the new entry
-                if (
-                    not accumulate
-                    and prev_record is not None
-                    and (prev_record["valid_to"] is None or prev_record["valid_to"] > ts)
-                ):
-                    conn.execute(
-                        "UPDATE entity_state SET valid_to=? WHERE state_id=?",
-                        (ts, prev_record["state_id"]),
-                    )
-                    # Propagate valid_to invalidation to memories table
-                    conn.execute(
-                        "UPDATE memories SET valid_to=? WHERE scope=? AND key LIKE ? AND valid_to IS NULL",
-                        (ts, namespace, f"{entity}.{attribute}.%"),
-                    )
 
                 record = EntityStateRecord(
                     namespace=namespace,

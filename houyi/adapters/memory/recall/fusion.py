@@ -269,24 +269,16 @@ class MMRDeduplicator:
 
     @staticmethod
     def _redundancy(a: RecallCandidate, b: RecallCandidate) -> float:
-        # Redundancy is keyed on *semantic fact identity*, not source
-        # anchor. Two facts about the same subject that point at the same
-        # concrete object ("Andrew has_relationship girlfriend" vs
-        # "Andrew shares_activity_with girlfriend") rephrase one evidence
-        # point, so they are fully redundant and one must yield its budget
-        # slot. Distinct objects ("played board games" vs "went_to wine
-        # tasting") are different members of the asked-about category and
-        # must both survive — exactly what enumeration coverage needs.
-        # Anchor-based keys failed here: vector candidates carry a UUID
-        # anchor (not a turn id), and same-turn facts are often distinct
-        # members. Fall back to lexical overlap when objects are absent.
         subj_a = a.fact.subject.strip().casefold()
         subj_b = b.fact.subject.strip().casefold()
-        obj_a = _object_head(a.fact.object)
-        obj_b = _object_head(b.fact.object)
-        if subj_a == subj_b and obj_a and obj_a == obj_b:
+        pred_a = a.fact.predicate.strip().casefold()
+        pred_b = b.fact.predicate.strip().casefold()
+        obj_a = a.fact.object.strip().casefold()
+        obj_b = b.fact.object.strip().casefold()
+
+        if subj_a == subj_b and pred_a == pred_b and obj_a == obj_b:
             return 1.0
-        return _jaccard(_candidate_text(a), _candidate_text(b))
+        return 0.0
 
 
 def _light_stem(word: str) -> str:
@@ -361,33 +353,17 @@ def _semantic_key(candidate: RecallCandidate) -> tuple[str, str, str, str]:
 
 
 def _group_near_duplicates(candidates: Iterable[RecallCandidate]) -> list[list[RecallCandidate]]:
-    """Group candidates by (subject, valid_day) exact matches, then Jaccard similarity."""
-    by_subj_day: dict[tuple[str, str], list[RecallCandidate]] = defaultdict(list)
+    """Group candidates by exact proposition identity (subject, predicate, object) and day."""
+    grouped_map: dict[tuple[str, str, str, str], list[RecallCandidate]] = defaultdict(list)
     for cand in candidates:
-        key = (cand.fact.subject.strip().casefold(), _valid_day(cand.fact.valid_from))
-        by_subj_day[key].append(cand)
-
-    grouped: list[list[RecallCandidate]] = []
-    for subj_day_list in by_subj_day.values():
-        sub_groups: list[list[RecallCandidate]] = []
-        for cand in subj_day_list:
-            found_group = False
-            for group in sub_groups:
-                rep = group[0]
-                words_cand = _stemmed_words(f"{cand.fact.predicate} {cand.fact.object}")
-                words_rep = _stemmed_words(f"{rep.fact.predicate} {rep.fact.object}")
-                intersection = words_cand.intersection(words_rep)
-                union = words_cand.union(words_rep)
-                jaccard = len(intersection) / len(union) if union else 1.0
-
-                if jaccard >= 0.6:
-                    group.append(cand)
-                    found_group = True
-                    break
-            if not found_group:
-                sub_groups.append([cand])
-        grouped.extend(sub_groups)
-    return grouped
+        key = (
+            cand.fact.subject.strip().casefold(),
+            cand.fact.predicate.strip().casefold(),
+            cand.fact.object.strip().casefold(),
+            _valid_day(cand.fact.valid_from),
+        )
+        grouped_map[key].append(cand)
+    return list(grouped_map.values())
 
 
 def _candidate_text(candidate: RecallCandidate) -> str:

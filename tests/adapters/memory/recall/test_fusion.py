@@ -97,7 +97,7 @@ class TestMMRDeduplicator:
     def test_penalizes_similarity(self) -> None:
         hits = [
             make_candidate("alpha", "likes", "coffee", 10.0),
-            make_candidate("alpha", "likes", "coffee beans", 9.9),
+            make_candidate("alpha", "likes", "coffee", 9.9),
             make_candidate("beta", "owns", "laptop", 9.0),
         ]
 
