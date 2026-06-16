@@ -25,7 +25,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
-from houyi.adapters.memory.recall.types import QueryType, RecallCandidate
+from houyi.adapters.memory.recall.types import QueryType, RecallCandidate, RetrieverKind
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +41,31 @@ class EvidenceRerankConfig:
     graph_base_bonus: float = 0.6
     graph_close_range_bonus: float = 0.2
     graph_decay_per_depth: float = 0.15
+    primary_retriever_bonus: float = 0.3
+    secondary_retriever_bonus: float = 0.15
+
+
+_PRIMARY_RETRIEVERS: dict[QueryType, frozenset[RetrieverKind]] = {
+    QueryType.FACTUAL_LOOKUP: frozenset(
+        {RetrieverKind.ENTITY_STATE, RetrieverKind.GRAPH, RetrieverKind.VECTOR}
+    ),
+    QueryType.NEGATION_CHECK: frozenset({RetrieverKind.ENTITY_STATE}),
+    QueryType.TEMPORAL_QUERY: frozenset({RetrieverKind.TIMELINE, RetrieverKind.GRAPH}),
+    QueryType.RELATIONAL_CHAIN: frozenset({RetrieverKind.ITERATIVE, RetrieverKind.GRAPH}),
+    QueryType.THEMATIC_SUMMARY: frozenset({RetrieverKind.VECTOR}),
+    QueryType.PROCEDURAL_RECALL: frozenset({RetrieverKind.RAW_TURN}),
+}
+
+_SECONDARY_RETRIEVERS: dict[QueryType, frozenset[RetrieverKind]] = {
+    QueryType.FACTUAL_LOOKUP: frozenset({RetrieverKind.ITERATIVE}),
+    QueryType.NEGATION_CHECK: frozenset(),
+    QueryType.TEMPORAL_QUERY: frozenset({RetrieverKind.VECTOR, RetrieverKind.ENTITY_STATE}),
+    QueryType.RELATIONAL_CHAIN: frozenset({RetrieverKind.VECTOR, RetrieverKind.ENTITY_STATE}),
+    QueryType.THEMATIC_SUMMARY: frozenset(
+        {RetrieverKind.GRAPH, RetrieverKind.RAW_TURN, RetrieverKind.TIMELINE}
+    ),
+    QueryType.PROCEDURAL_RECALL: frozenset({RetrieverKind.GRAPH, RetrieverKind.VECTOR}),
+}
 
 
 class Reranker(ABC):
@@ -131,18 +156,7 @@ class EvidenceAwareReranker(Reranker):
 
         # New Graph Signaling: graph_path_bonus
         if "bfs_depth" in candidate.signals:
-            depth = int(candidate.signals["bfs_depth"])
-            if depth == 1:
-                bonus = self._config.graph_base_bonus + self._config.graph_close_range_bonus
-            elif depth == 2:
-                bonus = self._config.graph_base_bonus
-            else:
-                bonus = max(
-                    0.0,
-                    self._config.graph_base_bonus
-                    - (depth - 2) * self._config.graph_decay_per_depth,
-                )
-            coverage += bonus
+            coverage += self._graph_coverage_bonus(int(candidate.signals["bfs_depth"]))
 
         if query_type == QueryType.RELATIONAL_CHAIN:
             chain_member = (
@@ -155,12 +169,29 @@ class EvidenceAwareReranker(Reranker):
                     coverage += self._config.complete_chain_bonus
                 else:
                     coverage -= self._config.partial_chain_penalty
+
+        kind = candidate.matched_by
+        if kind in _PRIMARY_RETRIEVERS.get(query_type, frozenset()):
+            coverage += self._config.primary_retriever_bonus
+        elif kind in _SECONDARY_RETRIEVERS.get(query_type, frozenset()):
+            coverage += self._config.secondary_retriever_bonus
+
         return max(0.0, min(1.0, coverage))
 
     def _rerank_score(self, candidate: RecallCandidate, *, coverage: float) -> float:
         base = float(candidate.signals.get("fused_score", candidate.score))
         round_bonus = _iteration_bonus(candidate)
         return base + coverage + round_bonus
+
+    def _graph_coverage_bonus(self, depth: int) -> float:
+        if depth == 1:
+            return self._config.graph_base_bonus + self._config.graph_close_range_bonus
+        if depth == 2:
+            return self._config.graph_base_bonus
+        return max(
+            0.0,
+            self._config.graph_base_bonus - (depth - 2) * self._config.graph_decay_per_depth,
+        )
 
 
 def _chain_complete(candidates: list[RecallCandidate]) -> bool:

@@ -48,7 +48,7 @@ class TestWeightedFuser:
         assert fused[0].signals["duplicate_count"] == 2
         assert fused[0].signals["contributors"] == ["entity_state", "raw_turn"]
 
-    def test_orders_by_weight(self) -> None:
+    def test_orders_by_normalized_score(self) -> None:
         hits = [
             make_candidate("a", "p", "low", 1.0, RetrieverKind.RAW_TURN),
             make_candidate("b", "p", "high", 0.2, RetrieverKind.ENTITY_STATE),
@@ -56,7 +56,65 @@ class TestWeightedFuser:
 
         fused = WeightedFuser().fuse(hits, top_k=2)
 
-        assert [hit.fact.object for hit in fused] == ["high", "low"]
+        # Uniform weights mean raw_turn (1.0) beats entity_state (0.2)
+        assert [hit.fact.object for hit in fused] == ["low", "high"]
+
+    def test_mild_weight_preference(self) -> None:
+        weights = {
+            RetrieverKind.RAW_TURN: 1.0,
+            RetrieverKind.ENTITY_STATE: 1.2,
+        }
+        hits = [
+            make_candidate("a", "p", "first", 1.0, RetrieverKind.RAW_TURN),
+            make_candidate("b", "p", "second", 1.0, RetrieverKind.ENTITY_STATE),
+        ]
+
+        fused = WeightedFuser(kind_weights=weights).fuse(hits, top_k=2)
+
+        # Same base score, ENTITY_STATE weight (1.2) beats RAW_TURN weight (1.0)
+        assert [hit.fact.object for hit in fused] == ["second", "first"]
+
+    def test_cross_retriever_competition(self) -> None:
+        hits = [
+            make_candidate("a", "p", "timeline_best", 3.8, RetrieverKind.TIMELINE),
+            make_candidate("b", "p", "entity_weak", 0.1, RetrieverKind.ENTITY_STATE),
+        ]
+
+        fused = WeightedFuser().fuse(hits, top_k=2)
+
+        # Timeline normalizes to 1.0. EntityState normalizes to 1.0 (it's the only one).
+        # Tie breaker falls to order of iteration / stability, but we can test
+        # that it doesn't just blindly prefer entity_state like before.
+        # Actually, let's make timeline's max = 3.8, and another timeline = 2.0.
+        hits = [
+            make_candidate("a", "p", "timeline_best", 3.8, RetrieverKind.TIMELINE),
+            make_candidate("c", "p", "timeline_mid", 2.0, RetrieverKind.TIMELINE),
+            make_candidate("b", "p", "entity_weak", 0.1, RetrieverKind.ENTITY_STATE),
+        ]
+
+        fused = WeightedFuser().fuse(hits, top_k=3)
+
+        # timeline_best becomes 1.0, entity_weak becomes 1.0.
+        # timeline_mid becomes 2.0 / 3.8 = ~0.52.
+        # timeline_best and entity_weak should both be > timeline_mid.
+        objects = [hit.fact.object for hit in fused]
+        assert "timeline_best" in objects[:2]
+        assert "entity_weak" in objects[:2]
+        assert objects[2] == "timeline_mid"
+
+    def test_normalizes_unit_range(self) -> None:
+        hits = [
+            make_candidate("a", "p", "best", 0.5, RetrieverKind.ENTITY_STATE),
+            make_candidate("b", "p", "worst", 0.1, RetrieverKind.ENTITY_STATE),
+        ]
+
+        fused = WeightedFuser().fuse(hits, top_k=2)
+
+        # s_max is 0.5. Instead of skipping normalization because s_max <= 1.0,
+        # it should normalize by / 0.5.
+        scores = {hit.fact.object: hit.score for hit in fused}
+        assert scores["best"] == 1.0
+        assert scores["worst"] == 0.2
 
 
 class TestReciprocalRankFuser:

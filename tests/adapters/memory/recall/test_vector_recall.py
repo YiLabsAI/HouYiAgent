@@ -102,4 +102,4 @@ class TestRoutingTable:
 
     def test_factual_weights_entity(self):
         weights = _DEFAULT_FUSION_WEIGHTS[QueryType.FACTUAL_LOOKUP]
-        assert weights[RetrieverKind.ENTITY_STATE] > weights[RetrieverKind.VECTOR]
+        assert weights[RetrieverKind.ENTITY_STATE] == weights[RetrieverKind.VECTOR]

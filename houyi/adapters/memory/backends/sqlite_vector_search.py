@@ -145,7 +145,10 @@ class SQLiteVectorSearch:
             if not record.is_active:
                 continue
             distance = float(dict(row).get("vec_distance") or 0.0)
-            similarity = max(0.0, min(1.0, 1.0 - distance))
+            # sqlite-vec MATCH returns L2 distance for vec0 by default.
+            # Assuming normalized vectors: L2^2 = 2 - 2*cos => cos = 1 - L2^2 / 2
+            cosine_sim = 1.0 - (distance * distance) / 2.0
+            similarity = max(0.0, min(1.0, cosine_sim))
             results.append((record, similarity))
         return results
 

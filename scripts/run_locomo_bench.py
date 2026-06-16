@@ -1066,6 +1066,7 @@ async def _run_all(
         "mrr": round(sum(mrr_values) / len(mrr_values), 4) if mrr_values else 0.0,
         "retrieve_p50_ms": round(_percentile(retrieve_samples, 0.5), 2),
         "retrieve_p95_ms": round(_percentile(retrieve_samples, 0.95), 2),
+        "retrieve_p99_ms": round(_percentile(retrieve_samples, 0.99), 2),
         "by_category": {
             str(k): {**v, "accuracy": round(v["correct"] / v["total"], 4)}
             for k, v in sorted(by_cat.items())

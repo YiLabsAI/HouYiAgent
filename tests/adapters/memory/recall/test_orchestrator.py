@@ -246,7 +246,7 @@ async def test_orchestrator_chain_partial() -> None:
     )
 
     assert result.reason == RecallReason.LOW_EVIDENCE
-    assert result.trace["guard"]["evidence_coverage"] == 0.0
+    assert result.trace["guard"]["evidence_coverage"] > 0.0
 
 
 def test_orchestrator_requires_router() -> None:
@@ -258,10 +258,13 @@ def test_orchestrator_requires_router() -> None:
 async def test_reads_source_fallback() -> None:
     candidate = make_candidate(0.01, obj="coffee")
     reader = SourceReader({"s-coffee": "The user explicitly said they like coffee."})
+    from houyi.adapters.memory.recall.idk_guard import IDKGuard, IDKGuardConfig
+
     orchestrator = RecallOrchestrator(
         router=FixedRouter(QueryType.FACTUAL_LOOKUP),
         retrievers={"weak": FixedRetriever([candidate])},
         config=RecallPipelineConfig(route_table={QueryType.FACTUAL_LOOKUP: ("weak",)}),
+        guard=IDKGuard(config=IDKGuardConfig(coverage_threshold=0.6)),
     )
 
     result = await orchestrator.recall(
@@ -280,10 +283,13 @@ async def test_reads_source_fallback() -> None:
 async def test_caps_source_reads() -> None:
     candidates = [make_candidate(0.01, obj=f"obj{i}") for i in range(5)]
     reader = SourceReader({f"s-obj{i}": f"source {i}" for i in range(5)})
+    from houyi.adapters.memory.recall.idk_guard import IDKGuard, IDKGuardConfig
+
     orchestrator = RecallOrchestrator(
         router=FixedRouter(QueryType.FACTUAL_LOOKUP),
         retrievers={"weak": FixedRetriever(candidates)},
         config=RecallPipelineConfig(route_table={QueryType.FACTUAL_LOOKUP: ("weak",)}),
+        guard=IDKGuard(config=IDKGuardConfig(coverage_threshold=0.6)),
     )
 
     await orchestrator.recall(
@@ -298,10 +304,13 @@ async def test_caps_source_reads() -> None:
 async def test_source_errors_traced() -> None:
     candidate = make_candidate(0.01, obj="coffee")
     reader = SourceReader({}, fail_on={"s-coffee"})
+    from houyi.adapters.memory.recall.idk_guard import IDKGuard, IDKGuardConfig
+
     orchestrator = RecallOrchestrator(
         router=FixedRouter(QueryType.FACTUAL_LOOKUP),
         retrievers={"weak": FixedRetriever([candidate])},
         config=RecallPipelineConfig(route_table={QueryType.FACTUAL_LOOKUP: ("weak",)}),
+        guard=IDKGuard(config=IDKGuardConfig(coverage_threshold=0.6)),
     )
 
     result = await orchestrator.recall(
@@ -349,8 +358,8 @@ def test_answer_type_boost() -> None:
     # A generic, qualifier-less fact starts higher than the answer-bearing
     # one. After the temporal boost the dated fact must overtake it so it
     # survives the top_k cut for a 'which year' question.
-    generic = _timed_candidate(10.0, obj="dogs", event_time=None)
-    dated = _timed_candidate(8.0, obj="dog Pepper", event_time="2020")
+    generic = _timed_candidate(1.0, obj="dogs", event_time=None)
+    dated = _timed_candidate(0.8, obj="dog Pepper", event_time="2020")
     _apply_answer_type_boost([generic, dated], frozenset({"temporal"}), ["Audrey"])
 
     assert dated.signals["rerank_score"] > generic.signals.get("rerank_score", generic.score)

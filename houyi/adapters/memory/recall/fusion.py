@@ -16,11 +16,12 @@ from datetime import UTC, datetime
 from houyi.adapters.memory.recall.types import RecallCandidate, RetrieverKind
 
 _DEFAULT_KIND_WEIGHTS: dict[RetrieverKind, float] = {
-    RetrieverKind.ENTITY_STATE: 10.0,
-    RetrieverKind.TIMELINE: 0.6,
+    RetrieverKind.ENTITY_STATE: 1.0,
+    RetrieverKind.TIMELINE: 1.0,
     RetrieverKind.ITERATIVE: 1.0,
-    RetrieverKind.RAW_TURN: 0.3,
-    RetrieverKind.GRAPH: 5.0,
+    RetrieverKind.RAW_TURN: 1.0,
+    RetrieverKind.GRAPH: 1.0,
+    RetrieverKind.VECTOR: 1.0,
 }
 
 
@@ -56,8 +57,8 @@ class WeightedFuser(Fuser):
             return candidates
         scores = [c.score for c in candidates]
         s_max = max(scores)
-        if s_max <= 1.0:
-            # Already within the [0.0, 1.0] interval: keep raw scores to avoid inflating weak candidates
+        if s_max == 0.0:
+            # Prevent division by zero; keep raw scores
             for c in candidates:
                 c.signals = dict(c.signals)
                 c.signals["raw_score"] = c.score

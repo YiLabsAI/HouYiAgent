@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from houyi.adapters.memory.recall.idk_guard import IDKGuard
+from houyi.adapters.memory.recall.idk_guard import IDKGuard, IDKGuardConfig
 from houyi.adapters.memory.recall.orchestrator import RecallOrchestrator, RecallPipelineConfig
 from houyi.adapters.memory.recall.retrievers.base import Retriever
 from houyi.adapters.memory.recall.router import QueryRouter, RouteDecision
@@ -47,6 +47,7 @@ def make_candidate(
     *,
     score: float = 1.0,
     signals: dict[str, object] | None = None,
+    kind: RetrieverKind = RetrieverKind.ENTITY_STATE,
 ) -> RecallCandidate:
     return RecallCandidate(
         fact=AtomicFact(
@@ -57,7 +58,7 @@ def make_candidate(
             source_anchor=f"s-{obj}",
         ),
         score=score,
-        matched_by=RetrieverKind.ENTITY_STATE,
+        matched_by=kind,
         retriever_name="fixed",
         signals=signals or {},
     )
@@ -69,6 +70,7 @@ async def test_adversarial_unknown() -> None:
         router=FixedRouter(QueryType.FACTUAL_LOOKUP),
         retrievers={"fixed": FixedRetriever([])},
         config=RecallPipelineConfig(route_table={QueryType.FACTUAL_LOOKUP: ("fixed",)}),
+        guard=IDKGuard(config=IDKGuardConfig(coverage_threshold=0.3)),
     )
 
     result = await orchestrator.recall(RecallQuery(text="unknown preference"))
@@ -79,10 +81,16 @@ async def test_adversarial_unknown() -> None:
 
 @pytest.mark.asyncio
 async def test_adversarial_low_source() -> None:
+    # Use empty object -> empty source_anchor -> coverage=0.0 to guarantee LOW_EVIDENCE
     orchestrator = RecallOrchestrator(
         router=FixedRouter(QueryType.FACTUAL_LOOKUP),
-        retrievers={"fixed": FixedRetriever([make_candidate("coffee", score=0.01)])},
+        retrievers={
+            "fixed": FixedRetriever(
+                [make_candidate("coffee", score=0.01, kind=RetrieverKind.TIMELINE)]
+            )
+        },
         config=RecallPipelineConfig(route_table={QueryType.FACTUAL_LOOKUP: ("fixed",)}),
+        guard=IDKGuard(config=IDKGuardConfig(coverage_threshold=0.3)),
     )
 
     result = await orchestrator.recall(

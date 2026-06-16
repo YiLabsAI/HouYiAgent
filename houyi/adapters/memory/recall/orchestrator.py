@@ -44,7 +44,7 @@ _FAILURE_REASONS: frozenset[RecallReason] = frozenset(
     }
 )
 
-_SOURCE_FALLBACK_SCORE = 2.0
+_SOURCE_FALLBACK_SCORE = 1.0
 _SOURCE_SNIPPET_CHARS = 2000
 
 # Coverage mode for enumeration queries ("what activities/items/places
@@ -66,7 +66,7 @@ _ENUMERATION_FUSION_FLOOR = 150
 # so the answer-bearing fact is cut before the reasoner ever reads it.
 # The boost encodes a universal retrieval prior (match the evidence type to
 # the question's answer type); it is not tied to any specific dataset.
-_ANSWER_TYPE_BOOST = 3.0
+_ANSWER_TYPE_BOOST = 0.8
 _ANSWER_TYPE_TEMPORAL_RE = re.compile(
     r"\bwhen\b|\b(?:what|which)\s+(?:year|date|month|day|time)\b", re.IGNORECASE
 )
@@ -93,52 +93,52 @@ _DEFAULT_ROUTE_TABLE: dict[QueryType, tuple[str, ...]] = {
 # where positive evidence must come from entity_state alone.
 _DEFAULT_FUSION_WEIGHTS: dict[QueryType, dict[RetrieverKind, float]] = {
     QueryType.FACTUAL_LOOKUP: {
-        RetrieverKind.ENTITY_STATE: 10.0,
-        RetrieverKind.GRAPH: 9.0,
-        RetrieverKind.VECTOR: 8.0,
-        RetrieverKind.RAW_TURN: 0.6,
-        RetrieverKind.ITERATIVE: 1.0,
-        RetrieverKind.TIMELINE: 0.4,
+        RetrieverKind.ENTITY_STATE: 1.0,
+        RetrieverKind.GRAPH: 1.1,
+        RetrieverKind.VECTOR: 1.0,
+        RetrieverKind.RAW_TURN: 0.7,
+        RetrieverKind.ITERATIVE: 0.8,
+        RetrieverKind.TIMELINE: 0.7,
     },
     QueryType.NEGATION_CHECK: {
-        RetrieverKind.ENTITY_STATE: 10.0,
-        RetrieverKind.GRAPH: 0.5,
-        RetrieverKind.VECTOR: 0.1,
-        RetrieverKind.RAW_TURN: 0.2,
-        RetrieverKind.ITERATIVE: 0.5,
-        RetrieverKind.TIMELINE: 0.2,
+        RetrieverKind.ENTITY_STATE: 1.2,
+        RetrieverKind.GRAPH: 0.7,
+        RetrieverKind.VECTOR: 0.7,
+        RetrieverKind.RAW_TURN: 0.7,
+        RetrieverKind.ITERATIVE: 0.7,
+        RetrieverKind.TIMELINE: 0.7,
     },
     QueryType.TEMPORAL_QUERY: {
-        RetrieverKind.TIMELINE: 3.0,
-        RetrieverKind.GRAPH: 2.0,
+        RetrieverKind.TIMELINE: 1.3,
+        RetrieverKind.GRAPH: 1.1,
         RetrieverKind.VECTOR: 0.8,
-        RetrieverKind.ENTITY_STATE: 1.0,
-        RetrieverKind.RAW_TURN: 0.6,
-        RetrieverKind.ITERATIVE: 0.5,
+        RetrieverKind.ENTITY_STATE: 0.9,
+        RetrieverKind.RAW_TURN: 0.7,
+        RetrieverKind.ITERATIVE: 0.7,
     },
     QueryType.RELATIONAL_CHAIN: {
-        RetrieverKind.ITERATIVE: 5.0,
-        RetrieverKind.GRAPH: 8.0,
-        RetrieverKind.VECTOR: 5.0,
-        RetrieverKind.ENTITY_STATE: 1.0,
-        RetrieverKind.RAW_TURN: 0.5,
-        RetrieverKind.TIMELINE: 0.3,
+        RetrieverKind.ITERATIVE: 1.2,
+        RetrieverKind.GRAPH: 1.2,
+        RetrieverKind.VECTOR: 1.0,
+        RetrieverKind.ENTITY_STATE: 0.8,
+        RetrieverKind.RAW_TURN: 0.7,
+        RetrieverKind.TIMELINE: 0.7,
     },
     QueryType.THEMATIC_SUMMARY: {
-        RetrieverKind.VECTOR: 2.5,
+        RetrieverKind.VECTOR: 1.3,
         RetrieverKind.GRAPH: 1.0,
-        RetrieverKind.RAW_TURN: 1.2,
+        RetrieverKind.RAW_TURN: 1.0,
         RetrieverKind.TIMELINE: 0.8,
-        RetrieverKind.ENTITY_STATE: 0.5,
-        RetrieverKind.ITERATIVE: 0.3,
+        RetrieverKind.ENTITY_STATE: 0.7,
+        RetrieverKind.ITERATIVE: 0.7,
     },
     QueryType.PROCEDURAL_RECALL: {
-        RetrieverKind.RAW_TURN: 2.0,
-        RetrieverKind.GRAPH: 1.0,
+        RetrieverKind.RAW_TURN: 1.2,
+        RetrieverKind.GRAPH: 0.9,
         RetrieverKind.VECTOR: 1.0,
-        RetrieverKind.ENTITY_STATE: 0.5,
-        RetrieverKind.TIMELINE: 0.4,
-        RetrieverKind.ITERATIVE: 0.3,
+        RetrieverKind.ENTITY_STATE: 0.7,
+        RetrieverKind.TIMELINE: 0.7,
+        RetrieverKind.ITERATIVE: 0.7,
     },
 }
 
@@ -452,7 +452,7 @@ def _source_candidate(candidate: RecallCandidate, text: str) -> RecallCandidate:
 def _apply_entity_relevance_boost(
     candidates: list[RecallCandidate],
     entities: list[str],
-    boost: float = 5.0,
+    boost: float = 1.5,
 ) -> None:
     """Add an equal rerank_score boost to every query-entity candidate.
 
@@ -467,9 +467,9 @@ def _apply_entity_relevance_boost(
     keep both entities' facts in contention so the diversity selector
     can cover both.
 
-    The boost amount (5.0) overcomes the typical score gap between a
-    single-retriever entity-state fact (~2) and a multi-retriever
-    score-stacked fact (~10), giving entity facts enough margin to
+    The boost amount (1.5) overcomes the typical score gap between a
+    single-retriever entity-state fact (~1.0) and a multi-retriever
+    score-stacked fact, giving entity facts enough margin to
     survive MMR selection.
     """
     targets = {e.lower() for e in entities if e and e.strip()}
