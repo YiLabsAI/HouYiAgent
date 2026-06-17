@@ -917,7 +917,7 @@ async def _run_all(
         },
         sort_keys=True,
     )
-    config_hash = hashlib.md5(extract_config_payload.encode("utf-8")).hexdigest()[:12]
+    config_hash = hashlib.md5(extract_config_payload.encode("utf-8")).hexdigest()[:24]
     db_cache_dir = Path("/tmp/locomo_session_db_cache")
     db_cache_dir.mkdir(parents=True, exist_ok=True)
 
@@ -977,6 +977,7 @@ async def _run_all(
                     extractor=counting_extractor,
                     entity_state=view,
                     candidate_inbox=inbox,
+                    event_view=backend,
                     config=ExtractorWorkerConfig(batch_size=EXTRACT_BATCH_SIZE),
                     write_lock=asyncio.Lock(),
                 )

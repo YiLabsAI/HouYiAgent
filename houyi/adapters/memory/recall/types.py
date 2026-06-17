@@ -112,6 +112,7 @@ class RetrieverKind(str, Enum):
     RAW_TURN = "raw_turn"
     VECTOR = "vector"
     GRAPH = "graph"
+    EVENT = "event"
 
 
 # ---------------------------------------------------------------------------

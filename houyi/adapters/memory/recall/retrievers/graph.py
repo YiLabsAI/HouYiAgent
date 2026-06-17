@@ -5,7 +5,7 @@ import logging
 import re
 from typing import Any
 
-from houyi.adapters.memory.backends.base import EntityStateView, MemoryBackend
+from houyi.adapters.memory.backends.base import EntityStateView, EventView, MemoryBackend
 from houyi.adapters.memory.recall.retrievers.base import Retriever
 from houyi.adapters.memory.recall.retrievers.entity_state import _infer_entity_attribute
 from houyi.adapters.memory.recall.types import (
@@ -19,6 +19,7 @@ from houyi.adapters.memory.types import (
     Certainty,
     EntityStateRecord,
     GraphTraversalResult,
+    MemoryEvent,
     MemoryRecord,
 )
 
@@ -48,13 +49,16 @@ class GraphRetriever(Retriever):
     BFS traversal (up to depth=3) over memory_edges, and return traversed records.
     """
 
-    def __init__(self, backend: MemoryBackend, view: EntityStateView) -> None:
+    def __init__(
+        self, backend: MemoryBackend, view: EntityStateView, event_view: EventView | None = None
+    ) -> None:
         if backend is None:
             raise ValueError("backend is required")
         if view is None:
             raise ValueError("view is required")
         self._backend = backend
         self._view = view
+        self._event_view = event_view
 
     async def retrieve(
         self,
@@ -83,9 +87,25 @@ class GraphRetriever(Retriever):
         relation_types: list[str] | None = None
         max_depth = 3
         if ctx.query_type == QueryType.TEMPORAL_QUERY:
-            relation_types = ["precedes", "causes", "same_as", "related_to", "supports"]
+            relation_types = [
+                "precedes",
+                "causes",
+                "same_as",
+                "related_to",
+                "supports",
+                "participates_in",
+                "involves",
+                "narrative_next",
+            ]
         elif ctx.query_type == QueryType.RELATIONAL_CHAIN:
-            relation_types = ["causes", "related_to", "same_as", "supports"]
+            relation_types = [
+                "causes",
+                "related_to",
+                "same_as",
+                "supports",
+                "participates_in",
+                "involves",
+            ]
         elif ctx.query_type == QueryType.NEGATION_CHECK:
             relation_types = ["related_to", "same_as", "supports"]
         elif ctx.query_type == QueryType.FACTUAL_LOOKUP:
@@ -329,6 +349,9 @@ class GraphRetriever(Retriever):
                 rel_boost = {
                     "causes": 1.4,
                     "precedes": 1.3,
+                    "narrative_next": 1.2,
+                    "participates_in": 1.3,
+                    "involves": 1.2,
                     "supports": 1.2,
                     "same_as": 1.1,
                     "related_to": 1.0,
@@ -347,6 +370,15 @@ class GraphRetriever(Retriever):
                             row, final_score, depth, relation, weight, node.parent_node_id
                         )
                     )
+            elif node_type == "event":
+                if self._event_view is not None:
+                    event = self._event_view.get_event(node_id)
+                    if event is not None:
+                        candidates.append(
+                            self._candidate_from_event(
+                                event, final_score, depth, relation, weight, node.parent_node_id
+                            )
+                        )
             elif node_type == "fact":
                 rec = self._backend.get_by_id(node_id)
                 if rec is not None:
@@ -357,6 +389,45 @@ class GraphRetriever(Retriever):
                     )
 
         return candidates
+
+    def _candidate_from_event(
+        self,
+        event: MemoryEvent,
+        score: float,
+        depth: int,
+        relation: str | None = None,
+        weight: float | None = None,
+        parent_node_id: str | None = None,
+    ) -> RecallCandidate:
+        fact = AtomicFact(
+            subject=event.subject,
+            predicate=event.action,
+            object=f"{event.object} ({event.timestamp})",
+            certainty=event.certainty,
+            source_anchor=event.source_anchor,
+            qualifiers=event.qualifiers,
+            event_time=event.timestamp,
+        )
+        signals: dict[str, Any] = {
+            "bfs_depth": depth,
+            "node_type": "event",
+            "event_id": event.event_id,
+        }
+        if relation:
+            signals["last_edge_relation"] = relation
+        if weight is not None:
+            signals["last_edge_weight"] = weight
+        if parent_node_id:
+            signals["parent_node_id"] = parent_node_id
+
+        return RecallCandidate(
+            fact=fact,
+            score=score,
+            matched_by=RetrieverKind.GRAPH,
+            retriever_name=self.name,
+            signals=signals,
+            explanation=f"graph BFS (depth={depth}) event: {event.subject} {event.action} {event.object}",
+        )
 
     def _candidate_from_state_row(
         self,

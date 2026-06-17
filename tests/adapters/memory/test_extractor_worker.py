@@ -12,13 +12,14 @@ from houyi.adapters.memory.backends.sqlite_candidate_inbox import SQLiteCandidat
 from houyi.adapters.memory.backends.sqlite_entity_state import SQLiteEntityStateView
 from houyi.adapters.memory.triggers import all_of
 from houyi.adapters.memory.turn_writer import TurnWriter
-from houyi.adapters.memory.types import AtomicFact, Certainty, RawTurn
+from houyi.adapters.memory.types import AtomicFact, Certainty, MemoryEvent, RawTurn
 from houyi.adapters.memory.workers import ExtractorWorker, ExtractorWorkerConfig
 
 
 @dataclass
 class _FakeResult:
     facts: list = None
+    events: list = None
     edges: list = None
     raw_sourceless: list = None
     invalid_dropped: int = 0
@@ -201,7 +202,7 @@ class TestProcessOnce:
         assert {r.value for r in rows} == {"tea", "coffee"}
         assert backend.extract_queue_stats() == {"done": 2}
 
-    async def test_extractor_persists_edges(self, backend, state_view, inbox):
+    async def test_auto_derive_edges(self, backend, state_view, inbox):
         wp = _make_tw(backend)
         turn = _enqueue(wp, "Caroline works as a Teacher. Joanna knows Bob.")
 
@@ -214,15 +215,7 @@ class TestProcessOnce:
                         ),
                         _fact(subject="Joanna", predicate="knows", obj="Bob", anchor=turn.turn_id),
                     ],
-                    edges=[
-                        {
-                            "source_unit_id": "Caroline.job",
-                            "target_unit_id": "Joanna.knows",
-                            "relation": "related_to",
-                            "source_type": "state",
-                            "target_type": "state",
-                        }
-                    ],
+                    edges=[],
                 )
             ]
         )
@@ -241,24 +234,66 @@ class TestProcessOnce:
         assert len(c_rows) == 1
         assert len(j_rows) == 1
 
-        # Verify edge was resolved and persisted
+        # Verify auto-derived edges (knows -> RELATED_TO, plus identity anchors)
         conn = backend._conn()
         edges = conn.execute("SELECT * FROM memory_edges").fetchall()
-        assert len(edges) == 3
+        edge_relations = {dict(e)["relation"] for e in edges}
+        assert "related_to" in edge_relations
 
-        # Find the specific LLM-extracted edge
-        llm_edge_row = None
-        for edge in edges:
-            row = dict(edge)
-            if (
-                row["source_unit_id"] == c_rows[0].state_id
-                and row["target_unit_id"] == j_rows[0].state_id
-            ):
-                llm_edge_row = row
-                break
+    async def test_event_wiring(self, backend, state_view, inbox):
+        wp = _make_tw(backend)
+        turn = _enqueue(wp, "Joanna watched Eternal Sunshine in 2019")
 
-        assert llm_edge_row is not None
-        assert llm_edge_row["relation"] == "related_to"
+        event = MemoryEvent(
+            namespace="default",
+            subject="Joanna",
+            action="watched",
+            object="Eternal Sunshine",
+            timestamp="2019",
+            certainty=Certainty.CERTAIN,
+            source_anchor=turn.turn_id,
+        )
+        extractor = _FakeExtractor(
+            results=[
+                _FakeResult(
+                    facts=[
+                        _fact(
+                            subject="Joanna",
+                            predicate="watched",
+                            obj="Eternal Sunshine",
+                            anchor=turn.turn_id,
+                        ),
+                    ],
+                    events=[event],
+                    edges=[],
+                )
+            ]
+        )
+        worker = ExtractorWorker(
+            backend=backend,
+            extractor=extractor,
+            entity_state=state_view,
+            candidate_inbox=inbox,
+            event_view=backend,
+        )
+        processed = await worker.process_once()
+        assert processed == 1
+
+        # Verify event stored
+        stored_event = backend.get_event(event.event_id)
+        assert stored_event is not None
+        assert stored_event.action == "watched"
+        assert stored_event.timestamp == "2019"
+
+        # Verify PARTICIPATES_IN edge (state -> event)
+        conn = backend._conn()
+        edges = conn.execute("SELECT * FROM memory_edges").fetchall()
+        participates_edges = [dict(e) for e in edges if dict(e)["relation"] == "participates_in"]
+        assert len(participates_edges) >= 1
+        pe = participates_edges[0]
+        assert pe["source_type"] == "state"
+        assert pe["target_type"] == "event"
+        assert pe["target_unit_id"] == event.event_id
 
 
 class TestFailureHandling:

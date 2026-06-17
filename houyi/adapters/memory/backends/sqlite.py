@@ -26,6 +26,7 @@ from typing import Any
 from houyi.adapters.memory.backends.base import MemoryBackend
 from houyi.adapters.memory.backends.sqlite_connection import SQLiteConnectionManager
 from houyi.adapters.memory.backends.sqlite_embedding_cache import SQLiteEmbeddingCache
+from houyi.adapters.memory.backends.sqlite_event_store import SQLiteEventStore
 from houyi.adapters.memory.backends.sqlite_extract_queue import SQLiteExtractQueue
 from houyi.adapters.memory.backends.sqlite_fts_search import SQLiteFTSSearch
 from houyi.adapters.memory.backends.sqlite_graph import SQLiteGraphStore
@@ -35,6 +36,7 @@ from houyi.adapters.memory.backends.sqlite_vector_search import SQLiteVectorSear
 from houyi.adapters.memory.types import (
     GraphTraversalResult,
     MemoryEdge,
+    MemoryEvent,
     MemoryProvenance,
     MemoryRecord,
     MemoryScope,
@@ -44,7 +46,7 @@ from houyi.adapters.memory.types import (
 
 logger = logging.getLogger(__name__)
 
-_SCHEMA_VERSION = 3
+_SCHEMA_VERSION = 4
 
 
 def _pack_floats(vec: list[float]) -> bytes:
@@ -92,6 +94,7 @@ class SQLiteMemoryBackend(MemoryBackend):
         self._raw_turn_log = SQLiteRawTurnLog(self._conn_manager, self._lock)
         self._extract_queue = SQLiteExtractQueue(self._conn_manager, self._raw_turn_log, self._lock)
         self._graph_store = SQLiteGraphStore(self._conn_manager)
+        self._event_store = SQLiteEventStore(self)
 
     def _conn(self) -> sqlite3.Connection:
         return self._conn_manager.get_connection()
@@ -292,6 +295,7 @@ class SQLiteMemoryBackend(MemoryBackend):
                 cur = conn.execute("DELETE FROM memories")
                 conn.execute("DELETE FROM embedding_cache")
                 conn.execute("DELETE FROM entity_state")
+                conn.execute("DELETE FROM events")
                 conn.execute("DELETE FROM vague_candidates")
                 conn.execute("DELETE FROM memory_edges")
                 conn.execute("DELETE FROM memory_community_labels")
@@ -554,6 +558,35 @@ class SQLiteMemoryBackend(MemoryBackend):
 
     def __del__(self) -> None:
         self.close()
+
+    # ------------------------------------------------------------------
+    # Events (first-class temporal occurrences)
+    # ------------------------------------------------------------------
+
+    def add_event(self, event: MemoryEvent) -> MemoryEvent:
+        with self._write_serialized():
+            result = self._event_store.add_event(event)
+            if not getattr(self._in_transaction, "active", False):
+                self._conn().commit()
+            return result
+
+    def get_event(self, event_id: str) -> MemoryEvent | None:
+        return self._event_store.get_event(event_id)
+
+    def get_events_by_subject(self, namespace: str, subject: str) -> list[MemoryEvent]:
+        return self._event_store.get_events_by_subject(namespace, subject)
+
+    def get_events_by_subject_and_action(
+        self,
+        namespace: str,
+        subject: str,
+        action: str,
+    ) -> list[MemoryEvent]:
+        return self._event_store.get_events_by_subject_and_action(
+            namespace,
+            subject,
+            action,
+        )
 
     # ------------------------------------------------------------------
     # GraphIndex (HouYi-Mesh) — delegates to SQLiteGraphStore

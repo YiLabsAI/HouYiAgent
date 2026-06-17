@@ -78,10 +78,10 @@ _DIGIT_RE = re.compile(r"\d")
 # the caller wires a vector retriever into the orchestrator, otherwise
 # its slot is a no-op.
 _DEFAULT_ROUTE_TABLE: dict[QueryType, tuple[str, ...]] = {
-    QueryType.FACTUAL_LOOKUP: ("entity_state", "graph", "vector", "raw_turn"),
+    QueryType.FACTUAL_LOOKUP: ("entity_state", "event", "graph", "vector", "raw_turn"),
     QueryType.NEGATION_CHECK: ("entity_state", "vector"),
-    QueryType.TEMPORAL_QUERY: ("timeline", "graph", "entity_state", "vector"),
-    QueryType.RELATIONAL_CHAIN: ("iterative", "graph", "entity_state", "vector"),
+    QueryType.TEMPORAL_QUERY: ("timeline", "event", "graph", "entity_state", "vector"),
+    QueryType.RELATIONAL_CHAIN: ("iterative", "graph", "event", "entity_state", "vector"),
     QueryType.PROCEDURAL_RECALL: ("raw_turn", "vector"),
     QueryType.THEMATIC_SUMMARY: ("vector", "raw_turn", "timeline"),
 }
@@ -94,6 +94,7 @@ _DEFAULT_ROUTE_TABLE: dict[QueryType, tuple[str, ...]] = {
 _DEFAULT_FUSION_WEIGHTS: dict[QueryType, dict[RetrieverKind, float]] = {
     QueryType.FACTUAL_LOOKUP: {
         RetrieverKind.ENTITY_STATE: 1.0,
+        RetrieverKind.EVENT: 1.0,
         RetrieverKind.GRAPH: 1.1,
         RetrieverKind.VECTOR: 1.0,
         RetrieverKind.RAW_TURN: 0.7,
@@ -102,6 +103,7 @@ _DEFAULT_FUSION_WEIGHTS: dict[QueryType, dict[RetrieverKind, float]] = {
     },
     QueryType.NEGATION_CHECK: {
         RetrieverKind.ENTITY_STATE: 1.2,
+        RetrieverKind.EVENT: 0.7,
         RetrieverKind.GRAPH: 0.7,
         RetrieverKind.VECTOR: 0.7,
         RetrieverKind.RAW_TURN: 0.7,
@@ -110,6 +112,7 @@ _DEFAULT_FUSION_WEIGHTS: dict[QueryType, dict[RetrieverKind, float]] = {
     },
     QueryType.TEMPORAL_QUERY: {
         RetrieverKind.TIMELINE: 1.3,
+        RetrieverKind.EVENT: 1.0,
         RetrieverKind.GRAPH: 1.1,
         RetrieverKind.VECTOR: 0.8,
         RetrieverKind.ENTITY_STATE: 0.9,
@@ -119,6 +122,7 @@ _DEFAULT_FUSION_WEIGHTS: dict[QueryType, dict[RetrieverKind, float]] = {
     QueryType.RELATIONAL_CHAIN: {
         RetrieverKind.ITERATIVE: 1.2,
         RetrieverKind.GRAPH: 1.2,
+        RetrieverKind.EVENT: 1.0,
         RetrieverKind.VECTOR: 1.0,
         RetrieverKind.ENTITY_STATE: 0.8,
         RetrieverKind.RAW_TURN: 0.7,
@@ -129,6 +133,7 @@ _DEFAULT_FUSION_WEIGHTS: dict[QueryType, dict[RetrieverKind, float]] = {
         RetrieverKind.GRAPH: 1.0,
         RetrieverKind.RAW_TURN: 1.0,
         RetrieverKind.TIMELINE: 0.8,
+        RetrieverKind.EVENT: 0.7,
         RetrieverKind.ENTITY_STATE: 0.7,
         RetrieverKind.ITERATIVE: 0.7,
     },
@@ -347,8 +352,13 @@ class RecallOrchestrator:
         # Diversity-aware final cut: rerank scores wide (fusion_k), then let
         # MMR pick the top_k. Enumeration queries use coverage diversity so
         # the budget spreads across distinct member facts.
+        if is_enumeration:
+            _apply_sibling_boost(ranked)
+            final_k = top_k * 2
+        else:
+            final_k = top_k
         diversity = _ENUMERATION_DIVERSITY if is_enumeration else None
-        deduped = self._dedupe.dedupe(ranked, top_k=top_k, diversity=diversity)
+        deduped = self._dedupe.dedupe(ranked, top_k=final_k, diversity=diversity)
         trace["rerank"] = {
             "reranker": type(self._reranker).__name__,
             "input_count": len(fused),
@@ -515,6 +525,27 @@ def _fact_has_number(fact: object) -> bool:
     """
     obj = getattr(fact, "object", "") or ""
     return bool(_DIGIT_RE.search(obj))
+
+
+def _apply_sibling_boost(candidates: list[RecallCandidate]) -> None:
+    from collections import defaultdict
+
+    groups = defaultdict(list)
+    for c in candidates:
+        key = (c.fact.subject.strip().casefold(), c.fact.predicate.strip().casefold())
+        groups[key].append(c)
+
+    for group in groups.values():
+        if len(group) > 1:
+            # Boost siblings so they stay together in top-k
+            for c in group:
+                score = float(c.signals.get("rerank_score", c.signals.get("fused_score", c.score)))
+                c.signals["rerank_score"] = score + 0.4
+
+    candidates.sort(
+        key=lambda c: float(c.signals.get("rerank_score", c.signals.get("fused_score", c.score))),
+        reverse=True,
+    )
 
 
 def _apply_answer_type_boost(

@@ -265,6 +265,17 @@ class LLMAnswerer:
         return None
 
     @staticmethod
+    def _format_fact_line(idx: int, cand: RecallCandidate) -> str:
+        """Render one candidate as a numbered fact line with anchor and time."""
+        f = cand.fact
+        line = f" {idx}. {f.subject} {f.predicate} {f.object}"
+        if f.source_anchor:
+            line += f" [{f.source_anchor}]"
+        if f.event_time:
+            line += f" (time: {f.event_time})"
+        return line
+
+    @staticmethod
     def _render_prompt(query: str, candidates: list[RecallCandidate]) -> str:
         lines = [
             "Answer the user's question using the numbered facts below. "
@@ -277,12 +288,7 @@ class LLMAnswerer:
             "Facts:",
         ]
         for i, cand in enumerate(candidates, start=1):
-            f = cand.fact
-            line = f" {i}. {f.subject} {f.predicate} {f.object}"
-            anchor = f.source_anchor
-            if anchor:
-                line += f" [{anchor}]"
-            lines.append(line)
+            lines.append(LLMAnswerer._format_fact_line(i, cand))
 
         # Append graph connection paths for topological and causal chain reasoning
         connections = []

@@ -11,7 +11,7 @@ import sqlite3
 
 logger = logging.getLogger(__name__)
 
-_SCHEMA_VERSION = 3
+_SCHEMA_VERSION = 4
 
 
 class SQLiteSchemaManager:
@@ -74,6 +74,7 @@ class SQLiteSchemaManager:
             self._create_memories_fts(cur)
             self._create_embedding_cache(cur)
             self._create_entity_state(cur)
+            self._create_events(cur)
             self._create_vague_candidates(cur)
             self._create_raw_turn_log(cur)
             self._create_extract_queue(cur)
@@ -198,6 +199,36 @@ class SQLiteSchemaManager:
         cur.execute(
             "CREATE INDEX IF NOT EXISTS idx_entity_state_temporal "
             "ON entity_state(namespace, entity, attribute, valid_from DESC)"
+        )
+
+    def _create_events(self, cur: sqlite3.Cursor) -> None:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS events (
+                event_id TEXT PRIMARY KEY,
+                namespace TEXT NOT NULL,
+                subject TEXT NOT NULL,
+                action TEXT NOT NULL,
+                object TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                context TEXT NOT NULL DEFAULT '',
+                certainty TEXT NOT NULL DEFAULT 'certain',
+                qualifiers TEXT,
+                source_anchor TEXT NOT NULL,
+                valid_from REAL NOT NULL,
+                valid_to REAL,
+                created_at REAL NOT NULL
+            )
+        """)
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_events_subject ON events(namespace, subject, valid_to)"
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_events_subject_action "
+            "ON events(namespace, subject, action, valid_to)"
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_events_subject_timestamp "
+            "ON events(namespace, subject, timestamp)"
         )
 
     def _create_vague_candidates(self, cur: sqlite3.Cursor) -> None:

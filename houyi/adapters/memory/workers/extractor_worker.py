@@ -30,6 +30,7 @@ from houyi.adapters.memory.types import (
     AtomicFact,
     Certainty,
     MemoryEdge,
+    MemoryEvent,
     MemoryRecord,
     MemoryRelation,
     RawTurn,
@@ -37,8 +38,46 @@ from houyi.adapters.memory.types import (
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Timestamp normalization for narrative chain ordering
+# ---------------------------------------------------------------------------
+
+_YEAR_RE = re.compile(r"\b(\d{4})\b")
+
+
+def _normalize_timestamp_for_sort(ts: str) -> tuple:
+    """Derive a sortable key from a free-form event timestamp.
+
+    Strategy:
+    1. If the timestamp contains a recognizable 4-digit year, extract it as
+       the primary sort key. Month and day are secondary keys if present.
+    2. Otherwise, return a high sentinel value so unparseable timestamps
+       sort after well-structured ones, preserving extraction order for
+       same-batch events with no parseable year.
+    """
+    if not ts:
+        return (999999, 99, 99)
+    year_match = _YEAR_RE.search(ts)
+    if year_match:
+        year = int(year_match.group(1))
+        # Try to extract month (1-12) and day from common patterns
+        month_day_re = re.compile(r"\b(\d{1,2})[/-](\d{1,2})\b")
+        md = month_day_re.search(ts)
+        month = int(md.group(1)) if md and 1 <= int(md.group(1)) <= 12 else 99
+        day = int(md.group(2)) if md and 1 <= int(md.group(2)) <= 31 else 99
+        return (year, month, day)
+    return (999999, 99, 99)
+
 
 _PREDICATE_TO_RELATION: dict[str, MemoryRelation] = {
+    # Fact predicates only -- state/attribute verbs extracted as AtomicFacts.
+    # Event action verbs (watched, adopted, moved_to, purchased, started, lost,
+    # passed_away, married, divorced, enrolled, quit, traveled_to, donated, sold,
+    # bought, acquired, switched_to, started_job, lost_job, lost_family_member,
+    # lost_friend) are NOT here by design: events use structural edges
+    # (PARTICIPATES_IN, INVOLVES, NARRATIVE_NEXT) instead of predicate-driven
+    # edges. See _wire_event_edges and _wire_narrative_next_chains.
+    #
     # Relational & Social
     "knows": MemoryRelation.RELATED_TO,
     "likes": MemoryRelation.RELATED_TO,
@@ -59,24 +98,6 @@ _PREDICATE_TO_RELATION: dict[str, MemoryRelation] = {
     "employed by": MemoryRelation.RELATED_TO,
     "works at": MemoryRelation.RELATED_TO,
     "partner of": MemoryRelation.RELATED_TO,
-    # Causal
-    "causes": MemoryRelation.CAUSES,
-    "leads to": MemoryRelation.CAUSES,
-    "results in": MemoryRelation.CAUSES,
-    "results_in": MemoryRelation.CAUSES,
-    "triggers": MemoryRelation.CAUSES,
-    "brings about": MemoryRelation.CAUSES,
-    "induces": MemoryRelation.CAUSES,
-    "creates": MemoryRelation.CAUSES,
-    "inspired by": MemoryRelation.CAUSES,
-    "motivated by": MemoryRelation.CAUSES,
-    # Temporal
-    "precedes": MemoryRelation.PRECEDES,
-    "before": MemoryRelation.PRECEDES,
-    "after": MemoryRelation.PRECEDES,
-    "since": MemoryRelation.PRECEDES,
-    "followed by": MemoryRelation.PRECEDES,
-    "then": MemoryRelation.PRECEDES,
     # Contradiction / Invalidation
     "contradicts": MemoryRelation.CONTRADICTS,
     "invalidates": MemoryRelation.INVALIDATES,
@@ -178,6 +199,10 @@ class _CandidateInboxProtocol(Protocol):
     def add_sourceless(self, namespace: str, raw_payload: dict[str, Any]) -> str: ...
 
 
+class _EventViewProtocol(Protocol):
+    def add_event(self, event: MemoryEvent) -> MemoryEvent: ...
+
+
 class _ExtractorProtocol(Protocol):
     async def extract(self, text: str, source_anchor: str | None) -> Any: ...  # ExtractionResult
 
@@ -276,6 +301,7 @@ class ExtractorWorker:
         extractor: _ExtractorProtocol,
         entity_state: _EntityStateProtocol,
         candidate_inbox: _CandidateInboxProtocol,
+        event_view: _EventViewProtocol | None = None,
         promoter: FactPromoter | None = None,
         config: ExtractorWorkerConfig | None = None,
         write_lock: asyncio.Lock | None = None,
@@ -312,6 +338,7 @@ class ExtractorWorker:
         self._extractor = extractor
         self._entity_state = entity_state
         self._candidate_inbox = candidate_inbox
+        self._event_view = event_view
         # Default to MemoryRecordPromoter so the L1 worker materializes
         # MemoryRecord rows that the vector path can index. Callers that
         # need to disable promotion pass a noop FactPromoter explicitly.
@@ -544,12 +571,40 @@ class ExtractorWorker:
                 # Auto-derive MemoryEdge from high-certainty atomic fact (subject, predicate, object) triples
                 self._auto_derive_edges(ns, fact, state_record, batch_map)
 
+            # Process events
+            batch_events: list[MemoryEvent] = []
+            for event in getattr(result, "events", []) or []:
+                if not isinstance(event, MemoryEvent):
+                    continue
+                if event.certainty is Certainty.VAGUE:
+                    self._candidate_inbox.add(
+                        ns,
+                        AtomicFact(
+                            subject=event.subject,
+                            predicate=event.action,
+                            object=f"{event.object} ({event.timestamp})",
+                            certainty=Certainty.VAGUE,
+                            source_anchor=event.source_anchor,
+                        ),
+                    )
+                    continue
+                if self._event_view is not None:
+                    stored_event = self._event_view.add_event(event)
+                else:
+                    stored_event = event
+                batch_map[event.event_id] = stored_event.event_id
+                batch_map[f"event:{event.subject}.{event.action}.{event.object}"] = (
+                    stored_event.event_id
+                )
+                batch_events.append(stored_event)
+                self._wire_event_edges(ns, stored_event, batch_map)
+
+            if batch_events:
+                self._wire_narrative_next_chains(ns, batch_events, batch_map)
+
             for raw in getattr(result, "raw_sourceless", []) or []:
                 payload = raw if isinstance(raw, dict) else {"item": str(raw)}
                 self._candidate_inbox.add_sourceless(ns, payload)
-
-            # Resolve and persist extracted relation edges
-            self._resolve_and_persist_extracted_edges(ns, turn, result, batch_map)
 
     def _auto_derive_edges(
         self, ns: str, fact: AtomicFact, state_record: Any, batch_map: dict[str, str]
@@ -602,211 +657,117 @@ class ExtractorWorker:
                     self._backend.add_edge(auto_edge)
                     batch_map[edge_key] = "1"
 
-    def _get_or_create_identity_anchor(
-        self, ns: str, sym_id: str, node_type: str, turn: RawTurn, batch_map: dict[str, str]
-    ) -> str | None:
+    def _wire_event_edges(self, ns: str, event: MemoryEvent, batch_map: dict[str, str]) -> None:
         import time
 
-        resolved = self._resolve_symbolic_id(ns, sym_id, node_type, batch_map)
-        if resolved:
-            return resolved
+        event_id = event.event_id
+        subject = event.subject.strip()
 
-        if node_type == "state":
-            # Check-first: see if there's any active state records for this entity
-            active = self._entity_state.get_active(ns, sym_id)
+        # Edge 1: Entity(state) -> PARTICIPATES_IN -> Event
+        subject_state_id = batch_map.get(subject)
+        if not subject_state_id:
+            active = self._entity_state.get_active(ns, subject)
             if active:
-                # Reuse the existing state's ID (which allows LLM lowercase output like 'sam' to map back to existing 'Sam')
-                batch_map[sym_id] = active[0].state_id
-                return active[0].state_id
-
-            if _is_valid_identity_candidate(sym_id, require_proper=True):
-                logger.info("Creating identity anchor for entity: %s", sym_id)
-                anchor_rec = self._entity_state.upsert(
-                    ns,
-                    sym_id,
-                    "identity",
-                    sym_id,
-                    certainty=Certainty.CERTAIN,
-                    valid_from=turn.created_at or time.time(),
-                    source_unit_id=None,
-                    qualifiers=None,
-                )
-                batch_map[sym_id] = anchor_rec.state_id
-                return anchor_rec.state_id
-        return None
-
-    def _resolve_and_persist_extracted_edges(
-        self, ns: str, turn: RawTurn, result: Any, batch_map: dict[str, str]
-    ) -> None:
-        import time
-
-        for raw_edge in getattr(result, "edges", []) or []:
-            try:
-                src_sym = str(raw_edge.get("source_unit_id", "")).strip()
-                tgt_sym = str(raw_edge.get("target_unit_id", "")).strip()
-                rel_raw = str(raw_edge.get("relation", "")).strip().lower()
-                src_type = str(raw_edge.get("source_type", "state")).strip().lower()
-                tgt_type = str(raw_edge.get("target_type", "state")).strip().lower()
-
-                if src_type not in ("fact", "state"):
-                    src_type = "state"
-                if tgt_type not in ("fact", "state"):
-                    tgt_type = "state"
-
-                if not src_sym or not tgt_sym or not rel_raw:
-                    continue
-
-                try:
-                    relation = MemoryRelation(rel_raw)
-                except ValueError:
-                    relation = MemoryRelation.RELATED_TO
-
-                source_id = self._get_or_create_identity_anchor(
-                    ns, src_sym, src_type, turn, batch_map
-                )
-                target_id = self._get_or_create_identity_anchor(
-                    ns, tgt_sym, tgt_type, turn, batch_map
-                )
-
-                if source_id and target_id:
-                    edge_key = f"edge:{ns}|{source_id}|{target_id}|{relation.value}"
-                    if edge_key in batch_map:
-                        logger.info(
-                            "Skipping duplicate edge in batch: %s -> %s (%s)",
-                            source_id,
-                            target_id,
-                            relation.value,
-                        )
-                        continue
-                    edge = MemoryEdge(
-                        namespace=ns,
-                        source_unit_id=source_id,
-                        target_unit_id=target_id,
-                        source_type=src_type,  # type: ignore[arg-type]
-                        target_type=tgt_type,  # type: ignore[arg-type]
-                        relation=relation,
-                        valid_from=turn.created_at or time.time(),
-                    )
-                    self._backend.add_edge(edge)
-                    batch_map[edge_key] = "1"
-                else:
-                    logger.warning(
-                        "Dropped extracted edge because symbolic IDs could not be resolved: %s (source_id=%s, target_id=%s)",
-                        raw_edge,
-                        source_id,
-                        target_id,
-                    )
-            except Exception:
-                logger.warning("Failed to persist extracted edge: %s", raw_edge, exc_info=True)
-
-    def _resolve_symbolic_id(
-        self, ns: str, sym_id: str, node_type: str, batch_map: dict[str, str]
-    ) -> str | None:
-        if sym_id in batch_map:
-            return batch_map[sym_id]
-
-        # Try standard type-based resolution first
-        resolved = self._resolve_by_type(ns, sym_id, node_type)
-        if resolved:
-            return resolved
-
-        # Systemic Fallback: If type-based resolution failed, try opposite type
-        opposite_type = "fact" if node_type == "state" else "state"
-        return self._resolve_by_type(ns, sym_id, opposite_type)
-
-    def _resolve_state_node_id(self, ns: str, sym_id: str) -> str | None:
-        if "." in sym_id:
-            parts = sym_id.split(".", 1)
-            entity, attribute = parts[0].strip(), parts[1].strip()
-
-            # 1. Exact match attempt
-            active = self._entity_state.get_active(ns, entity, attribute)
-            if active:
-                return active[0].state_id
-
-            # 2. Fuzzy/prefix/value match on all active attributes of the entity (systemic robustness)
-            all_active = self._entity_state.get_active(ns, entity)
-            if all_active:
-                return self._fuzzy_match_active(sym_id, entity, attribute, all_active)
-        else:
-            active = self._entity_state.get_active(ns, sym_id)
-            if active:
-                for pref in ("identity", "name", "label"):
-                    for rec in active:
-                        if rec.attribute == pref:
-                            return rec.state_id
-                if _is_valid_identity_candidate(sym_id):
-                    import time
-
-                    logger.info(
-                        "Auto-upserting missing identity anchor for active entity: %s", sym_id
-                    )
+                subject_state_id = active[0].state_id
+                batch_map[subject] = subject_state_id
+            else:
+                if _is_valid_identity_candidate(subject):
+                    logger.info("Creating identity anchor for event subject: %s", subject)
                     anchor_rec = self._entity_state.upsert(
                         ns,
-                        sym_id,
+                        subject,
                         "identity",
-                        sym_id,
+                        subject,
                         certainty=Certainty.CERTAIN,
-                        valid_from=time.time(),
-                        source_unit_id=None,
+                        valid_from=event.valid_from or time.time(),
+                        source_unit_id=event.source_anchor,
                         qualifiers=None,
                     )
-                    return anchor_rec.state_id
-                return active[0].state_id
-        return None
+                    subject_state_id = anchor_rec.state_id
+                    batch_map[subject] = subject_state_id
 
-    def _resolve_by_type(self, ns: str, sym_id: str, node_type: str) -> str | None:
-        if node_type == "state":
-            return self._resolve_state_node_id(ns, sym_id)
-        elif node_type == "fact":
-            try:
-                rec = self._backend.get_by_id(sym_id)
-                if rec:
-                    return rec.record_id
-            except Exception:
-                pass
-        return None
+        if subject_state_id:
+            edge_key = f"edge:{ns}|{subject_state_id}|{event_id}|participates_in"
+            if edge_key not in batch_map:
+                participates_edge = MemoryEdge(
+                    namespace=ns,
+                    source_unit_id=subject_state_id,
+                    target_unit_id=event_id,
+                    source_type="state",
+                    target_type="event",
+                    relation=MemoryRelation.PARTICIPATES_IN,
+                    valid_from=event.valid_from or time.time(),
+                    provenance=event.source_anchor,
+                )
+                self._backend.add_edge(participates_edge)
+                batch_map[edge_key] = "1"
 
-    def _fuzzy_match_active(
-        self, sym_id: str, entity: str, attribute: str, all_active: list[Any]
-    ) -> str | None:
-        best_rec = None
-        best_score = 0
-        sym_attr_clean = attribute.lower().replace("_", " ").strip()
+        # Edge 2: Event -> INVOLVES -> Entity(state) (only if object resolves to existing entity)
+        obj_str = event.object.strip()
+        object_state_id = batch_map.get(obj_str)
+        if not object_state_id:
+            active_obj = self._entity_state.get_active(ns, obj_str)
+            if active_obj:
+                object_state_id = active_obj[0].state_id
+                batch_map[obj_str] = object_state_id
 
-        for rec in all_active:
-            attr_clean = rec.attribute.strip().lower().replace("_", " ")
-            val_clean = str(rec.value).strip().lower().replace("_", " ")
+        if object_state_id:
+            edge_key = f"edge:{ns}|{event_id}|{object_state_id}|involves"
+            if edge_key not in batch_map:
+                involves_edge = MemoryEdge(
+                    namespace=ns,
+                    source_unit_id=event_id,
+                    target_unit_id=object_state_id,
+                    source_type="event",
+                    target_type="state",
+                    relation=MemoryRelation.INVOLVES,
+                    valid_from=event.valid_from or time.time(),
+                    provenance=event.source_anchor,
+                )
+                self._backend.add_edge(involves_edge)
+                batch_map[edge_key] = "1"
 
-            score = 0
-            # Check 1: Record attribute is in symbolic attribute or vice versa
-            if attr_clean in sym_attr_clean or sym_attr_clean in attr_clean:
-                score += 5
-            # Check 2: Record value is in symbolic attribute or vice versa
-            if val_clean in sym_attr_clean or sym_attr_clean in val_clean:
-                score += 5
-            # Check 3: Prefix common stem matching (at least 4 chars)
-            if (
-                len(attr_clean) >= 4
-                and len(sym_attr_clean) >= 4
-                and (attr_clean[:4] in sym_attr_clean or sym_attr_clean[:4] in attr_clean)
-            ):
-                score += 3
+    def _wire_narrative_next_chains(
+        self, ns: str, events: list[MemoryEvent], batch_map: dict[str, str]
+    ) -> None:
+        import time
+        from collections import defaultdict
 
-            if score > best_score:
-                best_score = score
-                best_rec = rec
+        groups = defaultdict(list)
+        for event in events:
+            groups[(ns, event.subject.strip())].append(event)
 
-        if best_rec and best_score >= 3:
-            logger.info(
-                "Fuzzy-resolved symbolic ID '%s' to physical state record '%s.%s' (score=%d)",
-                sym_id,
-                entity,
-                best_rec.attribute,
-                best_score,
+        for (_group_ns, _subject), group_events in groups.items():
+            if len(group_events) < 2:
+                continue
+            # Sort by occurrence time (event.timestamp) rather than system
+            # insertion time (valid_from). When timestamps are free-form
+            # strings that cannot be meaningfully compared, preserve the
+            # extraction order (which often reflects narrative sequence).
+            sorted_events = sorted(
+                group_events,
+                key=lambda e: _normalize_timestamp_for_sort(e.timestamp),
             )
-            return best_rec.state_id
-        return None
+            for i in range(len(sorted_events) - 1):
+                source_event = sorted_events[i]
+                target_event = sorted_events[i + 1]
+                edge_key = (
+                    f"edge:{ns}|{source_event.event_id}|{target_event.event_id}|narrative_next"
+                )
+                if edge_key in batch_map:
+                    continue
+                next_edge = MemoryEdge(
+                    namespace=ns,
+                    source_unit_id=source_event.event_id,
+                    target_unit_id=target_event.event_id,
+                    source_type="event",
+                    target_type="event",
+                    relation=MemoryRelation.NARRATIVE_NEXT,
+                    valid_from=source_event.valid_from or time.time(),
+                    provenance=source_event.source_anchor,
+                )
+                self._backend.add_edge(next_edge)
+                batch_map[edge_key] = "1"
 
 
 __all__ = ["ExtractorWorker", "ExtractorWorkerConfig"]

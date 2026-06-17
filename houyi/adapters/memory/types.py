@@ -116,6 +116,9 @@ class MemoryRelation(str, Enum):
     RELATED_TO = "related_to"
     STRATEGY_FOR = "strategy_for"
     READABLE_BY = "readable_by"
+    PARTICIPATES_IN = "participates_in"
+    INVOLVES = "involves"
+    NARRATIVE_NEXT = "narrative_next"
 
 
 class MemoryEdge(BaseModel):
@@ -143,8 +146,8 @@ class MemoryEdge(BaseModel):
     namespace: str
     source_unit_id: str
     target_unit_id: str
-    source_type: Literal["fact", "state"]  # "fact" or "state"
-    target_type: Literal["fact", "state"]  # "fact" or "state"
+    source_type: Literal["fact", "state", "event"]
+    target_type: Literal["fact", "state", "event"]
     relation: MemoryRelation
     weight: float = 1.0
     valid_from: float = Field(default_factory=time.time)
@@ -567,6 +570,79 @@ class EntityStateRecord(BaseModel):
     @property
     def is_active(self) -> bool:
         """Active state has open-ended validity (valid_to is None)."""
+        return self.valid_to is None
+
+
+# ---------------------------------------------------------------------------
+# Memory event (first-class temporal occurrence)
+# ---------------------------------------------------------------------------
+
+
+class MemoryEvent(BaseModel):
+    """A first-class temporal occurrence stored in the events table.
+
+    Unlike AtomicFact (which encodes a static subject/predicate/object
+    triple), MemoryEvent captures an action that happened at a point in
+    time. Events are immutable occurrences: they happened, so they never
+    get superseded or overwritten. valid_to on a MemoryEvent means the
+    system no longer remembers this event (logical deletion), NOT that
+    the event ended.
+
+    Key fields:
+    - subject: the actor (who performed the action).
+    - action: a specific verb (watched, adopted, moved_to, purchased).
+    - object: what the action targets.
+    - timestamp: LLM-inferred human-readable time string ("2019",
+      "a few years ago", "last Friday"). The reasoner resolves relative
+      times using observation_date.
+    - context: supplementary details (location, emotions, co-agents).
+    """
+
+    event_id: str = Field(default_factory=lambda: "evt_" + uuid.uuid4().hex[:12])
+    namespace: str
+    subject: str
+    action: str
+    object: str
+    timestamp: str
+    context: str = ""
+    certainty: Certainty = Certainty.CERTAIN
+    source_anchor: str
+    qualifiers: dict[str, str] | None = None
+    valid_from: float = Field(default_factory=time.time)
+    valid_to: float | None = None
+    created_at: float = Field(default_factory=time.time)
+
+    @model_validator(mode="before")
+    @classmethod
+    def populate_deterministic_id(cls, data: Any) -> Any:
+        if (
+            isinstance(data, dict)
+            and not data.get("event_id")
+            and all(k in data for k in ("namespace", "subject", "action", "object", "timestamp"))
+        ):
+            import hashlib
+
+            raw = (
+                f"{data['namespace']}|{data['subject']}|{data['action']}"
+                f"|{data['object']}|{data['timestamp']}"
+            )
+            data["event_id"] = "evt_" + hashlib.sha256(raw.encode("utf-8")).hexdigest()[:12]
+        return data
+
+    @field_validator("subject", "action", "object", "timestamp", "source_anchor", mode="before")
+    @classmethod
+    def _require_nonempty_string(cls, value: object) -> str:
+        if not isinstance(value, str):
+            raise ValueError("expected a string value")
+        text: str = value
+        stripped = text.strip()
+        if not stripped:
+            raise ValueError("must be a non-empty string")
+        return stripped
+
+    @property
+    def is_active(self) -> bool:
+        """Whether the system still remembers this event."""
         return self.valid_to is None
 
 

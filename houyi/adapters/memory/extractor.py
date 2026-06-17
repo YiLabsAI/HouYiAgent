@@ -28,6 +28,7 @@ from houyi.adapters.memory.types import (
     Certainty,
     ExtractionContext,
     MemoryCandidate,
+    MemoryEvent,
     MemorySourceKind,
     MemoryType,
 )
@@ -314,11 +315,11 @@ Output:
 """
 
 _ATOMIC_FACT_BATCH_SYSTEM_PROMPT = """You are an information extraction engine.
-Extract atomic facts and entity relationship edges from multiple turns. Each turn is prefixed by:
+Extract atomic facts and events from multiple turns. Each turn is prefixed by:
 <<TURN id=...>>
 The turn content is a JSON object with:
  - text: The conversation turn text.
- - speaker_name: The canonical name of the speaker (use this as the subject of extracted facts about the speaker).
+ - speaker_name: The canonical name of the speaker (use this as the subject of extracted facts/events about the speaker).
  - observation_date: The date when the conversation occurred.
  - system_date: Today's date.
 
@@ -337,23 +338,49 @@ Return JSON in this shape:
           "qualifiers": {"k": "v"}
         }
       ],
-      "edges": [
+      "events": [
         {
-          "source_unit_id": "...",
-          "target_unit_id": "...",
-          "relation": "derived_from|source_of|same_as|updates|replaces|invalidates|supports|contradicts|precedes|causes|related_to|strategy_for|readable_by",
-          "source_type": "state|fact",
-          "target_type": "state|fact"
+          "subject": "...",
+          "action": "...",
+          "object": "...",
+          "timestamp": "...",
+          "context": "...",
+          "certainty": "certain|probable|vague"
         }
-      ]
+      ],
+      "edges": []
     }
   ]
 }
 
+STATE vs EVENT DISTINCTION:
+Output each extracted semantic unit as either a FACT (state) or an EVENT (action):
+
+FACT (State): When the turn describes a static attribute, preference, or ongoing condition.
+  Example: "I love coffee" -> FACT(subject="user", predicate="likes", object="coffee", accumulate=false)
+  Example: "My job is designer" -> FACT(subject="user", predicate="job", object="designer")
+
+EVENT (Action): When the turn describes a specific action, occurrence, or transition that
+happened at a point in time. MUST include a timestamp.
+  Example: "I watched Eternal Sunshine in 2019" -> EVENT(subject="user", action="watched",
+    object="Eternal Sunshine", timestamp="2019")
+  Example: "I moved to Shanghai last year" -> EVENT(subject="user", action="moved_to",
+    object="Shanghai", timestamp="last year")
+
+Rules for EVENT extraction:
+1. Every EVENT MUST have a non-empty timestamp. Preserve relative times verbatim ("last week", "a few years ago").
+2. The action MUST be a specific verb (watched, adopted, moved_to, purchased, started, lost,
+   passed_away, married, traveled_to). Never use generic state verbs (likes, enjoys, has, is).
+3. Multiple events by the same subject: output EACH as a separate EVENT.
+4. When a turn describes both a state and an action, output BOTH as separate items.
+5. Edges are always an empty array. The system computes edges from EVENT fields.
+6. Compound facts (_compound) are ONLY for static enumeration lists. NEVER use _compound
+   for action sequences or temporal transitions.
+
 Rules:
-1) Keep each fact and edge under the correct source_anchor matching the <<TURN id=...>> prefix.
-2) If no fact or edge is present for a turn, return that source_anchor with empty arrays.
-3) Use the person's actual speaker_name if the fact is about the speaker.
+1) Keep each fact and event under the correct source_anchor matching the <<TURN id=...>> prefix.
+2) If no fact or event is present for a turn, return that source_anchor with empty arrays.
+3) Use the person's actual speaker_name if the fact/event is about the speaker.
 4) Return only JSON, no markdown or prose.
 5) PROPER NOUN & SPECIFIC DETAIL PRESERVATION: Do not generalize, abstract, or drop specific proper nouns, names, brands, models, objects, or locations. For example, "Ferrari 488 GTB" must NOT be simplified to "new car" or "luxury car"; keep "Ferrari 488 GTB" intact in the "object". Preserve specific names of people, places, and distinct assets (e.g. "mansion", "Karlie") rather than replacing them with generic categories like "friend" or "house".
 6) OBJECT SPECIFICITY RULE: The "object" field MUST preserve the exact specific term used in the original text. NEVER replace a concrete brand, model, name, or location with a generic category word. Forbidden generic replacements: ride, car, vehicle, place, city, house, friend, person, thing, item, job, pet, animal. WRONG: {"object": "new car"} RIGHT: {"object": "Ferrari 488 GTB"} WRONG: {"object": "ride"} RIGHT: {"object": "new Prius"} WRONG: {"object": "city"} RIGHT: {"object": "San Francisco"}
@@ -494,22 +521,8 @@ Output:
         {"subject": "Joanna", "predicate": "job", "object": "Designer", "certainty": "certain"},
         {"subject": "Joanna", "predicate": "knows", "object": "Evan", "certainty": "certain", "qualifiers": {"reason": "went to college together"}}
       ],
-      "edges": [
-        {
-          "source_unit_id": "Joanna.job",
-          "target_unit_id": "Joanna",
-          "relation": "derived_from",
-          "source_type": "state",
-          "target_type": "state"
-        },
-        {
-          "source_unit_id": "Joanna",
-          "target_unit_id": "Evan",
-          "relation": "related_to",
-          "source_type": "state",
-          "target_type": "state"
-        }
-      ]
+      "events": [],
+      "edges": []
     }
   ]
 }
@@ -577,16 +590,47 @@ OUTPUT SCHEMA (JSON object):
       "qualifiers": {"since": "...", "date": "..."}
     }
   ],
-  "edges": [
+  "events": [
     {
-      "source_unit_id": "Caroline",
-      "target_unit_id": "Joanna",
-      "relation": "related_to",
-      "source_type": "state",
-      "target_type": "state"
+      "subject": "who performed the action",
+      "action": "a specific verb (watched, adopted, moved_to, purchased, started, lost, passed_away, married, traveled_to)",
+      "object": "what the action targets",
+      "timestamp": "when it happened (year, relative time, date string)",
+      "context": "supplementary details",
+      "certainty": "certain|probable|vague"
     }
-  ]
+  ],
+  "edges": []
 }
+
+STATE vs EVENT DISTINCTION:
+Output each extracted semantic unit as either a FACT (state) or an EVENT (action):
+
+FACT (State): When the turn describes a static attribute, preference, or ongoing condition.
+  Example: "I love coffee" -> FACT(subject="user", predicate="likes", object="coffee", accumulate=false)
+  Example: "My job is designer" -> FACT(subject="user", predicate="job", object="designer")
+
+EVENT (Action): When the turn describes a specific action, occurrence, or transition that
+happened at a point in time. MUST include a timestamp.
+  Example: "I watched Eternal Sunshine in 2019" -> EVENT(subject="user", action="watched",
+    object="Eternal Sunshine", timestamp="2019")
+  Example: "I moved to Shanghai last year" -> EVENT(subject="user", action="moved_to",
+    object="Shanghai", timestamp="last year")
+  Example: "I adopted a dog named Pepper last month" -> EVENT(subject="user", action="adopted",
+    object="dog named Pepper", timestamp="last month")
+
+Rules for EVENT extraction:
+1. Every EVENT MUST have a non-empty timestamp field. If the turn gives a relative time
+   ("last week", "a few years ago", "yesterday"), preserve it verbatim in timestamp.
+2. The action field MUST be a specific verb (watched, adopted, moved_to, purchased,
+   started, lost, passed_away, married, divorced, enrolled, quit, traveled_to).
+   Never use generic state verbs (likes, enjoys, has, is, wants).
+3. When a turn mentions multiple events by the same subject, output EACH as a separate EVENT.
+4. When a turn describes both a state and an action, output BOTH. "I started painting
+   because I enjoy art" -> FACT(subject="user", predicate="enjoys", object="art") AND
+   EVENT(subject="user", action="started", object="painting", timestamp="...").
+5. Edges are always returned as an empty array. The system computes edges from
+   EVENT fields deterministically; do not generate edges yourself.
 
 DATE HANDLING (CRITICAL):
 Two dates are provided in each input:
@@ -838,7 +882,7 @@ Output:
   {"subject": "Jolene", "predicate": "family_loss", "object": "mother", "certainty": "certain", "accumulate": true, "qualifiers": {"date": "2022"}}
 ]
 
-Example 18 - Compound facts and relationship edges:
+Example 18 - Compound facts with event:
 Input: {"observation_date": "2023-04-10", "system_date": "2024-01-15", "text": "I switched from drinking cow milk to oat milk last month because of my lactose intolerance.", "speaker_name": "Evan"}
 Output:
 {
@@ -854,15 +898,10 @@ Output:
       "qualifiers": {"compound_type": "causal_transition", "date": "2023-03", "original_time": "last month"}
     }
   ],
-  "edges": [
-    {
-      "source_unit_id": "Evan.dislikes",
-      "target_unit_id": "Evan",
-      "relation": "derived_from",
-      "source_type": "state",
-      "target_type": "state"
-    }
-  ]
+  "events": [
+    {"subject": "Evan", "action": "switched_to", "object": "oat milk", "timestamp": "last month", "context": "from cow milk because of lactose intolerance", "certainty": "certain"}
+  ],
+  "edges": []
 }
 
 ---
@@ -873,7 +912,7 @@ INPUT FORMAT:
 Note: speaker_name is optional. When provided, use it as the subject for facts about the speaker (instead of "user").
 
 OUTPUT FORMAT:
-JSON object with "facts" (array of facts) and "edges" (array of edges). Return {"facts": [], "edges": []} if no extractable facts/edges.
+JSON object with "facts" (array of facts), "events" (array of events), and "edges" (always empty array). Return {"facts": [], "events": [], "edges": []} if no extractable facts/events.
 """
 
 
@@ -882,6 +921,7 @@ class ExtractionResult:
     """Outcome of a single AtomicFact extraction call.
 
     - facts - successfully validated AtomicFact list.
+    - events - successfully validated MemoryEvent list (temporal occurrences).
     - edges - successfully parsed semantic MemoryEdge candidate relationships.
     - raw_sourceless - LLM items parsed but rejected because the
     caller could not supply a source_anchor;
@@ -897,6 +937,7 @@ class ExtractionResult:
     """
 
     facts: list[AtomicFact] = field(default_factory=list)
+    events: list[Any] = field(default_factory=list)
     edges: list[dict[str, Any]] = field(default_factory=list)
     raw_sourceless: list[dict[str, Any]] = field(default_factory=list)
     invalid_dropped: int = 0
@@ -934,6 +975,25 @@ _ATOMIC_FACT_RESPONSE_FORMAT: dict[str, Any] = {
                         "additionalProperties": False,
                     },
                 },
+                "events": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "subject": {"type": "string"},
+                            "action": {"type": "string"},
+                            "object": {"type": "string"},
+                            "timestamp": {"type": "string"},
+                            "context": {"type": "string"},
+                            "certainty": {
+                                "type": "string",
+                                "enum": ["certain", "probable", "vague"],
+                            },
+                        },
+                        "required": ["subject", "action", "object", "timestamp"],
+                        "additionalProperties": False,
+                    },
+                },
                 "edges": {
                     "type": "array",
                     "items": {
@@ -944,11 +1004,11 @@ _ATOMIC_FACT_RESPONSE_FORMAT: dict[str, Any] = {
                             "relation": {"type": "string"},
                             "source_type": {
                                 "type": "string",
-                                "enum": ["state", "fact"],
+                                "enum": ["state", "fact", "event"],
                             },
                             "target_type": {
                                 "type": "string",
-                                "enum": ["state", "fact"],
+                                "enum": ["state", "fact", "event"],
                             },
                         },
                         "required": ["source_unit_id", "target_unit_id", "relation"],
@@ -1009,8 +1069,8 @@ class AtomicFactExtractor:
         if not text or not text.strip():
             return ExtractionResult()
 
-        facts_raw, edges_raw = await self._call_llm(text)
-        if not facts_raw:
+        facts_raw, edges_raw, events_raw = await self._call_llm(text)
+        if not facts_raw and not events_raw:
             return ExtractionResult()
 
         anchor = (source_anchor or "").strip()
@@ -1018,6 +1078,7 @@ class AtomicFactExtractor:
             return ExtractionResult(raw_sourceless=list(facts_raw))
 
         facts: list[AtomicFact] = []
+        events: list[Any] = []
         invalid = 0
         for item in facts_raw:
             fact = self._build_fact(item, anchor)
@@ -1026,7 +1087,9 @@ class AtomicFactExtractor:
             else:
                 facts.append(fact)
         facts = self._restore_generic_objects(facts)
-        return ExtractionResult(facts=facts, edges=list(edges_raw), invalid_dropped=invalid)
+        return ExtractionResult(
+            facts=facts, events=events, edges=list(edges_raw), invalid_dropped=invalid
+        )
 
     async def extract_batch(
         self,
@@ -1058,8 +1121,8 @@ class AtomicFactExtractor:
             return await self._fallback_single_turn(normalized)
 
         by_anchor = {
-            source_anchor: (list(facts), list(edges))
-            for source_anchor, facts, edges in parsed
+            source_anchor: (list(facts), list(edges), list(events))
+            for source_anchor, facts, edges, events in parsed
             if source_anchor
         }
         return self._results_from_batch_parse(normalized, by_anchor)
@@ -1089,19 +1152,22 @@ class AtomicFactExtractor:
     def _results_from_batch_parse(
         self,
         normalized: list[tuple[str, str]],
-        by_anchor: dict[str, tuple[list[dict[str, Any]], list[dict[str, Any]]]],
+        by_anchor: dict[
+            str, tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]
+        ],
     ) -> list[ExtractionResult]:
         out: list[ExtractionResult] = []
         for text, anchor in normalized:
             if not text:
                 out.append(ExtractionResult())
                 continue
-            items, raw_edges = by_anchor.get(anchor, ([], []))
+            items, raw_edges, events_raw = by_anchor.get(anchor, ([], [], []))
             if not anchor or anchor.startswith("batch-turn-"):
                 out.append(ExtractionResult(raw_sourceless=list(items)))
                 continue
 
             facts: list[AtomicFact] = []
+            events: list[Any] = []
             invalid = 0
             for item in items:
                 fact = self._build_fact(item, anchor)
@@ -1109,23 +1175,34 @@ class AtomicFactExtractor:
                     invalid += 1
                 else:
                     facts.append(fact)
+            # Build events from raw event dicts
+            for ev_item in events_raw:
+                event = self._build_event(ev_item, anchor, "default")
+                if event is None:
+                    invalid += 1
+                else:
+                    events.append(event)
             # Apply post-extraction restoration
             facts = self._restore_generic_objects(facts)
             out.append(
-                ExtractionResult(facts=facts, edges=list(raw_edges), invalid_dropped=invalid)
+                ExtractionResult(
+                    facts=facts, events=events, edges=list(raw_edges), invalid_dropped=invalid
+                )
             )
         return out
 
-    async def _call_llm(self, text: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    async def _call_llm(
+        self, text: str
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
         attempts = self._max_retries + 1
         for attempt in range(attempts):
             content = await self._request_llm(text, retry=attempt > 0)
             if content is None:
-                return [], []
+                return [], [], []
             res = self._parse_json_array(content)
             if res is not None:
                 return res
-        return [], []
+        return [], [], []
 
     async def _request_llm(self, text: str, *, retry: bool) -> str | None:
         user_content = text
@@ -1174,7 +1251,7 @@ class AtomicFactExtractor:
 
     async def _call_llm_batch(
         self, text: str
-    ) -> list[tuple[str, list[dict[str, Any]], list[dict[str, Any]]]] | None:
+    ) -> list[tuple[str, list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]] | None:
         attempts = self._max_retries + 1
         for attempt in range(attempts):
             content = await self._request_llm_batch(text, retry=attempt > 0)
@@ -1240,10 +1317,12 @@ class AtomicFactExtractor:
         return {"response_format": _ATOMIC_FACT_RESPONSE_FORMAT}
 
     @staticmethod
-    def _parse_json_array(content: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]] | None:
+    def _parse_json_array(
+        content: str,
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]] | None:
         candidates = _json_candidates(content)
         if not candidates:
-            return [], []
+            return [], [], []
         last_candidate = candidates[-1]
         for candidate in candidates:
             try:
@@ -1251,6 +1330,7 @@ class AtomicFactExtractor:
                 if isinstance(decoded, dict):
                     facts = decoded.get("facts")
                     edges = decoded.get("edges")
+                    events = decoded.get("events")
                     facts_list = (
                         [item for item in facts if isinstance(item, dict)]
                         if isinstance(facts, list)
@@ -1261,11 +1341,16 @@ class AtomicFactExtractor:
                         if isinstance(edges, list)
                         else []
                     )
-                    return facts_list, edges_list
+                    events_list = (
+                        [item for item in events if isinstance(item, dict)]
+                        if isinstance(events, list)
+                        else []
+                    )
+                    return facts_list, edges_list, events_list
                 elif isinstance(decoded, list):
                     # Fallback if it returned a flat array of facts
                     facts_list = [item for item in decoded if isinstance(item, dict)]
-                    return facts_list, []
+                    return facts_list, [], []
             except json.JSONDecodeError:
                 continue
         logger.warning("AtomicFactExtractor got non-JSON response: %s", last_candidate[:200])
@@ -1274,7 +1359,7 @@ class AtomicFactExtractor:
     @staticmethod
     def _parse_json_batch(
         content: str,
-    ) -> list[tuple[str, list[dict[str, Any]], list[dict[str, Any]]]] | None:
+    ) -> list[tuple[str, list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]] | None:
         candidates = _json_candidates(content)
         if not candidates:
             return []
@@ -1326,6 +1411,48 @@ class AtomicFactExtractor:
                 source_anchor=anchor,
                 qualifiers=qualifiers,
                 accumulate=accumulate,
+            )
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _build_event(item: dict[str, Any], anchor: str, namespace: str) -> MemoryEvent | None:
+        """Assemble one validated MemoryEvent or None on schema failure."""
+
+        subject = str(item.get("subject", "")).strip()
+        action = str(item.get("action", "")).strip()
+        obj = str(item.get("object", "")).strip()
+        timestamp = str(item.get("timestamp", "")).strip()
+        context = str(item.get("context", "")).strip()
+
+        if not subject or not action or not obj or not timestamp:
+            return None
+
+        try:
+            certainty_raw = str(item.get("certainty", "")).strip().lower()
+            certainty = Certainty(certainty_raw)
+        except ValueError:
+            certainty = Certainty.CERTAIN
+
+        qualifiers_raw = item.get("qualifiers")
+        qualifiers: dict[str, str] | None = None
+        if isinstance(qualifiers_raw, dict):
+            try:
+                qualifiers = {str(k): str(v) for k, v in qualifiers_raw.items()}
+            except (TypeError, ValueError):
+                qualifiers = None
+
+        try:
+            return MemoryEvent(
+                namespace=namespace,
+                subject=subject,
+                action=action,
+                object=obj,
+                timestamp=timestamp,
+                context=context,
+                certainty=certainty,
+                source_anchor=anchor,
+                qualifiers=qualifiers,
             )
         except ValueError:
             return None
@@ -1456,30 +1583,42 @@ def _atomic_items_from_decoded(decoded: Any) -> list[dict[str, Any]]:
     return [item for item in decoded if isinstance(item, dict)]
 
 
+def _event_items_from_decoded(decoded: Any) -> list[dict[str, Any]]:
+    if isinstance(decoded, list):
+        return [item for item in decoded if isinstance(item, dict)]
+    return []
+
+
 def _batch_items_from_decoded(
     decoded: Any,
-) -> list[tuple[str, list[dict[str, Any]], list[dict[str, Any]]]]:
+) -> list[tuple[str, list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]]:
     if isinstance(decoded, dict):
         items = decoded.get("items")
         if not isinstance(items, list):
             return []
-        out_dict: list[tuple[str, list[dict[str, Any]], list[dict[str, Any]]]] = []
+        out_dict: list[
+            tuple[str, list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]
+        ] = []
         for item in items:
             if not isinstance(item, dict):
                 continue
             source_anchor = str(item.get("source_anchor", "")).strip()
             facts = _atomic_items_from_decoded(item.get("facts", []))
             edges = [e for e in item.get("edges", []) if isinstance(e, dict)]
-            out_dict.append((source_anchor, facts, edges))
+            events = _event_items_from_decoded(item.get("events", []))
+            out_dict.append((source_anchor, facts, edges, events))
         return out_dict
     if isinstance(decoded, list):
-        out_list: list[tuple[str, list[dict[str, Any]], list[dict[str, Any]]]] = []
+        out_list: list[
+            tuple[str, list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]
+        ] = []
         for item in decoded:
             if not isinstance(item, dict):
                 continue
             source_anchor = str(item.get("source_anchor", "")).strip()
             facts = _atomic_items_from_decoded(item.get("facts", []))
             edges = [e for e in item.get("edges", []) if isinstance(e, dict)]
-            out_list.append((source_anchor, facts, edges))
+            events = _event_items_from_decoded(item.get("events", []))
+            out_list.append((source_anchor, facts, edges, events))
         return out_list
     return []

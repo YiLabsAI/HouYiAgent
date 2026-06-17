@@ -79,6 +79,9 @@ def build_memory_engine(
 
     turn_writer = TurnWriter(backend)
 
+    # The backend itself acts as EventView -- SQLiteMemoryBackend
+    # implements add_event, get_events_by_subject, etc. so no
+    # separate event_view instance is needed.
     extractor_worker: ExtractorWorker | None = None
     if llm_adapter is not None:
         atomic_extractor = AtomicFactExtractor(llm_adapter)
@@ -87,6 +90,7 @@ def build_memory_engine(
             extractor=atomic_extractor,
             entity_state=entity_state,
             candidate_inbox=candidate_inbox,
+            event_view=backend,
         )
 
     backfill_worker: EmbeddingBackfillWorker | None = None

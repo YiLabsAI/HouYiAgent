@@ -22,6 +22,7 @@ from houyi.adapters.memory.types import (
     EntityStateRecord,
     GraphTraversalResult,
     MemoryEdge,
+    MemoryEvent,
     MemoryRecord,
     MemoryScope,
     MemoryType,
@@ -350,3 +351,33 @@ class CandidateInbox(ABC):
     @abstractmethod
     def list_sourceless(self, namespace: str) -> list[dict[str, Any]]:
         """Return raw payloads parked under reason='sourceless'."""
+
+
+class EventView(ABC):
+    """Read/write surface for first-class MemoryEvent records.
+
+    Events are immutable temporal occurrences. valid_to on a MemoryEvent
+    means the system no longer remembers it (logical deletion), NOT that
+    the event ended.
+    """
+
+    @abstractmethod
+    def add_event(self, event: MemoryEvent) -> MemoryEvent:
+        """INSERT OR REPLACE an event. Returns the stored event."""
+
+    @abstractmethod
+    def get_event(self, event_id: str) -> MemoryEvent | None:
+        """Retrieve a single event by event_id."""
+
+    @abstractmethod
+    def get_events_by_subject(self, namespace: str, subject: str) -> list[MemoryEvent]:
+        """Return all active events for a given entity."""
+
+    @abstractmethod
+    def get_events_by_subject_and_action(
+        self,
+        namespace: str,
+        subject: str,
+        action: str,
+    ) -> list[MemoryEvent]:
+        """Return active events matching both subject and action."""
