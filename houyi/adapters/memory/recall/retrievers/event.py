@@ -34,9 +34,97 @@ _CERTAINTY_SCORE: dict[Certainty, float] = {
     Certainty.VAGUE: 3.0,
 }
 
+# Words that look like capitalized tokens but are not entity names.
+_SKIP_WORDS: frozenset[str] = frozenset(
+    {
+        "when",
+        "where",
+        "what",
+        "who",
+        "whom",
+        "whose",
+        "why",
+        "how",
+        "which",
+        "the",
+        "a",
+        "an",
+        "is",
+        "are",
+        "was",
+        "were",
+        "did",
+        "do",
+        "does",
+        "has",
+        "have",
+        "will",
+        "would",
+        "can",
+        "could",
+        "may",
+        "might",
+        "shall",
+        "should",
+        "must",
+        "i",
+        "he",
+        "she",
+        "it",
+        "we",
+        "they",
+        "monday",
+        "tuesday",
+        "wednesday",
+        "thursday",
+        "friday",
+        "saturday",
+        "sunday",
+        "january",
+        "february",
+        "march",
+        "april",
+        "june",
+        "july",
+        "august",
+        "september",
+        "october",
+        "november",
+        "december",
+    }
+)
+
+
+def _extract_all_entities(query_text: str, primary: str) -> list[str]:
+    """Extract all capitalized proper nouns from query text.
+
+    Returns a deduplicated list starting with the primary entity,
+    followed by any additional entities found in the query. This
+    mirrors the multi-entity scan in EntityStateRetriever so that
+    queries mentioning multiple people (e.g. "John and James") query
+    events for ALL of them, not just the first.
+    """
+    entities = [primary]
+    seen = {primary.lower()}
+    for word in query_text.split():
+        clean = word.strip(".,!?:;'\"()[]{}")
+        if not clean or not clean[0].isupper():
+            continue
+        low = clean.lower()
+        if low in _SKIP_WORDS or low in seen:
+            continue
+        seen.add(low)
+        entities.append(clean)
+    return entities
+
 
 class EventRetriever(Retriever):
-    """Direct lookup on the events table for entity-action queries."""
+    """Direct lookup on the events table for entity-action queries.
+
+    Supports multi-entity queries: when the query mentions multiple
+    people (e.g. "John and James"), events are queried for ALL of
+    them, not just the first entity extracted by the regex.
+    """
 
     def __init__(self, event_view: EventView) -> None:
         if event_view is None:
@@ -52,7 +140,7 @@ class EventRetriever(Retriever):
         if hint is None or not hint.entity:
             return []
 
-        entity = hint.entity.strip()
+        primary_entity = hint.entity.strip()
         namespace = query.namespace
 
         # If an attribute hint looks like an action verb, query by subject+action.
@@ -61,21 +149,33 @@ class EventRetriever(Retriever):
         if hint.attribute and hint.attribute.strip():
             query_action = hint.attribute.strip()
 
-        if query_action:
-            events = await asyncio.to_thread(
-                self._view.get_events_by_subject_and_action,
-                namespace,
-                entity,
-                query_action,
-            )
-        else:
-            events = await asyncio.to_thread(
-                self._view.get_events_by_subject,
-                namespace,
-                entity,
-            )
+        # Multi-entity scan: extract all capitalized proper nouns from
+        # the query text so multi-person queries (e.g. "John and James")
+        # retrieve events for ALL mentioned entities.
+        entities = _extract_all_entities(query.text, primary_entity)
 
-        return [_candidate_from_event(e, self.name, query_action=query_action) for e in events]
+        all_events: list[MemoryEvent] = []
+        seen_event_ids: set[str] = set()
+        for entity in entities:
+            if query_action:
+                evts = await asyncio.to_thread(
+                    self._view.get_events_by_subject_and_action,
+                    namespace,
+                    entity,
+                    query_action,
+                )
+            else:
+                evts = await asyncio.to_thread(
+                    self._view.get_events_by_subject,
+                    namespace,
+                    entity,
+                )
+            for evt in evts:
+                if evt.event_id not in seen_event_ids:
+                    seen_event_ids.add(evt.event_id)
+                    all_events.append(evt)
+
+        return [_candidate_from_event(e, self.name, query_action=query_action) for e in all_events]
 
 
 def _candidate_from_event(

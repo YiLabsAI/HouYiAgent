@@ -279,6 +279,87 @@ async def test_entity_filters_identity_anchor() -> None:
 
 
 @pytest.mark.asyncio
+async def test_entity_compound_accumulation() -> None:
+    view = FakeView()
+    # Add multiple accumulated facts
+    view.rows.extend(
+        [
+            EntityStateRecord(
+                namespace="n",
+                entity="John",
+                attribute="enjoys",
+                value="swimming",
+                certainty=Certainty.CERTAIN,
+                valid_from=10.0,
+                source_unit_id="u1",
+                qualifiers={"accumulate": "true"},
+            ),
+            EntityStateRecord(
+                namespace="n",
+                entity="John",
+                attribute="enjoys",
+                value="reading",
+                certainty=Certainty.CERTAIN,
+                valid_from=11.0,
+                source_unit_id="u2",
+                qualifiers={"accumulate": "true"},
+            ),
+            EntityStateRecord(
+                namespace="n",
+                entity="John",
+                attribute="enjoys",
+                value="running",
+                certainty=Certainty.CERTAIN,
+                valid_from=12.0,
+                source_unit_id="u3",
+                qualifiers={"accumulate": "true"},
+            ),
+        ]
+    )
+
+    retriever = EntityStateRetriever(view)
+    hits = await retriever.retrieve(
+        RecallQuery(text="What does John enjoy?", namespace="n"),
+        RetrieverContext(),
+    )
+
+    # Retriever should return all 3 individual candidates for Candidate Homogeneity in Fusion
+    assert len(hits) == 3
+
+    # Now verify that the post-fusion sibling merge correctly aggregates them
+    from houyi.adapters.memory.recall.orchestrator import RecallOrchestrator
+    from houyi.adapters.memory.recall.router import CascadingRouter, Tier0RuleRouter
+
+    orchestrator = RecallOrchestrator(
+        router=CascadingRouter(Tier0RuleRouter()),
+        retrievers={"entity_state": retriever},
+    )
+
+    merged_hits = orchestrator._merge_siblings_post_fusion(hits)
+
+    # One candidate should subsume all three enjoys objects
+    enjoys_cands = [h for h in merged_hits if h.fact.predicate == "enjoys"]
+    assert len(enjoys_cands) == 1
+
+    cand = enjoys_cands[0]
+    assert "swimming" in cand.fact.object
+    assert "reading" in cand.fact.object
+    assert "running" in cand.fact.object
+
+    # source_anchor keeps the best member's original anchor (not comma-joined)
+    # so the bench R@10 parser can still extract a single dia_id.
+    # Full anchor list is in signals["compound_source_anchors"].
+    assert cand.fact.source_anchor == "u1"  # best member's anchor preserved
+    assert "compound_source_anchors" in cand.signals
+    assert set(cand.signals["compound_source_anchors"]) == {"u1", "u2", "u3"}
+
+    # Ensure it's marked as a compound candidate in signals
+    assert "compound_members" in cand.signals
+    assert len(cand.signals["compound_members"]) == 3
+    assert cand.signals["compound_size"] == 3
+
+
+@pytest.mark.asyncio
 async def test_timeline_returns_history() -> None:
     retriever = TimelineRetriever(FakeView())
 
@@ -453,7 +534,30 @@ class TestInferEntity:
         hint = _infer_entity_attribute(query)
         assert hint is not None
         assert hint.entity == "John"
-        assert hint.source == "en_wh_question"
+        assert hint.attribute == "goals"
+        assert hint.source == "possessive"
+
+    def test_kind_of(self) -> None:
+        from houyi.adapters.memory.recall.retrievers.entity_state import _infer_entity_attribute
+
+        query = RecallQuery(
+            text="What kind of indoor activities has Andrew pursued with his girlfriend?"
+        )
+        hint = _infer_entity_attribute(query)
+        assert hint is not None
+        assert hint.entity == "Andrew"
+        assert hint.attribute == "indoor activities"
+        assert hint.source == "kind_of"
+
+    def test_wh_noun(self) -> None:
+        from houyi.adapters.memory.recall.retrievers.entity_state import _infer_entity_attribute
+
+        query = RecallQuery(text="Which places or events have John and James planned to meet at?")
+        hint = _infer_entity_attribute(query)
+        assert hint is not None
+        assert hint.entity == "John"
+        assert hint.attribute == "places or events"
+        assert hint.source == "wh_noun"
 
     def test_question_hint(self) -> None:
         from houyi.adapters.memory.recall.retrievers.entity_state import _infer_entity_attribute

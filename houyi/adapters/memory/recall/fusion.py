@@ -12,6 +12,7 @@ from abc import ABC, abstractmethod
 from collections import defaultdict
 from collections.abc import Iterable
 from datetime import UTC, datetime
+from typing import Any
 
 from houyi.adapters.memory.recall.types import RecallCandidate, RetrieverKind
 
@@ -196,6 +197,35 @@ class ReciprocalRankFuser(Fuser):
         return fused[:top_k]
 
 
+# Source-anchor overlap redundancy thresholds.
+#
+# When two facts derive evidence from the same conversation turns they are
+# cross-predicate re-statements of one underlying event/state: schema-on-read
+# splits one event into several compounds that still share turn sources. A
+# high Jaccard over the source-anchor set flags this without any text/semantic
+# heuristics, and does NOT penalise facts that merely share a subject but
+# come from different turns (a genuine multi-place enumeration stays intact).
+# Threshold chosen from empirical evidence: intra-topic compound pairs in
+# conv-41 cluster at Jaccard 0.3-0.5, cross-topic pairs at <=0.2.
+_SOURCE_OVERLAP_THRESHOLD = 0.3
+_SOURCE_OVERLAP_REDUNDANCY = 0.85
+
+
+def _fact_sources(candidate: RecallCandidate) -> set[str]:
+    """Return the set of conversation-turn source anchors backing a candidate.
+
+    Compound facts carry their merged members in the ``compound_source_anchors``
+    signal; single-source facts fall back to their own ``source_anchor``.
+    """
+    sig = candidate.signals
+    if sig:
+        anchors = sig.get("compound_source_anchors")
+        if anchors:
+            return set(anchors)
+    src = candidate.fact.source_anchor
+    return {src} if src else set()
+
+
 class MMRDeduplicator:
     """Simple max-marginal-relevance de-duplicator.
 
@@ -240,9 +270,21 @@ class MMRDeduplicator:
         hi = max(relevance.values())
         span = hi - lo
         norm = {cid: ((val - lo) / span if span > 0 else 1.0) for cid, val in relevance.items()}
+        # Pre-compute each candidate's source-anchor set once. _redundancy is
+        # called O(N*K) times in the selection loop below (every remaining
+        # candidate vs every selected candidate); rebuilding the frozenset on
+        # each call makes long-conversation cases with large compound anchors
+        # pathologically slow. Cache by object identity to keep the hot path
+        # cheap without polluting signals.
+        src_cache: dict[int, frozenset[str]] = {
+            id(c): frozenset(_fact_sources(c)) for c in remaining
+        }
         selected: list[RecallCandidate] = []
         while remaining and len(selected) < top_k:
-            best = max(remaining, key=lambda c: self._mmr_score(c, selected, norm, weight))
+            best = max(
+                remaining,
+                key=lambda c: self._mmr_score(c, selected, norm, weight, src_cache),
+            )
             selected.append(best)
             remaining.remove(best)
         return selected
@@ -261,15 +303,46 @@ class MMRDeduplicator:
         selected: list[RecallCandidate],
         norm: dict[int, float],
         diversity_weight: float,
+        src_cache: dict[int, frozenset[str]],
     ) -> float:
         relevance = norm[id(candidate)]
         if not selected:
             return relevance
-        redundancy = max(self._redundancy(candidate, s) for s in selected)
+        redundancy = max(self._redundancy(candidate, s, src_cache) for s in selected)
         return (1.0 - diversity_weight) * relevance - diversity_weight * redundancy
 
     @staticmethod
-    def _redundancy(a: RecallCandidate, b: RecallCandidate) -> float:
+    def _redundancy(
+        a: RecallCandidate,
+        b: RecallCandidate,
+        src_cache: dict[int, frozenset[str]] | None = None,
+    ) -> float:
+        # Check compound group key equality
+        cgk_a = a.signals and a.signals.get("compound_group_key")
+        cgk_b = b.signals and b.signals.get("compound_group_key")
+        if cgk_a and cgk_b and cgk_a == cgk_b:
+            return 1.0
+
+        # Source-anchor overlap: two facts that derive evidence from the same
+        # conversation turns are cross-predicate re-statements of one
+        # underlying event/state (schema-on-read splits one event across
+        # multiple predicates into several compounds that still share turn
+        # sources). A high Jaccard over the source-anchor set flags this
+        # without any text/semantic heuristics, and crucially does NOT
+        # penalise facts that merely share a subject but come from different
+        # turns (e.g. a genuine multi-place enumeration).
+        if src_cache is not None:
+            sources_a = src_cache.get(id(a))
+            sources_b = src_cache.get(id(b))
+        else:
+            sources_a = frozenset(_fact_sources(a))
+            sources_b = frozenset(_fact_sources(b))
+        if sources_a and sources_b:
+            union = sources_a | sources_b
+            overlap = len(sources_a & sources_b)
+            if overlap and overlap / len(union) >= _SOURCE_OVERLAP_THRESHOLD:
+                return _SOURCE_OVERLAP_REDUNDANCY
+
         subj_a = a.fact.subject.strip().casefold()
         subj_b = b.fact.subject.strip().casefold()
         pred_a = a.fact.predicate.strip().casefold()
@@ -277,8 +350,25 @@ class MMRDeduplicator:
         obj_a = a.fact.object.strip().casefold()
         obj_b = b.fact.object.strip().casefold()
 
-        if subj_a == subj_b and pred_a == pred_b and obj_a == obj_b:
-            return 1.0
+        # If they share subject & predicate and one of them is a compound,
+        # treat as partially redundant.
+        if subj_a == subj_b and pred_a == pred_b:
+            if cgk_a or cgk_b:
+                return 0.7
+            if obj_a == obj_b:
+                # Same (subject, predicate, object) but different qualifiers
+                # are NOT fully redundant. Enumeration members (e.g. "shares
+                # activity with GF" where qualifier distinguishes boardgames
+                # vs wine tasting) carry distinct answers. Without this check
+                # MMR treats qualifier-bearing facts as perfect duplicates and
+                # collapses enumeration members to a single representative.
+                quals_a = getattr(a.fact, "qualifiers", None) or {}
+                quals_b = getattr(b.fact, "qualifiers", None) or {}
+                if quals_a and quals_b and quals_a != quals_b:
+                    # Different qualifier values -> partially redundant only
+                    return 0.5
+                # Truly identical triple (no distinguishing qualifiers)
+                return 1.0
         return 0.0
 
 
@@ -354,16 +444,20 @@ def _semantic_key(candidate: RecallCandidate) -> tuple[str, str, str, str]:
 
 
 def _group_near_duplicates(candidates: Iterable[RecallCandidate]) -> list[list[RecallCandidate]]:
-    """Group candidates by exact proposition identity (subject, predicate, object) and day."""
-    grouped_map: dict[tuple[str, str, str, str], list[RecallCandidate]] = defaultdict(list)
+    """Group candidates by exact proposition identity (subject, predicate, object) and day, or by compound key."""
+    grouped_map: dict[tuple[Any, ...], list[RecallCandidate]] = defaultdict(list)
     for cand in candidates:
-        key = (
-            cand.fact.subject.strip().casefold(),
-            cand.fact.predicate.strip().casefold(),
-            cand.fact.object.strip().casefold(),
-            _valid_day(cand.fact.valid_from),
-        )
-        grouped_map[key].append(cand)
+        if cand.signals and cand.signals.get("compound_group_key"):
+            key = cand.signals["compound_group_key"]
+            grouped_map[("compound", key[0], key[1])].append(cand)
+        else:
+            key = (
+                cand.fact.subject.strip().casefold(),
+                cand.fact.predicate.strip().casefold(),
+                cand.fact.object.strip().casefold(),
+                _valid_day(cand.fact.valid_from),
+            )
+            grouped_map[("exact", *key)].append(cand)
     return list(grouped_map.values())
 
 

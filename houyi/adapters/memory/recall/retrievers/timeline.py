@@ -21,6 +21,8 @@ from houyi.adapters.memory.recall.retrievers.base import Retriever
 from houyi.adapters.memory.recall.retrievers.entity_state import (
     EntityAttributeHint,
     _extract_event_time,
+    _filter_fuzzy_rows,
+    _fuzzy_attr_match,
     _infer_entity_attribute,
     _is_identity_anchor,
 )
@@ -64,6 +66,15 @@ class TimelineRetriever(Retriever):
                 query.as_of,
                 hint.attribute,
             )
+            if hint.attribute is not None and not rows:
+                all_rows = await asyncio.to_thread(
+                    self._view.get_as_of,
+                    query.namespace,
+                    hint.entity,
+                    query.as_of,
+                    None,
+                )
+                rows = _filter_fuzzy_rows(all_rows, hint.attribute)
             return [
                 _candidate_from_row(row, self.name, hint, mode="as_of")
                 for row in rows
@@ -76,6 +87,14 @@ class TimelineRetriever(Retriever):
             hint.entity,
             hint.attribute,
         )
+        if hint.attribute is not None and not rows:
+            all_rows = await asyncio.to_thread(
+                self._view.get_history,
+                query.namespace,
+                hint.entity,
+                None,
+            )
+            rows = _filter_fuzzy_rows(all_rows, hint.attribute)
         return [
             _candidate_from_row(row, self.name, hint, mode="history")
             for row in rows
@@ -126,12 +145,15 @@ def _timeline_score(
     *,
     mode: str,
 ) -> float:
-    """Score exact attribute and as-of matches above broad history rows."""
+    """Score exact, fuzzy attribute and as-of matches above broad history rows."""
     score = 0.6
     if mode == "as_of":
         score += 1.0
-        if hint.attribute is not None and hint.attribute == row.attribute:
-            score += 2.0
+        if hint.attribute is not None:
+            if hint.attribute == row.attribute:
+                score += 2.0
+            elif row.attribute == "_compound" or _fuzzy_attr_match(hint.attribute, row.attribute):
+                score += 1.5
             if row.valid_to is None:
                 score += 0.2
     return score

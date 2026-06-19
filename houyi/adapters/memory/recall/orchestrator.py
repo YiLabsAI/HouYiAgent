@@ -240,6 +240,9 @@ class RecallOrchestrator:
         )
         if result.reason != RecallReason.LOW_EVIDENCE:
             self._emit_outcome(query, route.query_type, result, candidates_seen=len(deduped))
+            result.candidates = self._merge_siblings_post_fusion(
+                result.candidates, is_enumeration=is_enumeration
+            )
             return result
 
         source_candidates = await self._source_fallback(deduped, runtime, trace)
@@ -251,6 +254,9 @@ class RecallOrchestrator:
             )
             self._emit_outcome(
                 query, route.query_type, fallback_result, candidates_seen=len(deduped)
+            )
+            fallback_result.candidates = self._merge_siblings_post_fusion(
+                fallback_result.candidates, is_enumeration=is_enumeration
             )
             return fallback_result
 
@@ -274,7 +280,99 @@ class RecallOrchestrator:
             final_result,
             candidates_seen=len(deduped_with_source),
         )
+        final_result.candidates = self._merge_siblings_post_fusion(
+            final_result.candidates, is_enumeration=is_enumeration
+        )
         return final_result
+
+    def _merge_siblings_post_fusion(
+        self, candidates: list[RecallCandidate], *, is_enumeration: bool = False
+    ) -> list[RecallCandidate]:
+        """Perform presentation-layer sibling merge for final candidates.
+
+        This dynamically merges candidates with the same (subject, predicate)
+        into a single compound candidate, preserving all individual scores,
+        original anchors, and reducing final token space presented to the Answerer.
+        """
+        import copy
+        import hashlib
+        from collections import defaultdict
+
+        if not candidates:
+            return candidates
+
+        # Group candidates by (subject, predicate)
+        groups = defaultdict(list)
+        for cand in candidates:
+            group_key = (
+                cand.fact.subject.strip().casefold(),
+                cand.fact.predicate.strip().casefold(),
+            )
+            groups[group_key].append(cand)
+
+        final_candidates = []
+        processed_groups = set()
+
+        for cand in candidates:
+            group_key = (
+                cand.fact.subject.strip().casefold(),
+                cand.fact.predicate.strip().casefold(),
+            )
+            group_cands = groups[group_key]
+
+            should_merge = len(group_cands) >= 2 and (
+                is_enumeration or any(c.fact.accumulate for c in group_cands)
+            )
+
+            if should_merge:
+                if group_key not in processed_groups:
+                    # Select the highest-scoring candidate as representative based on final rerank/fusion scores
+                    best_cand = max(
+                        group_cands,
+                        key=lambda c: float(
+                            c.signals.get("rerank_score", c.signals.get("fused_score", c.score))
+                        ),
+                    )
+                    all_objects = []
+                    all_anchors = []
+                    for c in group_cands:
+                        if c.fact.object not in all_objects:
+                            all_objects.append(c.fact.object)
+                        if c.fact.source_anchor and c.fact.source_anchor not in all_anchors:
+                            all_anchors.append(c.fact.source_anchor)
+
+                    representative = RecallCandidate(
+                        fact=best_cand.fact.model_copy(
+                            update={
+                                "object": ", ".join(all_objects),
+                            }
+                        ),
+                        score=best_cand.score,
+                        matched_by=best_cand.matched_by,
+                        retriever_name=best_cand.retriever_name,
+                        signals=copy.deepcopy(best_cand.signals),
+                        explanation=best_cand.explanation,
+                    )
+                    best_anchor = best_cand.fact.source_anchor or ""
+                    best_plain = f"{best_cand.fact.subject}|{best_cand.fact.predicate}|{best_cand.fact.object}|{best_anchor}"
+                    best_digest = hashlib.sha256(best_plain.encode()).hexdigest()[:24]
+                    representative.signals["original_memory_id"] = f"fact:{best_digest}"
+                    representative.signals["compound_members"] = all_objects
+                    representative.signals["compound_source_anchors"] = all_anchors
+                    representative.signals["compound_group_key"] = group_key
+                    representative.signals["compound_size"] = len(group_cands)
+                    final_candidates.append(representative)
+                    processed_groups.add(group_key)
+            else:
+                # Keep them separate, preserving original order exactly
+                # Still tag single-member candidates so orchestrator subsumption works properly
+                cand.signals = dict(cand.signals)  # Prevent leakage by shallow copying signals
+                cand.signals["compound_members"] = [cand.fact.object]
+                cand.signals["compound_group_key"] = group_key
+                cand.signals["compound_size"] = 1
+                final_candidates.append(cand)
+
+        return final_candidates
 
     def _emit_outcome(
         self,
@@ -349,6 +447,14 @@ class RecallOrchestrator:
         # rises above same-entity rephrasings that lack the qualifier.
         if answer_types:
             _apply_answer_type_boost(ranked, answer_types, query_entities)
+        # Precise-date boost: when the question itself names a date (e.g.
+        # "on March 16, 2022"), a fact whose fact-time exactly matches that
+        # date is the strongest evidence regardless of answer type. Unlike
+        # the temporal answer-type boost (which lifts any dated fact for
+        # "when" questions), this gates on an exact date match so a fact
+        # dated to the asked instant rises above unrelated same-entity facts
+        # that merely carry some other date. Applies to any date-bearing
+        # question, not just "when".
         # Diversity-aware final cut: rerank scores wide (fusion_k), then let
         # MMR pick the top_k. Enumeration queries use coverage diversity so
         # the budget spreads across distinct member facts.
@@ -598,7 +704,6 @@ def _infer_query_entities(query: RecallQuery) -> list[str]:
     """
     if query.entity_hint:
         return [query.entity_hint.strip()]
-
     text = query.text.strip()
     # Skip thematic/broad questions that have no clear entity anchor.
     broad_words = {"many", "often", "all", "kinds", "types", "list", "field", "fields"}

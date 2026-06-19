@@ -95,6 +95,11 @@ class SQLiteEventStore(EventView):
         )
         return [_row_to_event(r) for r in rows]
 
+    def all_events(self) -> list[MemoryEvent]:
+        """Return all active events across all namespaces."""
+        rows = self._conn().execute("SELECT * FROM events WHERE valid_to IS NULL").fetchall()
+        return [_row_to_event(r) for r in rows]
+
 
 # ---------------------------------------------------------------------------
 # Helpers

@@ -6,6 +6,7 @@ import pytest
 
 from houyi.adapters.memory.recall.enumeration import (
     EnumerationBooster,
+    detect_enumeration_categories,
     detect_enumeration_category,
 )
 from houyi.adapters.memory.recall.types import (
@@ -61,6 +62,34 @@ class TestDetectCategory:
         assert detect_enumeration_category(query) is None
 
 
+class TestDetectCategories:
+    """Compound noun phrase extraction for multi-category enumeration."""
+
+    def test_compound_or(self) -> None:
+        """'places or events' yields both categories."""
+        cats = detect_enumeration_categories(
+            "Which places or events have John and James planned to meet at?"
+        )
+        assert "place" in cats
+        assert "event" in cats
+
+    def test_possessive_plural(self) -> None:
+        """'what are John's goals' detects enumeration intent."""
+        cat = detect_enumeration_category("what are John's goals")
+        assert cat == "goal"
+
+    def test_possessive_with_qualifier(self) -> None:
+        """'what are John's goals with regards to...' still detects goals."""
+        cat = detect_enumeration_category(
+            "what are John's goals with regards to his basketball career?"
+        )
+        assert cat == "goal"
+
+    def test_singular_non_enumeration(self) -> None:
+        """'what is John's goal' is NOT an enumeration query."""
+        assert detect_enumeration_category("what is John's goal") is None
+
+
 class TestBoosterApply:
     """Family detection and in-place score boosting."""
 
@@ -74,7 +103,7 @@ class TestBoosterApply:
         boosted = await EnumerationBooster().apply("What books has Tim read?", cands)
         assert boosted == 1
         assert cands[0].score == pytest.approx(13.0)
-        assert cands[0].signals.get("enumeration_family") == "book"
+        assert cands[0].signals.get("enumeration_family") == ["book"]
         assert cands[0].signals.get("enumeration_tier") == "instance"
         assert cands[1].score == pytest.approx(5.0)
 
@@ -116,4 +145,4 @@ class TestBoosterApply:
         cands = [_candidate("likes", "The Hobbit")]
         boosted = await EnumerationBooster(_Backend()).apply("What books has Tim read?", cands)
         assert boosted == 1
-        assert cands[0].signals.get("enumeration_family") == "book"
+        assert cands[0].signals.get("enumeration_family") == ["book"]

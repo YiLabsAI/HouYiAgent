@@ -50,13 +50,13 @@ _ENUM_PATTERNS: tuple[re.Pattern[str], ...] = (
         re.IGNORECASE,
     ),
     re.compile(rf"\b(?:what|which)\s+(?P<np>[\w' -]+?s)\s+{_AUX}\b", re.IGNORECASE),
+    re.compile(r"\b(?:what|which)\s+are\s+(?P<np>[\w' -]+?s)(?:\s+with\b|[?.!]|$)", re.IGNORECASE),
     re.compile(
         r"\blist\s+(?:all\s+)?(?:the\s+)?(?P<np>[\w' -]+?)(?:\s+of\b|[?.!]|$)", re.IGNORECASE
     ),
 )
 
-# Head nouns too generic to define a useful category. Structural
-# filler words only — never benchmark answer data.
+# Head nouns too generic to define a useful category.
 _GENERIC_HEADS: frozenset[str] = frozenset(
     {"thing", "one", "time", "way", "kind", "sort", "type", "people", "person"}
 )
@@ -127,12 +127,9 @@ def _words(text: str) -> set[str]:
     return {_stem(w) for w in normalized.split() if w}
 
 
-def detect_enumeration_category(text: str) -> str | None:
-    """Return the stemmed category head noun for enumeration queries.
-
-    Returns None when the query carries no enumeration intent or the
-    head noun is too generic to anchor a family.
-    """
+def detect_enumeration_categories(text: str) -> list[str]:
+    """Return all stemmed category head nouns for enumeration queries."""
+    categories = []
     for pattern in _ENUM_PATTERNS:
         match = pattern.search(text or "")
         if not match:
@@ -140,10 +137,26 @@ def detect_enumeration_category(text: str) -> str | None:
         phrase = match.group("np").strip()
         if not phrase:
             continue
-        head = _stem(phrase.split()[-1])
-        if len(head) >= 3 and head not in _GENERIC_HEADS:
-            return head
-    return None
+        # Split by "or", "and", "and/or", or comma
+        parts = re.split(r"\b(?:or|and|and/or)\b|,", phrase)
+        for part in parts:
+            part = part.strip()
+            if not part:
+                continue
+            head = _stem(part.split()[-1])
+            if len(head) >= 3 and head not in _GENERIC_HEADS and head not in categories:
+                categories.append(head)
+    return categories
+
+
+def detect_enumeration_category(text: str) -> str | None:
+    """Return the stemmed category head noun for enumeration queries.
+
+    Returns None when the query carries no enumeration intent or the
+    head noun is too generic to anchor a family.
+    """
+    cats = detect_enumeration_categories(text)
+    return cats[0] if cats else None
 
 
 class EnumerationBooster:
@@ -185,24 +198,37 @@ class EnumerationBooster:
         other subjects' family facts drop to mention rank so they
         cannot crowd the asked-about subject out of the budget.
         """
-        category = detect_enumeration_category(query_text)
-        if category is None or not candidates:
+        categories = detect_enumeration_categories(query_text)
+        if not categories or not candidates:
             return 0
 
         subjects = _query_entities(query_text)
-        instances, mentions = await self._classify(category, subjects, candidates)
 
-        for cand in instances:
-            self._mark(cand, category, "instance", self._instance_boost)
-        for cand in mentions:
-            self._mark(cand, category, "mention", self._mention_boost)
-        total = len(instances) + len(mentions)
+        all_instances = []
+        all_mentions = []
+        seen_instance_ids = set()
+        seen_mention_ids = set()
+
+        for category in categories:
+            instances, mentions = await self._classify(category, subjects, candidates)
+            for cand in instances:
+                self._mark(cand, category, "instance", self._instance_boost)
+                if id(cand) not in seen_instance_ids:
+                    all_instances.append(cand)
+                    seen_instance_ids.add(id(cand))
+            for cand in mentions:
+                if id(cand) not in seen_instance_ids and id(cand) not in seen_mention_ids:
+                    self._mark(cand, category, "mention", self._mention_boost)
+                    all_mentions.append(cand)
+                    seen_mention_ids.add(id(cand))
+
+        total = len(all_instances) + len(all_mentions)
         if total:
             logger.info(
-                "enumeration booster: category=%r instances=%d mentions=%d of %d candidates",
-                category,
-                len(instances),
-                len(mentions),
+                "enumeration booster: categories=%r instances=%d mentions=%d of %d candidates",
+                categories,
+                len(all_instances),
+                len(all_mentions),
                 len(candidates),
             )
         return total
@@ -211,7 +237,10 @@ class EnumerationBooster:
     def _mark(cand: RecallCandidate, category: str, tier: str, boost: float) -> None:
         cand.score += boost
         cand.signals = dict(cand.signals)
-        cand.signals["enumeration_family"] = category
+        if "enumeration_family" not in cand.signals:
+            cand.signals["enumeration_family"] = []
+        if category not in cand.signals["enumeration_family"]:
+            cand.signals["enumeration_family"].append(category)
         cand.signals["enumeration_tier"] = tier
 
     async def _classify(
@@ -271,4 +300,4 @@ class EnumerationBooster:
         return texts
 
 
-__all__ = ["EnumerationBooster", "detect_enumeration_category"]
+__all__ = ["EnumerationBooster", "detect_enumeration_categories", "detect_enumeration_category"]

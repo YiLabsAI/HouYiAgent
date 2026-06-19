@@ -224,11 +224,21 @@ class TestConnectionLifecycle:
         """close_all() empties the _connections set from 10 threads."""
         mgr = SQLiteConnectionManager(db_path=_file_db(tmp_path))
         conns = []
-        with ThreadPoolExecutor(max_workers=10) as pool:
-            futs = [pool.submit(lambda: mgr.get_connection()) for _ in range(10)]
-            for f in as_completed(futs):
-                conns.append(f.result())
-        assert len(mgr._connections) >= 8
+        threads = []
+        lock = threading.Lock()
+
+        def worker():
+            conn = mgr.get_connection()
+            with lock:
+                conns.append(conn)
+
+        for _ in range(10):
+            t = threading.Thread(target=worker)
+            threads.append(t)
+            t.start()
+        for t in threads:
+            t.join()
+        assert len(mgr._connections) == 10
         mgr.close_all()
         assert len(mgr._connections) == 0
 
@@ -279,7 +289,7 @@ class TestEngineConcurrentAccess:
         n = 20
         results = await asyncio.gather(
             *[
-                engine.write_turn(_raw_turn(f"turn-{i}", idx=i), schedule_extract=False)
+                engine.write_turn(_raw_turn(f"turn-{i}", idx=i + 1), schedule_extract=False)
                 for i in range(n)
             ],
             return_exceptions=True,

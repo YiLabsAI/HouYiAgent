@@ -79,6 +79,11 @@ _REASONER_SYSTEM_PROMPT = (
     "8. Merge near-duplicate items that refer to the same thing (a title and its series "
     "variant, an asset and its location) into a single entry, but keep every genuinely "
     "distinct item and preserve its specific descriptive words.\n"
+    "8a. When a single compound fact (a fact with compound_source_anchors or a long "
+    "narrative merging multiple occurrences) lists multiple distinct activities, events, "
+    "or items, extract EACH as a separate qualifying entry. A compound fact is a "
+    "compressed representation of multiple underlying facts — do not summarize it into "
+    "one item or pick only the most prominent one.\n"
     "\n"
     "SCOPE FILTERING\n"
     "9. When the question restricts the topic (regarding X, besides X, not related to "
@@ -342,10 +347,7 @@ class LLMMemoryReasoningPolicy:
         content = str(getattr(response, "content", "") or "").strip()
         logger.info("LLMMemoryReasoningPolicy PROMPT:\n%s\nRESPONSE:\n%s", prompt, content)
 
-        answer_match = re.search(
-            r"<Answer>\s*(.*?)\s*</Answer>", content, re.DOTALL | re.IGNORECASE
-        )
-        final_answer = answer_match.group(1).strip() if answer_match else content.strip()
+        final_answer = self._extract_final_answer(content)
 
         if not final_answer or self._IDK_SENTINEL in final_answer:
             return AnswerResult(
@@ -367,6 +369,47 @@ class LLMMemoryReasoningPolicy:
             prompt_chars=len(prompt),
             raw_llm_output=content,
         )
+
+    @staticmethod
+    def _extract_final_answer(content: str) -> str:
+        """Pull the answer out of an <Analysis>/<Answer> response.
+
+        The model is instructed to wrap its conclusion in
+        <Answer>...</Answer>. Under a max_tokens cutoff it can emit the
+        opening <Answer> but get truncated before the closing tag (or
+        drop the tag entirely). A strict closed-tag regex then fails to
+        match and the caller would otherwise fall back to the full raw
+        output, leaking the entire chain-of-thought as the "answer" and
+        guaranteeing a judge mismatch. We degrade gracefully instead:
+
+          1. Prefer a fully delimited <Answer>...</Answer> block.
+          2. On a missing/truncated closing tag, take everything after
+             the last <Answer> and scrub any stray tags.
+          3. With an <Analysis> block but no <Answer>, the answer never
+             arrived (pure reasoning, possibly truncated). Strip the
+             reasoning entirely and return what remains — which may be
+             empty so the caller abstains (IDK) instead of leaking the
+             chain-of-thought. Only with no tags at all is the raw
+             content treated as the answer.
+        """
+        closed = re.search(r"<Answer>\s*(.*?)\s*</Answer>", content, re.DOTALL | re.IGNORECASE)
+        if closed:
+            return closed.group(1).strip()
+
+        open_tag = re.search(r"<Answer>\s*(.*)\Z", content, re.DOTALL | re.IGNORECASE)
+        if open_tag:
+            tail = re.sub(r"</?(?:Answer|Analysis)>", "", open_tag.group(1), flags=re.IGNORECASE)
+            return tail.strip()
+
+        if re.search(r"<Analysis>", content, re.IGNORECASE):
+            stripped = re.sub(
+                r"<Analysis>.*?</Analysis>", "", content, flags=re.DOTALL | re.IGNORECASE
+            )
+            stripped = re.sub(r"<Analysis>.*\Z", "", stripped, flags=re.DOTALL | re.IGNORECASE)
+            stripped = re.sub(r"</?(?:Answer|Analysis)>", "", stripped, flags=re.IGNORECASE)
+            return stripped.strip()
+
+        return content.strip()
 
 
 class MemoryReasoner:

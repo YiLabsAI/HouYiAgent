@@ -97,6 +97,10 @@ class SQLiteEntityStateView(EntityStateView):
 
                 calculated_valid_to = None
 
+                effective_qualifiers = dict(qualifiers or {})
+                if accumulate:
+                    effective_qualifiers["accumulate"] = "true"
+
                 record = EntityStateRecord(
                     namespace=namespace,
                     entity=entity,
@@ -106,7 +110,7 @@ class SQLiteEntityStateView(EntityStateView):
                     valid_from=ts,
                     valid_to=calculated_valid_to,
                     source_unit_id=source_unit_id,
-                    qualifiers=qualifiers,
+                    qualifiers=effective_qualifiers if effective_qualifiers else None,
                 )
                 conn.execute(
                     """

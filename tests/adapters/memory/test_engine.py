@@ -429,3 +429,20 @@ class TestReformatRecallContent:
         out = MemoryEngine._reformat_recall_content(content, quals)
         assert "location: Rome" in out
         assert "co_agent: her mother" in out
+
+    def test_approximate_baked(self):
+        # vague-recency report date must not look exact.
+        content = "Calvin went to Tokyo (time: 2023-04-20)"
+        quals = {"date": "2023-04-20", "date_certainty": "approximate", "original_time": "just"}
+        out = MemoryEngine._reformat_recall_content(content, quals)
+        assert "reported on 2023-04-20, exact date earlier/uncertain" in out
+        assert "(time: 2023-04-20)" not in out
+        assert "date_certainty" not in out
+
+    def test_approximate_qualifier(self):
+        # Date present only in qualifiers (no baked "(time: ...)").
+        content = "Calvin went to Tokyo"
+        quals = {"date": "2023-04-20", "date_certainty": "approximate"}
+        out = MemoryEngine._reformat_recall_content(content, quals)
+        assert "reported on 2023-04-20, exact date earlier/uncertain" in out
+        assert "time: 2023-04-20" not in out

@@ -87,6 +87,37 @@ _EN_WH_RE = re.compile(
     re.IGNORECASE,
 )
 
+_POSSESSIVE_RE = re.compile(
+    r"\b(?P<entity>[A-Z][a-zA-Z0-9_]+)'s\s+(?P<attribute>[a-zA-Z0-9_]+(?:\s+(?:or|and)\s+[a-zA-Z0-9_]+)?)\b",
+    re.IGNORECASE,
+)
+
+_KIND_OF_RE = re.compile(
+    r"\b(?:what|which)\s+(?:kind|type|sort|fields?)\s+of\s+(?P<attribute>[a-zA-Z0-9_]+(?:\s+[a-zA-Z0-9_]+)?)\s+(?:has|have|does|do|did|is|are|was|were|would|could|can)\s+(?P<entity>[A-Z][a-zA-Z0-9_]+)\b",
+    re.IGNORECASE,
+)
+
+_WH_NOUN_RE = re.compile(
+    r"\b(?:what|which)\s+(?P<attribute>[a-zA-Z0-9_]+(?:\s+(?:or|and)\s+[a-zA-Z0-9_]+)?)\s+(?:has|have|does|do|did|is|are|was|were|would|could|can)\s+(?P<entity>[A-Z][a-zA-Z0-9_]+)\b",
+    re.IGNORECASE,
+)
+
+# Relationship terms that can be resolved to actual entities via relationship facts.
+# Format: "with his girlfriend" -> look up entity's relationship facts -> find "Audrey"
+_RELATIONSHIP_TERMS = frozenset(
+    {
+        "girlfriend",
+        "boyfriend",
+        "wife",
+        "husband",
+        "partner",
+        "spouse",
+        "fiancee",
+        "fiance",
+        "significant",  # "significant other"
+    }
+)
+
 # Words that look like entities to dumb regexes but never refer to a real
 # subject in the entity-state view. Any inferred or caller-provided entity
 # that collapses to one of these is dropped so the retriever returns []
@@ -174,6 +205,253 @@ _VERB_BREAKS: frozenset[str] = frozenset(
 )
 
 
+def _resolve_relationship_entities(
+    view: EntityStateView,
+    namespace: str,
+    entity: str,
+    query_text: str,
+) -> list[str]:
+    """Resolve relationship terms in query to actual entity names.
+
+    When the query mentions "with his girlfriend" or similar relationship
+    terms, look up the entity's relationship facts and find the actual
+    person. Two strategies:
+
+    1. If relationship value is a proper noun (e.g., "Audrey"), use it directly.
+    2. If relationship value is a common noun (e.g., "girlfriend", "GF"),
+       find the entity that most frequently appears in "shares activity"
+       facts with the primary entity.
+
+    Example: "Andrew's activities with girlfriend" ->
+    - Strategy 1: look for "Andrew | has_girlfriend | Audrey" -> return ["Audrey"]
+    - Strategy 2: look for "Andrew | shares_activity | Audrey" (most frequent) -> return ["Audrey"]
+    """
+    query_low = query_text.lower()
+    # Check if any relationship term appears in the query
+    has_relationship_term = any(term in query_low for term in _RELATIONSHIP_TERMS)
+    if not has_relationship_term:
+        return []
+
+    # Strategy 1: Look for relationship facts with proper noun values
+    resolved = []
+    try:
+        rows = view.get_active(namespace, entity, None)
+        for row in rows:
+            attr_low = row.attribute.lower()
+            # Match relationship attributes and only add proper noun values
+            if (
+                ("relationship" in attr_low or "girlfriend" in attr_low or "boyfriend" in attr_low)
+                and row.value
+                and row.value[0].isupper()
+                and row.value not in {"Girlfriend", "Boyfriend", "GF", "BF", "Partner", "Spouse"}
+            ):
+                resolved.append(row.value)
+    except Exception:
+        pass
+
+    # Strategy 2: If no proper noun found, infer from "shares activity" facts
+    if not resolved:
+        try:
+            rows = view.get_active(namespace, entity, None)
+            # Find all entities that appear in "shares activity" or "shares interest" facts
+            shared_entities: dict[str, int] = {}
+            for row in rows:
+                attr_low = row.attribute.lower()
+                # The value is the entity name (e.g., "Audrey")
+                if (
+                    "shares" in attr_low
+                    and ("activity" in attr_low or "interest" in attr_low)
+                    and row.value
+                    and row.value[0].isupper()
+                ):
+                    shared_entities[row.value] = shared_entities.get(row.value, 0) + 1
+            # Pick the most frequent shared entity
+            if shared_entities:
+                best_entity = max(shared_entities.keys(), key=lambda k: shared_entities[k])
+                resolved.append(best_entity)
+        except Exception:
+            pass
+
+    return resolved
+
+
+def _expand_entity_list(
+    view: EntityStateView,
+    namespace: str,
+    entities: list[str],
+    query_text: str,
+) -> list[str]:
+    """Expand entity list with multi-entity parsing and cross-entity association.
+
+    Combines two expansion strategies:
+    1. Multi-entity parsing: find other capitalized proper nouns in query
+    2. Cross-entity association: resolve relationship terms to actual entities
+    """
+    expanded = list(entities)
+
+    # Multi-entity parsing: find other capitalized words in the query text
+    for w in query_text.split():
+        w_clean = w.strip(".,!?:;'\"()")
+        if w_clean and w_clean[0].isupper():
+            w_low = w_clean.lower()
+            if (
+                w_low
+                not in {
+                    "when",
+                    "where",
+                    "what",
+                    "who",
+                    "whom",
+                    "whose",
+                    "why",
+                    "how",
+                    "which",
+                    "january",
+                    "february",
+                    "march",
+                    "april",
+                    "may",
+                    "june",
+                    "july",
+                    "august",
+                    "september",
+                    "october",
+                    "november",
+                    "december",
+                    "would",
+                    "should",
+                    "could",
+                    "does",
+                    "doesnt",
+                    "did",
+                    "didnt",
+                    "is",
+                    "isnt",
+                    "are",
+                    "arent",
+                    "was",
+                    "wasnt",
+                    "were",
+                    "werent",
+                    "has",
+                    "hasnt",
+                    "have",
+                    "havent",
+                    "can",
+                    "cant",
+                    "will",
+                    "wont",
+                    "do",
+                    "dont",
+                    "in",
+                    "according",
+                    "the",
+                    "a",
+                    "an",
+                    "if",
+                    "with",
+                    "from",
+                    "to",
+                    "at",
+                    "by",
+                    "for",
+                    "on",
+                    "about",
+                    "into",
+                }
+                and w_clean not in expanded
+            ):
+                expanded.append(w_clean)
+
+    # Cross-entity association: resolve relationship terms to actual entities
+    if expanded:
+        primary_entity = expanded[0]
+        resolved_entities = _resolve_relationship_entities(
+            view,
+            namespace,
+            primary_entity,
+            query_text,
+        )
+        for resolved in resolved_entities:
+            if resolved not in expanded:
+                expanded.append(resolved)
+
+    return expanded
+
+
+def _find_shared_attribute_rows(
+    entities: list[str],
+    entity_rows: dict[str, list[EntityStateRecord]],
+) -> list[EntityStateRecord]:
+    """Find EntityStateRecords for facts with shared attributes across entities.
+
+    General principle: when multiple entities (e.g., Andrew and Audrey) have
+    the same attribute (e.g., "grows"), return the EntityStateRecords of those
+    facts so they can be added to the candidate list.
+
+    Example:
+    - Andrew | grows | blooming flowers
+    - Audrey | grows | Peruvian Lilies
+    -> Return: [Andrew's grows row, Audrey's grows row]
+
+    This is a structural optimization, not data-fitting — it applies the general
+    principle "same attribute across related entities = shared activity" to any
+    attribute, not just specific hardcoded activities.
+    """
+    if len(entities) < 2:
+        return []
+
+    # Build attribute -> {entity: [rows]} mapping, tracking whether the
+    # attribute has any accumulate=true row across its entities.
+    #
+    # The accumulate flag is the extractor-supplied structural signal marking
+    # an attribute as a recurring activity / collected set (grows, recommends,
+    # has_pet, ...). Pure cognitive/affective states (believes, thinks,
+    # wants_to, finds) and image descriptions (shared_image_depicts) are never
+    # accumulate and are excluded, because they pollute the shared-activity
+    # candidate pool and bury real activities (a single "believes" fact can
+    # merge 28 propositions into one huge fact that dominates LLM attention).
+    #
+    # accumulate is per-row but sharedness is per-attribute, so the gate is
+    # applied at attribute granularity: an attribute qualifies if ANY of its
+    # rows across entities is accumulate=true. This keeps e.g. 'grows' even
+    # when only one entity's row carries the flag.
+    attr_map: dict[str, dict[str, list[EntityStateRecord]]] = {}
+    attr_accumulates: dict[str, bool] = {}
+    for ent, rows in entity_rows.items():
+        for row in rows:
+            # Skip compound and identity attributes
+            if row.attribute in {"_compound", "identity"}:
+                continue
+            attr_map.setdefault(row.attribute, {}).setdefault(ent, []).append(row)
+            if _row_is_accumulate(row):
+                attr_accumulates[row.attribute] = True
+
+    # Find attributes that (a) are activity collections and (b) appear for
+    # at least 2 entities, then collect all their rows.
+    shared_rows = []
+    for attr, entity_values in attr_map.items():
+        if len(entity_values) >= 2 and attr_accumulates.get(attr):
+            for ent in entity_values:
+                shared_rows.extend(entity_values[ent])
+
+    return shared_rows
+
+
+def _row_is_accumulate(row: EntityStateRecord) -> bool:
+    """Return True if the row's qualifiers mark it as accumulate=true.
+
+    The accumulate flag is set by the extractor for attributes that represent a
+    recurring activity or collected set (e.g. 'grows', 'recommends', 'has_pet').
+    Using it as the shared-attribute gate keeps the candidate pool to genuine
+    activity collections rather than cognitive states or image captions.
+    """
+    quals = row.qualifiers
+    if not quals:
+        return False
+    return quals.get("accumulate") == "true"
+
+
 def _clean_entity(entity: str) -> str:
     """Strip action verbs and trailing predicate content from captured entity."""
     match = re.match(r"^([^\'\s]+)'s\b", entity, re.IGNORECASE)
@@ -238,83 +516,19 @@ class EntityStateRetriever(Retriever):
             )
         )
 
-        # Multi-entity parsing: find other capitalized words in the query text.
-        for w in query.text.split():
-            w_clean = w.strip(".,!?:;'\"()")
-            if w_clean and w_clean[0].isupper():
-                w_low = w_clean.lower()
-                if (
-                    w_low
-                    not in {
-                        "when",
-                        "where",
-                        "what",
-                        "who",
-                        "whom",
-                        "whose",
-                        "why",
-                        "how",
-                        "which",
-                        "january",
-                        "february",
-                        "march",
-                        "april",
-                        "may",
-                        "june",
-                        "july",
-                        "august",
-                        "september",
-                        "october",
-                        "november",
-                        "december",
-                        "would",
-                        "should",
-                        "could",
-                        "does",
-                        "doesnt",
-                        "did",
-                        "didnt",
-                        "is",
-                        "isnt",
-                        "are",
-                        "arent",
-                        "was",
-                        "wasnt",
-                        "were",
-                        "werent",
-                        "has",
-                        "hasnt",
-                        "have",
-                        "havent",
-                        "can",
-                        "cant",
-                        "will",
-                        "wont",
-                        "do",
-                        "dont",
-                        "in",
-                        "according",
-                        "the",
-                        "a",
-                        "an",
-                        "if",
-                        "with",
-                        "from",
-                        "to",
-                        "at",
-                        "by",
-                        "for",
-                        "on",
-                        "about",
-                        "into",
-                    }
-                    and w_clean not in entities
-                ):
-                    entities.append(w_clean)
+        # Multi-entity parsing + cross-entity association
+        entities = _expand_entity_list(
+            self._view,
+            query.namespace,
+            entities,
+            query.text,
+        )
 
         if not entities:
             return []
 
+        # Retrieve rows for each entity
+        entity_rows: dict[str, list[EntityStateRecord]] = {}
         candidates = []
         for ent in entities:
             ent_hint = EntityAttributeHint(
@@ -322,20 +536,13 @@ class EntityStateRetriever(Retriever):
                 attribute=attribute,
                 source=source,
             )
-            if is_cumulative:
-                rows = await asyncio.to_thread(
-                    self._view.get_history,
-                    query.namespace,
-                    ent,
-                    attribute,
-                )
-            else:
-                rows = await asyncio.to_thread(
-                    self._view.get_active,
-                    query.namespace,
-                    ent,
-                    attribute,
-                )
+            rows = await self._retrieve_rows_for_entity(
+                query.namespace,
+                ent,
+                attribute,
+                is_cumulative,
+            )
+            entity_rows[ent] = [r for r in rows if not _is_identity_anchor(r)]
             candidates.extend(
                 [
                     _candidate_from_row(row, self.name, ent_hint, query_words)
@@ -343,7 +550,86 @@ class EntityStateRetriever(Retriever):
                     if not _is_identity_anchor(row)
                 ]
             )
+
+        # Boost scores for facts with shared attributes across entities.
+        # General principle: when multiple entities (e.g., Andrew and Audrey) have
+        # the same attribute (e.g., "grows"), add those facts to the candidate list
+        # with a boosted score. This bridges the gap between parallel individual facts
+        # and shared activities — shared facts are relevant even if they don't match
+        # the query attribute filter (e.g., "indoor activities" doesn't match "grows",
+        # but "grows" is still relevant when asking about shared activities).
+        if len(entities) >= 2:
+            # Build attribute -> {entity: [state_ids]} mapping from ALL entity facts
+            all_entity_rows: dict[str, list[EntityStateRecord]] = {}
+            for ent in entities:
+                all_rows = await asyncio.to_thread(
+                    self._view.get_active,
+                    query.namespace,
+                    ent,
+                    None,  # No attribute filter — get ALL facts
+                )
+                all_entity_rows[ent] = [r for r in all_rows if not _is_identity_anchor(r)]
+
+            # Find shared attributes and collect their rows
+            shared_rows = _find_shared_attribute_rows(entities, all_entity_rows)
+
+            # Add shared rows as candidates with boosted scores and shared_activity signal
+            for row in shared_rows:
+                ent_hint = EntityAttributeHint(
+                    entity=row.entity,
+                    attribute=row.attribute,
+                    source=source,
+                )
+                candidate = _candidate_from_row(row, self.name, ent_hint, query_words)
+                candidate.score += 8.0  # Significant boost for shared attributes
+                # Mark as shared activity so renderer generates clearer text
+                if candidate.signals is None:
+                    candidate.signals = {}
+                candidate.signals["shared_activity"] = True
+                candidate.signals["shared_entities"] = entities
+                candidates.append(candidate)
+
         return candidates
+
+    async def _retrieve_rows_for_entity(
+        self,
+        namespace: str,
+        entity: str,
+        attribute: str | None,
+        is_cumulative: bool,
+    ) -> list[EntityStateRecord]:
+        """Retrieve rows for a single entity, with fuzzy fallback."""
+        if is_cumulative:
+            rows = await asyncio.to_thread(
+                self._view.get_history,
+                namespace,
+                entity,
+                attribute,
+            )
+            if attribute is not None and not rows:
+                all_rows = await asyncio.to_thread(
+                    self._view.get_history,
+                    namespace,
+                    entity,
+                    None,
+                )
+                rows = _filter_fuzzy_rows(all_rows, attribute)
+        else:
+            rows = await asyncio.to_thread(
+                self._view.get_active,
+                namespace,
+                entity,
+                attribute,
+            )
+            if attribute is not None and not rows:
+                all_rows = await asyncio.to_thread(
+                    self._view.get_active,
+                    namespace,
+                    entity,
+                    None,
+                )
+                rows = _filter_fuzzy_rows(all_rows, attribute)
+        return rows
 
 
 _STOPWORDS = {
@@ -682,25 +968,21 @@ def _infer_entity_attribute(query: RecallQuery) -> EntityAttributeHint | None:
         )
 
     text = query.text.strip()
-    zh = _ZH_ATTR_RE.search(text)
-    if zh:
-        entity = zh.group("entity").strip()
-        if entity and not _is_question_word(entity):
-            return EntityAttributeHint(
-                entity=entity,
-                attribute=zh.group("attribute").strip(),
-                source="zh_attribute",
-            )
-
-    en_attr = _EN_ATTR_OF_RE.search(text)
-    if en_attr:
-        entity = en_attr.group("entity").strip()
-        if entity and not _is_question_word(entity):
-            return EntityAttributeHint(
-                entity=entity,
-                attribute=en_attr.group("attribute").lower().strip(),
-                source="en_attribute_of",
-            )
+    for pattern, source in [
+        (_ZH_ATTR_RE, "zh_attribute"),
+        (_EN_ATTR_OF_RE, "en_attribute_of"),
+        (_POSSESSIVE_RE, "possessive"),
+        (_KIND_OF_RE, "kind_of"),
+        (_WH_NOUN_RE, "wh_noun"),
+    ]:
+        match = pattern.search(text)
+        if match:
+            entity = match.group("entity").strip()
+            attribute = match.group("attribute").strip()
+            if source == "en_attribute_of":
+                attribute = attribute.lower()
+            if entity and not _is_question_word(entity):
+                return EntityAttributeHint(entity=entity, attribute=attribute, source=source)
 
     en_wh = _EN_WH_RE.search(text)
     if en_wh:
@@ -713,6 +995,68 @@ def _infer_entity_attribute(query: RecallQuery) -> EntityAttributeHint | None:
             return EntityAttributeHint(entity=entity, source="en_wh_question")
 
     return None
+
+
+def _fuzzy_attr_match(query_attr: str, stored_attr: str) -> bool:
+    """Determine whether a query attribute hint semantically aligns with a
+    stored attribute, using stemmed token overlap and containment.
+
+    This is the self-healing alignment mechanism that bridges the gap
+    between Extractor free-form predicate naming and Retriever query
+    parsing. No regex or ontology dictionary required -- stem matching
+    + Jaccard fallback covers arbitrary predicate phrasing.
+    """
+    target_stems = _attr_stems(query_attr)
+    row_stems = _attr_stems(stored_attr)
+    if not target_stems:
+        return False
+
+    # Stem overlap: "goals" -> {"goal"} matches "has_goal" -> {"has", "goal"}
+    if target_stems.intersection(row_stems):
+        return True
+
+    # Substring containment: "goal" in "primary_goal"
+    q_low = query_attr.lower()
+    s_low = stored_attr.lower()
+    if any(ts in s_low for ts in target_stems) or any(rs in q_low for rs in row_stems):
+        return True
+
+    # Jaccard fallback for multi-word attributes
+    if row_stems:
+        jaccard = len(target_stems & row_stems) / len(target_stems | row_stems)
+        if jaccard >= 0.4:
+            return True
+
+    return False
+
+
+def _attr_stems(attribute: str) -> set[str]:
+    """Stemmed content words from an attribute string."""
+    words = re.sub(r"[^a-z0-9]", " ", attribute.lower()).split()
+    return {_stemish(w) for w in words if len(w) >= 2 and _stemish(w) not in _STOPWORDS}
+
+
+def _filter_fuzzy_rows(
+    rows: list[EntityStateRecord], target_attribute: str
+) -> list[EntityStateRecord]:
+    """Filter rows by fuzzy matching target_attribute with row's attribute.
+
+    Uses _fuzzy_attr_match for per-row alignment, keeping compound rows
+    unconditionally as they carry consolidated multi-value facts.
+    """
+    target_stems = _attr_stems(target_attribute)
+    if not target_stems:
+        return []
+
+    matched = []
+    for r in rows:
+        # Always include compound rows as they hold rich consolidated facts
+        if r.attribute == "_compound":
+            matched.append(r)
+            continue
+        if _fuzzy_attr_match(target_attribute, r.attribute):
+            matched.append(r)
+    return matched
 
 
 def _extract_event_time(qualifiers: dict[str, str] | None) -> str | None:
@@ -746,9 +1090,18 @@ def _candidate_from_row(
         source_anchor=row.source_unit_id or row.state_id,
         qualifiers=row.qualifiers,
         event_time=_extract_event_time(row.qualifiers),
+        accumulate=bool(row.qualifiers and row.qualifiers.get("accumulate") == "true"),
     )
-    exact_attribute = hint.attribute is not None and hint.attribute == row.attribute
-    score = 10.0 if exact_attribute else 5.0
+    is_matched = False
+    match_tier = "broad"
+    if hint.attribute is not None:
+        if hint.attribute == row.attribute:
+            is_matched = True
+            match_tier = "exact"
+        elif row.attribute == "_compound" or _fuzzy_attr_match(hint.attribute, row.attribute):
+            is_matched = True
+            match_tier = "fuzzy"
+    score = {"exact": 10.0, "fuzzy": 7.5, "broad": 5.0}[match_tier]
     if query_words:
         # Boost interest and hobby attributes for shared interest queries
         if query_words.intersection({"interest", "share"}):
@@ -782,7 +1135,7 @@ def _candidate_from_row(
             "entity": row.entity,
             "attribute": row.attribute,
             "hint_source": hint.source,
-            "exact_attribute": exact_attribute,
+            "exact_attribute": is_matched,
         },
         explanation=f"active entity-state row for {row.entity}.{row.attribute}",
     )

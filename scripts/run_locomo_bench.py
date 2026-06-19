@@ -679,17 +679,30 @@ async def _run_case_with_mode(
             parts = record.key.split(".", 1)
             subj = parts[0] if len(parts) > 1 else ""
             pred = parts[1] if len(parts) > 1 else record.key
-            rows.append(
-                _BenchRow(
-                    entity=subj,
-                    attribute=pred,
-                    value=record.content,
-                    qualifiers=None,
-                    source_anchor=record.provenance.source_ids[0]
-                    if (record.provenance and record.provenance.source_ids)
-                    else "",
+            comp_anchors = r.qualifiers.get("compound_source_anchors")
+            if comp_anchors and isinstance(comp_anchors, list):
+                for anchor in comp_anchors:
+                    rows.append(
+                        _BenchRow(
+                            entity=subj,
+                            attribute=pred,
+                            value=record.content,
+                            qualifiers=None,
+                            source_anchor=anchor,
+                        )
+                    )
+            else:
+                rows.append(
+                    _BenchRow(
+                        entity=subj,
+                        attribute=pred,
+                        value=record.content,
+                        qualifiers=None,
+                        source_anchor=record.provenance.source_ids[0]
+                        if (record.provenance and record.provenance.source_ids)
+                        else "",
+                    )
                 )
-            )
     # Pure retrieval latency self-reported by the engine. The previous
     # wall-clock span here also covered embedding-provider construction,
     # backfill, and the answer-LLM generation, inflating P50/P95 by an

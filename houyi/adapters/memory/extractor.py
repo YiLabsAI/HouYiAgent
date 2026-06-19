@@ -371,7 +371,11 @@ Rules for EVENT extraction:
 1. Every EVENT MUST have a non-empty timestamp. Preserve relative times verbatim ("last week", "a few years ago").
 2. The action MUST be a specific verb (watched, adopted, moved_to, purchased, started, lost,
    passed_away, married, traveled_to). Never use generic state verbs (likes, enjoys, has, is).
-3. Multiple events by the same subject: output EACH as a separate EVENT.
+3. Multiple events by the same subject: output EACH as a separate EVENT. This includes
+   SECONDARY or EMBEDDED activities. Invitations, plans, and proposals ("we're going to X",
+   "want to join?", "let's do Y next Saturday", "I went to Z") MUST each produce their own
+   EVENT even when they are not the main point of the sentence. Never drop a planned/proposed
+   activity just because the sentence's primary clause is about a different topic.
 4. When a turn describes both a state and an action, output BOTH as separate items.
 5. Edges are always an empty array. The system computes edges from EVENT fields.
 6. Compound facts (_compound) are ONLY for static enumeration lists. NEVER use _compound
@@ -544,7 +548,8 @@ Relative time mappings (use observation_date as anchor):
  - for N months -> started at observation_date minus N months; record qualifier since: that computed year-month
  - last year -> year of (observation_date minus 1 year); record qualifier date: that year
  - last month -> year-month of (observation_date minus 1 month); record qualifier date: that year-month
- - just / recently / no explicit time -> the event happened at observation_date; record qualifier date: observation_date
+ - no explicit time on a STATIC STATE (likes, owns, lives in) -> the state holds as of observation_date; record qualifier date: observation_date
+ - just / recently / the other day / vague recency on a PAST ACTION or EVENT (e.g. "I just went to X", "I recently saw Y") -> the action happened at an UNKNOWN point BEFORE observation_date. observation_date is only the REPORT/UPPER-BOUND date, NOT the precise event date. Record qualifier date: observation_date (the upper bound) AND qualifier date_certainty: "approximate" AND qualifier original_time: the verbatim cue (e.g. "recently"). Never present observation_date as the exact event date.
 
 CERTAINTY RUBRIC:
  - certain: Direct factual statements without hedging.
@@ -626,6 +631,10 @@ Rules for EVENT extraction:
    started, lost, passed_away, married, divorced, enrolled, quit, traveled_to).
    Never use generic state verbs (likes, enjoys, has, is, wants).
 3. When a turn mentions multiple events by the same subject, output EACH as a separate EVENT.
+   This includes SECONDARY or EMBEDDED activities: invitations, plans, and proposals
+   ("we're going to X", "want to join?", "let's do Y next Saturday", "I went to Z") MUST each
+   produce their own EVENT even when they are not the main point of the sentence. Never drop a
+   planned/proposed activity just because the sentence's primary clause is about a different topic.
 4. When a turn describes both a state and an action, output BOTH. "I started painting
    because I enjoy art" -> FACT(subject="user", predicate="enjoys", object="art") AND
    EVENT(subject="user", action="started", object="painting", timestamp="...").
@@ -653,7 +662,8 @@ Relative time mappings (use observation_date as anchor):
  - "for N months" → started at observation_date minus N months; record as qualifier "since": that computed year-month
  - "last year" → year of (observation_date minus 1 year); record as qualifier "date": that year
  - "last month" → year-month of (observation_date minus 1 month); record as qualifier "date": that year-month
- - "just" / "recently" / no explicit time → the event happened at observation_date; record as qualifier "date": observation_date
+ - no explicit time on a STATIC STATE (likes, owns, lives in) → the state holds as of observation_date; record as qualifier "date": observation_date
+ - "just" / "recently" / "the other day" / vague recency on a PAST ACTION or EVENT (e.g. "I just went to X", "I recently saw Y") → the action happened at an UNKNOWN point BEFORE observation_date. observation_date is only the REPORT/UPPER-BOUND date, NOT the precise event date. Record qualifier "date": observation_date (the upper bound) AND qualifier "date_certainty": "approximate" AND qualifier "original_time": the verbatim cue (e.g. "recently"). Never present observation_date as the exact event date.
 
 CERTAINTY RUBRIC:
  - "certain": Direct factual statements without hedging ("I live in Beijing", "My name is Alice")

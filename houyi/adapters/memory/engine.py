@@ -70,6 +70,7 @@ from houyi.adapters.memory.types import (
     MemoryRecord,
     MemoryScope,
     MemorySourceKind,
+    MemoryType,
     RawTurn,
     RecallMatchMethod,
     RelevanceDetail,
@@ -105,6 +106,9 @@ _INTERNAL_QUALIFIER_KEYS: frozenset[str] = frozenset(
         "fact_subject",
         "fact_predicate",
         "fact_object",
+        "event_id",
+        "event_action",
+        "event_timestamp",
     }
 )
 
@@ -422,7 +426,8 @@ class MemoryEngine:
         for recall in recalls:
             record = record_index.get(recall.memory_id)
             if record is not None:
-                content = self._reformat_recall_content(record.content, recall.qualifiers)
+                raw_content = recall.qualifiers.get("merged_object") or record.content
+                content = self._reformat_recall_content(raw_content, recall.qualifiers)
                 record = record.model_copy(update={"content": content})
                 records.append(record)
         records = self._prepare_reasoner_records(records)
@@ -493,9 +498,10 @@ class MemoryEngine:
         for r in recalls:
             record = record_index.get(r.memory_id)
             if record:
+                raw_content = r.qualifiers.get("merged_object") or record.content
                 lines.append(
                     f"- [{record.memory_type.value}] {record.key}: "
-                    f"{record.content} (score={r.score:.2f})"
+                    f"{raw_content} (score={r.score:.2f})"
                 )
         return "\n".join(lines)
 
@@ -505,6 +511,10 @@ class MemoryEngine:
         Built once per answer() so recall resolution is O(1) per hit
         instead of an all_records() scan. Exact record_id keys take
         precedence over derived fact-id aliases on collision.
+
+        Also indexes first-class MemoryEvent records so that event
+        retriever candidates resolve to synthetic MemoryRecords instead
+        of being silently dropped.
         """
         records = list(self._store.all_records())
         index: dict[str, MemoryRecord] = {}
@@ -518,6 +528,39 @@ class MemoryEngine:
         # Second pass: exact record_id wins on any collision.
         for record in records:
             index[record.record_id] = record
+
+        # Third pass: index first-class events so EventRetriever
+        # candidates resolve instead of being silently dropped.
+        # The hash must match _candidate_to_memory_recall's format:
+        # fact:sha256(subject|predicate|object (timestamp)|anchor)[:24]
+        if self._backend is not None and hasattr(self._backend, "all_events"):
+            with contextlib.suppress(Exception):
+                for event in self._backend.all_events():
+                    anchor = event.source_anchor or ""
+                    obj_with_ts = f"{event.object} ({event.timestamp})"
+                    plain = f"{event.subject}|{event.action}|{obj_with_ts}|{anchor}"
+                    digest = hashlib.sha256(plain.encode()).hexdigest()[:24]
+                    event_memory_id = f"fact:{digest}"
+                    synthetic = MemoryRecord(
+                        record_id=event.event_id,
+                        scope=MemoryScope.SESSION,
+                        key=f"{event.subject}.{event.action}",
+                        content=f"{event.subject} {event.action} {event.object}",
+                        memory_type=MemoryType.EVENT,
+                        provenance=MemoryProvenance(
+                            source_ids=[anchor] if anchor else [],
+                        ),
+                        metadata={
+                            "fact_subject": event.subject,
+                            "fact_predicate": event.action,
+                            "fact_object": event.object,
+                            "event_timestamp": event.timestamp,
+                        },
+                    )
+                    index.setdefault(event_memory_id, synthetic)
+                    # Also index by event_id for direct lookup
+                    index.setdefault(event.event_id, synthetic)
+
         return index
 
     @staticmethod
@@ -527,16 +570,25 @@ class MemoryEngine:
         if not quals and not cal_time:
             return content
 
+        approximate = bool(
+            quals and str(quals.get("date_certainty", "")).strip().lower() == "approximate"
+        )
         parts = []
         if cal_time:
-            parts.append(f"time: {cal_time}")
+            if approximate:
+                parts.append(f"reported on {cal_time}, exact date earlier/uncertain")
+            else:
+                parts.append(f"time: {cal_time}")
         for qk, qv in sorted((quals or {}).items()):
-            if not qv or (qk == "date" and cal_time):
+            if not qv or (qk == "date" and cal_time) or qk == "date_certainty":
                 continue
             if qk in _INTERNAL_QUALIFIER_KEYS:
                 # Internal bookkeeping (compound_type, original_time, raw
                 # triple copies) is never answer evidence; rendering it only
                 # leaks metadata into the LLM's echoed answer.
+                continue
+            if qk == "date" and approximate:
+                parts.append(f"reported on {qv}, exact date earlier/uncertain")
                 continue
             lbl = "time" if qk == "date" else qk
             parts.append(f"{lbl}: {qv}")
@@ -808,14 +860,37 @@ class MemoryEngine:
 
 def _candidate_to_memory_recall(candidate: RecallCandidate) -> MemoryRecall:
     fact = candidate.fact
-    anchor = fact.source_anchor or ""
-    plain = f"{fact.subject}|{fact.predicate}|{fact.object}|{anchor}"
-    digest = hashlib.sha256(plain.encode()).hexdigest()[:24]
-    memory_id = f"fact:{digest}"
+    if candidate.signals and "original_memory_id" in candidate.signals:
+        memory_id = candidate.signals["original_memory_id"]
+    else:
+        anchor = fact.source_anchor or ""
+        plain = f"{fact.subject}|{fact.predicate}|{fact.object}|{anchor}"
+        digest = hashlib.sha256(plain.encode()).hexdigest()[:24]
+        memory_id = f"fact:{digest}"
     matched_by = _RETRIEVER_KIND_TO_MATCH_METHOD.get(candidate.matched_by, RecallMatchMethod.HYBRID)
     quals = dict(fact.qualifiers) if fact.qualifiers else {}
+    if candidate.signals and "original_memory_id" in candidate.signals:
+        quals["merged_object"] = fact.object
+    # For shared-activity facts, generate clearer object text that includes subject and predicate
+    if candidate.signals and candidate.signals.get("shared_activity"):
+        shared_entities = candidate.signals.get("shared_entities", [])
+        if len(shared_entities) >= 2:
+            entity_str = " and ".join(shared_entities[:2])
+            quals["merged_object"] = f"{entity_str} both {fact.predicate}: {fact.object}"
+        else:
+            quals["merged_object"] = fact.object
+    if candidate.signals and "compound_source_anchors" in candidate.signals:
+        quals["compound_source_anchors"] = candidate.signals["compound_source_anchors"]
     if fact.event_time and "date" not in quals:
         quals["date"] = fact.event_time
+    # Transfer event signals to qualifiers for traceability and downstream
+    # event-aware rendering (e.g. source_anchor attribution in R@10).
+    if candidate.signals and "event_id" in candidate.signals:
+        quals["event_id"] = candidate.signals["event_id"]
+    if candidate.signals and "action" in candidate.signals:
+        quals["event_action"] = candidate.signals["action"]
+    if candidate.signals and "timestamp" in candidate.signals:
+        quals["event_timestamp"] = candidate.signals["timestamp"]
     # NOTE: deliberately no valid_from fallback here. valid_from is a
     # system timestamp (when the fact was recorded), not a fact-relevant
     # time (when the event occurred). Rendering a Unix epoch as a date

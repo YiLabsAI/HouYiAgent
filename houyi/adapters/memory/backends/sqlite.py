@@ -588,6 +588,10 @@ class SQLiteMemoryBackend(MemoryBackend):
             action,
         )
 
+    def all_events(self) -> list[MemoryEvent]:
+        """Return all active events across all namespaces."""
+        return self._event_store.all_events()
+
     # ------------------------------------------------------------------
     # GraphIndex (HouYi-Mesh) — delegates to SQLiteGraphStore
     # ------------------------------------------------------------------

@@ -381,3 +381,11 @@ class EventView(ABC):
         action: str,
     ) -> list[MemoryEvent]:
         """Return active events matching both subject and action."""
+
+    @abstractmethod
+    def all_events(self) -> list[MemoryEvent]:
+        """Return all active events (valid_to IS NULL) across all namespaces.
+
+        Used by the record-index builder to make events first-class
+        participants in the recall-to-answer resolution pipeline.
+        """

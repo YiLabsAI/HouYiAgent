@@ -268,8 +268,21 @@ class LLMAnswerer:
     def _format_fact_line(idx: int, cand: RecallCandidate) -> str:
         """Render one candidate as a numbered fact line with anchor and time."""
         f = cand.fact
-        line = f" {idx}. {f.subject} {f.predicate} {f.object}"
-        if f.source_anchor:
+        compound_members = cand.signals and cand.signals.get("compound_members")
+        if compound_members and isinstance(compound_members, list) and len(compound_members) > 8:
+            rendered_obj = (
+                ", ".join(compound_members[:8]) + f", ... and {len(compound_members) - 8} more"
+            )
+        else:
+            rendered_obj = f.object
+
+        line = f" {idx}. {f.subject} {f.predicate} {rendered_obj}"
+        # For compound candidates, render all source anchors so the LLM
+        # can cite each member. For individuals, keep the single anchor.
+        compound_anchors = cand.signals and cand.signals.get("compound_source_anchors")
+        if compound_anchors and isinstance(compound_anchors, list) and len(compound_anchors) > 1:
+            line += f" [{', '.join(compound_anchors)}]"
+        elif f.source_anchor:
             line += f" [{f.source_anchor}]"
         if f.event_time:
             line += f" (time: {f.event_time})"

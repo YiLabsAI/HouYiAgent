@@ -217,6 +217,38 @@ class TestDeterministicPolicy:
         assert result is None
 
 
+class TestAnswerParsing:
+    """<Answer> extraction must not leak chain-of-thought."""
+
+    async def _answer(self, llm_text: str) -> str:
+        llm = MockLLMAdapter(llm_text)
+        policy = LLMMemoryReasoningPolicy(llm)
+        records = [MemoryRecord(key="t", content="Calvin acquired a new ride.")]
+        recalls = [MemoryRecall(memory_id=records[0].record_id, score=0.9)]
+        request = MemoryReasoningInput(query="when?", recalls=recalls, records=records)
+        result = await policy.answer(request)
+        return result.answer
+
+    async def test_closed_answer_tag(self):
+        answer = await self._answer(
+            "<Analysis>\nthinking\n</Analysis>\n<Answer>\n26 March 2023\n</Answer>"
+        )
+        assert answer == "26 March 2023"
+
+    async def test_truncated_answer(self):
+        # max_tokens cutoff: opening <Answer> present, closing tag dropped.
+        leaked = "<Analysis>\nlong reasoning about dates\n</Analysis>\n\n<Answer>\nbetween 26 March and 20 April 2023"
+        answer = await self._answer(leaked)
+        assert answer == "between 26 March and 20 April 2023"
+        assert "<Analysis>" not in answer
+        assert "reasoning" not in answer
+
+    async def test_analysis_only(self):
+        answer = await self._answer("<Analysis>\nfull reasoning only, no answer block\n</Analysis>")
+        assert "<Analysis>" not in answer
+        assert "reasoning" not in answer
+
+
 class TestLLMPromptChanges:
     """Verify simplified prompt structure and fact formatting."""
 
