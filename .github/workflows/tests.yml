@@ -37,6 +37,7 @@ jobs:
         UV_INDEX_URL: https://pypi.org/simple
         UV_EXTRA_INDEX_URL: ""
         HNSWLIB_NO_NATIVE: "1"
+        CFLAGS: "-march=x86-64 -O2"
       run: |
         uv sync --extra dev --extra rag --extra model-adapters --no-binary-package hnswlib
 
@@ -77,6 +78,7 @@ jobs:
         UV_INDEX_URL: https://pypi.org/simple
         UV_EXTRA_INDEX_URL: ""
         HNSWLIB_NO_NATIVE: "1"
+        CFLAGS: "-march=x86-64 -O2"
       run: |
         uv sync --extra dev --extra rag --no-binary-package hnswlib
         uv pip install -e houyi-studio/server --quiet
