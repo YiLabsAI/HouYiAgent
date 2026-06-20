@@ -143,38 +143,32 @@ class EventRetriever(Retriever):
         primary_entity = hint.entity.strip()
         namespace = query.namespace
 
-        # If an attribute hint looks like an action verb, query by subject+action.
-        # Otherwise query by subject only and let downstream rank by relevance.
-        query_action = None
-        if hint.attribute and hint.attribute.strip():
-            query_action = hint.attribute.strip()
+        # query_action is the hint.attribute, kept ONLY as a scoring signal for
+        # _candidate_from_event (it boosts a candidate whose stored action
+        # exactly matches the query verb). It is NOT used to filter the DB
+        # query, because hint.attribute is a query property (noun phrase like
+        # "places or events", "martial arts") while event actions are verbs
+        # (plans_to_go, went, agreed_to) — they never match, so filtering by
+        # the attribute yields zero events for almost every question.
+        query_action = hint.attribute.strip() if hint.attribute else None
 
-        # Multi-entity scan: extract all capitalized proper nouns from
-        # the query text so multi-person queries (e.g. "John and James")
-        # retrieve events for ALL mentioned entities.
+        # Multi-entity scan: extract all capitalized proper nouns from the
+        # query text so multi-person queries (e.g. "John and James") retrieve
+        # events for ALL mentioned entities.
         entities = _extract_all_entities(query.text, primary_entity)
 
         all_events: list[MemoryEvent] = []
         seen_event_ids: set[str] = set()
         for entity in entities:
-            if query_action:
-                evts = await asyncio.to_thread(
-                    self._view.get_events_by_subject_and_action,
-                    namespace,
-                    entity,
-                    query_action,
-                )
-            else:
-                evts = await asyncio.to_thread(
-                    self._view.get_events_by_subject,
-                    namespace,
-                    entity,
-                )
+            evts = await asyncio.to_thread(
+                self._view.get_events_by_subject,
+                namespace,
+                entity,
+            )
             for evt in evts:
                 if evt.event_id not in seen_event_ids:
                     seen_event_ids.add(evt.event_id)
                     all_events.append(evt)
-
         return [_candidate_from_event(e, self.name, query_action=query_action) for e in all_events]
 
 

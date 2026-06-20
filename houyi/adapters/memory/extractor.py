@@ -1104,11 +1104,17 @@ class AtomicFactExtractor:
     async def extract_batch(
         self,
         turns: list[tuple[str, str | None]],
+        namespace: str = "default",
     ) -> list[ExtractionResult]:
         """Extract facts for multiple turns with one LLM call.
 
         Args:
             turns: Ordered list of (text, source_anchor).
+            namespace: Namespace applied to extracted events. Events are
+                written alongside entity_state facts and must share the query
+                namespace, otherwise the EventRetriever (which queries by the
+                same namespace) never sees them. Default "default" preserves
+                backward compatibility for callers without a namespace.
 
         Returns:
             One ExtractionResult per input element, preserving order.
@@ -1135,7 +1141,7 @@ class AtomicFactExtractor:
             for source_anchor, facts, edges, events in parsed
             if source_anchor
         }
-        return self._results_from_batch_parse(normalized, by_anchor)
+        return self._results_from_batch_parse(normalized, by_anchor, namespace=namespace)
 
     @staticmethod
     def _normalize_batch_turns(turns: list[tuple[str, str | None]]) -> list[tuple[str, str]]:
@@ -1165,6 +1171,7 @@ class AtomicFactExtractor:
         by_anchor: dict[
             str, tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]
         ],
+        namespace: str = "default",
     ) -> list[ExtractionResult]:
         out: list[ExtractionResult] = []
         for text, anchor in normalized:
@@ -1187,7 +1194,7 @@ class AtomicFactExtractor:
                     facts.append(fact)
             # Build events from raw event dicts
             for ev_item in events_raw:
-                event = self._build_event(ev_item, anchor, "default")
+                event = self._build_event(ev_item, anchor, namespace)
                 if event is None:
                     invalid += 1
                 else:

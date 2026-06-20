@@ -9,12 +9,14 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import atexit
 import copy
 import datetime
 import hashlib
 import json
 import logging
 import os
+import pickle
 import re
 import shutil
 import sys
@@ -215,7 +217,39 @@ class _JudgeLLM:
 # (anchor, text) lets the second question reuse the first's facts and skip
 # the LLM call entirely. Results are deep-copied on hit because downstream
 # promotion writes them into each case's own backend.
-_TURN_EXTRACT_CACHE: dict[str, Any] = {}
+#
+# PERSISTENT: loaded at startup and saved on exit (atexit), so clearing the
+# session-DB cache to re-project (e.g. after a namespace/config change) does
+# NOT re-call the LLM — it replays the cached ExtractionResult and only
+# re-projects into the DB. This turns a ~50min re-extract into ~10min reproject.
+_TURN_EXTRACT_CACHE_FILE = "/tmp/locomo_turn_extract_cache.pkl"
+
+
+def _load_turn_cache() -> dict[str, Any]:
+    try:
+        with open(_TURN_EXTRACT_CACHE_FILE, "rb") as f:
+            loaded = pickle.load(f)
+        if isinstance(loaded, dict):
+            print(f"[TurnCache] Loaded {len(loaded)} cached extraction results")
+            return loaded
+    except FileNotFoundError:
+        pass
+    except Exception as exc:
+        print(f"[TurnCache] load failed ({exc}); starting empty")
+    return {}
+
+
+def _save_turn_cache() -> None:
+    try:
+        with open(_TURN_EXTRACT_CACHE_FILE, "wb") as f:
+            pickle.dump(_TURN_EXTRACT_CACHE, f)
+        print(f"[TurnCache] Saved {len(_TURN_EXTRACT_CACHE)} extraction results")
+    except Exception as exc:
+        print(f"[TurnCache] save failed ({exc})")
+
+
+_TURN_EXTRACT_CACHE: dict[str, Any] = _load_turn_cache()
+atexit.register(_save_turn_cache)
 
 
 def _turn_cache_key(text: str, source_anchor: str | None) -> str:
@@ -237,7 +271,9 @@ class _CountingBatchExtractor:
         _TURN_EXTRACT_CACHE[key] = result
         return result
 
-    async def extract_batch(self, turns: list[tuple[str, str | None]]) -> list[Any]:
+    async def extract_batch(
+        self, turns: list[tuple[str, str | None]], namespace: str = "default"
+    ) -> list[Any]:
         results: list[Any] = [None] * len(turns)
         uncached: list[tuple[int, tuple[str, str | None]]] = []
         for i, (text, anchor) in enumerate(turns):
@@ -251,7 +287,7 @@ class _CountingBatchExtractor:
             self.calls += 1
             sub = [turn for _, turn in uncached]
             if hasattr(self._inner, "extract_batch"):
-                out = await self._inner.extract_batch(sub)
+                out = await self._inner.extract_batch(sub, namespace=namespace)
             else:
                 out = [await self._inner.extract(text, anchor) for text, anchor in sub]
             for (i, (text, anchor)), res in zip(uncached, out, strict=True):

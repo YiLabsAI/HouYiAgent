@@ -394,9 +394,17 @@ class ExtractorWorker:
             return
 
         batch_extractor = extractor
+        # Turns within a claimed batch share the same namespace (a worker
+        # claims jobs for one session/namespace). Take the namespace from the
+        # first turn so extracted events are written under the query namespace
+        # and become visible to the EventRetriever (which queries by the same
+        # namespace). Falls back to "default" only when a turn lacks one.
+        batch_namespace = claimed[0][1].namespace if claimed else "default"
+        if not batch_namespace:
+            batch_namespace = "default"
         payload = [(_extract_text_for(turn), _source_anchor_for(turn)) for _, turn in claimed]
         try:
-            results = await batch_extractor.extract_batch(payload)
+            results = await batch_extractor.extract_batch(payload, namespace=batch_namespace)
         except Exception as exc:
             logger.warning("batch extractor failed for %d jobs: %s", len(claimed), exc)
             for queue_id, _turn in claimed:

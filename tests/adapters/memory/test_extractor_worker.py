@@ -47,7 +47,7 @@ class _BatchFakeExtractor(_FakeExtractor):
         super().__init__(results=results)
         self.batch_calls: list[list[tuple[str, str | None]]] = []
 
-    async def extract_batch(self, turns: list[tuple[str, str | None]]):
+    async def extract_batch(self, turns: list[tuple[str, str | None]], namespace: str = "default"):
         self.batch_calls.append(list(turns))
         if not self.results:
             return [_FakeResult(facts=[], raw_sourceless=[]) for _ in turns]
