@@ -31,13 +31,19 @@ jobs:
 
     - name: Set up uv
       uses: astral-sh/setup-uv@v7
+      with:
+        # Bust the uv wheel cache: a prior run cached an AVX-enabled hnswlib
+        # wheel built before HNSWLIB_NO_NATIVE was set, and the cache key does
+        # not include build env vars, so it kept reinstalling that poisoned
+        # wheel (SIGILL at import time). Bump the suffix to force a fresh
+        # build; the corrected wheel re-caches under the new key afterward.
+        cache-suffix: "hnswlib-baseline-v1"
 
     - name: Install dependencies
       env:
         UV_INDEX_URL: https://pypi.org/simple
         UV_EXTRA_INDEX_URL: ""
         HNSWLIB_NO_NATIVE: "1"
-        CFLAGS: "-march=x86-64 -O2"
       run: |
         uv sync --extra dev --extra rag --extra model-adapters --no-binary-package hnswlib
 
@@ -72,13 +78,15 @@ jobs:
 
     - name: Set up uv
       uses: astral-sh/setup-uv@v7
+      with:
+        # Bust the uv wheel cache: see comment in the test job above.
+        cache-suffix: "hnswlib-baseline-v1"
 
     - name: Install dependencies
       env:
         UV_INDEX_URL: https://pypi.org/simple
         UV_EXTRA_INDEX_URL: ""
         HNSWLIB_NO_NATIVE: "1"
-        CFLAGS: "-march=x86-64 -O2"
       run: |
         uv sync --extra dev --extra rag --no-binary-package hnswlib
         uv pip install -e houyi-studio/server --quiet
