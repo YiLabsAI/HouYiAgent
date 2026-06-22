@@ -136,6 +136,80 @@ class TestReciprocalRankFuser:
         assert fused[0].fact.object == "one"
 
 
+class TestReciprocalRankFuserRanking:
+    def test_keeps_event_candidate(self) -> None:
+        # 23 equal-scored entity_state rows (the dateless majority) followed
+        # by one high-value event row last in arrival order. min-max fusion
+        # buries the event below the 23 ties and cuts it; RRF ranks per kind
+        # so the event (rank-1 in its own kind) survives the top_k cut.
+        hits = [
+            make_candidate("james", "likes", f"thing{i}", 5.0, RetrieverKind.ENTITY_STATE)
+            for i in range(23)
+        ]
+        hits.append(make_candidate("james", "went_bowling", "bowling", 7.0, RetrieverKind.EVENT))
+
+        rrf = ReciprocalRankFuser().fuse(hits, top_k=20)
+        weighted = WeightedFuser().fuse(hits, top_k=20)
+
+        rrf_objects = {c.fact.object for c in rrf}
+        weighted_objects = {c.fact.object for c in weighted}
+        assert "bowling" in rrf_objects
+        assert "bowling" not in weighted_objects
+
+    def test_multi_source_accumulates(self) -> None:
+        shared_es = make_candidate("u", "visited", "tokyo", 5.0, RetrieverKind.ENTITY_STATE)
+        shared_event = make_candidate("u", "visited", "tokyo", 5.0, RetrieverKind.EVENT)
+        single = make_candidate("u", "visited", "osaka", 5.0, RetrieverKind.ENTITY_STATE)
+
+        fused = ReciprocalRankFuser().fuse([shared_es, shared_event, single], top_k=5)
+        by_obj = {c.fact.object: c for c in fused}
+
+        assert by_obj["tokyo"].signals["fused_score"] > by_obj["osaka"].signals["fused_score"]
+        assert by_obj["tokyo"].signals["contributors"] == ["entity_state", "event"]
+
+    def test_weight_prioritizes_kind(self) -> None:
+        timeline = make_candidate("u", "born", "1990", 1.0, RetrieverKind.TIMELINE)
+        entity = make_candidate("u", "lives", "paris", 1.0, RetrieverKind.ENTITY_STATE)
+
+        fused = ReciprocalRankFuser(
+            kind_weights={RetrieverKind.TIMELINE: 1.3, RetrieverKind.ENTITY_STATE: 1.0}
+        ).fuse([entity, timeline], top_k=2)
+
+        assert fused[0].matched_by == RetrieverKind.TIMELINE
+
+    def test_event_time_tiebreak(self) -> None:
+        dated = RecallCandidate(
+            fact=AtomicFact(
+                subject="u",
+                predicate="visited",
+                object="tokyo",
+                certainty=Certainty.CERTAIN,
+                source_anchor="d1",
+                event_time="2022-03-16",
+            ),
+            score=5.0,
+            matched_by=RetrieverKind.ENTITY_STATE,
+            retriever_name="entity_state",
+        )
+        undated_higher = RecallCandidate(
+            fact=AtomicFact(
+                subject="u",
+                predicate="visited",
+                object="tokyo",
+                certainty=Certainty.CERTAIN,
+                source_anchor="d2",
+            ),
+            score=7.0,
+            matched_by=RetrieverKind.TIMELINE,
+            retriever_name="timeline",
+        )
+
+        fused = ReciprocalRankFuser().fuse([undated_higher, dated], top_k=1)
+
+        assert len(fused) == 1
+        assert fused[0].fact.event_time == "2022-03-16"
+
+
 class TestMMRDeduplicator:
     def test_rejects_weight(self) -> None:
         with pytest.raises(ValueError):

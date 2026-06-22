@@ -81,6 +81,13 @@ Populated from --ablate-retrievers in main(); empty by default so normal
 runs use the unmodified default route table.
 """
 
+_FUSION_STRATEGY = "rrf"
+"""Cross-source fusion strategy: "weighted" (per-kind min-max) or "rrf".
+
+Populated from --fusion-strategy in main(); defaults to "rrf" (rank-based
+ReciprocalRankFuser, robust to incomparable retriever score scales).
+"""
+
 _MODEL_EXTRACT = "Qwen/Qwen2.5-14B-Instruct"  # structured JSON extraction
 _MODEL_ANSWER = "Qwen/Qwen2.5-72B-Instruct"  # reasoning over retrieved facts
 _MODEL_JUDGE = "Qwen/Qwen2.5-32B-Instruct"  # yes/no verdict, needs reliable token output
@@ -189,6 +196,15 @@ def _parse_args():
         type=int,
         default=10,
         help="Size of the evidence window (context range before and after each evidence turn) when use-window is enabled. (default: 10)",
+    )
+    p.add_argument(
+        "--fusion-strategy",
+        default="rrf",
+        choices=("weighted", "rrf"),
+        help=(
+            "cross-source fusion strategy: rrf (rank-based ReciprocalRankFuser, "
+            "default) or weighted (per-kind min-max)"
+        ),
     )
     return p.parse_args()
 
@@ -875,14 +891,19 @@ def _ablated_recall_config():
     own default config unchanged. Used to measure each retriever's
     marginal contribution without permanently editing the route table.
     """
-    if not _ABLATE_RETRIEVERS:
-        return None
     from houyi.adapters.memory.recall.orchestrator import (
         _DEFAULT_FUSION_WEIGHTS,
         _DEFAULT_ROUTE_TABLE,
         RecallPipelineConfig,
     )
     from houyi.adapters.memory.recall.types import QueryType, RetrieverKind
+
+    if not _ABLATE_RETRIEVERS:
+        # No route ablation: only override config when a non-default fusion
+        # strategy is requested, else let the factory use its own defaults.
+        if _FUSION_STRATEGY == "weighted":
+            return None
+        return RecallPipelineConfig(fusion_strategy=_FUSION_STRATEGY)
 
     # Handle weight-lowering ablation (e.g. graph_low)
     custom_weights = None
@@ -900,8 +921,12 @@ def _ablated_recall_config():
     }
 
     if custom_weights:
-        return RecallPipelineConfig(route_table=pruned_route, fusion_weights=custom_weights)
-    return RecallPipelineConfig(route_table=pruned_route)
+        return RecallPipelineConfig(
+            route_table=pruned_route,
+            fusion_weights=custom_weights,
+            fusion_strategy=_FUSION_STRATEGY,
+        )
+    return RecallPipelineConfig(route_table=pruned_route, fusion_strategy=_FUSION_STRATEGY)
 
 
 async def _run_all(
@@ -1148,6 +1173,11 @@ def main():
         logger.info(
             "ABLATION: stripping retrievers from route table: %s", sorted(_ABLATE_RETRIEVERS)
         )
+
+    global _FUSION_STRATEGY
+    _FUSION_STRATEGY = args.fusion_strategy
+    if _FUSION_STRATEGY != "weighted":
+        logger.info("FUSION: using %s strategy", _FUSION_STRATEGY)
 
     if args.case_pair or args.case:
         from houyi.adapters.memory.bench.locomo import load_locomo_all

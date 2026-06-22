@@ -11,13 +11,19 @@ import asyncio
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from typing import Literal
 
 from houyi.adapters.memory.event_emitter import MemoryEventEmitter
 from houyi.adapters.memory.recall.enumeration import (
     EnumerationBooster,
     detect_enumeration_category,
 )
-from houyi.adapters.memory.recall.fusion import MMRDeduplicator, WeightedFuser
+from houyi.adapters.memory.recall.fusion import (
+    Fuser,
+    MMRDeduplicator,
+    ReciprocalRankFuser,
+    WeightedFuser,
+)
 from houyi.adapters.memory.recall.idk_guard import IDKGuard
 from houyi.adapters.memory.recall.rerank import EvidenceAwareReranker, Reranker
 from houyi.adapters.memory.recall.retrievers.base import Retriever, RetrieverError
@@ -160,6 +166,16 @@ class RecallPipelineConfig:
     )
     parallel_retrieval: bool = False
     rerank_multiplier: int = 2
+    # Cross-source fusion strategy. "weighted" uses the per-kind min-max
+    # WeightedFuser; "rrf" uses the rank-based ReciprocalRankFuser, which is
+    # robust to incomparable retriever score scales and is the default.
+    fusion_strategy: Literal["weighted", "rrf"] = "rrf"
+    # Query types that keep the WeightedFuser even when fusion_strategy="rrf".
+    # RRF is score-agnostic and rewards cross-source agreement, which buries
+    # single-source high-confidence gold. Temporal answers live in one
+    # timeline/event fact whose date is not redundantly attested, so they
+    # stay on the magnitude-preserving weighted path.
+    rrf_weighted_query_types: frozenset[QueryType] = frozenset({QueryType.TEMPORAL_QUERY})
 
 
 class RecallOrchestrator:
@@ -170,7 +186,7 @@ class RecallOrchestrator:
         *,
         router: QueryRouter,
         retrievers: Mapping[str, Retriever],
-        fuser: WeightedFuser | None = None,
+        fuser: Fuser | None = None,
         deduplicator: MMRDeduplicator | None = None,
         reranker: Reranker | None = None,
         guard: IDKGuard | None = None,
@@ -476,13 +492,21 @@ class RecallOrchestrator:
             trace["enumeration_coverage"] = True
         return deduped
 
-    def _fuser_for(self, query_type: QueryType) -> WeightedFuser:
-        if type(self._fuser) is not WeightedFuser:
+    def _fuser_for(self, query_type: QueryType) -> Fuser:
+        # An explicitly injected non-default fuser always wins.
+        if not isinstance(self._fuser, WeightedFuser):
             return self._fuser
         weights = self._config.fusion_weights.get(query_type)
-        if weights is None:
+        kind_weights = dict(weights) if weights is not None else None
+        use_rrf = (
+            self._config.fusion_strategy == "rrf"
+            and query_type not in self._config.rrf_weighted_query_types
+        )
+        if use_rrf:
+            return ReciprocalRankFuser(kind_weights=kind_weights)
+        if kind_weights is None:
             return self._fuser
-        return WeightedFuser(kind_weights=dict(weights))
+        return WeightedFuser(kind_weights=kind_weights)
 
     async def _retrieve_all(
         self,

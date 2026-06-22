@@ -131,18 +131,34 @@ class WeightedFuser(Fuser):
 
 
 class ReciprocalRankFuser(Fuser):
-    """Reciprocal-rank fusion for already-ranked candidate lists.
+    """Rank-based fusion across retriever kinds.
 
-    This implementation accepts a flat iterable and treats current
-    order as the rank order. It is useful when retrievers have already
-    done their own normalization and rank is more trustworthy than
-    local score magnitude.
+    Each retriever kind is ranked independently by its own local score,
+    and a candidate's fused score is the weighted sum of reciprocal ranks
+    over the kinds that surfaced it::
+
+        score(d) = Σ_kind  w(kind) · 1 / (k + rank_kind(d))
+
+    Ranking *per kind* (rather than by global arrival order or by raw
+    score magnitude) makes fusion robust to the incomparable score scales
+    different retrievers emit: every kind's top hit earns the same
+    reciprocal-rank weight, so a numerous low-diversity source (e.g. many
+    equal-scored entity_state rows) can no longer monopolise the candidate
+    budget purely by arrival order. Near-duplicate candidates surfaced by
+    multiple kinds accumulate one term per kind, rewarding cross-source
+    agreement. Final scores are min-max normalized to [0, 1] so they stay
+    on the same scale as the downstream reranker's coverage bonuses
+    (rerank_score = fused_score + coverage + ...).
     """
 
-    def __init__(self, k: int = 60) -> None:
+    def __init__(self, k: int = 60, kind_weights: dict[RetrieverKind, float] | None = None) -> None:
         if k <= 0:
             raise ValueError("k must be > 0")
         self._k = k
+        self._weights = dict(kind_weights or {})
+
+    def _weight(self, kind: RetrieverKind) -> float:
+        return self._weights.get(kind, 1.0)
 
     def fuse(
         self,
@@ -152,49 +168,83 @@ class ReciprocalRankFuser(Fuser):
     ) -> list[RecallCandidate]:
         if top_k <= 0:
             return []
+        candidates = list(candidates)
+        if not candidates:
+            return []
 
-        # Group candidates by near-duplicate detection
         grouped = _group_near_duplicates(candidates)
-
-        scores: dict[int, float] = defaultdict(float)
-        best: dict[int, RecallCandidate] = {}
-        cand_to_group_id = {}
+        cand_to_group_id: dict[int, int] = {}
         for group_id, group in enumerate(grouped):
             for cand in group:
                 cand_to_group_id[id(cand)] = group_id
 
-        for idx, cand in enumerate(candidates, start=1):
-            mapped_group_id = cand_to_group_id.get(id(cand))
-            if mapped_group_id is not None:
-                scores[mapped_group_id] += 1.0 / (self._k + idx)
-                # When multiple retrievers return the same fact, prefer the
-                # candidate that carries event_time (fact-relevant time) over
-                # one that only has valid_from (system timestamp). event_time
-                # contains the human-readable date the LLM needs for temporal
-                # questions. Without this tie-breaker, the fuser may pick a
-                # Timeline candidate (event_time=None) over an EntityState
-                # candidate (event_time="2020-03") solely because the
-                # Timeline score is marginally higher, discarding the answer-
-                # relevant date information.
-                should_replace = False
-                if (
-                    mapped_group_id not in best
-                    or (cand.fact.event_time and not best[mapped_group_id].fact.event_time)
-                    or cand.score > best[mapped_group_id].score
-                ):
-                    should_replace = True
-                if should_replace:
-                    best[mapped_group_id] = cand
-
-        fused = []
-        for group_id, score in scores.items():
-            cand = best[group_id]
-            cand.signals = dict(cand.signals)
-            cand.signals["fused_score"] = score
-            fused.append(cand)
-
+        scores, best = self._rank_groups(candidates, cand_to_group_id)
+        max_score = max(scores.values()) if scores else 0.0
+        fused = [
+            self._build_representative(best[group_id], grouped[group_id], raw, max_score)
+            for group_id, raw in scores.items()
+        ]
         fused.sort(key=lambda c: c.signals["fused_score"], reverse=True)
         return fused[:top_k]
+
+    def _rank_groups(
+        self,
+        candidates: list[RecallCandidate],
+        cand_to_group_id: dict[int, int],
+    ) -> tuple[dict[int, float], dict[int, RecallCandidate]]:
+        # Rank within each retriever kind by local score, then accumulate
+        # weighted reciprocal-rank contributions onto the near-duplicate group.
+        by_kind: dict[RetrieverKind, list[RecallCandidate]] = defaultdict(list)
+        for cand in candidates:
+            by_kind[cand.matched_by].append(cand)
+
+        scores: dict[int, float] = defaultdict(float)
+        best: dict[int, RecallCandidate] = {}
+        for kind, kind_list in by_kind.items():
+            weight = self._weight(kind)
+            ranked = sorted(kind_list, key=lambda c: c.score, reverse=True)
+            for rank, cand in enumerate(ranked, start=1):
+                group_id = cand_to_group_id[id(cand)]
+                scores[group_id] += weight / (self._k + rank)
+                if self._prefers(cand, best.get(group_id)):
+                    best[group_id] = cand
+        return scores, best
+
+    @staticmethod
+    def _prefers(cand: RecallCandidate, current: RecallCandidate | None) -> bool:
+        # Prefer the candidate carrying event_time (fact-relevant date) over
+        # one that only has a system valid_from, even at a lower local score —
+        # temporal answers depend on that date. A higher local score only wins
+        # when it does not discard an already-dated representative.
+        if current is None:
+            return True
+        cand_dated = bool(cand.fact.event_time)
+        if cand_dated and not current.fact.event_time:
+            return True
+        return (cand_dated or not current.fact.event_time) and cand.score > current.score
+
+    @staticmethod
+    def _build_representative(
+        rep: RecallCandidate,
+        members: list[RecallCandidate],
+        raw: float,
+        max_score: float,
+    ) -> RecallCandidate:
+        all_contributors: list[str] = []
+        for member in members:
+            all_contributors.extend(member.signals.get("contributors", [member.matched_by.value]))
+        rep.signals = dict(rep.signals)
+        rep.signals["raw_score"] = rep.score
+        rep.signals["rrf_score"] = raw
+        rep.signals["fused_score"] = raw / max_score if max_score > 0 else 0.0
+        rep.signals["contributors"] = sorted(set(all_contributors))
+        rep.signals["duplicate_count"] = len(members)
+        for other in members:
+            if other is rep:
+                continue
+            for key, value in other.signals.items():
+                rep.signals.setdefault(key, value)
+        return rep
 
 
 # Source-anchor overlap redundancy thresholds.
@@ -205,8 +255,8 @@ class ReciprocalRankFuser(Fuser):
 # high Jaccard over the source-anchor set flags this without any text/semantic
 # heuristics, and does NOT penalise facts that merely share a subject but
 # come from different turns (a genuine multi-place enumeration stays intact).
-# Threshold chosen from empirical evidence: intra-topic compound pairs in
-# conv-41 cluster at Jaccard 0.3-0.5, cross-topic pairs at <=0.2.
+# Threshold chosen from empirical evidence: intra-topic compound pairs
+# cluster at Jaccard 0.3-0.5, cross-topic pairs at <=0.2.
 _SOURCE_OVERLAP_THRESHOLD = 0.3
 _SOURCE_OVERLAP_REDUNDANCY = 0.85
 

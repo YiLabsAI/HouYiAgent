@@ -390,3 +390,50 @@ def test_boost_entity_gated() -> None:
     )
     _apply_answer_type_boost([other], frozenset({"temporal"}), ["Deborah"])
     assert "answer_type_boost" not in other.signals
+
+
+class TestFusionStrategySwitch:
+    def test_default_is_rrf(self) -> None:
+        from houyi.adapters.memory.recall.fusion import ReciprocalRankFuser
+
+        orchestrator = RecallOrchestrator(
+            router=FixedRouter(QueryType.FACTUAL_LOOKUP),
+            retrievers={},
+        )
+        assert orchestrator._config.fusion_strategy == "rrf"
+        assert isinstance(orchestrator._fuser_for(QueryType.FACTUAL_LOOKUP), ReciprocalRankFuser)
+
+    def test_weighted_strategy_used(self) -> None:
+        from houyi.adapters.memory.recall.fusion import WeightedFuser
+
+        orchestrator = RecallOrchestrator(
+            router=FixedRouter(QueryType.FACTUAL_LOOKUP),
+            retrievers={},
+            config=RecallPipelineConfig(fusion_strategy="weighted"),
+        )
+        assert isinstance(orchestrator._fuser_for(QueryType.FACTUAL_LOOKUP), WeightedFuser)
+
+    def test_rrf_per_query_weights(self) -> None:
+        from houyi.adapters.memory.recall.fusion import ReciprocalRankFuser
+
+        orchestrator = RecallOrchestrator(
+            router=FixedRouter(QueryType.FACTUAL_LOOKUP),
+            retrievers={},
+            config=RecallPipelineConfig(fusion_strategy="rrf"),
+        )
+        fuser = orchestrator._fuser_for(QueryType.FACTUAL_LOOKUP)
+        assert isinstance(fuser, ReciprocalRankFuser)
+        # Per-query kind weights flow into the RRF fuser.
+        assert fuser._weight(RetrieverKind.GRAPH) == pytest.approx(1.1)
+
+    def test_temporal_stays_weighted(self) -> None:
+        from houyi.adapters.memory.recall.fusion import ReciprocalRankFuser, WeightedFuser
+
+        orchestrator = RecallOrchestrator(
+            router=FixedRouter(QueryType.TEMPORAL_QUERY),
+            retrievers={},
+            config=RecallPipelineConfig(fusion_strategy="rrf"),
+        )
+        # RRF buries single-source dated gold, so temporal keeps WeightedFuser.
+        assert isinstance(orchestrator._fuser_for(QueryType.TEMPORAL_QUERY), WeightedFuser)
+        assert isinstance(orchestrator._fuser_for(QueryType.FACTUAL_LOOKUP), ReciprocalRankFuser)
