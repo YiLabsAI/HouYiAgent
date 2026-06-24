@@ -28,6 +28,7 @@ import logging
 from collections.abc import Mapping
 
 from houyi.application.evolution.client import EvolutionClient
+from houyi.application.evolution.event_log import EvolutionEventLog
 from houyi.application.evolution.events import EvolutionEvent, EvolutionEventType
 
 logger = logging.getLogger(__name__)
@@ -50,6 +51,15 @@ class MemoryEventEmitter:
     @property
     def enabled(self) -> bool:
         return self._client is not None
+
+    @property
+    def event_log(self) -> EvolutionEventLog | None:
+        """Expose the backing event log for replay-style signal mining.
+
+        Returns None when emission is disabled (no client), so callers can
+        fall back to a signal-free path instead of inventing queries.
+        """
+        return self._client.event_log if self._client is not None else None
 
     def emit(
         self,

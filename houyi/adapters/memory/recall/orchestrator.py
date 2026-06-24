@@ -413,6 +413,10 @@ class RecallOrchestrator:
                 "query_type": query_type.value,
                 "reason": result.reason.value,
                 "namespace": query.namespace,
+                # The evolution control plane replays failing queries to judge
+                # whether an evolved memory would have made them retrievable, so
+                # the query text must travel with the failure signal.
+                "query_preview": query.text[:200],
             },
             metrics={
                 "candidates": float(candidates_seen),

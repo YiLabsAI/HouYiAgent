@@ -48,6 +48,14 @@ class _StubView(EntityStateView):
     def upsert(self, record: EntityStateRecord) -> None:
         pass
 
+    def list_conflicted_triples(self, namespace: str | None = None) -> list[tuple[str, str, str]]:
+        return []
+
+    def supersede(
+        self, namespace, entity, attribute, *, keep_state_id, valid_to
+    ) -> tuple[int, int]:
+        return (0, 0)
+
 
 def _record(entity: str, attr: str, value: str, updated_at: float = 0.0) -> EntityStateRecord:
     r = EntityStateRecord(namespace="default", entity=entity, attribute=attr, value=value)

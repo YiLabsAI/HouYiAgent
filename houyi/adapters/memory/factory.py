@@ -24,6 +24,7 @@ from houyi.adapters.embedding import (
 from houyi.adapters.memory.backends.sqlite import SQLiteMemoryBackend
 from houyi.adapters.memory.backends.sqlite_candidate_inbox import SQLiteCandidateInbox
 from houyi.adapters.memory.backends.sqlite_entity_state import SQLiteEntityStateView
+from houyi.adapters.memory.dreamer import EvolutionBudget
 from houyi.adapters.memory.engine import MemoryEngine
 from houyi.adapters.memory.extractor import AtomicFactExtractor
 from houyi.adapters.memory.recall.factory import _build_default_recall_orchestrator
@@ -31,6 +32,11 @@ from houyi.adapters.memory.store import MemoryStore
 from houyi.adapters.memory.turn_writer import TurnWriter
 from houyi.adapters.memory.workers.embedding_backfill import EmbeddingBackfillWorker
 from houyi.adapters.memory.workers.extractor_worker import ExtractorWorker
+from houyi.adapters.memory.workers.trigger import (
+    ActivityMonitor,
+    HybridTriggerConfig,
+    HybridTriggerPolicy,
+)
 
 
 def build_memory_engine(
@@ -39,6 +45,9 @@ def build_memory_engine(
     llm_adapter: Any | None = None,
     embedding_provider: EmbeddingProvider | None = None,
     namespace: str = "default",
+    enable_evolution: bool = False,
+    evolution_config: HybridTriggerConfig | None = None,
+    evolution_budget: EvolutionBudget | None = None,
 ) -> MemoryEngine:
     """Construct a fully wired MemoryEngine.
 
@@ -106,6 +115,16 @@ def build_memory_engine(
         embedding_provider=embedding_provider,
     )
 
+    # Background evolution wiring. Off by default. When enabled, the monitor
+    # is shared between the engine hot path (which records activity/failures)
+    # and the HybridTriggerPolicy (which reads them), so the trigger reacts to
+    # real load and recall-failure pressure. start() launches the dreamer.
+    activity_monitor: ActivityMonitor | None = None
+    evolution_trigger: HybridTriggerPolicy | None = None
+    if enable_evolution:
+        activity_monitor = ActivityMonitor()
+        evolution_trigger = HybridTriggerPolicy(activity_monitor, config=evolution_config)
+
     return MemoryEngine(
         store,
         embedding_provider=embedding_provider,
@@ -114,6 +133,10 @@ def build_memory_engine(
         turn_writer=turn_writer,
         extractor_worker=extractor_worker,
         backfill_worker=backfill_worker,
+        activity_monitor=activity_monitor,
+        evolution_trigger=evolution_trigger,
+        evolution_budget=evolution_budget,
+        entity_state=entity_state,
     )
 
 

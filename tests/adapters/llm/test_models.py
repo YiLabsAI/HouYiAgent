@@ -32,6 +32,7 @@ from houyi.adapters.llm.models import (
     MODEL_CONTEXT_WINDOWS,
     # Provider identifiers
     PROVIDER_ANTHROPIC,
+    PROVIDER_DASHSCOPE,
     PROVIDER_DEEPSEEK,
     PROVIDER_DISPLAY_NAMES,
     PROVIDER_GOOGLE_AI,
@@ -51,6 +52,7 @@ class TestProviderIdentifiers:
         PROVIDER_OPENAI_COMPAT,
         PROVIDER_ANTHROPIC,
         PROVIDER_DEEPSEEK,
+        PROVIDER_DASHSCOPE,
         PROVIDER_GOOGLE_AI,
         PROVIDER_VERTEX,
     ]

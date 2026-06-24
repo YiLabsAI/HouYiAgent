@@ -12,7 +12,9 @@ Phase 2: Used by ContextCompressor to decide compression triggers.
 from __future__ import annotations
 
 import logging
+import os
 import unicodedata
+from pathlib import Path
 from typing import Any
 
 from houyi.adapters.llm.models import (
@@ -30,6 +32,14 @@ from houyi.adapters.llm.models import (
 
 logger = logging.getLogger(__name__)
 
+# Pin tiktoken's BPE cache to a stable, shared, non-temp directory (mirrors how
+# local embeddings live under ~/.cache/huggingface). tiktoken's own default is
+# tempfile.gettempdir()/data-gym-cache, which macOS wipes on reboot; a cold
+# cache plus an unreachable download endpoint (openaipublic.blob SSL-fails
+# here) then turns every TokenEstimator init into a network timeout. setdefault
+# respects an explicit TIKTOKEN_CACHE_DIR from the environment when present.
+os.environ.setdefault("TIKTOKEN_CACHE_DIR", str(Path.home() / ".cache" / "tiktoken"))
+
 
 class TokenEstimator:
     """Estimates token counts for messages and strings.
@@ -41,6 +51,12 @@ class TokenEstimator:
     """
 
     _tiktoken_available: bool | None = None
+    # Per-encoding cache so each encoding is loaded at most once per process.
+    # A failed load (e.g. the BPE file is not cached locally and the download
+    # endpoint is unreachable) is also memoized, otherwise every TokenEstimator
+    # instance would re-attempt the network call and pay its timeout again.
+    _encodings: dict[str, Any] = {}
+    _encoding_failures: set[str] = set()
 
     def __init__(
         self,
@@ -146,33 +162,53 @@ class TokenEstimator:
 
     @classmethod
     def _try_load_encoding(cls, model: str) -> Any | None:
-        """Try to load tiktoken encoding for the model."""
+        """Try to load tiktoken encoding for the model.
+
+        Results are memoized per encoding name: a successful load is kept for
+        the process, and a failed load is remembered so it is not retried on
+        every subsequent instance (a missing local BPE cache plus an
+        unreachable download endpoint would otherwise cost a full network
+        timeout per TokenEstimator).
+        """
         if cls._tiktoken_available is False:
             return None
         try:
             import tiktoken
 
             cls._tiktoken_available = True
-            # Map model names to tiktoken encoding names
-            encoding_map = {
-                GPT_4O: "o200k_base",
-                GPT_4O_MINI: "o200k_base",
-                GPT_4_TURBO: "cl100k_base",
-                GPT_35_TURBO: "cl100k_base",
-            }
-            model_lower = model.lower()
-            for key, enc_name in encoding_map.items():
-                if key in model_lower:
-                    return tiktoken.get_encoding(enc_name)
-            # Default to cl100k_base (good approximation for most models)
-            return tiktoken.get_encoding("cl100k_base")
         except ImportError:
             cls._tiktoken_available = False
             logger.info("tiktoken not available, using character-ratio estimation")
             return None
-        except Exception as e:
-            logger.warning("Failed to load tiktoken encoding: %s", e)
+
+        enc_name = cls._encoding_name_for(model)
+        if enc_name in cls._encoding_failures:
             return None
+        if enc_name in cls._encodings:
+            return cls._encodings[enc_name]
+        try:
+            encoding = tiktoken.get_encoding(enc_name)
+        except Exception as e:
+            cls._encoding_failures.add(enc_name)
+            logger.warning("Failed to load tiktoken encoding %s: %s", enc_name, e)
+            return None
+        cls._encodings[enc_name] = encoding
+        return encoding
+
+    @staticmethod
+    def _encoding_name_for(model: str) -> str:
+        """Map a model id to its tiktoken encoding name (default cl100k_base)."""
+        encoding_map = {
+            GPT_4O: "o200k_base",
+            GPT_4O_MINI: "o200k_base",
+            GPT_4_TURBO: "cl100k_base",
+            GPT_35_TURBO: "cl100k_base",
+        }
+        model_lower = model.lower()
+        for key, enc_name in encoding_map.items():
+            if key in model_lower:
+                return enc_name
+        return "cl100k_base"
 
     @staticmethod
     def _fallback_count(text: str) -> int:

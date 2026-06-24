@@ -72,6 +72,7 @@ PROVIDER_OPENAI = "openai"
 PROVIDER_OPENAI_COMPAT = "openai_compat"  # generic OpenAI-compatible endpoint
 PROVIDER_ANTHROPIC = "anthropic"
 PROVIDER_DEEPSEEK = "deepseek"
+PROVIDER_DASHSCOPE = "dashscope"  # Alibaba Cloud Bailian (OpenAI-compatible)
 PROVIDER_GOOGLE_AI = "google_ai"  # Gemini API (direct, API key)
 PROVIDER_VERTEX = "vertex"  # Vertex AI (GCP project)
 
@@ -86,6 +87,7 @@ PROVIDER_DISPLAY_NAMES: dict[str, str] = {
     PROVIDER_OPENAI_COMPAT: "OpenAI Compatible",
     PROVIDER_ANTHROPIC: "Anthropic",
     PROVIDER_DEEPSEEK: "DeepSeek",
+    PROVIDER_DASHSCOPE: "Bailian (DashScope)",
     PROVIDER_GOOGLE_AI: "Google AI (Gemini)",
     PROVIDER_VERTEX: "Vertex AI",
 }

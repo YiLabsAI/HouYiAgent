@@ -10,6 +10,7 @@ import time
 from typing import Any
 
 from houyi.adapters.memory.backends.base import EntityStateView
+from houyi.adapters.memory.fact_identity import fact_record_id
 from houyi.adapters.memory.types import Certainty, EntityStateRecord
 
 logger = logging.getLogger(__name__)
@@ -64,16 +65,23 @@ class SQLiteEntityStateView(EntityStateView):
         qualifiers: dict[str, str] | None = None,
         accumulate: bool = False,
     ) -> EntityStateRecord:
-        """Insert a new active state, closing any prior active row first (unless accumulate is True).
+        """Append a new active state row. This is append-only: it does NOT close
+        any prior active row for the same (namespace, entity, attribute) triple.
+
+        Closing stale active rows (so that a single-valued attribute has at most
+        one active row) is deferred to the dreamer's entity_state conflict-
+        resolution pass, which scans triples with >=2 active rows and sets
+        valid_to on the superseded ones by valid_from order. Keeping the write
+        path append-only preserves its low latency; consolidation runs off the
+        hot path. Callers that need immediate retraction use invalidate().
 
         Semantics:
-        - If accumulate is False, and a row with valid_to IS NULL already exists for the
-          (namespace, entity, attribute) triple, its valid_to is
-          set to the new valid_from (closed-open interval contract).
-        - The new row is inserted with valid_to = NULL.
-        - valid_from must be >= any existing active row's
-          valid_from; otherwise ValueError is raised because the
-          materialized view has no defined order for backdated edits.
+        - The new row is inserted with valid_to = NULL regardless of accumulate.
+        - accumulate only tags the row's qualifiers so readers know multiple
+          active values are expected (open set) rather than a contradiction.
+        - valid_from must be >= any existing active row's valid_from; otherwise
+          ValueError is raised because the materialized view has no defined
+          order for backdated edits.
         """
         if not namespace or not entity or not attribute:
             raise ValueError("namespace, entity, attribute must be non-empty")
@@ -172,6 +180,93 @@ class SQLiteEntityStateView(EntityStateView):
         if not getattr(self._backend._in_transaction, "active", False):
             conn.commit()
         return cur.rowcount > 0
+
+    def list_conflicted_triples(
+        self,
+        namespace: str | None = None,
+    ) -> list[tuple[str, str, str]]:
+        """Return (namespace, entity, attribute) triples with >=2 active rows.
+
+        Uses the idx_entity_state_active partial index so only active rows are
+        scanned. The consolidator calls this to find single-valued attributes
+        the append-only write path left with concurrent active values.
+        """
+        conn = self._backend._conn()
+        if namespace is None:
+            rows = conn.execute(
+                """
+                SELECT namespace, entity, attribute FROM entity_state
+                WHERE valid_to IS NULL
+                GROUP BY namespace, entity, attribute
+                HAVING COUNT(*) >= 2
+                ORDER BY namespace ASC, entity ASC, attribute ASC
+                """
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT namespace, entity, attribute FROM entity_state
+                WHERE namespace=? AND valid_to IS NULL
+                GROUP BY namespace, entity, attribute
+                HAVING COUNT(*) >= 2
+                ORDER BY entity ASC, attribute ASC
+                """,
+                (namespace,),
+            ).fetchall()
+        return [(row["namespace"], row["entity"], row["attribute"]) for row in rows]
+
+    def supersede(
+        self,
+        namespace: str,
+        entity: str,
+        attribute: str,
+        *,
+        keep_state_id: str,
+        valid_to: float,
+    ) -> tuple[int, int]:
+        """Close every active row of the triple except keep_state_id.
+
+        The successor (keep_state_id) stays active; every other active row is
+        closed with valid_to (the successor's valid_from, preserving as-of
+        semantics). The valid_to IS NULL guard makes the call idempotent.
+
+        For each closed row the backing memories row is closed too, located by
+        re-deriving its record_id from (entity, attribute, value, source_unit_id)
+        via the shared fact identity hash. This is a precise single-row close,
+        unlike invalidate()'s key-prefix LIKE which would also close the
+        successor's backing row. Both updates share one transaction so the
+        entity_state view and the memories store never disagree.
+        """
+        conn = self._backend._conn()
+        rows_closed = 0
+        rows_propagated = 0
+        victims = conn.execute(
+            """
+            SELECT state_id, value, source_unit_id FROM entity_state
+            WHERE namespace=? AND entity=? AND attribute=?
+            AND state_id<>? AND valid_to IS NULL
+            """,
+            (namespace, entity, attribute, keep_state_id),
+        ).fetchall()
+        for row in victims:
+            conn.execute(
+                "UPDATE entity_state SET valid_to=? WHERE state_id=?",
+                (valid_to, row["state_id"]),
+            )
+            rows_closed += 1
+            anchor = row["source_unit_id"] or ""
+            record_id = fact_record_id(entity, attribute, row["value"], anchor)
+            cur = conn.execute(
+                "UPDATE memories SET valid_to=? WHERE record_id=? AND valid_to IS NULL",
+                (valid_to, record_id),
+            )
+            if cur.rowcount > 0:
+                rows_propagated += cur.rowcount
+        # Mirror invalidate(): commit only when no outer transaction owns the
+        # connection, so supersede is safe to nest inside a writer transaction.
+        if not getattr(self._backend._in_transaction, "active", False):
+            conn.commit()
+        return rows_closed, rows_propagated
 
     # ------------------------------------------------------------------
     # Query

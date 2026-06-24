@@ -18,6 +18,7 @@ from __future__ import annotations
 import logging
 from typing import Protocol
 
+from houyi.adapters.memory.fact_identity import fact_key, fact_record_id
 from houyi.adapters.memory.types import (
     AtomicFact,
     MemoryProvenance,
@@ -40,7 +41,7 @@ class FactPromoter(Protocol):
 
     # Protocol body has no real implementation, so coverage cannot
     # observe it; the pragma silences a false-positive miss.
-    def promote(self, turn: RawTurn, fact: AtomicFact) -> None:  # pragma: no cover
+    def promote(self, turn: RawTurn, fact: AtomicFact) -> MemoryRecord | None:  # pragma: no cover
         ...
 
 
@@ -81,17 +82,19 @@ class MemoryRecordPromoter:
         self._memory_type = memory_type
         self._provider_label = provider_label
 
-    def promote(self, turn: RawTurn, fact: AtomicFact) -> None:
+    def promote(self, turn: RawTurn, fact: AtomicFact) -> MemoryRecord | None:
         """Persist the fact as a deferred-embedding MemoryRecord.
 
-        The fact is already committed to entity_state by the time this
-        runs, so the L2 row is an optimization rather than a correctness
-        guarantee. Failures are logged and swallowed so the worker's
-        retry loop is not affected.
+        Returns the persisted record (so callers that need to retract it can
+        re-put it with valid_to set), or None when persistence failed. The fact
+        is already committed to entity_state by the time this runs, so the L2
+        row is an optimization rather than a correctness guarantee. Failures
+        are logged and swallowed so the worker's retry loop is not affected.
         """
         try:
             record = self._make_record(turn, fact)
             self._backend.put(record)
+            return record
         except Exception:
             logger.warning(
                 "fact promotion failed for %s.%s",
@@ -99,14 +102,11 @@ class MemoryRecordPromoter:
                 fact.predicate,
                 exc_info=True,
             )
+            return None
 
     def _make_record(self, turn: RawTurn, fact: AtomicFact) -> MemoryRecord:
-        import hashlib
-
         anchor = fact.source_anchor or ""
-        plain = f"{fact.subject}|{fact.predicate}|{fact.object}|{anchor}"
-        digest = hashlib.sha256(plain.encode()).hexdigest()[:24]
-        record_id = f"fact:{digest}"
+        record_id = fact_record_id(fact.subject, fact.predicate, fact.object, anchor)
 
         # Build self-contained semantic content so both retrievers and reasoning policies
         # have full access to subject, predicate, object, and temporal event_time.
@@ -126,7 +126,7 @@ class MemoryRecordPromoter:
 
         return MemoryRecord(
             record_id=record_id,
-            key=f"{fact.subject}.{fact.predicate}.{digest}",
+            key=fact_key(fact.subject, fact.predicate, fact.object, anchor),
             content=content,
             scope=self._scope,
             memory_type=self._memory_type,

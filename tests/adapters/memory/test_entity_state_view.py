@@ -31,7 +31,10 @@ class TestSQLiteEntityStateViewUpsert:
         assert len(active) == 1
         assert active[0].value == "Beijing"
 
-    def test_second_upsert_closes_prior(self, view: SQLiteEntityStateView) -> None:
+    def test_second_upsert_appends(self, view: SQLiteEntityStateView) -> None:
+        """Write path is append-only: a second upsert leaves the prior active
+        row open. Closing stale single-valued rows is the consolidator's job
+        (the supersede pass), not upsert's."""
         view.upsert("ws", "user", "city", "Beijing", valid_from=100.0)
         view.upsert("ws", "user", "city", "Shanghai", valid_from=200.0)
 
@@ -273,3 +276,116 @@ class TestSQLiteEntityStateViewCascade:
         stored = view._backend.get("user.city.somehash", MemoryScope.WORKSPACE)
         assert stored is not None
         assert stored.valid_to == 300.0
+
+
+class TestSQLiteEntityStateSupersede:
+    """Supersede: close stale active rows of single-valued attributes."""
+
+    def test_list_finds_duplicates(self, view: SQLiteEntityStateView) -> None:
+        view.upsert("ws", "Andrew", "job", "banker", valid_from=100.0)
+        view.upsert("ws", "Andrew", "job", "designer", valid_from=200.0)
+        view.upsert("ws", "Andrew", "city", "NYC", valid_from=100.0)
+
+        conflicts = view.list_conflicted_triples("ws")
+        assert conflicts == [("ws", "Andrew", "job")]
+        # namespace=None scans every namespace.
+        assert view.list_conflicted_triples(None) == [("ws", "Andrew", "job")]
+
+    def test_closes_old_keeps_new(self, view: SQLiteEntityStateView) -> None:
+        view.upsert("ws", "Andrew", "job", "banker", valid_from=100.0)
+        view.upsert("ws", "Andrew", "job", "designer", valid_from=200.0)
+
+        active = view.get_active("ws", "Andrew", "job")
+        keeper = max(active, key=lambda r: r.valid_from)
+        closed, _ = view.supersede(
+            "ws", "Andrew", "job", keep_state_id=keeper.state_id, valid_to=200.0
+        )
+
+        assert closed == 1
+        active_after = view.get_active("ws", "Andrew", "job")
+        assert len(active_after) == 1
+        assert active_after[0].value == "designer"
+        banker = view.get_history("ws", "Andrew", "job")[-1]
+        assert banker.value == "banker"
+        assert banker.valid_to == 200.0
+
+    def test_supersede_idempotent(self, view: SQLiteEntityStateView) -> None:
+        view.upsert("ws", "Andrew", "job", "banker", valid_from=100.0)
+        view.upsert("ws", "Andrew", "job", "designer", valid_from=200.0)
+        active = view.get_active("ws", "Andrew", "job")
+        keeper = max(active, key=lambda r: r.valid_from)
+        view.supersede("ws", "Andrew", "job", keep_state_id=keeper.state_id, valid_to=200.0)
+
+        # Second call closes nothing: the valid_to IS NULL guard skips resolved rows.
+        closed, _ = view.supersede(
+            "ws", "Andrew", "job", keep_state_id=keeper.state_id, valid_to=200.0
+        )
+        assert closed == 0
+
+    def test_preserves_asof_history(self, view: SQLiteEntityStateView) -> None:
+        view.upsert("ws", "Andrew", "job", "banker", valid_from=100.0)
+        view.upsert("ws", "Andrew", "job", "designer", valid_from=200.0)
+        active = view.get_active("ws", "Andrew", "job")
+        keeper = max(active, key=lambda r: r.valid_from)
+        view.supersede("ws", "Andrew", "job", keep_state_id=keeper.state_id, valid_to=200.0)
+
+        # At t=150 the banker still held the job; as-of must still resolve to it.
+        as_of = view.get_as_of("ws", "Andrew", 150.0, "job")
+        assert len(as_of) == 1
+        assert as_of[0].value == "banker"
+        # At t=250 the designer holds it.
+        as_of_late = view.get_as_of("ws", "Andrew", 250.0, "job")
+        assert len(as_of_late) == 1
+        assert as_of_late[0].value == "designer"
+
+    def test_propagates_to_memories(self, view: SQLiteEntityStateView) -> None:
+        """Closing the old entity_state row must close its backing memories row
+        (by re-derived record_id) while leaving the successor's row active."""
+        from houyi.adapters.memory.fact_identity import fact_record_id
+        from houyi.adapters.memory.types import (
+            MemoryProvenance,
+            MemoryRecord,
+            MemoryScope,
+        )
+
+        anchor = "turn:1"
+        banker_id = fact_record_id("Andrew", "job", "banker", anchor)
+        designer_id = fact_record_id("Andrew", "job", "designer", anchor)
+
+        def _seed(record_id: str, value: str) -> None:
+            view._backend.put(
+                MemoryRecord(
+                    record_id=record_id,
+                    key=f"Andrew.job.{record_id.split(':')[-1]}",
+                    content=f"Andrew job {value}",
+                    scope=MemoryScope.WORKSPACE,
+                    confidence=1.0,
+                    valid_from=100.0,
+                    valid_to=None,
+                    provenance=MemoryProvenance(source_type="test"),
+                )
+            )
+
+        _seed(banker_id, "banker")
+        _seed(designer_id, "designer")
+        view.upsert("workspace", "Andrew", "job", "banker", valid_from=100.0, source_unit_id=anchor)
+        view.upsert(
+            "workspace", "Andrew", "job", "designer", valid_from=200.0, source_unit_id=anchor
+        )
+
+        active = view.get_active("workspace", "Andrew", "job")
+        keeper = max(active, key=lambda r: r.valid_from)
+        closed, propagated = view.supersede(
+            "workspace",
+            "Andrew",
+            "job",
+            keep_state_id=keeper.state_id,
+            valid_to=200.0,
+        )
+
+        assert closed == 1
+        assert propagated == 1
+        banker_row = view._backend.get_by_id(banker_id)
+        designer_row = view._backend.get_by_id(designer_id)
+        assert banker_row is not None and banker_row.valid_to == 200.0
+        assert designer_row is not None and designer_row.valid_to is None

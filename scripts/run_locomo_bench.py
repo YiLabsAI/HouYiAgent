@@ -34,7 +34,7 @@ from houyi.adapters.embedding import (
     SiliconFlowEmbeddingProvider,
     make_embedding_provider,
 )
-from houyi.adapters.llm.siliconflow_adapter import SiliconFlowAdapter
+from houyi.adapters.llm.factory import LLMAdapterFactory
 from houyi.adapters.memory.answerer import AnswerResult
 from houyi.adapters.memory.backends.sqlite import SQLiteMemoryBackend
 from houyi.adapters.memory.backends.sqlite_candidate_inbox import SQLiteCandidateInbox
@@ -88,9 +88,41 @@ Populated from --fusion-strategy in main(); defaults to "rrf" (rank-based
 ReciprocalRankFuser, robust to incomparable retriever score scales).
 """
 
-_MODEL_EXTRACT = "Qwen/Qwen2.5-14B-Instruct"  # structured JSON extraction
-_MODEL_ANSWER = "Qwen/Qwen2.5-72B-Instruct"  # reasoning over retrieved facts
-_MODEL_JUDGE = "Qwen/Qwen2.5-32B-Instruct"  # yes/no verdict, needs reliable token output
+# SiliconFlow default model set (provider=siliconflow).
+_SF_MODEL_EXTRACT = "Qwen/Qwen2.5-14B-Instruct"  # structured JSON extraction
+_SF_MODEL_ANSWER = "Qwen/Qwen2.5-72B-Instruct"  # reasoning over retrieved facts
+_SF_MODEL_JUDGE = "Qwen/Qwen2.5-32B-Instruct"  # yes/no verdict, needs reliable token output
+_SF_MODEL_EVOLVE = "Qwen/Qwen2.5-72B-Instruct"  # reflection over sampled memories
+
+# Bailian/DashScope default model set (provider=dashscope). Kept independent of
+# the SiliconFlow set so picking a provider never silently inherits the other's
+# model identifiers.
+_DS_MODEL_EXTRACT = "glm-5.1"  # structured JSON extraction
+_DS_MODEL_ANSWER = "qwen3.7-max"  # reasoning over retrieved facts
+_DS_MODEL_JUDGE = "qwen3.7-max"  # yes/no verdict
+_DS_MODEL_EVOLVE = "glm-5.2"  # reflection over sampled memories during evolution
+
+# Per-provider default model sets, resolved after CLI parsing when the
+# corresponding --extract/answer/judge/evolve-model flag is left unset.
+_PROVIDER_MODEL_DEFAULTS: dict[str, dict[str, str]] = {
+    "siliconflow": {
+        "extract": _SF_MODEL_EXTRACT,
+        "answer": _SF_MODEL_ANSWER,
+        "judge": _SF_MODEL_JUDGE,
+        "evolve": _SF_MODEL_EVOLVE,
+    },
+    "dashscope": {
+        "extract": _DS_MODEL_EXTRACT,
+        "answer": _DS_MODEL_ANSWER,
+        "judge": _DS_MODEL_JUDGE,
+        "evolve": _DS_MODEL_EVOLVE,
+    },
+}
+
+# Backwards-compatible aliases used as fallbacks in helper signatures.
+_MODEL_EXTRACT = _SF_MODEL_EXTRACT
+_MODEL_ANSWER = _SF_MODEL_ANSWER
+_MODEL_JUDGE = _SF_MODEL_JUDGE
 
 logger = logging.getLogger(__name__)
 
@@ -147,17 +179,38 @@ def _parse_args():
         help="number of cases to run in parallel (default: 1 = serial)",
     )
     p.add_argument(
+        "--llm-provider",
+        default="siliconflow",
+        choices=tuple(_PROVIDER_MODEL_DEFAULTS),
+        help=(
+            "LLM backend for extract/answer/judge: siliconflow (default) or "
+            "dashscope (Bailian). Selecting a provider also picks that "
+            "provider's default model set unless --extract/answer/judge-model "
+            "are given. dashscope resolves DASHSCOPE_API_KEY/BASE_URL from env."
+        ),
+    )
+    p.add_argument(
         "--extract-model",
-        default=_MODEL_EXTRACT,
-        help="model for fact extraction (default: Qwen2.5-7B)",
+        default=None,
+        help="model for fact extraction (default: provider-specific)",
     )
     p.add_argument(
         "--answer-model",
-        default=_MODEL_ANSWER,
-        help="model for answer reasoning (default: Qwen2.5-72B)",
+        default=None,
+        help="model for answer reasoning (default: provider-specific)",
     )
     p.add_argument(
-        "--judge-model", default=_MODEL_JUDGE, help="model for judge verdict (default: Qwen2.5-7B)"
+        "--judge-model",
+        default=None,
+        help="model for judge verdict (default: provider-specific)",
+    )
+    p.add_argument(
+        "--evolve-model",
+        default=None,
+        help=(
+            "model for evolution reflection in --evolve-mode "
+            "(default: provider-specific; dashscope -> glm-5.2)"
+        ),
     )
     p.add_argument(
         "--api-key",
@@ -192,6 +245,36 @@ def _parse_args():
         help="Enable evidence-window turn restriction to only ingest turns around the target evidence, accelerating cold extraction.",
     )
     p.add_argument(
+        "--evolve-mode",
+        action="store_true",
+        default=False,
+        help=(
+            "Run a self-evolution pass per case: answer (baseline), evolve memories "
+            "via the causal recall-replay evaluator, re-answer, and emit a before/after "
+            "accuracy + recall@10 report. Memories are derived only from stored records."
+        ),
+    )
+    p.add_argument(
+        "--no-consolidate",
+        action="store_true",
+        default=False,
+        help=(
+            "Skip the deterministic entity-state supersede pass that normally runs "
+            "before reflection in --evolve-mode. Ablation switch to isolate the "
+            "consolidation pass's recall contribution from reflection's."
+        ),
+    )
+    p.add_argument(
+        "--no-reflect",
+        action="store_true",
+        default=False,
+        help=(
+            "Skip the failure-anchored reflector that normally runs after "
+            "consolidation in --evolve-mode. Ablation switch to isolate "
+            "reflection's contribution from consolidation's."
+        ),
+    )
+    p.add_argument(
         "--window-size",
         type=int,
         default=10,
@@ -210,9 +293,9 @@ def _parse_args():
 
 
 class _JudgeLLM:
-    """Minimal wrapper to adapt SiliconFlowAdapter for LLMMemoryJudge."""
+    """Minimal wrapper to adapt an LLM adapter for LLMMemoryJudge."""
 
-    def __init__(self, llm: SiliconFlowAdapter) -> None:
+    def __init__(self, llm: Any) -> None:
         self._llm = llm
 
     async def chat(
@@ -510,7 +593,7 @@ def _percentile(values: list[float], p: float) -> float:
     return ordered[low] * (1.0 - weight) + ordered[high] * weight
 
 
-async def _judge(llm_judge: SiliconFlowAdapter, case: LoCoMoCase, answer: AnswerResult) -> dict:
+async def _judge(llm_judge: Any, case: LoCoMoCase, answer: AnswerResult) -> dict:
     if _rough_semantic_match(case.answer, answer.answer):
         return {"correct": True, "reason": "semantic_match"}
 
@@ -524,6 +607,141 @@ async def _judge(llm_judge: SiliconFlowAdapter, case: LoCoMoCase, answer: Answer
     return {"correct": verdict.correct, "reason": verdict.reason}
 
 
+def _recalls_to_rows(engine: MemoryEngine, recalls: list[Any]) -> list[_BenchRow]:
+    """Map engine recalls to the bench's evidence-anchored rows."""
+    rows: list[_BenchRow] = []
+    record_index = engine._build_record_index()
+    for r in recalls:
+        record = record_index.get(r.memory_id)
+        if not record:
+            continue
+        parts = record.key.split(".", 1)
+        subj = parts[0] if len(parts) > 1 else ""
+        pred = parts[1] if len(parts) > 1 else record.key
+        comp_anchors = r.qualifiers.get("compound_source_anchors")
+        if comp_anchors and isinstance(comp_anchors, list):
+            for anchor in comp_anchors:
+                rows.append(
+                    _BenchRow(
+                        entity=subj,
+                        attribute=pred,
+                        value=record.content,
+                        qualifiers=None,
+                        source_anchor=anchor,
+                    )
+                )
+        else:
+            rows.append(
+                _BenchRow(
+                    entity=subj,
+                    attribute=pred,
+                    value=record.content,
+                    qualifiers=None,
+                    source_anchor=record.provenance.source_ids[0]
+                    if (record.provenance and record.provenance.source_ids)
+                    else "",
+                )
+            )
+    return rows
+
+
+async def _answer_and_score(
+    engine: MemoryEngine,
+    case: LoCoMoCase,
+    namespace: str,
+    llm_judge: Any,
+    *,
+    obs_date: str,
+    sys_date: str,
+) -> dict[str, Any]:
+    """Run one answer pass and score recall + verdict for a case."""
+    from houyi.adapters.memory.types import SessionContext
+
+    answer = await engine.answer(
+        case.question,
+        session_context=SessionContext(
+            session_id=namespace, current_observation_date=obs_date, current_system_date=sys_date
+        ),
+        top_k=RECALL_TOP_K,
+    )
+    rows = _recalls_to_rows(engine, answer.extras.get("recalls", []))
+    recall_at_10, mrr = _recall_hits(rows, case.evidence, top_k=RECALL_TOP_K)
+    verdict = await _judge(llm_judge, case, answer)
+    return {
+        "answer": answer,
+        "rows": rows,
+        "recall_at_10": recall_at_10,
+        "mrr": mrr,
+        "verdict": verdict,
+        "retrieve_ms": float(answer.extras.get("recall_ms", 0.0)),
+    }
+
+
+async def _evolve_and_rescore(
+    engine: MemoryEngine,
+    backfill: EmbeddingBackfillWorker,
+    case: LoCoMoCase,
+    namespace: str,
+    llm_judge: Any,
+    llm_reflect: Any | None = None,
+    *,
+    baseline: dict[str, Any],
+    obs_date: str,
+    sys_date: str,
+    consolidate: bool = True,
+    reflect: bool = True,
+) -> dict[str, Any]:
+    """Run one evolution pass (consolidation + reflection) and re-score.
+
+    Reflection is failure-anchored: it re-extracts query-answering facts from
+    the SOURCE turns for the failing question, grounds each against its source,
+    and keeps only facts that are actually retrievable. Evolution never sees
+    the gold answer, so any accuracy/recall gain is honest self-evolution, not
+    fitting. Newly promoted records are embedding-backfilled before the second
+    answer pass so the vector retriever can surface them.
+    """
+    report = engine.evolve(
+        consolidate=consolidate,
+        reflect=reflect,
+        failing_queries=[case.question] if reflect else None,
+        namespace=namespace,
+        llm=llm_reflect,
+    )
+
+    # Backfill embeddings for any promoted records before the second pass.
+    while await backfill.process_once():
+        pass
+
+    after = await _answer_and_score(
+        engine, case, namespace, llm_judge, obs_date=obs_date, sys_date=sys_date
+    )
+    logger.info(
+        "  [evolve] kept=%d before_correct=%s after_correct=%s",
+        len(report.created_records),
+        baseline["verdict"]["correct"],
+        after["verdict"]["correct"],
+    )
+    consolidation = report.consolidation
+    reflection = report.reflection
+    return {
+        "records_created": len(report.created_records),
+        "k1_rows_closed": consolidation.rows_closed if consolidation else 0,
+        "k1_triples_resolved": consolidation.triples_resolved if consolidation else 0,
+        "reflection_extracted": reflection.facts_extracted if reflection else 0,
+        "reflection_kept": reflection.facts_kept if reflection else 0,
+        "reflection_retracted": reflection.facts_retracted if reflection else 0,
+        "k1_skipped_accumulate": consolidation.skipped_accumulate if consolidation else 0,
+        "before_correct": bool(baseline["verdict"]["correct"]),
+        "after_correct": bool(after["verdict"]["correct"]),
+        "before_recall_at_10": round(baseline["recall_at_10"], 4),
+        "after_recall_at_10": round(after["recall_at_10"], 4),
+        "before_mrr": round(baseline["mrr"], 4),
+        "after_mrr": round(after["mrr"], 4),
+        "after_answer": after["answer"].answer,
+        "after_reason": after["verdict"]["reason"],
+    }
+
+
 async def _run_case_with_mode(
     case: LoCoMoCase,
     turn_writer: TurnWriter,
@@ -532,8 +750,8 @@ async def _run_case_with_mode(
     view: SQLiteEntityStateView,
     backend: SQLiteMemoryBackend,
     namespace: str,
-    llm_answer: SiliconFlowAdapter,
-    llm_judge: SiliconFlowAdapter,
+    llm_answer: Any,
+    llm_judge: Any,
     *,
     embedding_provider: str = "siliconflow",
     embedding_model: str | None = None,
@@ -542,6 +760,10 @@ async def _run_case_with_mode(
     skip_ingestion: bool = False,
     use_window: bool = False,
     window_size: int = 10,
+    evolve_mode: bool = False,
+    llm_reflect: Any | None = None,
+    consolidate: bool = True,
+    reflect: bool = True,
 ) -> dict[str, Any]:
     t0 = time.perf_counter()
     extract_calls_per_case = 0
@@ -643,7 +865,6 @@ async def _run_case_with_mode(
     logger.info("  pending embeddings: %d", _pending_emb)
 
     retrieve_t0 = time.perf_counter()
-    rows: list[_BenchRow]
 
     # Embedding provider for the vector retriever. Errors propagate so
     # bench failure modes stay loud.
@@ -706,83 +927,60 @@ async def _run_case_with_mode(
             config=_ablated_recall_config(),
         ),
         embedding_provider=embedding_prov,
+        entity_state=view,
     )
-    from houyi.adapters.memory.types import SessionContext
-
     last_turn = case.sample.turns[-1] if case.sample.turns else None
     obs_date = _normalize_observation_date(last_turn.session_datetime) if last_turn else None
     if not obs_date:
         obs_date = datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%d")
     sys_date = datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%d")
 
-    answer = await engine.answer(
-        case.question,
-        session_context=SessionContext(
-            session_id=namespace, current_observation_date=obs_date, current_system_date=sys_date
-        ),
-        top_k=RECALL_TOP_K,
+    baseline = await _answer_and_score(
+        engine, case, namespace, llm_judge, obs_date=obs_date, sys_date=sys_date
     )
-    recalls = answer.extras.get("recalls", [])
-    rows = []
-    record_index = engine._build_record_index()
-    for r in recalls:
-        record = record_index.get(r.memory_id)
-        if record:
-            parts = record.key.split(".", 1)
-            subj = parts[0] if len(parts) > 1 else ""
-            pred = parts[1] if len(parts) > 1 else record.key
-            comp_anchors = r.qualifiers.get("compound_source_anchors")
-            if comp_anchors and isinstance(comp_anchors, list):
-                for anchor in comp_anchors:
-                    rows.append(
-                        _BenchRow(
-                            entity=subj,
-                            attribute=pred,
-                            value=record.content,
-                            qualifiers=None,
-                            source_anchor=anchor,
-                        )
-                    )
-            else:
-                rows.append(
-                    _BenchRow(
-                        entity=subj,
-                        attribute=pred,
-                        value=record.content,
-                        qualifiers=None,
-                        source_anchor=record.provenance.source_ids[0]
-                        if (record.provenance and record.provenance.source_ids)
-                        else "",
-                    )
-                )
     # Pure retrieval latency self-reported by the engine. The previous
     # wall-clock span here also covered embedding-provider construction,
     # backfill, and the answer-LLM generation, inflating P50/P95 by an
     # order of magnitude.
     answer_pipeline_ms = (time.perf_counter() - retrieve_t0) * 1000.0
-    retrieve_ms = float(answer.extras.get("recall_ms", answer_pipeline_ms))
+    retrieve_ms = baseline["retrieve_ms"] or answer_pipeline_ms
 
-    recall_at_10, mrr = _recall_hits(rows, case.evidence, top_k=RECALL_TOP_K)
-    logger.info("  Generated answer: %s", answer.answer[:200])
+    logger.info("  Generated answer: %s", baseline["answer"].answer[:200])
     logger.info("  Expected answer: %s", case.answer[:200])
-    verdict = await _judge(llm_judge, case, answer)
 
-    return {
+    result: dict[str, Any] = {
         "case_id": f"{case.sample_id}:{case.question[:60]}",
         "category": case.category,
-        "answer": answer.answer,
+        "answer": baseline["answer"].answer,
         "expected": case.answer,
-        "correct": verdict["correct"],
-        "reason": verdict["reason"],
-        "memories_count": len(rows),
+        "correct": baseline["verdict"]["correct"],
+        "reason": baseline["verdict"]["reason"],
+        "memories_count": len(baseline["rows"]),
         "turns_ingested": len(ingest_idxs),
         "retrieve_ms": round(retrieve_ms, 2),
         "answer_pipeline_ms": round(answer_pipeline_ms, 2),
-        "recall_at_10": round(recall_at_10, 4),
-        "mrr": round(mrr, 4),
+        "recall_at_10": round(baseline["recall_at_10"], 4),
+        "mrr": round(baseline["mrr"], 4),
         "extract_calls_per_case": int(max(extract_calls_per_case, 0)),
         "duration_s": round(time.perf_counter() - t0, 1),
     }
+
+    if evolve_mode:
+        result["evolve"] = await _evolve_and_rescore(
+            engine,
+            backfill,
+            case,
+            namespace,
+            llm_judge,
+            baseline=baseline,
+            obs_date=obs_date,
+            sys_date=sys_date,
+            llm_reflect=llm_reflect,
+            consolidate=consolidate,
+            reflect=reflect,
+        )
+
+    return result
 
 
 class DiskCacheWrapper:
@@ -796,10 +994,22 @@ class DiskCacheWrapper:
     def _get_key(
         self, messages: list[Any], temperature: float, max_tokens: int | None, **kwargs: Any
     ) -> str:
+        # Normalize pydantic LLMMessage objects to dicts so the cache key is
+        # JSON-serializable. The adapter contract accepts LLMMessage | dict,
+        # but json.dumps (used for the hash) cannot serialize pydantic models,
+        # which would raise and surface as a silent reflection fallback.
+        norm_messages = []
+        for msg in messages:
+            if isinstance(msg, dict):
+                norm_messages.append(msg)
+            else:
+                role = getattr(msg, "role", None)
+                role_val = getattr(role, "value", role)
+                norm_messages.append({"role": role_val, "content": getattr(msg, "content", None)})
         # Create stable hash key for messages and parameters
         serialized = json.dumps(
             {
-                "messages": messages,
+                "messages": norm_messages,
                 "temperature": temperature,
                 "max_tokens": max_tokens,
                 "kwargs": {k: v for k, v in kwargs.items() if k != "api_key"},
@@ -936,31 +1146,53 @@ async def _run_all(
     extract_model: str = _MODEL_EXTRACT,
     answer_model: str = _MODEL_ANSWER,
     judge_model: str = _MODEL_JUDGE,
+    evolve_model: str = _SF_MODEL_EVOLVE,
     api_key: str | None = None,
     base_url: str | None = None,
+    llm_provider: str = "siliconflow",
     embedding_provider: str = "siliconflow",
     embedding_model: str | None = None,
     embedding_api_key: str | None = None,
     use_window: bool = False,
     window_size: int = 10,
+    evolve_mode: bool = False,
+    consolidate: bool = True,
+    reflect: bool = True,
 ) -> dict:
-    resolved_key = api_key or _ENV_API_KEY
-    if not resolved_key:
-        sys.exit("No API key: pass --api-key or set SILICONFLOW_API_KEY")
-    llm_extract = DiskCacheWrapper(
-        SiliconFlowAdapter(api_key=resolved_key, base_url=base_url, default_model=extract_model)
-    )
-    llm_answer = DiskCacheWrapper(
-        SiliconFlowAdapter(api_key=resolved_key, base_url=base_url, default_model=answer_model)
-    )
-    llm_judge = DiskCacheWrapper(
-        SiliconFlowAdapter(api_key=resolved_key, base_url=base_url, default_model=judge_model)
-    )
+    # Credential resolution is provider-scoped. SiliconFlow still requires an
+    # explicit key (or SILICONFLOW_API_KEY) up front; dashscope defers to the
+    # factory, which fails fast on a missing DASHSCOPE_API_KEY rather than
+    # borrowing another provider's key.
+    if llm_provider == "siliconflow":
+        resolved_key = api_key or _ENV_API_KEY
+        if not resolved_key:
+            sys.exit("No API key: pass --api-key or set SILICONFLOW_API_KEY")
+    else:
+        resolved_key = api_key
+
+    def _make_llm(model: str) -> DiskCacheWrapper:
+        return DiskCacheWrapper(
+            LLMAdapterFactory.create(
+                llm_provider,
+                model=model,
+                api_key=resolved_key,
+                base_url=base_url,
+            )
+        )
+
+    llm_extract = _make_llm(extract_model)
+    llm_answer = _make_llm(answer_model)
+    llm_judge = _make_llm(judge_model)
+    # Reflection LLM is only used in --evolve-mode; build it lazily so a normal
+    # run does not construct an adapter (and resolve credentials) it never uses.
+    llm_reflect = _make_llm(evolve_model) if evolve_mode else None
     logger.info(
-        "models: extract=%s answer=%s judge=%s window=%d concurrency=%d use_window=%s window_size=%d",
+        "provider=%s models: extract=%s answer=%s judge=%s evolve=%s window=%d concurrency=%d use_window=%s window_size=%d",
+        llm_provider,
         extract_model,
         answer_model,
         judge_model,
+        evolve_model if evolve_mode else "-",
         WINDOW,
         concurrency,
         use_window,
@@ -1072,6 +1304,10 @@ async def _run_all(
                     skip_ingestion=is_cached,  # Pass skip_ingestion flag to avoid redundant work
                     use_window=use_window,
                     window_size=window_size,
+                    evolve_mode=evolve_mode,
+                    llm_reflect=llm_reflect,
+                    consolidate=consolidate,
+                    reflect=reflect,
                 )
 
                 # Close the backend connection first to checkpoint and flush WAL records.
@@ -1148,11 +1384,90 @@ async def _run_all(
         },
         "results": results,
     }
+    if evolve_mode:
+        report["evolve"] = _summarize_evolve(results, output_path)
     if output_path:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
         logger.info("wrote %s", output_path)
     return report
+
+
+def _summarize_evolve(results: list[dict], output_path: Path | None) -> dict:
+    """Aggregate per-case evolve deltas and write a before/after artifact.
+
+    Reports the honest end metric: QA accuracy and mean recall@10 before vs
+    after one evolution pass over the same questions. Promoted memories are
+    derived from stored records only (never the gold answer), so a positive
+    delta reflects genuine self-evolution benefit.
+    """
+    evos = [r["evolve"] for r in results if isinstance(r, dict) and "evolve" in r]
+    n = len(evos)
+    if n == 0:
+        return {"cases": 0}
+
+    before_correct = sum(1 for e in evos if e["before_correct"])
+    after_correct = sum(1 for e in evos if e["after_correct"])
+    gained = [e for e in evos if e["after_correct"] and not e["before_correct"]]
+    regressed = [e for e in evos if e["before_correct"] and not e["after_correct"]]
+    before_acc = before_correct / n
+    after_acc = after_correct / n
+    before_recall = sum(e["before_recall_at_10"] for e in evos) / n
+    after_recall = sum(e["after_recall_at_10"] for e in evos) / n
+    records_created = sum(e["records_created"] for e in evos)
+
+    summary = {
+        "cases": n,
+        "records_created": records_created,
+        "before_accuracy": round(before_acc, 4),
+        "after_accuracy": round(after_acc, 4),
+        "accuracy_delta": round(after_acc - before_acc, 4),
+        "before_recall_at_10": round(before_recall, 4),
+        "after_recall_at_10": round(after_recall, 4),
+        "recall_delta": round(after_recall - before_recall, 4),
+        "gained": len(gained),
+        "regressed": len(regressed),
+    }
+
+    # Persist a BeforeAfterReport artifact alongside the JSON output so the
+    # evolution pass leaves an auditable, comparable record on disk.
+    try:
+        from houyi.application.evolution.before_after import (
+            BeforeAfterReport,
+            make_run_id,
+            write_report,
+        )
+
+        out_dir = (
+            output_path.parent if output_path else Path("benchmark/output/memory")
+        ) / "evolve"
+        report = BeforeAfterReport(
+            run_id=make_run_id(),
+            optimizer="memory_dreamer",
+            artifact_type="locomo_qa",
+            baseline_content=f"{n} questions answered before evolution",
+            optimized_content=f"{records_created} memories promoted via self-evolution",
+            baseline_score=round(before_acc, 4),
+            optimized_score=round(after_acc, 4),
+            delta=round(after_acc - before_acc, 4),
+            sample_size=n,
+            signal_count=records_created,
+            verdict="promote" if after_acc > before_acc else "hold",
+            reason="accuracy_gain" if after_acc > before_acc else "no_gain",
+            metrics={
+                "before_recall_at_10": round(before_recall, 4),
+                "after_recall_at_10": round(after_recall, 4),
+                "gained": float(len(gained)),
+                "regressed": float(len(regressed)),
+            },
+        )
+        path = write_report(report, out_dir)
+        summary["report_path"] = str(path)
+        logger.info("wrote evolve before/after report %s", path)
+    except Exception:
+        logger.warning("failed to write evolve before/after report", exc_info=True)
+
+    return summary
 
 
 def main():
@@ -1231,21 +1546,36 @@ def main():
     else:
         ts = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
         out_path = Path("benchmark/output/memory") / f"locomo-{ts}.json"
+
+    # Resolve per-role model defaults from the chosen provider only when the
+    # caller did not pin a model explicitly. Provider sets are independent so
+    # one provider never inherits the other's identifiers.
+    provider_defaults = _PROVIDER_MODEL_DEFAULTS[args.llm_provider]
+    extract_model = args.extract_model or provider_defaults["extract"]
+    answer_model = args.answer_model or provider_defaults["answer"]
+    judge_model = args.judge_model or provider_defaults["judge"]
+    evolve_model = args.evolve_model or provider_defaults["evolve"]
+
     report = asyncio.run(
         _run_all(
             cases,
             out_path,
             concurrency=args.concurrency,
-            extract_model=args.extract_model,
-            answer_model=args.answer_model,
-            judge_model=args.judge_model,
+            extract_model=extract_model,
+            answer_model=answer_model,
+            judge_model=judge_model,
+            evolve_model=evolve_model,
             api_key=args.api_key,
             base_url=args.base_url,
+            llm_provider=args.llm_provider,
             embedding_provider=args.embedding_provider,
             embedding_model=args.embedding_model,
             embedding_api_key=args.embedding_api_key,
             use_window=args.use_window,
             window_size=args.window_size,
+            evolve_mode=args.evolve_mode,
+            consolidate=not args.no_consolidate,
+            reflect=not args.no_reflect,
         )
     )
     print(

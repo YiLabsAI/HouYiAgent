@@ -16,6 +16,7 @@ import os
 from houyi.adapters.llm.base import LLMAdapter
 from houyi.adapters.llm.models import (
     DEFAULT_MODEL,
+    PROVIDER_DASHSCOPE,
     PROVIDER_DEEPSEEK,
     PROVIDER_GOOGLE_AI,
     PROVIDER_OPENAI,
@@ -42,7 +43,13 @@ class LLMAdapterFactory:
     """
 
     @staticmethod
-    def create(provider: str | None = None) -> LLMAdapter:
+    def create(
+        provider: str | None = None,
+        *,
+        model: str | None = None,
+        api_key: str | None = None,
+        base_url: str | None = None,
+    ) -> LLMAdapter:
         """Create an LLM adapter.
 
         Args:
@@ -53,7 +60,13 @@ class LLMAdapterFactory:
                 * openai — OpenAI via the SDK
                 * openai_compat — generic OpenAI-compatible endpoint
                 * deepseek — DeepSeek via OpenAI-compatible endpoint
+                * dashscope — Alibaba Cloud Bailian via OpenAI-compatible endpoint
                 * None — reads DEFAULT_LLM_PROVIDER from env
+            model: Optional per-call model override. When omitted each provider
+                resolves its own configured/default model.
+            api_key: Optional credential override. When omitted the provider
+                resolves its own keyed credential (never another provider's key).
+            base_url: Optional endpoint override.
 
         Returns:
             Configured LLM adapter instance.
@@ -65,7 +78,7 @@ class LLMAdapterFactory:
         if provider == PROVIDER_SILICONFLOW:
             from houyi.adapters.llm.siliconflow_adapter import SiliconFlowAdapter
 
-            return SiliconFlowAdapter()
+            return SiliconFlowAdapter(api_key=api_key, base_url=base_url, default_model=model)
 
         if provider in _VERTEX_ALIASES:
             return _create_vertex_adapter()
@@ -78,6 +91,9 @@ class LLMAdapterFactory:
 
         if provider == PROVIDER_DEEPSEEK:
             return _create_deepseek_adapter()
+
+        if provider == PROVIDER_DASHSCOPE:
+            return _create_dashscope_adapter(model=model, api_key=api_key, base_url=base_url)
 
         logger.warning("Unknown provider %s, falling back to SiliconFlow", provider)
         from houyi.adapters.llm.siliconflow_adapter import SiliconFlowAdapter
@@ -155,6 +171,39 @@ def _create_deepseek_adapter() -> LLMAdapter:
     base_url = os.getenv(ENV_DEEPSEEK_BASE_URL) or os.getenv(ENV_OPENAI_BASE_URL)
     model = os.getenv(ENV_TOOLCALL_MODEL) or EnvConfig.get().siliconflow_model or DEFAULT_MODEL
     return OpenAICompatibleAdapter(api_key=api_key, base_url=base_url, model=model)
+
+
+def _create_dashscope_adapter(
+    *,
+    model: str | None = None,
+    api_key: str | None = None,
+    base_url: str | None = None,
+) -> LLMAdapter:
+    """Create a Bailian (DashScope) adapter via the OpenAI-compatible endpoint.
+
+    DashScope exposes an OpenAI-compatible surface at compatible-mode/v1, so it
+    reuses OpenAICompatibleAdapter with DashScope-keyed credentials. The adapter
+    raises if no DashScope key is available rather than silently borrowing
+    OPENAI_API_KEY, so a misconfigured run fails fast instead of routing to the
+    wrong endpoint.
+    """
+    from houyi.adapters.llm.openai_compat_adapter import OpenAICompatibleAdapter
+    from houyi.infrastructure.config.env_config import ENV_DASHSCOPE_API_KEY, EnvConfig
+
+    env = EnvConfig.get()
+    resolved_key = api_key or env.dashscope_api_key
+    if not resolved_key:
+        raise ValueError(
+            f"{ENV_DASHSCOPE_API_KEY} is not set but the LLM provider is dashscope. "
+            "DashScope must use its own key; falling back to OPENAI_API_KEY would "
+            "silently route requests to the wrong endpoint. Set "
+            f"{ENV_DASHSCOPE_API_KEY} or choose a different --llm-provider."
+        )
+    return OpenAICompatibleAdapter(
+        api_key=resolved_key,
+        base_url=base_url or env.dashscope_base_url,
+        model=model or env.dashscope_model,
+    )
 
 
 create_vertex_adapter = _create_vertex_adapter

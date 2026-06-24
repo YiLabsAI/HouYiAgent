@@ -491,6 +491,9 @@ class SQLiteMemoryBackend(MemoryBackend):
     def get_raw_turn(self, turn_id: str) -> RawTurn | None:
         return self._raw_turn_log.get_raw_turn(turn_id)
 
+    def list_raw_turns_by_namespace(self, namespace: str, *, limit: int = 2000) -> list[RawTurn]:
+        return self._raw_turn_log.list_turns_by_namespace(namespace, limit=limit)
+
     # ------------------------------------------------------------------
     # Extract queue (L0 → L1 hand-off)
     # ------------------------------------------------------------------

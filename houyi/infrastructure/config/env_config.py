@@ -153,7 +153,7 @@ _DEFAULT_RAG_KNOWLEDGE_DIR = "knowledge/"
 
 # DashScope defaults
 _DEFAULT_DASHSCOPE_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-_DEFAULT_DASHSCOPE_MODEL = "glm-5"
+_DEFAULT_DASHSCOPE_MODEL = "glm-5.1"
 _DEFAULT_DASHSCOPE_EMBEDDING_MODEL = "text-embedding-v2"
 
 

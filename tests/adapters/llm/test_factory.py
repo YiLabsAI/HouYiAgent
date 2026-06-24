@@ -11,10 +11,12 @@ import houyi.adapters.llm.factory as factory_module
 import houyi.adapters.llm.siliconflow_adapter as sf_module
 from houyi.adapters.llm.factory import (
     LLMAdapterFactory,
+    _create_dashscope_adapter,
     _create_deepseek_adapter,
     _create_vertex_adapter,
 )
 from houyi.adapters.llm.models import (
+    PROVIDER_DASHSCOPE,
     PROVIDER_DEEPSEEK,
     PROVIDER_GOOGLE_AI,
     PROVIDER_OPENAI_COMPAT,
@@ -23,6 +25,9 @@ from houyi.adapters.llm.models import (
 )
 from houyi.adapters.llm.siliconflow_adapter import SiliconFlowAdapter
 from houyi.infrastructure.config.env_config import (
+    ENV_DASHSCOPE_API_KEY,
+    ENV_DASHSCOPE_BASE_URL,
+    ENV_DASHSCOPE_MODEL,
     ENV_DEEPSEEK_API_KEY,
     ENV_DEEPSEEK_BASE_URL,
     ENV_DEEPSEEK_MODEL,
@@ -90,6 +95,19 @@ class TestLLMAdapterFactory:
         ):
             adapter = LLMAdapterFactory.create(PROVIDER_OPENAI_COMPAT)
             assert hasattr(adapter, "chat")
+
+    def test_dashscope(self):
+        """dashscope provider creates OpenAI-compatible adapter."""
+        fake_openai = ModuleType("openai")
+        fake_openai.AsyncOpenAI = MagicMock()
+        with (
+            patch.dict(os.environ, {ENV_DASHSCOPE_API_KEY: "bailian-key"}, clear=False),
+            patch.dict(sys.modules, {"openai": fake_openai}),
+        ):
+            EnvConfig._reset()
+            adapter = LLMAdapterFactory.create(PROVIDER_DASHSCOPE)
+            EnvConfig._reset()
+        assert hasattr(adapter, "chat")
 
     def test_unknown_falls_back(self):
         fake_adapter = MagicMock(spec=SiliconFlowAdapter)
@@ -203,6 +221,109 @@ def test_vertex_forces_genai(monkeypatch):
         adapter = _create_vertex_adapter()
 
     assert adapter == "forced-genai"
+
+
+def test_dashscope_uses_keyed_env(monkeypatch):
+    fake_openai = ModuleType("openai")
+    fake_openai.AsyncOpenAI = MagicMock()
+    with (
+        patch.dict(sys.modules, {"openai": fake_openai}),
+        patch.dict(
+            os.environ,
+            {
+                ENV_DASHSCOPE_API_KEY: "bailian-key",
+                ENV_DASHSCOPE_BASE_URL: "https://dashscope.example/compatible-mode/v1",
+                ENV_DASHSCOPE_MODEL: "glm-5.1",
+            },
+            clear=False,
+        ),
+    ):
+        EnvConfig._reset()
+        adapter = _create_dashscope_adapter()
+        EnvConfig._reset()
+
+    assert adapter.api_key == "bailian-key"
+    assert adapter.base_url == "https://dashscope.example/compatible-mode/v1"
+    assert adapter.model == "glm-5.1"
+
+
+def test_dashscope_missing_key_raises(monkeypatch):
+    fake_openai = ModuleType("openai")
+    fake_openai.AsyncOpenAI = MagicMock()
+    with (
+        patch.dict(sys.modules, {"openai": fake_openai}),
+        patch.dict(os.environ, {ENV_DASHSCOPE_API_KEY: ""}, clear=False),
+    ):
+        EnvConfig._reset()
+        with pytest.raises(ValueError):
+            _create_dashscope_adapter()
+        EnvConfig._reset()
+
+
+def test_dashscope_override_wins(monkeypatch):
+    fake_openai = ModuleType("openai")
+    fake_openai.AsyncOpenAI = MagicMock()
+    with (
+        patch.dict(sys.modules, {"openai": fake_openai}),
+        patch.dict(
+            os.environ,
+            {
+                ENV_DASHSCOPE_API_KEY: "env-key",
+                ENV_DASHSCOPE_BASE_URL: "https://env.example/v1",
+                ENV_DASHSCOPE_MODEL: "glm-5.1",
+            },
+            clear=False,
+        ),
+    ):
+        EnvConfig._reset()
+        adapter = _create_dashscope_adapter(
+            model="qwen3.7-max",
+            api_key="explicit-key",
+            base_url="https://explicit.example/v1",
+        )
+        EnvConfig._reset()
+
+    assert adapter.api_key == "explicit-key"
+    assert adapter.base_url == "https://explicit.example/v1"
+    assert adapter.model == "qwen3.7-max"
+
+
+def test_dashscope_explicit_key(monkeypatch):
+    fake_openai = ModuleType("openai")
+    fake_openai.AsyncOpenAI = MagicMock()
+    with (
+        patch.dict(sys.modules, {"openai": fake_openai}),
+        patch.dict(os.environ, {ENV_DASHSCOPE_API_KEY: ""}, clear=False),
+    ):
+        EnvConfig._reset()
+        adapter = _create_dashscope_adapter(api_key="explicit-key")
+        EnvConfig._reset()
+
+    assert adapter.api_key == "explicit-key"
+
+
+def test_create_siliconflow_model_override(monkeypatch):
+    captured = {}
+
+    def _fake_ctor(*, api_key=None, base_url=None, default_model=None):
+        captured["api_key"] = api_key
+        captured["base_url"] = base_url
+        captured["default_model"] = default_model
+        return MagicMock(spec=SiliconFlowAdapter)
+
+    with patch.object(sf_module, "SiliconFlowAdapter", side_effect=_fake_ctor):
+        LLMAdapterFactory.create(
+            PROVIDER_SILICONFLOW,
+            model="custom-model",
+            api_key="custom-key",
+            base_url="https://custom.example/v1",
+        )
+
+    assert captured == {
+        "api_key": "custom-key",
+        "base_url": "https://custom.example/v1",
+        "default_model": "custom-model",
+    }
 
 
 def test_deepseek_prefers_env(monkeypatch):

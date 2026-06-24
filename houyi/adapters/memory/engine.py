@@ -34,9 +34,12 @@ from typing import Any
 
 from houyi.adapters.embedding import EmbeddingProvider
 from houyi.adapters.memory.answerer import AnswerResult
+from houyi.adapters.memory.backends.base import EntityStateView
 from houyi.adapters.memory.builder import MemoryCandidateBuilder
 from houyi.adapters.memory.classifier import MemoryClassifier
 from houyi.adapters.memory.deduplicator import MemoryDeduplicator
+from houyi.adapters.memory.dreamer import EvolutionBudget, EvolutionRunReport
+from houyi.adapters.memory.dreamer_eval import mine_failure_queries
 from houyi.adapters.memory.event_emitter import MemoryEventEmitter
 from houyi.adapters.memory.extractor import MemoryCandidateExtractor
 from houyi.adapters.memory.forgetting import apply_forgetting
@@ -76,8 +79,10 @@ from houyi.adapters.memory.types import (
     RelevanceDetail,
     SessionContext,
 )
+from houyi.adapters.memory.workers.dreamer_worker import DreamerWorker
 from houyi.adapters.memory.workers.embedding_backfill import EmbeddingBackfillWorker
 from houyi.adapters.memory.workers.extractor_worker import ExtractorWorker
+from houyi.adapters.memory.workers.trigger import ActivityMonitor, TriggerPolicy
 from houyi.application.evolution.events import EvolutionEventType
 
 # Maps a recall-layer RetrieverKind to the legacy RecallMatchMethod enum
@@ -147,6 +152,13 @@ class MemoryEngine:
         turn_writer: TurnWriter | None = None,
         extractor_worker: ExtractorWorker | None = None,
         backfill_worker: EmbeddingBackfillWorker | None = None,
+        # Background evolution. Off by default: when evolution_trigger is None
+        # start() launches no dreamer worker. Passing a TriggerPolicy (e.g.
+        # HybridTriggerPolicy over self.activity_monitor) opts in.
+        activity_monitor: ActivityMonitor | None = None,
+        evolution_trigger: TriggerPolicy | None = None,
+        evolution_budget: EvolutionBudget | None = None,
+        entity_state: EntityStateView | None = None,
     ):
         self._store = store
         self._builder = builder or MemoryCandidateBuilder(llm_adapter=llm_adapter)
@@ -179,12 +191,29 @@ class MemoryEngine:
         self._turn_writer: TurnWriter | None = turn_writer
         self._extractor_worker: ExtractorWorker | None = extractor_worker
         self._backfill_worker: EmbeddingBackfillWorker | None = backfill_worker
+        # Background-evolution wiring. The monitor always exists (cheap) so the
+        # hot path can record activity/failures unconditionally; the trigger
+        # gates whether a DreamerWorker is launched in start(). dreamer_worker
+        # is built lazily in start() with self as the engine, avoiding a
+        # construction cycle between engine and worker.
+        self._activity_monitor: ActivityMonitor = activity_monitor or ActivityMonitor()
+        self._evolution_trigger: TriggerPolicy | None = evolution_trigger
+        self._evolution_budget: EvolutionBudget | None = evolution_budget
+        self._dreamer_worker: DreamerWorker | None = None
         self._worker_tasks: list[asyncio.Task[Any]] = []
         self._worker_stops: list[asyncio.Event] = []
         # The flush implementation needs to query the SQLite-level extract
         # queue. The legacy MemoryStore wraps the backend via a private
         # attribute; cache the handle once so the hot path stays cheap.
         self._backend = getattr(store, "_backend", None)
+        # Deterministic entity-state conflict resolution (the consolidator)
+        # runs at the start of evolve() when a view is present. Optional so
+        # engines built without a view (tests, lexical-only) skip it.
+        self._entity_state: EntityStateView | None = entity_state
+        # The LLM adapter drives the failure-anchored reflector in evolve();
+        # kept here (not just on the builder/extractor) so the reflector can
+        # re-extract query-answering facts from source turns.
+        self._llm_adapter = llm_adapter
 
     @staticmethod
     def _build_reasoner(
@@ -204,6 +233,11 @@ class MemoryEngine:
     def store(self) -> MemoryStore:
         """Access the underlying store directly."""
         return self._store
+
+    @property
+    def activity_monitor(self) -> ActivityMonitor:
+        """Hot-path activity/failure monitor that drives evolution triggers."""
+        return self._activity_monitor
 
     # ------------------------------------------------------------------
     # Write pipeline
@@ -340,14 +374,18 @@ class MemoryEngine:
         adapted to MemoryRecall so existing callers stay unchanged.
         Otherwise the legacy MemoryRetriever path is used.
         """
+        # A recall is hot-path activity regardless of outcome; record it so the
+        # idle-based evolution trigger sees the system as busy.
+        self._activity_monitor.record_activity()
         if self._recall_orchestrator is not None:
             recalls = await self._recall_via_orchestrator(query, top_k, session_context)
         else:
             recalls = await self._retriever.retrieve(query, session_context, top_k)
         if not recalls:
-            # Empty recall = retrieval miss on the legacy path. Surface to
-            # the evolution control plane the same way the new orchestrator
-            # does, so signal mining is path-uniform.
+            # Empty recall = retrieval miss. Surface it to the evolution control
+            # plane the same way the orchestrator does (path-uniform signal
+            # mining) and bump failure pressure so the trigger can react.
+            self._activity_monitor.record_failure()
             self._emitter.emit(
                 EvolutionEventType.RECALL_FAILURE,
                 target="memory_engine",
@@ -699,6 +737,9 @@ class MemoryEngine:
                 "MemoryEngine has no TurnWriter; build it via "
                 "build_memory_engine or pass turn_writer=... explicitly."
             )
+        # A turn write is hot-path activity; record it so the idle-based
+        # evolution trigger does not fire while ingestion is in flight.
+        self._activity_monitor.record_activity()
         # The fast_path is sync but does blocking SQLite work; dispatch
         # off-thread so the event loop is not blocked under load.
         return await asyncio.to_thread(
@@ -732,6 +773,24 @@ class MemoryEngine:
                 asyncio.create_task(
                     self._backfill_worker.run_forever(stop),
                     name="memory-backfill-worker",
+                )
+            )
+        # Background evolution is opt-in: only launch the dreamer when a
+        # trigger policy was supplied. The worker is built here (not at
+        # construction) so it can take this engine as its evolve target
+        # without a construction-time cycle.
+        if self._evolution_trigger is not None:
+            self._dreamer_worker = DreamerWorker(
+                engine=self,
+                budget=self._evolution_budget,
+                trigger=self._evolution_trigger,
+            )
+            stop = asyncio.Event()
+            self._worker_stops.append(stop)
+            self._worker_tasks.append(
+                asyncio.create_task(
+                    self._dreamer_worker.run_forever(stop),
+                    name="memory-dreamer-worker",
                 )
             )
 
@@ -785,15 +844,15 @@ class MemoryEngine:
         """
         if self._backend is None:
             return {"extracted": 0, "backfilled": 0}
-        extract_pending = await asyncio.to_thread(self._extract_pending_count)
-        embedding_pending = await asyncio.to_thread(self._embedding_pending_count)
+        extract_pending = await asyncio.to_thread(_extract_pending_count, self._backend)
+        embedding_pending = await asyncio.to_thread(_embedding_pending_count, self._backend)
         extracted = 0
         backfilled = 0
         deadline = time.monotonic() + max(0.0, timeout)
         sleep_s = 0.05
         while True:
-            current_extract = await asyncio.to_thread(self._extract_pending_count)
-            current_embedding = await asyncio.to_thread(self._embedding_pending_count)
+            current_extract = await asyncio.to_thread(_extract_pending_count, self._backend)
+            current_embedding = await asyncio.to_thread(_embedding_pending_count, self._backend)
             if current_extract == 0 and current_embedding == 0:
                 extracted = max(extracted, extract_pending)
                 backfilled = max(backfilled, embedding_pending)
@@ -806,6 +865,35 @@ class MemoryEngine:
                 )
             await asyncio.sleep(sleep_s)
             sleep_s = min(sleep_s * 1.5, 0.2)
+
+    # ------------------------------------------------------------------
+    # Evolution
+    # ------------------------------------------------------------------
+
+    def evolve(
+        self,
+        *,
+        budget: EvolutionBudget | None = None,
+        persist: bool = True,
+        consolidate: bool = True,
+        reflect: bool = True,
+        failing_queries: list[str] | None = None,
+        namespace: str | None = None,
+        llm: Any | None = None,
+    ) -> EvolutionRunReport:
+        """Run consolidation then reflection off the hot path. See _run_evolve."""
+        return _run_evolve(
+            entity_state=self._entity_state,
+            recall_orchestrator=self._recall_orchestrator,
+            backend=self._backend,
+            store=self._store,
+            emitter=self._emitter,
+            llm_adapter=llm if llm is not None else self._llm_adapter,
+            consolidate=consolidate,
+            reflect=reflect,
+            failing_queries=failing_queries,
+            namespace=namespace,
+        )
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -823,39 +911,41 @@ class MemoryEngine:
         result = await self._recall_orchestrator.recall(recall_query, RetrieverContext())
         return [_candidate_to_memory_recall(c) for c in result.candidates]
 
-    def _extract_pending_count(self) -> int:
-        """Return the number of extract-queue rows still in flight.
 
-        pending plus in_progress: anything else (done, failed) is final
-        and does not need a flush wait.
-        """
-        if self._backend is None:
-            return 0
-        with contextlib.suppress(Exception):
-            stats = self._backend.extract_queue_stats()
-            return int(stats.get("pending", 0)) + int(stats.get("in_progress", 0))
+def _extract_pending_count(backend: Any | None) -> int:
+    """Return the number of extract-queue rows still in flight.
+
+    pending plus in_progress: anything else (done, failed) is final
+    and does not need a flush wait.
+    """
+    if backend is None:
         return 0
+    with contextlib.suppress(Exception):
+        stats = backend.extract_queue_stats()
+        return int(stats.get("pending", 0)) + int(stats.get("in_progress", 0))
+    return 0
 
-    def _embedding_pending_count(self) -> int:
-        """Return how many MemoryRecord rows still need a vector backfill.
 
-        Uses a small fetch (limit=128) and a one-shot SELECT count fallback
-        so the hot path stays cheap; the polling cadence keeps the cost
-        bounded even when the backlog is large.
-        """
-        if self._backend is None:
-            return 0
-        with contextlib.suppress(Exception):
-            pending = self._backend.list_pending_embeddings(limit=1)
-            if not pending:
-                return 0
-        with contextlib.suppress(Exception):
-            conn = self._backend._conn()
-            row = conn.execute(
-                "SELECT COUNT(*) AS n FROM memories WHERE embedding_pending = 1"
-            ).fetchone()
-            return int(row["n"]) if row is not None else 0
+def _embedding_pending_count(backend: Any | None) -> int:
+    """Return how many MemoryRecord rows still need a vector backfill.
+
+    Uses a small fetch (limit=128) and a one-shot SELECT count fallback
+    so the hot path stays cheap; the polling cadence keeps the cost
+    bounded even when the backlog is large.
+    """
+    if backend is None:
         return 0
+    with contextlib.suppress(Exception):
+        pending = backend.list_pending_embeddings(limit=1)
+        if not pending:
+            return 0
+    with contextlib.suppress(Exception):
+        conn = backend._conn()
+        row = conn.execute(
+            "SELECT COUNT(*) AS n FROM memories WHERE embedding_pending = 1"
+        ).fetchone()
+        return int(row["n"]) if row is not None else 0
+    return 0
 
 
 def _candidate_to_memory_recall(candidate: RecallCandidate) -> MemoryRecall:
@@ -906,3 +996,115 @@ def _candidate_to_memory_recall(candidate: RecallCandidate) -> MemoryRecall:
         relevance_detail=RelevanceDetail(),
         qualifiers=quals,
     )
+
+
+def _run_consolidation(view: EntityStateView | None, enabled: bool):
+    """Run the deterministic consolidator when an entity_state view is wired.
+
+    Returns the ConsolidationReport, or None when consolidation is disabled
+    (no view, or enabled=False for ablation). Kept module-level so
+    MemoryEngine.evolve stays a thin orchestrator and the class stays
+    under the size gate.
+    """
+    if not enabled or view is None:
+        return None
+    from houyi.adapters.memory.dreamer_consolidate import EntityStateConsolidator
+
+    return EntityStateConsolidator(view).consolidate()
+
+
+def _run_evolve(
+    *,
+    entity_state: EntityStateView | None,
+    recall_orchestrator: Any | None,
+    backend: Any | None,
+    store: MemoryStore,
+    emitter: MemoryEventEmitter,
+    llm_adapter: Any | None,
+    consolidate: bool,
+    reflect: bool,
+    failing_queries: list[str] | None,
+    namespace: str | None,
+) -> EvolutionRunReport:
+    """Run consolidation then reflection, aggregating into one report.
+
+    Module-level so MemoryEngine.evolve stays a thin wrapper and the class
+    stays under the size gate.
+    """
+    started = time.perf_counter()
+    consolidation = _run_consolidation(entity_state, consolidate)
+    reflection = _run_reflection(
+        recall_orchestrator,
+        backend,
+        store,
+        emitter,
+        llm_adapter,
+        reflect=reflect,
+        failing_queries=failing_queries,
+        namespace=namespace,
+    )
+    kept = reflection.kept_records if reflection is not None else ()
+    return EvolutionRunReport(
+        duration_ms=round((time.perf_counter() - started) * 1000, 3),
+        created_records=tuple(kept),
+        consolidation=consolidation,
+        reflection=reflection,
+    )
+
+
+def _run_reflection(
+    recall_orchestrator: Any | None,
+    backend: Any | None,
+    store: MemoryStore,
+    emitter: MemoryEventEmitter,
+    llm_adapter: Any | None,
+    *,
+    reflect: bool,
+    failing_queries: list[str] | None,
+    namespace: str | None,
+):
+    """Run the failure-anchored reflector when its dependencies are wired.
+
+    Returns the ReflectionReport, or None when reflection is disabled
+    (reflect=False) or any of its read-only / append-only dependencies are
+    absent (no recall orchestrator, no backend, no llm, or no failing query).
+    Missing dependencies degrade cleanly to None so engines built without a
+    recall path or llm (tests, lexical-only) skip reflection without error.
+    Kept module-level so MemoryEngine.evolve stays a thin orchestrator and
+    the class stays under the size gate.
+    """
+    if not reflect:
+        return None
+    if recall_orchestrator is None or backend is None or llm_adapter is None:
+        return None
+    queries = failing_queries
+    if queries is None:
+        event_log = emitter.event_log if emitter is not None else None
+        if event_log is None:
+            return None
+        queries = mine_failure_queries(event_log)
+    if not queries:
+        return None
+    from houyi.adapters.memory.dreamer_reflect import (
+        LLMReExtractor,
+        MemoryReflector,
+        RecallAnchoredSourceSampler,
+        SelfRetrievabilityJudge,
+        TokenOverlapGroundingVerifier,
+        _BackendSourceReader,
+        _SyncRecallProbe,
+    )
+    from houyi.adapters.memory.fact_promoter import MemoryRecordPromoter
+
+    ns = namespace or "default"
+    promoter = MemoryRecordPromoter(backend)
+    reflector = MemoryReflector(
+        sampler=RecallAnchoredSourceSampler(),
+        reextractor=LLMReExtractor(),
+        verifier=TokenOverlapGroundingVerifier(),
+        judge=SelfRetrievabilityJudge(promoter, store),
+        recall=_SyncRecallProbe(recall_orchestrator),
+        source_reader=_BackendSourceReader(backend),
+        llm=llm_adapter,
+    )
+    return reflector.reflect(queries, namespace=ns)

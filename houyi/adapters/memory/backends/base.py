@@ -238,13 +238,21 @@ class EntityStateView(ABC):
         qualifiers: dict[str, str] | None = None,
         accumulate: bool = False,
     ) -> EntityStateRecord:
-        """Insert a new active state, closing any prior active row first.
+        """Append a new active state row; append-only, does NOT close prior active rows.
 
-        - If a row with valid_to IS NULL already exists for the
-        triple, its valid_to is set to the new valid_from.
-        - The new row is inserted with valid_to = NULL.
-        - valid_from must be greater than or equal to any existing
-        active row's valid_from; otherwise raise ValueError.
+        Closing stale active rows (so a single-valued attribute has at most one
+        active row) is deferred to the consolidator supersede pass, which scans
+        triples with >=2 active rows and sets valid_to on the superseded ones by
+        valid_from order. Keeping the write path append-only preserves its low
+        latency; consolidation runs off the hot path. Callers that need immediate
+        retraction use invalidate().
+
+        - The new row is inserted with valid_to = NULL regardless of accumulate.
+        - accumulate only tags the row so readers know multiple active values are
+        expected (an open set) rather than a contradiction.
+        - valid_from must be >= any existing active row's valid_from; otherwise
+        raise ValueError, because the materialized view has no defined order
+        for backdated edits.
         """
 
     @abstractmethod
@@ -259,6 +267,44 @@ class EntityStateView(ABC):
         """Close the currently active row without inserting a successor.
 
         Returns True if an active row was closed.
+        """
+
+    @abstractmethod
+    def list_conflicted_triples(
+        self,
+        namespace: str | None = None,
+    ) -> list[tuple[str, str, str]]:
+        """Return (namespace, entity, attribute) triples with >=2 active rows.
+
+        When namespace is None, scan every namespace. Backed by the partial
+        index over active rows, so the scan is O(conflicts) rather than
+        O(all rows). The consolidator uses this to find single-valued
+        attributes the append-only write path left with more than one
+        concurrent active value.
+        """
+
+    @abstractmethod
+    def supersede(
+        self,
+        namespace: str,
+        entity: str,
+        attribute: str,
+        *,
+        keep_state_id: str,
+        valid_to: float,
+    ) -> tuple[int, int]:
+        """Close every active row of the triple except keep_state_id.
+
+        The kept row (the successor) stays active; every other active row is
+        closed by setting valid_to (the successor's valid_from, to preserve
+        bi-temporal as-of semantics). The valid_to IS NULL guard makes this
+        idempotent: a second call closes zero rows.
+
+        The closure is propagated to the backing memories row of each closed
+        entity_state row, re-derived by the shared fact identity hash, so that
+        FTS and vector recall also stop surfacing the superseded value. The
+        entity_state close and the memories propagation run in one transaction
+        so the two tables never disagree. Returns (rows_closed, rows_propagated).
         """
 
     @abstractmethod

@@ -51,6 +51,14 @@ class DummyEntityStateView(EntityStateView):
     def list_entities(self, namespace: str) -> list[str]:
         return []
 
+    def list_conflicted_triples(self, namespace: str | None = None) -> list[tuple[str, str, str]]:
+        return []
+
+    def supersede(
+        self, namespace, entity, attribute, *, keep_state_id, valid_to
+    ) -> tuple[int, int]:
+        return (0, 0)
+
     def upsert(
         self,
         namespace: str,

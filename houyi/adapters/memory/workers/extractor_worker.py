@@ -25,6 +25,7 @@ import re
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from houyi.adapters.memory.fact_identity import fact_record_id
 from houyi.adapters.memory.fact_promoter import FactPromoter, MemoryRecordPromoter
 from houyi.adapters.memory.types import (
     AtomicFact,
@@ -533,8 +534,6 @@ class ExtractorWorker:
 
     def _sync_project_result(self, turn: RawTurn, result: Any) -> None:
         """Synchronous projection run on a single thread to guarantee atomic transaction."""
-        import hashlib
-
         ns = turn.namespace
         with self._backend.transaction():
             batch_map: dict[str, str] = {}
@@ -566,9 +565,7 @@ class ExtractorWorker:
 
                 # Compute record_id for memories
                 anchor = fact.source_anchor or ""
-                plain = f"{fact.subject}|{fact.predicate}|{fact.object}|{anchor}"
-                digest = hashlib.sha256(plain.encode()).hexdigest()[:24]
-                record_id = f"fact:{digest}"
+                record_id = fact_record_id(fact.subject, fact.predicate, fact.object, anchor)
 
                 # Register mappings for edge resolution
                 batch_map[f"{fact.subject}.{fact.predicate}"] = state_record.state_id

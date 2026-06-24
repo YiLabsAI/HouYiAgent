@@ -110,6 +110,22 @@ class SQLiteRawTurnLog:
         )
         return int(row["n"])
 
+    def list_turns_by_namespace(self, namespace: str, *, limit: int = 2000) -> list[RawTurn]:
+        """Return every turn in a namespace across all sessions, newest-first.
+
+        Used by the reflector's source sampler to scan candidate source turns
+        for a failing query without knowing session ids ahead of time.
+        """
+        rows = (
+            self._conn_manager.get_connection()
+            .execute(
+                "SELECT * FROM raw_turn_log WHERE namespace = ? ORDER BY created_at DESC LIMIT ?",
+                (namespace, limit),
+            )
+            .fetchall()
+        )
+        return [_row_to_raw_turn(r) for r in rows]
+
     def get_raw_turn(self, turn_id: str) -> RawTurn | None:
         """Look up a single turn by id. Returns None when missing."""
         row = (
