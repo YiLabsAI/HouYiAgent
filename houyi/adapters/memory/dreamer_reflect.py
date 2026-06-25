@@ -487,21 +487,27 @@ class RetrievabilityJudge(Protocol):
 
 
 class SelfRetrievabilityJudge:
-    """Persist-test-retract: promote, recall, keep iff the candidate surfaces.
+    """Persist-test-retract: promote, backfill, recall, keep iff it surfaces.
 
     The candidate is written through the append-only promoter (the same path
-    every writer uses), then the failing query is re-run through real recall.
-    If the candidate's (subject, object) appears in the top-k, it is genuinely
-    retrievable and is kept (the persisted record is returned); otherwise it is
-    retracted by re-putting the record with valid_to set (append-only bi-
-    temporal retraction, no delete) and None is returned. This breaks the old
-    lexical-coverage tautology: an observation that merely echoes query tokens
-    no longer passes by construction -- it must actually surface in retrieval.
+    every writer uses), its embedding is backfilled so the vector retriever
+    can find it (not just FTS), then the failing query is re-run through real
+    recall. If the candidate's (subject, object) appears in the top-k, it is
+    genuinely retrievable and is kept (the persisted record is returned);
+    otherwise it is retracted by re-putting the record with valid_to set
+    (append-only bi-temporal retraction, no delete) and None is returned.
+    This breaks the old lexical-coverage tautology: an observation that merely
+    echoes query tokens no longer passes by construction -- it must actually
+    surface in retrieval. Backfilling before the check is what makes the
+    judge measure real (semantic) retrievability rather than FTS-only, so a
+    fact whose content does not lexically echo the query (e.g. a singular vs
+    plural wording) is not wrongly retracted.
     """
 
-    def __init__(self, promoter: FactPromoter, store: Any) -> None:
+    def __init__(self, promoter: FactPromoter, store: Any, backfill: Any | None = None) -> None:
         self._promoter = promoter
         self._store = store
+        self._backfill = backfill
 
     def judge(
         self,
@@ -516,6 +522,11 @@ class SelfRetrievabilityJudge:
         record = self._promoter.promote(source_turn, fact)
         if record is None:
             return None
+        if self._backfill is not None:
+            # Fill the candidate's embedding so the vector retriever can
+            # surface it; without this the recall check is FTS-only and
+            # wrongly retracts semantically-retrievable facts.
+            _run_coro(self._backfill.process_once())
         candidates = recall.recall(query, namespace=namespace, top_k=top_k)
         subject = fact.subject.lower()
         obj_tokens = _tokens(fact.object)

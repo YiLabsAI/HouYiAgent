@@ -889,6 +889,7 @@ class MemoryEngine:
             store=self._store,
             emitter=self._emitter,
             llm_adapter=llm if llm is not None else self._llm_adapter,
+            embedding_provider=self._embedding,
             consolidate=consolidate,
             reflect=reflect,
             failing_queries=failing_queries,
@@ -1021,6 +1022,7 @@ def _run_evolve(
     store: MemoryStore,
     emitter: MemoryEventEmitter,
     llm_adapter: Any | None,
+    embedding_provider: Any | None,
     consolidate: bool,
     reflect: bool,
     failing_queries: list[str] | None,
@@ -1039,6 +1041,7 @@ def _run_evolve(
         store,
         emitter,
         llm_adapter,
+        embedding_provider,
         reflect=reflect,
         failing_queries=failing_queries,
         namespace=namespace,
@@ -1058,6 +1061,7 @@ def _run_reflection(
     store: MemoryStore,
     emitter: MemoryEventEmitter,
     llm_adapter: Any | None,
+    embedding_provider: Any | None,
     *,
     reflect: bool,
     failing_queries: list[str] | None,
@@ -1098,11 +1102,22 @@ def _run_reflection(
 
     ns = namespace or "default"
     promoter = MemoryRecordPromoter(backend)
+    # A backfill worker lets the judge fill a candidate's embedding before
+    # its retrievability check, so the judge measures real (vector + FTS)
+    # retrievability rather than FTS-only. Only wired when an embedding
+    # provider is present; without it the judge falls back to FTS-only.
+    backfill = None
+    if embedding_provider is not None:
+        from houyi.adapters.memory.workers.embedding_backfill import (
+            EmbeddingBackfillWorker,
+        )
+
+        backfill = EmbeddingBackfillWorker(backend=backend, provider=embedding_provider)
     reflector = MemoryReflector(
         sampler=RecallAnchoredSourceSampler(),
         reextractor=LLMReExtractor(),
         verifier=TokenOverlapGroundingVerifier(),
-        judge=SelfRetrievabilityJudge(promoter, store),
+        judge=SelfRetrievabilityJudge(promoter, store, backfill=backfill),
         recall=_SyncRecallProbe(recall_orchestrator),
         source_reader=_BackendSourceReader(backend),
         llm=llm_adapter,
