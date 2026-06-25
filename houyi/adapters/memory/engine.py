@@ -1090,22 +1090,19 @@ def _run_reflection(
     if not queries:
         return None
     from houyi.adapters.memory.dreamer_reflect import (
-        LLMReExtractor,
         MemoryReflector,
-        RecallAnchoredSourceSampler,
-        SelfRetrievabilityJudge,
-        TokenOverlapGroundingVerifier,
+        QueryFocusedReflector,
+        RecallAnchoredSampler,
+        RetrievabilityEvaluator,
+        SourceGroundedMutator,
         _BackendSourceReader,
+        _run_coro,
         _SyncRecallProbe,
     )
     from houyi.adapters.memory.fact_promoter import MemoryRecordPromoter
 
     ns = namespace or "default"
     promoter = MemoryRecordPromoter(backend)
-    # A backfill worker lets the judge fill a candidate's embedding before
-    # its retrievability check, so the judge measures real (vector + FTS)
-    # retrievability rather than FTS-only. Only wired when an embedding
-    # provider is present; without it the judge falls back to FTS-only.
     backfill = None
     if embedding_provider is not None:
         from houyi.adapters.memory.workers.embedding_backfill import (
@@ -1114,12 +1111,12 @@ def _run_reflection(
 
         backfill = EmbeddingBackfillWorker(backend=backend, provider=embedding_provider)
     reflector = MemoryReflector(
-        sampler=RecallAnchoredSourceSampler(),
-        reextractor=LLMReExtractor(),
-        verifier=TokenOverlapGroundingVerifier(),
-        judge=SelfRetrievabilityJudge(promoter, store, backfill=backfill),
+        sampler=RecallAnchoredSampler(),
+        reflector=QueryFocusedReflector(),
+        mutator=SourceGroundedMutator(),
+        evaluator=RetrievabilityEvaluator(promoter, store, backfill=backfill),
         recall=_SyncRecallProbe(recall_orchestrator),
         source_reader=_BackendSourceReader(backend),
         llm=llm_adapter,
     )
-    return reflector.reflect(queries, namespace=ns)
+    return _run_coro(reflector.reflect(queries, namespace=ns))

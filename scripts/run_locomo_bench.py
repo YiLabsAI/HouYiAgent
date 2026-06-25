@@ -553,29 +553,46 @@ def _rough_semantic_match(expected: str, answer: str) -> bool:
     return False
 
 
-def _recall_hits(
+def _recall_metrics(
     rows: list[_BenchRow], evidence: tuple[str, ...], *, top_k: int
-) -> tuple[float, float]:
+) -> tuple[float, float, float]:
+    """Compute recall@k, nDCG@k, precision@k (6 golden metrics).
+
+    Relevance is binary: a candidate is relevant if its source_anchor matches
+    a gold evidence anchor. nDCG rewards relevant items at higher ranks
+    (position-discounted); Precision measures noise (non-relevant slots in
+    top-k). Both use first-occurrence only (duplicate anchors do not double-
+    count).
+    """
+    import math
+
     if not evidence:
-        return 0.0, 0.0
+        return 0.0, 0.0, 0.0
     evidence_set = set(evidence)
     ranked = rows[:top_k]
-    hit_positions: list[int] = []
+    seen: set[str] = set()
+    first_hits: list[int] = []
     for idx, row in enumerate(ranked, start=1):
-        if _anchor_turn_id(row.source_anchor) in evidence_set:
-            hit_positions.append(idx)
-    recall_at_k = len(
-        {p for p in [_anchor_turn_id(r.source_anchor) for r in ranked] if p in evidence_set}
-    ) / max(len(evidence_set), 1)
-    mrr = 1.0 / hit_positions[0] if hit_positions else 0.0
+        anchor = _anchor_turn_id(row.source_anchor)
+        if anchor in evidence_set and anchor not in seen:
+            seen.add(anchor)
+            first_hits.append(idx)
+    recall_at_k = len(seen) / max(len(evidence_set), 1)
+    dcg = sum(1.0 / math.log2(pos + 1) for pos in first_hits)
+    idcg = sum(1.0 / math.log2(i + 1) for i in range(1, min(len(evidence_set), top_k) + 1))
+    ndcg_at_k = dcg / idcg if idcg > 0 else 0.0
+    precision_at_k = len(seen) / max(len(ranked), 1)
     logger.info(
-        "  Recall hits: %s (recall_at_%d=%.2f, mrr=%.2f)",
+        "  Recall hits: %s (R@%d=%.2f, nDCG@%d=%.2f, P@%d=%.2f)",
         ", ".join(f"{i}:{_anchor_turn_id(r.source_anchor)}" for i, r in enumerate(ranked, start=1)),
         top_k,
         recall_at_k,
-        mrr,
+        top_k,
+        ndcg_at_k,
+        top_k,
+        precision_at_k,
     )
-    return recall_at_k, mrr
+    return recall_at_k, ndcg_at_k, precision_at_k
 
 
 def _percentile(values: list[float], p: float) -> float:
@@ -665,13 +682,16 @@ async def _answer_and_score(
         top_k=RECALL_TOP_K,
     )
     rows = _recalls_to_rows(engine, answer.extras.get("recalls", []))
-    recall_at_10, mrr = _recall_hits(rows, case.evidence, top_k=RECALL_TOP_K)
+    recall_at_10, ndcg_at_10, precision_at_10 = _recall_metrics(
+        rows, case.evidence, top_k=RECALL_TOP_K
+    )
     verdict = await _judge(llm_judge, case, answer)
     return {
         "answer": answer,
         "rows": rows,
         "recall_at_10": recall_at_10,
-        "mrr": mrr,
+        "ndcg_at_10": ndcg_at_10,
+        "precision_at_10": precision_at_10,
         "verdict": verdict,
         "retrieve_ms": float(answer.extras.get("recall_ms", 0.0)),
     }
@@ -735,8 +755,10 @@ async def _evolve_and_rescore(
         "after_correct": bool(after["verdict"]["correct"]),
         "before_recall_at_10": round(baseline["recall_at_10"], 4),
         "after_recall_at_10": round(after["recall_at_10"], 4),
-        "before_mrr": round(baseline["mrr"], 4),
-        "after_mrr": round(after["mrr"], 4),
+        "before_ndcg_at_10": round(baseline["ndcg_at_10"], 4),
+        "before_precision_at_10": round(baseline["precision_at_10"], 4),
+        "after_ndcg_at_10": round(after["ndcg_at_10"], 4),
+        "after_precision_at_10": round(after["precision_at_10"], 4),
         "after_answer": after["answer"].answer,
         "after_reason": after["verdict"]["reason"],
     }
@@ -778,7 +800,8 @@ async def _run_case_with_mode(
             "duration_s": 0,
             "retrieve_ms": 0.0,
             "recall_at_10": 0.0,
-            "mrr": 0.0,
+            "ndcg_at_10": 0.0,
+            "precision_at_10": 0.0,
         }
 
     # Determine which turns to ingest (windowed or full)
@@ -925,6 +948,7 @@ async def _run_case_with_mode(
             entity_state=view,
             embedding_provider=embedding_prov,
             config=_ablated_recall_config(),
+            llm_adapter=llm_answer,
         ),
         embedding_provider=embedding_prov,
         entity_state=view,
@@ -960,7 +984,8 @@ async def _run_case_with_mode(
         "retrieve_ms": round(retrieve_ms, 2),
         "answer_pipeline_ms": round(answer_pipeline_ms, 2),
         "recall_at_10": round(baseline["recall_at_10"], 4),
-        "mrr": round(baseline["mrr"], 4),
+        "ndcg_at_10": round(baseline["ndcg_at_10"], 4),
+        "precision_at_10": round(baseline["precision_at_10"], 4),
         "extract_calls_per_case": int(max(extract_calls_per_case, 0)),
         "duration_s": round(time.perf_counter() - t0, 1),
     }
@@ -1365,7 +1390,10 @@ async def _run_all(
     recall_at_10_values = [
         float(r.get("recall_at_10", 0.0)) for r in results if isinstance(r, dict)
     ]
-    mrr_values = [float(r.get("mrr", 0.0)) for r in results if isinstance(r, dict)]
+    ndcg_values = [float(r.get("ndcg_at_10", 0.0)) for r in results if isinstance(r, dict)]
+    precision_values = [
+        float(r.get("precision_at_10", 0.0)) for r in results if isinstance(r, dict)
+    ]
     report = {
         "recall_mode": "orchestrator",
         "total": total,
@@ -1374,7 +1402,10 @@ async def _run_all(
         "recall_at_10": round(sum(recall_at_10_values) / len(recall_at_10_values), 4)
         if recall_at_10_values
         else 0.0,
-        "mrr": round(sum(mrr_values) / len(mrr_values), 4) if mrr_values else 0.0,
+        "ndcg_at_10": round(sum(ndcg_values) / len(ndcg_values), 4) if ndcg_values else 0.0,
+        "precision_at_10": round(sum(precision_values) / len(precision_values), 4)
+        if precision_values
+        else 0.0,
         "retrieve_p50_ms": round(_percentile(retrieve_samples, 0.5), 2),
         "retrieve_p95_ms": round(_percentile(retrieve_samples, 0.95), 2),
         "retrieve_p99_ms": round(_percentile(retrieve_samples, 0.99), 2),

@@ -75,6 +75,10 @@ class Reranker(ABC):
     (e.g. LLM-driven) override arerank and let the default
     rerank raise; the orchestrator always awaits arerank
     so the sync/async split is invisible at the call site.
+
+    The optional query is the raw query text; semantic rerankers
+    (cross-encoder, LLM) need it to score query-document relevance,
+    while provenance-based rerankers ignore it.
     """
 
     @abstractmethod
@@ -84,6 +88,7 @@ class Reranker(ABC):
         query_type: QueryType,
         candidates: Iterable[RecallCandidate],
         top_k: int,
+        query: str | None = None,
     ) -> list[RecallCandidate]:
         """Return candidates ordered by rerank score."""
         raise NotImplementedError  # pragma: no cover - abstract
@@ -94,6 +99,7 @@ class Reranker(ABC):
         query_type: QueryType,
         candidates: Iterable[RecallCandidate],
         top_k: int,
+        query: str | None = None,
     ) -> list[RecallCandidate]:
         """Async entry point — defaults to rerank for sync rerankers.
 
@@ -101,7 +107,7 @@ class Reranker(ABC):
         and leave rerank raising. The orchestrator only calls
         arerank.
         """
-        return self.rerank(query_type=query_type, candidates=candidates, top_k=top_k)
+        return self.rerank(query_type=query_type, candidates=candidates, top_k=top_k, query=query)
 
 
 class EvidenceAwareReranker(Reranker):
@@ -116,6 +122,7 @@ class EvidenceAwareReranker(Reranker):
         query_type: QueryType,
         candidates: Iterable[RecallCandidate],
         top_k: int,
+        query: str | None = None,
     ) -> list[RecallCandidate]:
         if top_k <= 0:
             return []
@@ -287,6 +294,7 @@ class LLMReranker(Reranker):
         query_type: QueryType,
         candidates: Iterable[RecallCandidate],
         top_k: int,
+        query: str | None = None,
     ) -> list[RecallCandidate]:
         """Sync stub — refuses to run synchronously.
 
@@ -307,6 +315,7 @@ class LLMReranker(Reranker):
         query_type: QueryType,
         candidates: Iterable[RecallCandidate],
         top_k: int,
+        query: str | None = None,
     ) -> list[RecallCandidate]:
         """Budget-guarded async rerank.
 

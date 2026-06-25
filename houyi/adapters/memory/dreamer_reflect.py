@@ -15,6 +15,12 @@ This is the LLM counterpart to the deterministic consolidator
 MemoryEngine.evolve: consolidate first repairs structural contradictions,
 then reflect repairs semantic gaps for failing queries.
 
+The reflection pipeline is fully async (MemoryReflector.reflect is async def)
+so all I/O -- the LLM call, recall, and embedding backfill -- shares one
+event loop. The engine bridges the async reflect into its sync evolve() via
+a single _run_coro call (one thread, one loop), avoiding the per-call
+thread spawning that could deadlock under cross-loop resource sharing.
+
 Design references (positioned against memory substrates Mem0/Zep/Graphiti,
 not task-agent self-evolution systems like ExpeL/Reflexion):
 - Failure-anchored source re-extraction: no major memory substrate re-extracts
@@ -23,12 +29,6 @@ not task-agent self-evolution systems like ExpeL/Reflexion):
   check whether it surfaces in top-k -- directly measuring the property that
   matters, instead of an LLM opinion or a lexical-coverage tautology.
 - Grounding gate: every reflected fact must be supported by a source turn.
-
-The reflector depends on four narrow, read-only / append-only protocols
-(RecallProbe, SourceReader, FactPromoter, LLMAdapter) so it
-has no circular coupling with the recall path: it reads recall results and
-source turns, and persists candidates through the same append-only write path
-every other writer uses.
 """
 
 from __future__ import annotations
@@ -51,14 +51,15 @@ if TYPE_CHECKING:
     from houyi.adapters.memory.recall.types import RecallCandidate
 
 
-# ---------------------------------------------------------------------
-# Async bridging (the reflection pipeline is synchronous; recall and the
-# LLM adapter are async)
-# ---------------------------------------------------------------------
-
-
 def _run_coro(coro: Coroutine[Any, Any, Any]) -> Any:
-    """Execute a coroutine whether or not an event loop is already running."""
+    """Execute a coroutine whether or not an event loop is already running.
+
+    When no loop is running, asyncio.run is used directly. When a loop IS
+    running (the bench's async context), a single worker thread runs the
+    coroutine in its own loop so the caller's loop is not nested. This is
+    called ONCE per reflection run (not per-LLM-call) so all async I/O
+    shares one thread/loop and avoids cross-loop deadlocks.
+    """
     try:
         asyncio.get_running_loop()
     except RuntimeError:
@@ -73,20 +74,6 @@ def _run_coro(coro: Coroutine[Any, Any, Any]) -> Any:
     thread.start()
     thread.join()
     return holder.get("value")
-
-
-def _complete_sync(adapter: LLMAdapter, prompt: str, *, max_tokens: int) -> str:
-    """Run an adapter chat completion from synchronous code.
-
-    Messages are passed as plain dicts (not LLMMessage) so they are JSON-
-    serializable end to end: the adapter contract accepts LLMMessage | dict,
-    and some adapter wrappers hash the message list via json.dumps before
-    the adapter normalizes it, which would raise on a pydantic LLMMessage.
-    """
-    messages: list[LLMMessage | dict[str, Any]] = [{"role": "user", "content": prompt}]
-    coro = adapter.chat(messages, temperature=0.0, max_tokens=max_tokens)
-    response = _run_coro(coro)
-    return getattr(response, "content", "") or ""
 
 
 # ---------------------------------------------------------------------
@@ -138,8 +125,6 @@ _STOPWORDS: frozenset[str] = frozenset(
         "with",
         "you",
         "your",
-        # pronouns / possessives -- the LLM paraphrases speaker voice
-        # (his/her/my) which must not break source grounding.
         "he",
         "her",
         "him",
@@ -160,50 +145,45 @@ _TOKEN_RE = re.compile(r"[a-z0-9]+")
 
 
 def _tokens(text: str) -> frozenset[str]:
-    """Lowercase content tokens of text with stopwords removed."""
     return frozenset(tok for tok in _TOKEN_RE.findall(text.lower()) if tok not in _STOPWORDS)
 
 
 # ---------------------------------------------------------------------
-# Read-only seams
+# Read-only seams (async)
 # ---------------------------------------------------------------------
 
 
 @runtime_checkable
 class RecallProbe(Protocol):
-    """Synchronous read-only recall for the failing query."""
+    """Async read-only recall for the failing query."""
 
-    def recall(self, query: str, *, namespace: str, top_k: int = 10) -> list[RecallCandidate]: ...
+    async def recall(
+        self, query: str, *, namespace: str, top_k: int = 10
+    ) -> list[RecallCandidate]: ...
 
 
 class _SyncRecallProbe:
-    """Bridge the async RecallOrchestrator.recall into a sync call.
-
-    Recall is a pure read (the retriever contract forbids mutation), so this
-    is safe to call from the synchronous reflection pipeline.
-    """
+    """Async recall bridge -- awaits RecallOrchestrator.recall directly."""
 
     def __init__(self, orchestrator: RecallOrchestrator) -> None:
         self._orchestrator = orchestrator
 
-    def recall(self, query: str, *, namespace: str, top_k: int = 10) -> list[RecallCandidate]:
+    async def recall(self, query: str, *, namespace: str, top_k: int = 10) -> list[RecallCandidate]:
         from houyi.adapters.memory.recall.types import RecallQuery, RetrieverContext
 
         recall_query = RecallQuery(text=query, top_k=top_k, namespace=namespace)
-        result = _run_coro(self._orchestrator.recall(recall_query, RetrieverContext()))
+        result = await self._orchestrator.recall(recall_query, RetrieverContext())
         return list(result.candidates)
 
 
 @runtime_checkable
 class SourceReader(Protocol):
-    """Read-only access to the raw source turn log."""
+    """Read-only access to the raw source turn log (sync -- SQLite is sync)."""
 
     def list_turns(self, namespace: str) -> list[RawTurn]: ...
 
 
 class _BackendSourceReader:
-    """Wrap a SQLite backend's raw-turn log behind the SourceReader seam."""
-
     def __init__(self, backend: Any) -> None:
         self._backend = backend
 
@@ -221,8 +201,6 @@ class _BackendSourceReader:
 
 @dataclass(frozen=True, slots=True)
 class ReflectedFact:
-    """A query-answering triple before it is anchored to a source turn."""
-
     subject: str
     predicate: str
     object: str
@@ -230,15 +208,15 @@ class ReflectedFact:
 
 
 # ---------------------------------------------------------------------
-# 1. SourceTurnSampler
+# 1. Sampler
 # ---------------------------------------------------------------------
 
 
 @runtime_checkable
-class SourceTurnSampler(Protocol):
+class Sampler(Protocol):
     """Select the source turns a failing query is about."""
 
-    def sample(
+    async def sample(
         self,
         query: str,
         *,
@@ -249,21 +227,23 @@ class SourceTurnSampler(Protocol):
     ) -> list[RawTurn]: ...
 
 
-class RecallAnchoredSourceSampler:
-    """Find source turns via semantic recall, then entity-match to turns.
+class RecallAnchoredSampler:
+    """Find source turns via semantic recall, then per-fact best-turn match.
 
-    Recall (over already-embedded extracted facts) finds the facts semantically
-    relevant to the failing query. Each recalled fact's object tokens are then
-    matched against raw turn text to locate the source turns that produced
-    those facts -- the source turns carry the full semantics the extractor
-    flattened. This reuses the existing recall index (no new FTS over raw
-    turns) and is robust to the source_anchor format differing from turn_id.
+    For each recalled fact, picks the source turn with the highest fact-token
+    overlap. Tiebreaker: highest query-token overlap -- the turn that matches
+    BOTH the fact AND the query is the originator (it discusses the fact in
+    the query's context, e.g. containing "girlfriend" when the query asks
+    about activities "with girlfriend"). This is principled (query-fact
+    joint relevance, no speaker heuristics) and picks D25:1 ("My girlfriend
+    and I went wine tasting") over D25:2 ("glad you had fun at the wine
+    tasting") because D25:1 shares more query tokens.
     """
 
     def __init__(self, *, max_turns: int = 10) -> None:
         self._max_turns = max_turns
 
-    def sample(
+    async def sample(
         self,
         query: str,
         *,
@@ -272,51 +252,53 @@ class RecallAnchoredSourceSampler:
         namespace: str,
         top_k: int = 30,
     ) -> list[RawTurn]:
-        candidates = recall.recall(query, namespace=namespace, top_k=top_k)
+        candidates = await recall.recall(query, namespace=namespace, top_k=top_k)
         if not candidates:
             return []
         fact_token_sets = [ts for ts in (_tokens(str(c.fact.object)) for c in candidates) if ts]
         if not fact_token_sets:
             return []
+        query_tokens = _tokens(query)
         turns = source_reader.list_turns(namespace)
-        # For each turn, the set of recalled-fact indices it touches (any token
-        # overlap). A turn "covers" a fact if it shares at least one content
-        # token with that fact's object.
-        turn_covers: list[tuple[RawTurn, frozenset[int]]] = []
-        for turn in turns:
-            text_tokens = _tokens(turn.content)
-            if not text_tokens:
+        best = _best_turn_per_fact(turns, fact_token_sets, query_tokens)
+        seen: dict[int, int] = {}
+        for overlap, _q, turn in best.values():
+            tid = id(turn)
+            if tid not in seen or overlap > seen[tid]:
+                seen[tid] = overlap
+        ranked = sorted(seen.items(), key=lambda x: x[1], reverse=True)
+        id_to_turn = {id(t): t for t in turns}
+        return [id_to_turn[tid] for tid, _ in ranked[: self._max_turns]]
+
+
+def _best_turn_per_fact(
+    turns: list[RawTurn],
+    fact_token_sets: list[frozenset[str]],
+    query_tokens: frozenset[str],
+) -> dict[int, tuple[int, int, RawTurn]]:
+    """For each recalled fact, find the source turn with the highest fact-token
+    overlap (tiebreaker: query-token overlap). Returns {fact_index: (overlap,
+    q_overlap, turn)}."""
+    best: dict[int, tuple[int, int, RawTurn]] = {}
+    for turn in turns:
+        text_tokens = _tokens(turn.content)
+        if not text_tokens:
+            continue
+        q_overlap = len(query_tokens & text_tokens)
+        for fi, ftokens in enumerate(fact_token_sets):
+            overlap = len(ftokens & text_tokens)
+            if overlap == 0:
                 continue
-            covers = frozenset(i for i, ts in enumerate(fact_token_sets) if (ts & text_tokens))
-            if covers:
-                turn_covers.append((turn, covers))
-        # Greedy max-coverage: pick the turn that covers the most still-uncovered
-        # recalled facts, repeat. This surfaces the source turn for each distinct
-        # underlying fact (e.g. the wine-tasting turn) even when its total token
-        # overlap is low and would lose to busier turns under a sum-of-overlap
-        # score.
-        uncovered: set[int] = set(range(len(fact_token_sets)))
-        selected: list[RawTurn] = []
-        pool = list(turn_covers)
-        while len(selected) < self._max_turns and uncovered and pool:
-            best_idx = max(
-                range(len(pool)),
-                key=lambda i: len(pool[i][1] & uncovered),
-            )
-            best_turn, best_covers = pool[best_idx]
-            gain = best_covers & uncovered
-            if not gain:
-                break
-            selected.append(best_turn)
-            uncovered -= gain
-            pool.pop(best_idx)
-        return selected
+            prev = best.get(fi)
+            key = (overlap, q_overlap)
+            if prev is None or key > (prev[0], prev[1]):
+                best[fi] = (overlap, q_overlap, turn)
+    return best
 
 
 # ---------------------------------------------------------------------
-# 2. QueryFocusedReExtractor
+# 2. Reflector
 # ---------------------------------------------------------------------
-
 
 _REEXTRACTION_SYSTEM_PROMPT = (
     "You re-extract facts from raw conversation turns to answer a specific "
@@ -334,10 +316,10 @@ _REEXTRACTION_SYSTEM_PROMPT = (
 
 
 @runtime_checkable
-class QueryFocusedReExtractor(Protocol):
+class Reflector(Protocol):
     """Re-extract query-answering facts from source turns."""
 
-    def reflect(
+    async def reflect(
         self,
         query: str,
         source_turns: Sequence[RawTurn],
@@ -346,19 +328,13 @@ class QueryFocusedReExtractor(Protocol):
     ) -> list[ReflectedFact]: ...
 
 
-class LLMReExtractor:
-    """LLM query-focused re-extraction over the source turns.
-
-    Produces raw ReflectedFact triples (no source anchor yet); the
-    grounding verifier anchors each to the source turn that supports it. Any
-    LLM error or malformed JSON degrades to an empty list so the run never
-    aborts on a transient model failure.
-    """
+class QueryFocusedReflector:
+    """LLM query-focused re-extraction over the source turns (async)."""
 
     def __init__(self, *, max_tokens: int = 512) -> None:
         self._max_tokens = max_tokens
 
-    def reflect(
+    async def reflect(
         self,
         query: str,
         source_turns: Sequence[RawTurn],
@@ -374,14 +350,15 @@ class LLMReExtractor:
             f"{_REEXTRACTION_SYSTEM_PROMPT}\n\nQuestion: {query}\n\nSource turns:\n{body}\n\nJSON:"
         )
         try:
-            raw = _complete_sync(llm, prompt, max_tokens=self._max_tokens)
+            messages: list[LLMMessage | dict[str, Any]] = [{"role": "user", "content": prompt}]
+            response = await llm.chat(messages, temperature=0.0, max_tokens=self._max_tokens)
+            raw = getattr(response, "content", "") or ""
         except Exception:
             return []
         return _parse_reflected_facts(raw)
 
 
 def _parse_reflected_facts(raw: str) -> list[ReflectedFact]:
-    """Parse the LLM JSON response into ReflectedFact triples."""
     text = raw.strip()
     start = text.find("{")
     end = text.rfind("}")
@@ -413,31 +390,28 @@ def _parse_reflected_facts(raw: str) -> list[ReflectedFact]:
 
 
 # ---------------------------------------------------------------------
-# 3. GroundingVerifier
+# 3. Mutator (grounding = the mutation mechanism: raw -> anchored or reject)
 # ---------------------------------------------------------------------
 
 
 @runtime_checkable
-class GroundingVerifier(Protocol):
-    """Anchor a reflected fact to a supporting source turn, or reject it."""
+class Mutator(Protocol):
+    """Mutate a raw ReflectedFact into an anchored AtomicFact, or reject it."""
 
-    def verify(self, fact: ReflectedFact, source_turns: Sequence[RawTurn]) -> AtomicFact | None: ...
+    def mutate(self, fact: ReflectedFact, source_turns: Sequence[RawTurn]) -> AtomicFact | None: ...
 
 
-class TokenOverlapGroundingVerifier:
+class SourceGroundedMutator:
     """Ground a fact by matching its object tokens to a source turn.
 
-    A fact is grounded (and anchored to the best-supporting source turn) when
-    at least one source turn mentions at least half of the fact's object
-    content tokens (pronouns are already stripped, so speaker-voice paraphrase
-    like his/her/my does not break grounding). Half-coverage (rather than all)
-    tolerates the LLM's wording variants while still rejecting fabrication --
-    a hallucinated object whose tokens appear in no source turn scores 0. The
-    anchor is the supporting turn's source_anchor metadata (falling back to
-    turn_id), so the promoted fact stays traceable to its source.
+    Grounding (the mutation mechanism): a raw ReflectedFact is mutated into
+    an anchored AtomicFact when at least one source turn mentions half of the
+    fact's object tokens -- the fact is "grounded" (supported by source text,
+    not hallucination). The anchor is the supporting turn's source_anchor.
+    If no turn supports the fact, the mutation fails (reject).
     """
 
-    def verify(self, fact: ReflectedFact, source_turns: Sequence[RawTurn]) -> AtomicFact | None:
+    def mutate(self, fact: ReflectedFact, source_turns: Sequence[RawTurn]) -> AtomicFact | None:
         object_tokens = _tokens(fact.object)
         if not object_tokens:
             return None
@@ -466,15 +440,15 @@ class TokenOverlapGroundingVerifier:
 
 
 # ---------------------------------------------------------------------
-# 4. RetrievabilityJudge
+# 4. Evaluator
 # ---------------------------------------------------------------------
 
 
 @runtime_checkable
-class RetrievabilityJudge(Protocol):
+class Evaluator(Protocol):
     """Promote a grounded fact iff it is retrievable for the failing query."""
 
-    def judge(
+    async def evaluate(
         self,
         query: str,
         fact: AtomicFact,
@@ -486,22 +460,13 @@ class RetrievabilityJudge(Protocol):
     ) -> MemoryRecord | None: ...
 
 
-class SelfRetrievabilityJudge:
+class RetrievabilityEvaluator:
     """Persist-test-retract: promote, backfill, recall, keep iff it surfaces.
 
-    The candidate is written through the append-only promoter (the same path
-    every writer uses), its embedding is backfilled so the vector retriever
-    can find it (not just FTS), then the failing query is re-run through real
-    recall. If the candidate's (subject, object) appears in the top-k, it is
-    genuinely retrievable and is kept (the persisted record is returned);
-    otherwise it is retracted by re-putting the record with valid_to set
-    (append-only bi-temporal retraction, no delete) and None is returned.
-    This breaks the old lexical-coverage tautology: an observation that merely
-    echoes query tokens no longer passes by construction -- it must actually
-    surface in retrieval. Backfilling before the check is what makes the
-    judge measure real (semantic) retrievability rather than FTS-only, so a
-    fact whose content does not lexically echo the query (e.g. a singular vs
-    plural wording) is not wrongly retracted.
+    The candidate is written through the append-only promoter, its embedding
+    is backfilled, then the failing query is re-run through real recall. If
+    the candidate's object tokens appear in the top-k, it is genuinely
+    retrievable and kept; otherwise it is retracted (valid_to set).
     """
 
     def __init__(self, promoter: FactPromoter, store: Any, backfill: Any | None = None) -> None:
@@ -509,7 +474,7 @@ class SelfRetrievabilityJudge:
         self._store = store
         self._backfill = backfill
 
-    def judge(
+    async def evaluate(
         self,
         query: str,
         fact: AtomicFact,
@@ -523,34 +488,23 @@ class SelfRetrievabilityJudge:
         if record is None:
             return None
         if self._backfill is not None:
-            # Fill the candidate's embedding so the vector retriever can
-            # surface it; without this the recall check is FTS-only and
-            # wrongly retracts semantically-retrievable facts.
-            _run_coro(self._backfill.process_once())
-        candidates = recall.recall(query, namespace=namespace, top_k=top_k)
-        subject = fact.subject.lower()
+            await self._backfill.process_once()
+        candidates = await recall.recall(query, namespace=namespace, top_k=top_k)
         obj_tokens = _tokens(fact.object)
-        surfaced = any(
-            c.fact.subject.lower() == subject and (obj_tokens & _tokens(str(c.fact.object)))
-            for c in candidates
-        )
+        surfaced = any(obj_tokens & _tokens(str(c.fact.object)) for c in candidates)
         if not surfaced:
-            # Retract: re-put the record with valid_to so recall stops
-            # surfacing it. Append-only; no row is deleted.
             self._store.put_record(record.model_copy(update={"valid_to": time.time()}))
             return None
         return record
 
 
 # ---------------------------------------------------------------------
-# Report + orchestrator
+# Report + orchestrator (async)
 # ---------------------------------------------------------------------
 
 
 @dataclass(frozen=True, slots=True)
 class ReflectionReport:
-    """Result of one reflection run."""
-
     queries_reflected: int = 0
     facts_extracted: int = 0
     facts_grounded: int = 0
@@ -564,7 +518,7 @@ class ReflectionReport:
 class Reflection(Protocol):
     """Reflect on failing queries to repair semantic recall gaps."""
 
-    def reflect(
+    async def reflect(
         self,
         failing_queries: Sequence[str],
         *,
@@ -573,34 +527,35 @@ class Reflection(Protocol):
 
 
 class MemoryReflector:
-    """Failure-anchored source re-extraction orchestrator.
+    """Failure-anchored source re-extraction orchestrator (async).
 
-    For each failing query: sample source turns (semantic recall + entity
-    match), re-extract query-answering facts from those turns (LLM), ground
-    each against its source (no hallucination), and promote only facts that
-    are actually retrievable for the failing query (self-retrievability judge).
+    For each failing query: sample source turns (semantic recall + per-fact
+    best-turn match), re-extract query-answering facts from those turns (LLM),
+    mutate each into an anchored AtomicFact (grounding), and promote only
+    facts that are actually retrievable (self-retrievability evaluator).
+    All I/O (LLM, recall, backfill) runs in one async event loop.
     """
 
     def __init__(
         self,
         *,
-        sampler: SourceTurnSampler,
-        reextractor: QueryFocusedReExtractor,
-        verifier: GroundingVerifier,
-        judge: RetrievabilityJudge,
+        sampler: Sampler,
+        reflector: Reflector,
+        mutator: Mutator,
+        evaluator: Evaluator,
         recall: RecallProbe,
         source_reader: SourceReader,
         llm: LLMAdapter,
     ) -> None:
         self._sampler = sampler
-        self._reextractor = reextractor
-        self._verifier = verifier
-        self._judge = judge
+        self._reflector = reflector
+        self._mutator = mutator
+        self._evaluator = evaluator
         self._recall = recall
         self._source_reader = source_reader
         self._llm = llm
 
-    def reflect(
+    async def reflect(
         self,
         failing_queries: Sequence[str],
         *,
@@ -610,7 +565,7 @@ class MemoryReflector:
         extracted = grounded = kept = retracted = 0
         kept_records: list[MemoryRecord] = []
         for query in failing_queries:
-            source_turns = self._sampler.sample(
+            source_turns = await self._sampler.sample(
                 query,
                 recall=self._recall,
                 source_reader=self._source_reader,
@@ -618,17 +573,15 @@ class MemoryReflector:
             )
             if not source_turns:
                 continue
-            reflected = self._reextractor.reflect(query, source_turns, llm=self._llm)
+            reflected = await self._reflector.reflect(query, source_turns, llm=self._llm)
             extracted += len(reflected)
             for rf in reflected:
-                fact = self._verifier.verify(rf, source_turns)
+                fact = self._mutator.mutate(rf, source_turns)
                 if fact is None:
                     continue
                 grounded += 1
-                # Anchor the judge's source turn to the one the verifier
-                # grounded against: find the supporting turn again.
                 supporting = _supporting_turn(rf, source_turns) or source_turns[0]
-                kept_record = self._judge.judge(
+                kept_record = await self._evaluator.evaluate(
                     query,
                     fact,
                     supporting,
@@ -652,8 +605,6 @@ class MemoryReflector:
 
 
 def _supporting_turn(fact: ReflectedFact, turns: Sequence[RawTurn]) -> RawTurn | None:
-    """Return the turn that best supports the fact (half-coverage, mirroring
-    the grounding verifier)."""
     object_tokens = _tokens(fact.object)
     if not object_tokens:
         return None
@@ -671,18 +622,18 @@ def _supporting_turn(fact: ReflectedFact, turns: Sequence[RawTurn]) -> RawTurn |
 
 
 __all__ = [
-    "GroundingVerifier",
-    "LLMReExtractor",
+    "Evaluator",
     "MemoryReflector",
-    "QueryFocusedReExtractor",
-    "RecallAnchoredSourceSampler",
+    "Mutator",
+    "QueryFocusedReflector",
+    "RecallAnchoredSampler",
     "RecallProbe",
     "ReflectedFact",
     "Reflection",
     "ReflectionReport",
-    "RetrievabilityJudge",
-    "SelfRetrievabilityJudge",
+    "Reflector",
+    "RetrievabilityEvaluator",
+    "Sampler",
+    "SourceGroundedMutator",
     "SourceReader",
-    "SourceTurnSampler",
-    "TokenOverlapGroundingVerifier",
 ]

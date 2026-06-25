@@ -113,6 +113,7 @@ def build_memory_engine(
         backend=backend,
         entity_state=entity_state,
         embedding_provider=embedding_provider,
+        llm_adapter=llm_adapter,
     )
 
     # Background evolution wiring. Off by default. When enabled, the monitor

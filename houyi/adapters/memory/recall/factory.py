@@ -15,6 +15,7 @@ from houyi.adapters.embedding import EmbeddingProvider
 from houyi.adapters.memory.backends.base import EntityStateView, EventView, MemoryBackend
 from houyi.adapters.memory.recall.enumeration import EnumerationBooster
 from houyi.adapters.memory.recall.orchestrator import RecallOrchestrator, RecallPipelineConfig
+from houyi.adapters.memory.recall.rerank_cross_encoder import build_default_reranker
 from houyi.adapters.memory.recall.retrievers.entity_state import EntityStateRetriever
 from houyi.adapters.memory.recall.retrievers.event import EventRetriever
 from houyi.adapters.memory.recall.retrievers.graph import GraphRetriever
@@ -32,6 +33,7 @@ def _build_default_recall_orchestrator(
     entity_state: EntityStateView,
     embedding_provider: EmbeddingProvider | None = None,
     config: RecallPipelineConfig | None = None,
+    llm_adapter: Any | None = None,
 ) -> RecallOrchestrator:
     """Assemble the default RecallOrchestrator.
 
@@ -86,6 +88,7 @@ def _build_default_recall_orchestrator(
         retrievers=retrievers,
         config=config,
         enum_booster=EnumerationBooster(backend),
+        reranker=build_default_reranker(llm_adapter=llm_adapter),
     )
 
 

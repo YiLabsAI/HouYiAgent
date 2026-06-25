@@ -248,6 +248,7 @@ class RecallOrchestrator:
             query_entities=query_entities,
             is_enumeration=is_enumeration,
             answer_types=answer_types,
+            query_text=query.text,
         )
         result = self._guard.evaluate(
             query_type=route.query_type,
@@ -284,6 +285,7 @@ class RecallOrchestrator:
             query_entities=query_entities,
             is_enumeration=is_enumeration,
             answer_types=answer_types,
+            query_text=query.text,
         )
         final_result = self._guard.evaluate(
             query_type=route.query_type,
@@ -435,6 +437,7 @@ class RecallOrchestrator:
         query_entities: list[str] | None = None,
         is_enumeration: bool = False,
         answer_types: frozenset[str] = frozenset(),
+        query_text: str | None = None,
     ) -> list[RecallCandidate]:
         # Enumeration coverage needs a wide pre-MMR pool: member facts sit
         # at the same lexical floor score, so a narrow fusion_k would drop
@@ -449,6 +452,7 @@ class RecallOrchestrator:
             query_type=query_type,
             candidates=fused,
             top_k=fusion_k,
+            query=query_text,
         )
         # Entity relevance boost: candidates whose subject matches ANY
         # entity named in the query get an equal score boost so they
