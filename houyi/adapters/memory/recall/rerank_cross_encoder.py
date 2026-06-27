@@ -73,6 +73,13 @@ class CrossEncoderReranker(Reranker):
     ) -> None:
         self._model_name = model_name
         self._device = device
+        # Two-stage retrieval bound: the cross-encoder re-scores only the
+        # top-N of the fused pool, not the whole pool. 64 is within standard
+        # rerank depth (BEIR/RAG practice 50-100) and bounds the per-query
+        # rerank cost. Candidates beyond 64 are kept in the tail (unscored,
+        # at their pre-rerank fused score) so downstream boost + MMR stages
+        # still see them -- a gold fact that sits in the fused tail stays
+        # reachable instead of being silently dropped.
         self._max_candidates = max_candidates
         self._batch_size = batch_size
         self._model: Any | None = None
@@ -138,6 +145,9 @@ class CrossEncoderReranker(Reranker):
         model = self._load_model()
         if model is None:
             raise RuntimeError("cross-encoder model unavailable")
+        # Score the bounded top-N of the fused pool (already fused-score
+        # ordered by the orchestrator). Candidates beyond max_candidates are
+        # kept in the tail (unscored) so downstream stages still see them.
         window = ordered[: self._max_candidates]
         pairs = [(query, _candidate_text(c)) for c in window]
         scores = await asyncio.to_thread(model.predict, pairs, batch_size=self._batch_size)

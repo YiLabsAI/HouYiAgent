@@ -1045,6 +1045,7 @@ def _run_evolve(
         reflect=reflect,
         failing_queries=failing_queries,
         namespace=namespace,
+        entity_state=entity_state,
     )
     kept = reflection.kept_records if reflection is not None else ()
     return EvolutionRunReport(
@@ -1066,6 +1067,7 @@ def _run_reflection(
     reflect: bool,
     failing_queries: list[str] | None,
     namespace: str | None,
+    entity_state: EntityStateView | None = None,
 ):
     """Run the failure-anchored reflector when its dependencies are wired.
 
@@ -1114,7 +1116,9 @@ def _run_reflection(
         sampler=RecallAnchoredSampler(),
         reflector=QueryFocusedReflector(),
         mutator=SourceGroundedMutator(),
-        evaluator=RetrievabilityEvaluator(promoter, store, backfill=backfill),
+        evaluator=RetrievabilityEvaluator(
+            promoter, store, backfill=backfill, entity_state=entity_state
+        ),
         recall=_SyncRecallProbe(recall_orchestrator),
         source_reader=_BackendSourceReader(backend),
         llm=llm_adapter,

@@ -81,7 +81,13 @@ class TestCrossEncoderReranker:
             )
 
     async def test_preserves_unscored_tail(self, reranker) -> None:
-        """Candidates beyond max_candidates are kept in the tail."""
+        """Candidates beyond max_candidates are kept in the tail.
+
+        Gold that sits in the fused tail (>max_candidates) must stay visible
+        downstream so boost + MMR can still lift it; drop-tail lost it
+        (regressed 8 cases). The scored window leads, the unscored tail
+        follows.
+        """
         many = [_candidate("s", "p", str(i)) for i in range(10)]
         reranker._max_candidates = 3
         result = await reranker.arerank(

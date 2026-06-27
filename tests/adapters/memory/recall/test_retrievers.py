@@ -577,10 +577,10 @@ class TestInferEntity:
         assert hint.source == "zh_attribute"
 
 
-def test_stemish() -> None:
-    from houyi.adapters.memory.recall.retrievers.entity_state import _stemish
+def test_light_stem() -> None:
+    from houyi.adapters.memory.recall.retrievers.entity_state import _light_stem
 
-    assert _stemish("wanted") == "want"
-    assert _stemish("dogs") == "dog"
-    assert _stemish("cooking") == "cook"
-    assert _stemish("cat") == "cat"
+    assert _light_stem("wanted") == "want"
+    assert _light_stem("dogs") == "dog"
+    assert _light_stem("cooking") == "cook"
+    assert _light_stem("cat") == "cat"

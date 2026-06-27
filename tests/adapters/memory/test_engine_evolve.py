@@ -52,7 +52,7 @@ def test_evolve_runs_consolidation_first(tmp_path) -> None:
         emitter=_FakeEmitter(None),
     )
     view.upsert("default", "Andrew", "job", "banker", valid_from=100.0)
-    view.upsert("default", "Andrew", "job", "designer", valid_from=200.0)
+    view.upsert("default", "Andrew", "job", "banker", valid_from=200.0)
 
     report = engine.evolve()
 

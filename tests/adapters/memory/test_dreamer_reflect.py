@@ -200,7 +200,7 @@ class TestMemoryReflector:
                 )()
 
         store = _RecordingStore()
-        recall = _FakeRecall([_FakeCandidate("Andrew", "wine tasting")])
+        recall = _FakeRecall([_FakeCandidate("Andrew", "wine tasting with girlfriend")])
         reflector = MemoryReflector(
             sampler=RecallAnchoredSampler(),
             reflector=QueryFocusedReflector(),

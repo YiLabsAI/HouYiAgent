@@ -185,13 +185,16 @@ def _candidate_from_event(
       verb, indicating a precise subject+action hit rather than a broad
       subject-only sweep.
     """
+    quals = dict(event.qualifiers or {})
+    if event.context:
+        quals["context"] = event.context
     fact = AtomicFact(
         subject=event.subject,
         predicate=event.action,
         object=f"{event.object} ({event.timestamp})",
         certainty=event.certainty,
         source_anchor=event.source_anchor,
-        qualifiers=event.qualifiers,
+        qualifiers=quals or None,
         event_time=event.timestamp,
     )
     score = _CERTAINTY_SCORE.get(event.certainty, 5.0)

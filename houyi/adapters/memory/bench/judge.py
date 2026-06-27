@@ -197,7 +197,7 @@ class LLMMemoryJudge:
         # Cheap structural shortcut: if the system abstained AND the
         # gold answer is empty/unknown, we accept without an LLM call.
         if answer.abstained and not (case.answer or "").strip():
-            return JudgeVerdict(correct=True, reason="trivial_abstain_ok")
+            return JudgeVerdict(correct=True, reason="empty_gold_abstain")
 
         messages = [
             {"role": "system", "content": _LLM_JUDGE_SYSTEM},

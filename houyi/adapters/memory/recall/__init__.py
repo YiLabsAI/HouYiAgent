@@ -22,7 +22,6 @@ from houyi.adapters.memory.recall.types import (
     RecallResult,
     RetrieverContext,
     RetrieverKind,
-    SourceChunkReader,
 )
 
 __all__ = [
@@ -37,5 +36,4 @@ __all__ = [
     "Reranker",
     "RetrieverContext",
     "RetrieverKind",
-    "SourceChunkReader",
 ]

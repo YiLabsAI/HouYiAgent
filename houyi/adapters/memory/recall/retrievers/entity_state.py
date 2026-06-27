@@ -511,7 +511,7 @@ class EntityStateRetriever(Retriever):
         is_cumulative = bool(query_words.intersection(_CORE_WORDS)) or (
             attribute is not None
             and any(
-                _stemish(w) in _CORE_WORDS
+                _light_stem(w) in _CORE_WORDS
                 for w in re.sub(r"[^a-z0-9\s]", " ", attribute.lower()).split()
             )
         )
@@ -914,7 +914,7 @@ _IRREGULAR_VERB_MAP: dict[str, str] = {
 }
 
 
-def _stemish(token: str) -> str:
+def _light_stem(token: str) -> str:
     t = token.strip().lower()
     if t in _IRREGULAR_VERB_MAP:
         return _IRREGULAR_VERB_MAP[t]
@@ -939,7 +939,9 @@ def _stemish(token: str) -> str:
 def _extract_query_words(text: str) -> set[str]:
     normalized = re.sub(r"[^a-z0-9\s]", " ", (text or "").lower())
     return {
-        _stemish(w) for w in normalized.split() if len(w) >= 2 and _stemish(w) not in _STOPWORDS
+        _light_stem(w)
+        for w in normalized.split()
+        if len(w) >= 2 and _light_stem(w) not in _STOPWORDS
     }
 
 
@@ -1033,7 +1035,7 @@ def _fuzzy_attr_match(query_attr: str, stored_attr: str) -> bool:
 def _attr_stems(attribute: str) -> set[str]:
     """Stemmed content words from an attribute string."""
     words = re.sub(r"[^a-z0-9]", " ", attribute.lower()).split()
-    return {_stemish(w) for w in words if len(w) >= 2 and _stemish(w) not in _STOPWORDS}
+    return {_light_stem(w) for w in words if len(w) >= 2 and _light_stem(w) not in _STOPWORDS}
 
 
 def _filter_fuzzy_rows(
@@ -1121,7 +1123,7 @@ def _candidate_from_row(
             ):
                 score += 5.0
         fact_text = f"{row.attribute} {row.value}".lower()
-        fact_words = {_stemish(w) for w in re.sub(r"[^a-z0-9\s]", " ", fact_text).split()}
+        fact_words = {_light_stem(w) for w in re.sub(r"[^a-z0-9\s]", " ", fact_text).split()}
         overlap = query_words.intersection(fact_words)
         for w in overlap:
             weight = 3.0 if w in _CORE_WORDS else 1.0

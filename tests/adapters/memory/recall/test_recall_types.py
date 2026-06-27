@@ -9,7 +9,6 @@ from houyi.adapters.memory.recall.types import (
     RecallQuery,
     RecallReason,
     RecallResult,
-    RetrieverContext,
     RetrieverKind,
 )
 from houyi.adapters.memory.types import AtomicFact, Certainty
@@ -65,8 +64,3 @@ def test_result_top_empty() -> None:
 
     assert result.is_sufficient() is False
     assert result.top() is None
-
-
-def test_context_requires_reads() -> None:
-    with pytest.raises(ValidationError):
-        RetrieverContext(max_source_reads=0)

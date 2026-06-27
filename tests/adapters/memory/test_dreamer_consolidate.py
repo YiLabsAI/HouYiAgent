@@ -24,7 +24,14 @@ def view(tmp_path) -> Iterator[SQLiteEntityStateView]:
 class TestEntityStateConsolidator:
     """Consolidator: scan conflicts, keep newest for single-value, skip accumulate."""
 
-    def test_resolves_single_value(self, view: SQLiteEntityStateView) -> None:
+    def test_keeps_distinct_values(self, view: SQLiteEntityStateView) -> None:
+        """Distinct values are kept (multi-valued set), not superseded.
+
+        Without schema-level cardinality we cannot tell a genuine open set
+        from a single-valued attribute that changed, so we keep both and let
+        recall MMR de-duplicate. Closing distinct values loses gold facts
+        (conv-48/30 regression).
+        """
         view.upsert("ws", "Andrew", "job", "banker", valid_from=100.0)
         view.upsert("ws", "Andrew", "job", "designer", valid_from=200.0)
 
@@ -32,12 +39,23 @@ class TestEntityStateConsolidator:
 
         assert isinstance(report, ConsolidationReport)
         assert report.triples_scanned == 1
+        assert report.triples_resolved == 0
+        assert report.rows_closed == 0
+        assert report.skipped_multi_value == 1
+        active = view.get_active("ws", "Andrew", "job")
+        assert len(active) == 2
+
+    def test_dedupes_same_value(self, view: SQLiteEntityStateView) -> None:
+        """Exact duplicate values are de-duplicated (keep newest)."""
+        view.upsert("ws", "Andrew", "job", "banker", valid_from=100.0)
+        view.upsert("ws", "Andrew", "job", "banker", valid_from=200.0)
+
+        report = EntityStateConsolidator(view).consolidate(namespace="ws")
+
         assert report.triples_resolved == 1
         assert report.rows_closed == 1
-        assert report.skipped_accumulate == 0
         active = view.get_active("ws", "Andrew", "job")
         assert len(active) == 1
-        assert active[0].value == "designer"
 
     def test_skips_accumulate(self, view: SQLiteEntityStateView) -> None:
         """Accumulate-tagged attributes are open sets: multiple active values
@@ -62,7 +80,7 @@ class TestEntityStateConsolidator:
 
     def test_idempotent(self, view: SQLiteEntityStateView) -> None:
         view.upsert("ws", "Andrew", "job", "banker", valid_from=100.0)
-        view.upsert("ws", "Andrew", "job", "designer", valid_from=200.0)
+        view.upsert("ws", "Andrew", "job", "banker", valid_from=200.0)
 
         EntityStateConsolidator(view).consolidate(namespace="ws")
         second = EntityStateConsolidator(view).consolidate(namespace="ws")
@@ -80,9 +98,10 @@ class TestEntityStateConsolidator:
         report = EntityStateConsolidator(view).consolidate()
 
         assert report.triples_scanned == 2
-        assert report.rows_closed == 2
-        assert view.get_active("ws-a", "Andrew", "job")[0].value == "designer"
-        assert view.get_active("ws-b", "Bob", "city")[0].value == "LA"
+        assert report.rows_closed == 0
+        assert report.skipped_multi_value == 2
+        assert len(view.get_active("ws-a", "Andrew", "job")) == 2
+        assert len(view.get_active("ws-b", "Bob", "city")) == 2
 
     def test_mixed_accumulate_conservative(self, view: SQLiteEntityStateView) -> None:
         """If any row of a triple is tagged accumulate, treat it as an open set
@@ -97,14 +116,14 @@ class TestEntityStateConsolidator:
         assert len(view.get_active("ws", "Andrew", "hobby")) == 2
 
     def test_keeps_newest(self, view: SQLiteEntityStateView) -> None:
-        """Three versions: the middle one must not survive; only the newest stays."""
+        """Three duplicate versions: only the newest stays (dedupe)."""
         view.upsert("ws", "Andrew", "job", "banker", valid_from=100.0)
-        view.upsert("ws", "Andrew", "job", "engineer", valid_from=200.0)
-        view.upsert("ws", "Andrew", "job", "designer", valid_from=300.0)
+        view.upsert("ws", "Andrew", "job", "banker", valid_from=200.0)
+        view.upsert("ws", "Andrew", "job", "banker", valid_from=300.0)
 
         report = EntityStateConsolidator(view).consolidate(namespace="ws")
 
         assert report.rows_closed == 2
         active = view.get_active("ws", "Andrew", "job")
         assert len(active) == 1
-        assert active[0].value == "designer"
+        assert active[0].value == "banker"

@@ -127,19 +127,6 @@ class FixedRetriever(Retriever):
         return self.candidates
 
 
-class SourceReader:
-    def __init__(self, chunks: dict[str, str], *, fail_on: set[str] | None = None) -> None:
-        self.chunks = chunks
-        self.fail_on = fail_on or set()
-        self.calls: list[str] = []
-
-    def read_source_chunk(self, source_anchor: str) -> str | None:
-        self.calls.append(source_anchor)
-        if source_anchor in self.fail_on:
-            raise RuntimeError("source unavailable")
-        return self.chunks.get(source_anchor)
-
-
 class BrokenRetriever(Retriever):
     async def retrieve(
         self,
@@ -252,76 +239,6 @@ async def test_orchestrator_chain_partial() -> None:
 def test_orchestrator_requires_router() -> None:
     with pytest.raises(ValueError):
         RecallOrchestrator(router=None, retrievers={})  # type: ignore[arg-type]
-
-
-@pytest.mark.asyncio
-async def test_reads_source_fallback() -> None:
-    candidate = make_candidate(0.01, obj="coffee")
-    reader = SourceReader({"s-coffee": "The user explicitly said they like coffee."})
-    from houyi.adapters.memory.recall.idk_guard import IDKGuard, IDKGuardConfig
-
-    orchestrator = RecallOrchestrator(
-        router=FixedRouter(QueryType.FACTUAL_LOOKUP),
-        retrievers={"weak": FixedRetriever([candidate])},
-        config=RecallPipelineConfig(route_table={QueryType.FACTUAL_LOOKUP: ("weak",)}),
-        guard=IDKGuard(config=IDKGuardConfig(coverage_threshold=0.6)),
-    )
-
-    result = await orchestrator.recall(
-        RecallQuery(text="what does the user like?"),
-        RetrieverContext(source_reader=reader),
-    )
-
-    assert result.reason == RecallReason.SUFFICIENT
-    assert reader.calls == ["s-coffee"]
-    assert result.top() is not None
-    assert result.top().signals["source_rehydrated"] is True
-    assert result.trace["source_reads"] == [{"source_anchor": "s-coffee", "found": True}]
-
-
-@pytest.mark.asyncio
-async def test_caps_source_reads() -> None:
-    candidates = [make_candidate(0.01, obj=f"obj{i}") for i in range(5)]
-    reader = SourceReader({f"s-obj{i}": f"source {i}" for i in range(5)})
-    from houyi.adapters.memory.recall.idk_guard import IDKGuard, IDKGuardConfig
-
-    orchestrator = RecallOrchestrator(
-        router=FixedRouter(QueryType.FACTUAL_LOOKUP),
-        retrievers={"weak": FixedRetriever(candidates)},
-        config=RecallPipelineConfig(route_table={QueryType.FACTUAL_LOOKUP: ("weak",)}),
-        guard=IDKGuard(config=IDKGuardConfig(coverage_threshold=0.6)),
-    )
-
-    await orchestrator.recall(
-        RecallQuery(text="anything", top_k=5),
-        RetrieverContext(source_reader=reader, max_source_reads=3),
-    )
-
-    assert reader.calls == ["s-obj0", "s-obj1", "s-obj2"]
-
-
-@pytest.mark.asyncio
-async def test_source_errors_traced() -> None:
-    candidate = make_candidate(0.01, obj="coffee")
-    reader = SourceReader({}, fail_on={"s-coffee"})
-    from houyi.adapters.memory.recall.idk_guard import IDKGuard, IDKGuardConfig
-
-    orchestrator = RecallOrchestrator(
-        router=FixedRouter(QueryType.FACTUAL_LOOKUP),
-        retrievers={"weak": FixedRetriever([candidate])},
-        config=RecallPipelineConfig(route_table={QueryType.FACTUAL_LOOKUP: ("weak",)}),
-        guard=IDKGuard(config=IDKGuardConfig(coverage_threshold=0.6)),
-    )
-
-    result = await orchestrator.recall(
-        RecallQuery(text="what does the user like?"),
-        RetrieverContext(source_reader=reader),
-    )
-
-    assert result.reason == RecallReason.LOW_EVIDENCE
-    assert result.trace["source_reads"] == [
-        {"source_anchor": "s-coffee", "error": "source unavailable"}
-    ]
 
 
 def _timed_candidate(score: float, *, obj: str, event_time: str | None) -> RecallCandidate:

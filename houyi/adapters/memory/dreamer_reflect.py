@@ -34,6 +34,7 @@ not task-agent self-evolution systems like ExpeL/Reflexion):
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import re
 import threading
@@ -306,10 +307,18 @@ _REEXTRACTION_SYSTEM_PROMPT = (
     "turn and extract EVERY fact that directly answers the question. If the "
     "question asks for activities, kinds, or a list, output ONE fact PER "
     "distinct item -- do not stop at the first; scan all turns and gather each "
-    "one. Preserve participant relationships verbatim from the source (if a "
-    "turn says the subject did something WITH someone, keep that "
-    "co-participation in the fact). Never invent a fact, name, or date not "
-    'present in the source turns. Reply with a JSON object {"facts": '
+    "one. Use a single entity as the subject (the main actor named in the "
+    "source turn). Put co-participants in the object, not the subject: if a "
+    "turn says the subject did something with someone, write the main actor as "
+    "subject and the other participant inside the object, e.g. subject=James "
+    "and object=the pub with John. Never use a compound subject such as John "
+    "and James, because compound subjects break entity lookup and the fact "
+    "becomes unfindable. Never invent a fact, name, or date not present in the "
+    "source turns. When the question asks for a date or time, extract absolute "
+    "dates from the source, not relative expressions like yesterday or today; "
+    "if a turn only has a relative date, skip it rather than resolve it, so "
+    "the answer stays the sourced absolute date. "
+    'Reply with a JSON object {"facts": '
     '[{"subject","predicate","object","event_time"}], "events": []} and '
     "nothing else."
 )
@@ -469,10 +478,17 @@ class RetrievabilityEvaluator:
     retrievable and kept; otherwise it is retracted (valid_to set).
     """
 
-    def __init__(self, promoter: FactPromoter, store: Any, backfill: Any | None = None) -> None:
+    def __init__(
+        self,
+        promoter: FactPromoter,
+        store: Any,
+        backfill: Any | None = None,
+        entity_state: Any | None = None,
+    ) -> None:
         self._promoter = promoter
         self._store = store
         self._backfill = backfill
+        self._entity_state = entity_state
 
     async def evaluate(
         self,
@@ -487,13 +503,54 @@ class RetrievabilityEvaluator:
         record = self._promoter.promote(source_turn, fact)
         if record is None:
             return None
+        # The promoter writes the MemoryRecord + FTS + vector, but not the
+        # entity_state L2 index. The hot extraction path upserts entity_state
+        # separately via the extractor worker; reflection facts skip that
+        # worker, so upsert entity_state here or the EntityStateRetriever --
+        # the main recall path -- cannot find the new fact and
+        # self-retrievability is a false negative (the just-promoted fact is
+        # never recalled, so it is retracted and reflection has no effect).
+        if self._entity_state is not None:
+            with contextlib.suppress(Exception):
+                self._entity_state.upsert(
+                    namespace,
+                    fact.subject,
+                    fact.predicate,
+                    fact.object,
+                    certainty=fact.certainty,
+                    source_unit_id=fact.source_anchor or None,
+                )
         if self._backfill is not None:
             await self._backfill.process_once()
+        new_object = str(fact.object)
         candidates = await recall.recall(query, namespace=namespace, top_k=top_k)
-        obj_tokens = _tokens(fact.object)
-        surfaced = any(obj_tokens & _tokens(str(c.fact.object)) for c in candidates)
-        if not surfaced:
-            self._store.put_record(record.model_copy(update={"valid_to": time.time()}))
+        # Judge whether the just-promoted fact itself surfaces in top-k, not
+        # whether some other candidate shares object tokens. Token overlap
+        # was a false positive: a new fact about baseball with James matched
+        # the old fact about John attending baseball on the baseball token,
+        # kept a fact that never entered top-k, and the after-answer then hit
+        # the LLM cache unchanged so reflection had no effect. Match the exact
+        # object string, including compound members (a consolidated compound
+        # carries member objects in signals under compound_members).
+        in_top_k = any(
+            str(c.fact.object) == new_object
+            or new_object in (getattr(c, "signals", None) or {}).get("compound_members", [])
+            for c in candidates
+        )
+        if not in_top_k:
+            ts = time.time()
+            self._store.put_record(record.model_copy(update={"valid_to": ts}))
+            # Retract the entity_state row too, or it stays active and the
+            # ghost fact keeps surfacing in recall. invalidate closes the
+            # active row for this subject+predicate; reflection facts usually
+            # have a distinct predicate from existing facts so this does not
+            # touch unrelated rows, but a same-predicate retraction would close
+            # a prior active row -- a precise state_id close is the future fix.
+            if self._entity_state is not None:
+                with contextlib.suppress(Exception):
+                    self._entity_state.invalidate(
+                        namespace, fact.subject, fact.predicate, valid_to=ts
+                    )
             return None
         return record
 

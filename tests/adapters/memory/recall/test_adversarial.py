@@ -37,11 +37,6 @@ class FixedRetriever(Retriever):
         return self.candidates
 
 
-class EmptyReader:
-    def read_source_chunk(self, source_anchor: str) -> str | None:
-        return None
-
-
 def make_candidate(
     obj: str,
     *,
@@ -77,29 +72,6 @@ async def test_adversarial_unknown() -> None:
 
     assert result.reason == RecallReason.NO_CANDIDATES
     assert result.suggested_action == "admit_unknown"
-
-
-@pytest.mark.asyncio
-async def test_adversarial_low_source() -> None:
-    # Use empty object -> empty source_anchor -> coverage=0.0 to guarantee LOW_EVIDENCE
-    orchestrator = RecallOrchestrator(
-        router=FixedRouter(QueryType.FACTUAL_LOOKUP),
-        retrievers={
-            "fixed": FixedRetriever(
-                [make_candidate("coffee", score=0.01, kind=RetrieverKind.TIMELINE)]
-            )
-        },
-        config=RecallPipelineConfig(route_table={QueryType.FACTUAL_LOOKUP: ("fixed",)}),
-        guard=IDKGuard(config=IDKGuardConfig(coverage_threshold=0.3)),
-    )
-
-    result = await orchestrator.recall(
-        RecallQuery(text="what does the user like"),
-        RetrieverContext(source_reader=EmptyReader()),
-    )
-
-    assert result.reason == RecallReason.LOW_EVIDENCE
-    assert result.trace["source_reads"] == [{"source_anchor": "s-coffee", "found": False}]
 
 
 def test_adversarial_contradiction() -> None:

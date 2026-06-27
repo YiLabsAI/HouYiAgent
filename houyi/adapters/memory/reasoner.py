@@ -504,7 +504,7 @@ def answer_from_turn_evidence(
 ) -> str | None:
     """Deterministic temporal resolver over turn-level evidence."""
 
-    q = _normalize_surface(query)
+    q = _normalize_text(query)
     evidence_set = set(evidence_ids)
     evidence_turns = [turn for turn in turns if turn.turn_id in evidence_set]
     if not evidence_turns:
@@ -584,7 +584,7 @@ def _resolve_first_trip_date(q: str, turns: list[TemporalTurn]) -> str | None:
     return _format_iso_date(first_iso)
 
 
-def _normalize_surface(text: str) -> str:
+def _normalize_text(text: str) -> str:
     return re.sub(r"\s+", " ", re.sub(r"[^\w\s]", " ", (text or "").lower())).strip()
 
 

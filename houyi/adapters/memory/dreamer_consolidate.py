@@ -41,6 +41,7 @@ class ConsolidationReport:
     rows_closed: int = 0
     rows_propagated: int = 0
     skipped_accumulate: int = 0
+    skipped_multi_value: int = 0
     duration_ms: float = 0.0
 
 
@@ -82,6 +83,7 @@ class EntityStateConsolidator:
         rows_propagated = 0
         resolved = 0
         skipped_accumulate = 0
+        skipped_multi_value = 0
 
         for ns, entity, attribute in triples:
             active = self._view.get_active(ns, entity, attribute)
@@ -90,6 +92,20 @@ class EntityStateConsolidator:
                 continue
             if any(_is_accumulate(record) for record in active):
                 skipped_accumulate += 1
+                continue
+            # Conservative dedupe: only close rows that repeat the SAME value
+            # (exact duplicates). Distinct values are kept as a multi-valued
+            # set rather than treated as a single-valued contradiction to
+            # supersede away, because without a schema-level cardinality
+            # declaration there is no way to tell a genuine open set from a
+            # single-valued attribute that changed. Closing distinct values
+            # loses gold facts (conv-48/30 regression). Aligns with OWL
+            # default: a property is multi-valued unless declared
+            # FunctionalProperty. True contradictions are de-duplicated
+            # downstream by the recall MMR stage.
+            values = {getattr(record, "value", None) for record in active}
+            if len(values) > 1:
+                skipped_multi_value += 1
                 continue
             keeper = max(active, key=lambda record: record.valid_from)
             closed, propagated = self._view.supersede(
@@ -110,6 +126,7 @@ class EntityStateConsolidator:
             rows_closed=rows_closed,
             rows_propagated=rows_propagated,
             skipped_accumulate=skipped_accumulate,
+            skipped_multi_value=skipped_multi_value,
             duration_ms=round((time.perf_counter() - started) * 1000, 3),
         )
 

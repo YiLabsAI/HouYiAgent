@@ -48,6 +48,36 @@ DEFAULT_IDK_PHRASE = "I don't know based on what I currently remember."
 _LLM_IDK_SENTINEL = "[IDK]"
 """Token the prompt instructs the LLM to emit when it cannot answer."""
 
+_ANSWER_TAG_RE = re.compile(r"<Answer>\s*(.*?)\s*</Answer>", re.DOTALL | re.IGNORECASE)
+_ANALYSIS_TAG_RE = re.compile(r"<Analysis>\s*(.*?)\s*</Analysis>", re.DOTALL | re.IGNORECASE)
+
+
+def _extract_answer_tag(content: str) -> str:
+    """Pull the answer out of an LLM response shaped as
+    <Analysis>...</Analysis><Answer>...</Answer>.
+
+    The judge compares gold against the answer, not the reasoning, so
+    returning the whole content (Analysis + Answer) lets an empty Answer
+    tag drag the verdict to llm_mismatch even when the Analysis carries
+    the answer. Extract the Answer payload; an empty Answer falls back
+    to the Analysis (some models put the answer in Analysis and leave
+    Answer empty). An empty Answer with no Analysis returns "" so the
+    caller abstains. Responses without the tag are returned as-is for
+    backward compatibility with models that do not emit the tags.
+    """
+    m = _ANSWER_TAG_RE.search(content)
+    if m:
+        answer = m.group(1).strip()
+        if answer:
+            return answer
+        am = _ANALYSIS_TAG_RE.search(content)
+        if am:
+            analysis = am.group(1).strip()
+            if analysis:
+                return analysis
+        return ""
+    return content.strip()
+
 
 @dataclass(frozen=True)
 class AnswerBudget:
@@ -215,8 +245,19 @@ class LLMAnswerer:
                 raw_llm_output=content,
             )
 
+        answer_text = _extract_answer_tag(content)
+        if not answer_text:
+            return _abstain(
+                self._idk_phrase,
+                reason="llm_idk",
+                citations=tuple(_citations(candidates)),
+                facts_used=len(candidates),
+                prompt_chars=len(prompt_body),
+                raw_llm_output=content,
+            )
+
         return AnswerResult(
-            answer=content,
+            answer=answer_text,
             abstained=False,
             reason="sufficient",
             citations=tuple(_citations(candidates)),
@@ -286,6 +327,10 @@ class LLMAnswerer:
             line += f" [{f.source_anchor}]"
         if f.event_time:
             line += f" (time: {f.event_time})"
+        if f.qualifiers:
+            orig = f.qualifiers.get("original_time")
+            if orig:
+                line += f" (original: {orig})"
         return line
 
     @staticmethod

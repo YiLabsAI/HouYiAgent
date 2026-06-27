@@ -50,9 +50,6 @@ _FAILURE_REASONS: frozenset[RecallReason] = frozenset(
     }
 )
 
-_SOURCE_FALLBACK_SCORE = 1.0
-_SOURCE_SNIPPET_CHARS = 2000
-
 # Coverage mode for enumeration queries ("what activities/items/places
 # has X"). Such queries score every member fact at the same lexical
 # floor, so relevance ranking is uninformative and a normal narrow cut
@@ -231,8 +228,11 @@ class RecallOrchestrator:
             "route": route.model_dump(),
             "retrievers": retriever_names,
             "errors": [],
+            "debug_trace": runtime.debug_trace,
         }
         raw_candidates = await self._retrieve_all(query, runtime, retrievers, trace)
+        if runtime.debug_trace:
+            trace["dbg_raw"] = _dbg_snapshot(raw_candidates)
         if self._enum_booster is not None:
             boosted = await self._enum_booster.apply(query.text, raw_candidates)
             if boosted:
@@ -255,53 +255,11 @@ class RecallOrchestrator:
             candidates=deduped,
             trace=trace,
         )
-        if result.reason != RecallReason.LOW_EVIDENCE:
-            self._emit_outcome(query, route.query_type, result, candidates_seen=len(deduped))
-            result.candidates = self._merge_siblings_post_fusion(
-                result.candidates, is_enumeration=is_enumeration
-            )
-            return result
-
-        source_candidates = await self._source_fallback(deduped, runtime, trace)
-        if not source_candidates:
-            fallback_result = self._guard.evaluate(
-                query_type=route.query_type,
-                candidates=deduped,
-                trace=trace,
-            )
-            self._emit_outcome(
-                query, route.query_type, fallback_result, candidates_seen=len(deduped)
-            )
-            fallback_result.candidates = self._merge_siblings_post_fusion(
-                fallback_result.candidates, is_enumeration=is_enumeration
-            )
-            return fallback_result
-
-        deduped_with_source = await self._rank_candidates(
-            route.query_type,
-            [*deduped, *source_candidates],
-            top_k=query.top_k,
-            trace=trace,
-            query_entities=query_entities,
-            is_enumeration=is_enumeration,
-            answer_types=answer_types,
-            query_text=query.text,
+        self._emit_outcome(query, route.query_type, result, candidates_seen=len(deduped))
+        result.candidates = self._merge_siblings_post_fusion(
+            result.candidates, is_enumeration=is_enumeration
         )
-        final_result = self._guard.evaluate(
-            query_type=route.query_type,
-            candidates=deduped_with_source,
-            trace=trace,
-        )
-        self._emit_outcome(
-            query,
-            route.query_type,
-            final_result,
-            candidates_seen=len(deduped_with_source),
-        )
-        final_result.candidates = self._merge_siblings_post_fusion(
-            final_result.candidates, is_enumeration=is_enumeration
-        )
-        return final_result
+        return result
 
     def _merge_siblings_post_fusion(
         self, candidates: list[RecallCandidate], *, is_enumeration: bool = False
@@ -489,6 +447,17 @@ class RecallOrchestrator:
             final_k = top_k
         diversity = _ENUMERATION_DIVERSITY if is_enumeration else None
         deduped = self._dedupe.dedupe(ranked, top_k=final_k, diversity=diversity)
+        if trace.get("debug_trace"):
+            # Per-stage candidate snapshot so callers can trace where a gold
+            # fact drops (raw -> fused -> reranked -> final) without poking
+            # private methods. Gated on RetrieverContext.debug_trace.
+            trace["dbg_fused"] = _dbg_snapshot(fused)
+            trace["dbg_reranked"] = _dbg_snapshot(ranked)
+            trace["dbg_final"] = _dbg_snapshot(deduped)
+            deduped_ids = {id(c) for c in deduped}
+            trace["dbg_mmr_dropped"] = _dbg_snapshot(
+                [c for c in ranked if id(c) not in deduped_ids]
+            )
         trace["rerank"] = {
             "reranker": type(self._reranker).__name__,
             "input_count": len(fused),
@@ -549,52 +518,29 @@ class RecallOrchestrator:
                 errors.append({"retriever": retriever.name, "error": str(exc)})
             return []
 
-    async def _source_fallback(
-        self,
-        candidates: Sequence[RecallCandidate],
-        ctx: RetrieverContext,
-        trace: dict[str, object],
-    ) -> list[RecallCandidate]:
-        reader = ctx.source_reader
-        if reader is None:
-            return []
 
-        reads = trace.setdefault("source_reads", [])
-        source_candidates: list[RecallCandidate] = []
-        seen: set[str] = set()
-        for candidate in candidates:
-            if len(seen) >= ctx.max_source_reads:
-                break
-            anchor = candidate.fact.source_anchor
-            if anchor in seen:
-                continue
-            seen.add(anchor)
-            try:
-                text = await asyncio.to_thread(reader.read_source_chunk, anchor)
-            except Exception as exc:
-                if isinstance(reads, list):
-                    reads.append({"source_anchor": anchor, "error": str(exc)})
-                continue
-            if not text or not text.strip():
-                if isinstance(reads, list):
-                    reads.append({"source_anchor": anchor, "found": False})
-                continue
-            if isinstance(reads, list):
-                reads.append({"source_anchor": anchor, "found": True})
-            source_candidates.append(_source_candidate(candidate, text))
-        return source_candidates
+def _dbg_snapshot(cands: Sequence[RecallCandidate]) -> list[dict[str, object]]:
+    """Compact per-candidate snapshot for debug_trace observability.
 
-
-def _source_candidate(candidate: RecallCandidate, text: str) -> RecallCandidate:
-    source_candidate = candidate.model_copy(deep=True)
-    source_candidate.score = max(source_candidate.score, _SOURCE_FALLBACK_SCORE)
-    source_candidate.matched_by = RetrieverKind.RAW_TURN
-    source_candidate.retriever_name = "SourceChunkFallback"
-    source_candidate.signals = dict(source_candidate.signals)
-    source_candidate.signals["source_rehydrated"] = True
-    source_candidate.signals["source_text"] = text[:_SOURCE_SNIPPET_CHARS]
-    source_candidate.explanation = "source chunk confirms candidate evidence"
-    return source_candidate
+    Captures the fact identity, source anchor, and the score signals that
+    matter for root-causing (fused_score, rerank_score, retriever). Kept
+    small (object truncated) so the trace stays cheap to serialize.
+    """
+    out: list[dict[str, object]] = []
+    for c in cands:
+        s = c.signals or {}
+        out.append(
+            {
+                "s": c.fact.subject,
+                "p": c.fact.predicate,
+                "o": str(c.fact.object)[:40],
+                "a": c.fact.source_anchor,
+                "fs": s.get("fused_score"),
+                "rs": s.get("rerank_score"),
+                "rn": c.retriever_name,
+            }
+        )
+    return out
 
 
 def _apply_entity_relevance_boost(

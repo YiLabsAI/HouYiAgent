@@ -34,7 +34,7 @@ from __future__ import annotations
 
 import time
 from enum import Enum
-from typing import Any, Protocol, runtime_checkable
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -163,15 +163,6 @@ class RecallQuery(BaseModel):
         return v
 
 
-@runtime_checkable
-class SourceChunkReader(Protocol):
-    """Read original source text by provenance anchor."""
-
-    def read_source_chunk(self, source_anchor: str) -> str | None:
-        """Return source text for source_anchor or None when missing."""
-        ...
-
-
 class RetrieverContext(BaseModel):
     """Runtime carrier passed through router → retrievers → fusion.
 
@@ -200,21 +191,8 @@ class RetrieverContext(BaseModel):
     llm_adapter: Any | None = None
     """Required only by iterative retrievers; others ignore it."""
 
-    source_reader: SourceChunkReader | None = None
-    """Optional provenance reader used when structured evidence is weak."""
-
-    max_source_reads: int = 3
-    """Maximum source chunks a recall call may rehydrate."""
-
     debug_trace: bool = False
     """When true, retrievers attach extra detail to RecallCandidate.signals."""
-
-    @field_validator("max_source_reads")
-    @classmethod
-    def _max_source_reads_positive(cls, v: int) -> int:
-        if v <= 0:
-            raise ValueError("RetrieverContext.max_source_reads must be > 0")
-        return v
 
 
 # ---------------------------------------------------------------------------

@@ -211,6 +211,61 @@ class TestHappyPath:
 
 
 # ---------------------------------------------------------------------------
+# Answer tag parsing (conv-44 job regression): LLM emits
+# <Analysis>...</Analysis><Answer>...</Answer>; the answerer must extract
+# the <Answer> tag, not return the whole response. An empty <Answer> with a
+# populated <Analysis> falls back to the Analysis so the model is not scored
+# wrong when it puts the answer in Analysis but leaves Answer empty.
+# ---------------------------------------------------------------------------
+
+
+class TestAnswerTagParsing:
+    async def test_parses_answer_tag(self):
+        llm = _FakeLLM(
+            content="<Analysis>thinking it through</Analysis><Answer>around 2023-03-20</Answer>"
+        )
+        result = await LLMAnswerer(llm).answer("q", _recall([_candidate(_fact())]))
+        assert result.abstained is False
+        assert result.answer == "around 2023-03-20"
+
+    async def test_falls_back_to_analysis(self):
+        llm = _FakeLLM(content="<Analysis>around 2023-03-20</Analysis><Answer></Answer>")
+        result = await LLMAnswerer(llm).answer("q", _recall([_candidate(_fact())]))
+        assert result.abstained is False
+        assert result.answer == "around 2023-03-20"
+
+    async def test_no_analysis_abstains(self):
+        llm = _FakeLLM(content="<Answer></Answer>")
+        result = await LLMAnswerer(llm).answer("q", _recall([_candidate(_fact())]))
+        assert result.abstained is True
+
+
+# ---------------------------------------------------------------------------
+# Fact line rendering: qualifiers (original_time) must reach the LLM so
+# relative-time expressions like "last week" are not lost. The extractor
+# records original_time per TEMPORAL LITERAL PRESERVATION; if the answerer
+# drops it the LLM only sees a resolved point date + "uncertain" and
+# reasons unstably (conv-44 job: around vs before).
+# ---------------------------------------------------------------------------
+
+
+class TestFormatFactLine:
+    def test_original_time_in_prompt(self):
+        fact = AtomicFact(
+            subject="Andrew",
+            predicate="started_job",
+            object="Financial Analyst",
+            certainty=Certainty.CERTAIN,
+            source_anchor="D1:2",
+            event_time="2023-03-20",
+            qualifiers={"original_time": "last week"},
+        )
+        cand = _candidate(fact)
+        line = LLMAnswerer._format_fact_line(1, cand)
+        assert "last week" in line
+
+
+# ---------------------------------------------------------------------------
 # LLM-side abstain detection
 # ---------------------------------------------------------------------------
 

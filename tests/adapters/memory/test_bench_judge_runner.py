@@ -199,7 +199,7 @@ class TestLLMJudge:
             _locomo_case(answer=""), _ans("idk", abstained=True, reason="no_candidates")
         )
         assert verdict.correct
-        assert verdict.reason == "trivial_abstain_ok"
+        assert verdict.reason == "empty_gold_abstain"
         # LLM never called — structural shortcut wins.
         assert llm.calls == 0
 

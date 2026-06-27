@@ -508,13 +508,13 @@ def _format_iso_range(start_iso: str, end_iso: str) -> str:
     return f"between {_format_iso_date(start_iso)} and {_format_iso_date(end_iso)}"
 
 
-def _normalize_surface(text: str) -> str:
+def _normalize_text(text: str) -> str:
     if not text:
         return ""
     return re.sub(r"\s+", " ", re.sub(r"[^\w\s]", " ", text.lower())).strip()
 
 
-def _stemish(token: str) -> str:
+def _light_stem(token: str) -> str:
     t = token.strip().lower()
     if len(t) > 4 and t.endswith("ing"):
         return t[:-3]
@@ -525,28 +525,28 @@ def _stemish(token: str) -> str:
     return t
 
 
-def _rough_semantic_match(expected: str, answer: str) -> bool:
-    exp = _normalize_surface(expected)
-    ans = _normalize_surface(answer)
+def _token_subset_match(expected: str, answer: str) -> bool:
+    exp = _normalize_text(expected)
+    ans = _normalize_text(answer)
     if not exp or not ans:
         return False
     if exp in ans:
         return True
 
-    exp_tokens = {_stemish(tok) for tok in exp.split() if tok}
-    ans_tokens = {_stemish(tok) for tok in ans.split() if tok}
+    exp_tokens = {_light_stem(tok) for tok in exp.split() if tok}
+    ans_tokens = {_light_stem(tok) for tok in ans.split() if tok}
     if exp_tokens and exp_tokens.issubset(ans_tokens):
         return True
 
     segments = [s.strip() for s in expected.split(",") if s.strip()]
     if len(segments) >= 2:
         for seg in segments:
-            seg_norm = _normalize_surface(seg)
+            seg_norm = _normalize_text(seg)
             if not seg_norm:
                 continue
             if seg_norm in ans:
                 continue
-            seg_tokens = {_stemish(tok) for tok in seg_norm.split() if tok}
+            seg_tokens = {_light_stem(tok) for tok in seg_norm.split() if tok}
             if not seg_tokens or not seg_tokens.issubset(ans_tokens):
                 return False
         return True
@@ -611,7 +611,7 @@ def _percentile(values: list[float], p: float) -> float:
 
 
 async def _judge(llm_judge: Any, case: LoCoMoCase, answer: AnswerResult) -> dict:
-    if _rough_semantic_match(case.answer, answer.answer):
+    if _token_subset_match(case.answer, answer.answer):
         return {"correct": True, "reason": "semantic_match"}
 
     judge_llm = LLMMemoryJudge(_JudgeLLM(llm_judge), timeout_seconds=20.0, max_tokens=16)
@@ -621,7 +621,13 @@ async def _judge(llm_judge: Any, case: LoCoMoCase, answer: AnswerResult) -> dict
     # Retry once on transient failure (network timeout, empty response)
     if verdict.reason in ("judge_llm_failed", "judge_parse_failed"):
         verdict = await judge_llm.judge(normalized_case, normalized_answer)
-    return {"correct": verdict.correct, "reason": verdict.reason}
+    # Accuracy counts only real answers: a token-subset match (above) or an
+    # LLM-judged MATCH. Abstention is NOT correct -- if the gold is genuinely
+    # absent from the conversation the case is a benchmark-data problem to
+    # exclude, not a correct abstention; if the gold is present the system
+    # failed to recall or reason it. Either way abstention is wrong. The
+    # reason is kept so the abstention count stays observable.
+    return {"correct": verdict.reason == "llm_match", "reason": verdict.reason}
 
 
 def _recalls_to_rows(engine: MemoryEngine, recalls: list[Any]) -> list[_BenchRow]:
@@ -1014,7 +1020,19 @@ class DiskCacheWrapper:
         self._cache_file = Path(cache_file)
         self._cache: dict[str, Any] = {}
         self._lock = asyncio.Lock()
+        # Hit/miss counters for cache observability. The LLM cache is per-run
+        # shared across cases (and concurrency), so these are run-aggregate --
+        # a high hit rate means most LLM responses were reused from disk (the
+        # run did not actually re-extract/answer); a high miss rate means fresh
+        # LLM calls. Per-case freeze status comes from the DB-cache hit/rebuild
+        # log and the TurnCache "M LLM calls" line, both emitted inline.
+        self._hits = 0
+        self._misses = 0
         self._load_cache()
+
+    def cache_stats(self) -> tuple[int, int]:
+        """Return (hits, misses) since this wrapper was created."""
+        return self._hits, self._misses
 
     def _get_key(
         self, messages: list[Any], temperature: float, max_tokens: int | None, **kwargs: Any
@@ -1073,6 +1091,7 @@ class DiskCacheWrapper:
         # 1. Thread-safe lock-free read check (Python dict lookups are atomic)
         if key in self._cache and "content" in self._cache[key]:
             cached_data = self._cache[key]
+            self._hits += 1
 
             @dataclass
             class FakeResponse:
@@ -1080,14 +1099,30 @@ class DiskCacheWrapper:
 
             return FakeResponse(content=cached_data["content"])
 
-        # 2. Call real LLM without holding any locks
-        response = await self._inner.chat(
-            messages=messages,
-            tools=tools,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            **kwargs,
-        )
+        self._misses += 1
+        # 2. Call real LLM without holding any locks. Overall 60s timeout
+        # forces a failure (case scored wrong, bench moves on) when the
+        # provider hangs on a request -- the openai SDK per-request timeout
+        # does not always fire for streaming responses, so this is the
+        # backstop that keeps a full run from hanging on one stuck call.
+        try:
+            response = await asyncio.wait_for(
+                self._inner.chat(
+                    messages=messages,
+                    tools=tools,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    **kwargs,
+                ),
+                timeout=60.0,
+            )
+        except TimeoutError:
+            logger.warning("LLM call timed out after 60s, treating as empty response")
+
+            class _Empty:
+                content = ""
+
+            return _Empty()
         content = getattr(response, "content", None)
         if isinstance(content, str):
             # 3. Only lock to update the dict and write to disk asynchronously to prevent blocking threads
@@ -1372,6 +1407,22 @@ async def _run_all(
                 # db.unlink(missing_ok=True)
 
     await asyncio.gather(*[_run_one(i, c) for i, c in enumerate(cases)])
+
+    # Cache hit/miss observability: LLM cache is per-run shared, so only a
+    # run aggregate is meaningful. high hits = LLM responses reused from disk
+    # (no real re-extract/answer); high misses = fresh LLM calls. Per-case
+    # freeze status is in the inline DB-cache hit/rebuild + TurnCache lines.
+    for _name, _wrapper in (
+        ("extract", llm_extract),
+        ("answer", llm_answer),
+        ("judge", llm_judge),
+        ("reflect", llm_reflect),
+    ):
+        if _wrapper is None:
+            continue
+        _h, _m = _wrapper.cache_stats()
+        _rate = (_h / (_h + _m) * 100) if (_h + _m) else 0.0
+        logger.info("[cache] llm %s hits=%d misses=%d hit_rate=%.0f%%", _name, _h, _m, _rate)
 
     correct = 0
     by_cat: dict = {}
