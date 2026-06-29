@@ -159,6 +159,12 @@ class MemoryEngine:
         evolution_trigger: TriggerPolicy | None = None,
         evolution_budget: EvolutionBudget | None = None,
         entity_state: EntityStateView | None = None,
+        # Diagnostic: capture per-stage recall snapshots (dbg_raw/fused/
+        # reranked/final/mmr_dropped) into AnswerResult.extras["trace"] for
+        # offline root-causing. Off by default; the bench constructs a fresh
+        # engine per case, so this is a per-case configuration, not a
+        # per-call flag threaded through the recall path.
+        debug_trace: bool = False,
     ):
         self._store = store
         self._builder = builder or MemoryCandidateBuilder(llm_adapter=llm_adapter)
@@ -183,6 +189,8 @@ class MemoryEngine:
         # RecallOrchestrator path. Production wiring may share a single
         # MemoryEventEmitter across both surfaces.
         self._emitter = emitter or MemoryEventEmitter()
+        self._debug_trace = debug_trace
+        self._last_recall_trace: dict[str, Any] = {}  # per-stage snapshots when debug_trace on
 
         # Facade members. The orchestrator wins over the legacy retriever
         # whenever both are available; the workers are optional and only
@@ -367,13 +375,7 @@ class MemoryEngine:
         session_context: SessionContext | None = None,
         top_k: int = 5,
     ) -> list[MemoryRecall]:
-        """Retrieve relevant memories for a query.
-
-        When a RecallOrchestrator is wired into the engine the call is
-        delegated there and the resulting RecallCandidate list is
-        adapted to MemoryRecall so existing callers stay unchanged.
-        Otherwise the legacy MemoryRetriever path is used.
-        """
+        """Retrieve relevant memories via the orchestrator (or legacy retriever)."""
         # A recall is hot-path activity regardless of outcome; record it so the
         # idle-based evolution trigger sees the system as busy.
         self._activity_monitor.record_activity()
@@ -484,9 +486,10 @@ class MemoryEngine:
 
         # Strictly slice the recalls back to standard top_k to keep evaluation clean
         evaluation_recalls = recalls[:top_k]
-        return dataclasses.replace(
-            res, extras={**res.extras, "recalls": evaluation_recalls, "recall_ms": recall_ms}
-        )
+        extras = {**res.extras, "recalls": evaluation_recalls, "recall_ms": recall_ms}
+        if self._debug_trace:
+            extras["trace"] = self._last_recall_trace
+        return dataclasses.replace(res, extras=extras)
 
     _CONTENT_FREE_RELATION_RE = re.compile(
         r"^\s*[\w'.-]+\s+"
@@ -909,7 +912,11 @@ class MemoryEngine:
         assert self._recall_orchestrator is not None
         namespace = (session_context.session_id if session_context else None) or "default"
         recall_query = RecallQuery(text=query, top_k=top_k, namespace=namespace)
-        result = await self._recall_orchestrator.recall(recall_query, RetrieverContext())
+        result = await self._recall_orchestrator.recall(
+            recall_query, RetrieverContext(debug_trace=self._debug_trace)
+        )
+        # Stash per-stage trace so answer() can fold it into extras (empty when off).
+        self._last_recall_trace = dict(result.trace or {}) if self._debug_trace else {}
         return [_candidate_to_memory_recall(c) for c in result.candidates]
 
 

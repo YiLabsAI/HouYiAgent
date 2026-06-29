@@ -269,17 +269,25 @@ def test_infer_answer_type() -> None:
 
 
 def test_answer_type_boost() -> None:
-    """Temporal boost lifts a dated fact above a generic higher-scored one."""
-    from houyi.adapters.memory.recall.orchestrator import _apply_answer_type_boost
+    """Temporal boost adds a small tiebreaker to a dated query-entity fact.
 
-    # A generic, qualifier-less fact starts higher than the answer-bearing
-    # one. After the temporal boost the dated fact must overtake it so it
-    # survives the top_k cut for a 'which year' question.
+    The boost is a 0-1-scale tiebreaker (not a score-lifter): it nudges a
+    dated fact about the queried entity above same-score noise, but does
+    not overcome a real score gap -- a generic fact the cross-encoder
+    scored higher stays higher. This keeps the cross-encoder's
+    discrimination in charge instead of drowning it.
+    """
+    from houyi.adapters.memory.recall.orchestrator import (
+        _ANSWER_TYPE_BOOST,
+        _apply_answer_type_boost,
+    )
+
     generic = _timed_candidate(1.0, obj="dogs", event_time=None)
     dated = _timed_candidate(0.8, obj="dog Pepper", event_time="2020")
     _apply_answer_type_boost([generic, dated], frozenset({"temporal"}), ["Audrey"])
 
-    assert dated.signals["rerank_score"] > generic.signals.get("rerank_score", generic.score)
+    assert dated.signals["rerank_score"] == 0.8 + _ANSWER_TYPE_BOOST
+    assert "answer_type_boost" in dated.signals
     assert "answer_type_boost" not in generic.signals
 
 

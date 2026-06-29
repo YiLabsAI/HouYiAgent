@@ -956,6 +956,47 @@ class ExtractionResult:
 _ATOMIC_FENCE_RE = re.compile(r"^`(?:json)?\s*|\s*`\s*$", re.MULTILINE)
 _TRAILING_COMMA_RE = re.compile(r",\s*([}\]])")
 
+_ATOMIC_FACT_ITEM_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "subject": {"type": "string"},
+        "predicate": {"type": "string"},
+        "object": {"type": "string"},
+        "certainty": {"type": "string", "enum": ["certain", "probable", "vague"]},
+        "accumulate": {"type": "boolean"},
+        "qualifiers": {"type": "object", "additionalProperties": {"type": "string"}},
+    },
+    "required": ["subject", "predicate", "object", "certainty"],
+    "additionalProperties": False,
+}
+
+_ATOMIC_EVENT_ITEM_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "subject": {"type": "string"},
+        "action": {"type": "string"},
+        "object": {"type": "string"},
+        "timestamp": {"type": "string"},
+        "context": {"type": "string"},
+        "certainty": {"type": "string", "enum": ["certain", "probable", "vague"]},
+    },
+    "required": ["subject", "action", "object", "timestamp"],
+    "additionalProperties": False,
+}
+
+_ATOMIC_EDGE_ITEM_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "source_unit_id": {"type": "string"},
+        "target_unit_id": {"type": "string"},
+        "relation": {"type": "string"},
+        "source_type": {"type": "string", "enum": ["state", "fact", "event"]},
+        "target_type": {"type": "string", "enum": ["state", "fact", "event"]},
+    },
+    "required": ["source_unit_id", "target_unit_id", "relation"],
+    "additionalProperties": False,
+}
+
 _ATOMIC_FACT_RESPONSE_FORMAT: dict[str, Any] = {
     "type": "json_schema",
     "json_schema": {
@@ -963,74 +1004,55 @@ _ATOMIC_FACT_RESPONSE_FORMAT: dict[str, Any] = {
         "schema": {
             "type": "object",
             "properties": {
-                "facts": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "subject": {"type": "string"},
-                            "predicate": {"type": "string"},
-                            "object": {"type": "string"},
-                            "certainty": {
-                                "type": "string",
-                                "enum": ["certain", "probable", "vague"],
-                            },
-                            "accumulate": {"type": "boolean"},
-                            "qualifiers": {
-                                "type": "object",
-                                "additionalProperties": {"type": "string"},
-                            },
-                        },
-                        "required": ["subject", "predicate", "object", "certainty"],
-                        "additionalProperties": False,
-                    },
-                },
-                "events": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "subject": {"type": "string"},
-                            "action": {"type": "string"},
-                            "object": {"type": "string"},
-                            "timestamp": {"type": "string"},
-                            "context": {"type": "string"},
-                            "certainty": {
-                                "type": "string",
-                                "enum": ["certain", "probable", "vague"],
-                            },
-                        },
-                        "required": ["subject", "action", "object", "timestamp"],
-                        "additionalProperties": False,
-                    },
-                },
-                "edges": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "source_unit_id": {"type": "string"},
-                            "target_unit_id": {"type": "string"},
-                            "relation": {"type": "string"},
-                            "source_type": {
-                                "type": "string",
-                                "enum": ["state", "fact", "event"],
-                            },
-                            "target_type": {
-                                "type": "string",
-                                "enum": ["state", "fact", "event"],
-                            },
-                        },
-                        "required": ["source_unit_id", "target_unit_id", "relation"],
-                        "additionalProperties": False,
-                    },
-                },
+                "facts": {"type": "array", "items": _ATOMIC_FACT_ITEM_SCHEMA},
+                "events": {"type": "array", "items": _ATOMIC_EVENT_ITEM_SCHEMA},
+                "edges": {"type": "array", "items": _ATOMIC_EDGE_ITEM_SCHEMA},
             },
             "required": ["facts"],
             "additionalProperties": False,
         },
     },
 }
+
+
+def _atomic_fact_batch_response_format(n_turns: int) -> dict[str, Any]:
+    """JSON schema constraining batch extraction output.
+
+    minItems forces the LLM to return one item per input turn -- a turn with
+    no facts comes back as an item with empty arrays rather than being
+    silently omitted -- so long-batch attention loss can no longer drop turns
+    from the response. Each item requires a source_anchor so facts stay
+    grouped to their turn. The per-anchor recovery in extract_batch remains
+    as a safety net for providers that do not enforce minItems.
+    """
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "atomic_fact_batch_extraction",
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "items": {
+                        "type": "array",
+                        "minItems": n_turns,
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "source_anchor": {"type": "string"},
+                                "facts": {"type": "array", "items": _ATOMIC_FACT_ITEM_SCHEMA},
+                                "events": {"type": "array", "items": _ATOMIC_EVENT_ITEM_SCHEMA},
+                                "edges": {"type": "array", "items": _ATOMIC_EDGE_ITEM_SCHEMA},
+                            },
+                            "required": ["source_anchor", "facts", "events", "edges"],
+                            "additionalProperties": False,
+                        },
+                    }
+                },
+                "required": ["items"],
+                "additionalProperties": False,
+            },
+        },
+    }
 
 
 class AtomicFactExtractor:
@@ -1067,6 +1089,8 @@ class AtomicFactExtractor:
         self,
         text: str,
         source_anchor: str | None,
+        *,
+        namespace: str = "default",
     ) -> ExtractionResult:
         """Extract atomic facts from text.
 
@@ -1075,6 +1099,12 @@ class AtomicFactExtractor:
         every extracted item is routed to raw_sourceless instead of
         being assembled into an AtomicFact (the schema would refuse
         an empty anchor anyway, and silently dropping would lose data).
+
+        namespace is applied to extracted events so the EventRetriever
+        (which queries by the same namespace) can find them -- mirrors
+        the batch path. Without it, single-turn recovery would write
+        events under the default namespace and the retriever would miss
+        them.
         """
         if not text or not text.strip():
             return ExtractionResult()
@@ -1096,6 +1126,16 @@ class AtomicFactExtractor:
                 invalid += 1
             else:
                 facts.append(fact)
+        # Build events from raw event dicts -- mirrors the batch parse path.
+        # Without this loop the single-turn path silently dropped every event
+        # (events_raw was read but never assembled), so any anchor recovered
+        # via single-turn re-extraction lost its time-anchored events.
+        for ev_item in events_raw:
+            event = self._build_event(ev_item, anchor, namespace)
+            if event is None:
+                invalid += 1
+            else:
+                events.append(event)
         facts = self._restore_generic_objects(facts)
         return ExtractionResult(
             facts=facts, events=events, edges=list(edges_raw), invalid_dropped=invalid
@@ -1128,7 +1168,7 @@ class AtomicFactExtractor:
             return [ExtractionResult() for _ in turns]
 
         payload = "\n\n".join(prompt_parts)
-        parsed = await self._call_llm_batch(payload)
+        parsed = await self._call_llm_batch(payload, n_turns=len(prompt_parts))
         if parsed is None:
             logger.warning(
                 "AtomicFactExtractor batch parse failed; fallback to single-turn extraction for %d turns",
@@ -1141,7 +1181,40 @@ class AtomicFactExtractor:
             for source_anchor, facts, edges, events in parsed
             if source_anchor
         }
-        return self._results_from_batch_parse(normalized, by_anchor, namespace=namespace)
+        # Guarantee per-anchor coverage. The batch LLM response is unreliable
+        # at the per-turn level in TWO ways, both caused by long-batch
+        # attention loss: (1) it silently OMITS a turn entirely, and (2) it
+        # returns the turn PRESENT BUT EMPTY (an item with facts=[] and
+        # events=[]). Empirically the empty case is NOT "the model deliberately
+        # found nothing" -- the same turn extracted singly (no batch attention
+        # loss) yields its salient facts, while the batch drops them. Treating
+        # a batch empty as authoritative makes a gold evidence turn score 0
+        # facts forever: it vanishes from the DB and recall has nothing to
+        # surface (root-caused via fresh debug-trace: gold turns D1:5/D3:1/D1:4
+        # came back batch-empty and were never recovered). So we re-extract via
+        # the single-turn path BOTH absent anchors AND present-but-empty ones.
+        # Single-turn re-extraction of a genuinely empty turn simply returns
+        # empty again -- a wasted call, never a correctness loss.
+        single_results: dict[str, ExtractionResult] = {}
+        dropped = 0
+        for text, anchor in normalized:
+            if not text or not anchor or anchor.startswith("batch-turn-"):
+                continue
+            covered = by_anchor.get(anchor)
+            # covered is (facts, edges, events); re-extract when the batch
+            # omitted the anchor or returned it with neither facts nor events.
+            if covered is None or (not covered[0] and not covered[2]):
+                dropped += 1
+                single_results[anchor] = await self.extract(text, anchor, namespace=namespace)
+        if dropped:
+            logger.info(
+                "AtomicFactExtractor batch dropped/emptied %d/%d anchors; re-extracted singly",
+                dropped,
+                len(normalized),
+            )
+        return self._results_from_batch_parse(
+            normalized, by_anchor, single_results, namespace=namespace
+        )
 
     @staticmethod
     def _normalize_batch_turns(turns: list[tuple[str, str | None]]) -> list[tuple[str, str]]:
@@ -1171,12 +1244,19 @@ class AtomicFactExtractor:
         by_anchor: dict[
             str, tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]
         ],
+        single_results: dict[str, ExtractionResult] | None = None,
         namespace: str = "default",
     ) -> list[ExtractionResult]:
+        single_results = single_results or {}
         out: list[ExtractionResult] = []
         for text, anchor in normalized:
             if not text:
                 out.append(ExtractionResult())
+                continue
+            # Anchors the batch dropped were re-extracted singly in extract_batch;
+            # use that result directly instead of the empty by_anchor fallback.
+            if anchor in single_results:
+                out.append(single_results[anchor])
                 continue
             items, raw_edges, events_raw = by_anchor.get(anchor, ([], [], []))
             if not anchor or anchor.startswith("batch-turn-"):
@@ -1267,11 +1347,11 @@ class AtomicFactExtractor:
         return content
 
     async def _call_llm_batch(
-        self, text: str
+        self, text: str, *, n_turns: int
     ) -> list[tuple[str, list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]] | None:
         attempts = self._max_retries + 1
         for attempt in range(attempts):
-            content = await self._request_llm_batch(text, retry=attempt > 0)
+            content = await self._request_llm_batch(text, n_turns=n_turns, retry=attempt > 0)
             if content is None:
                 return None
             items = self._parse_json_batch(content)
@@ -1279,7 +1359,7 @@ class AtomicFactExtractor:
                 return items
         return None
 
-    async def _request_llm_batch(self, text: str, *, retry: bool) -> str | None:
+    async def _request_llm_batch(self, text: str, *, n_turns: int, retry: bool) -> str | None:
         user_content = text
         if retry:
             user_content = (
@@ -1291,25 +1371,27 @@ class AtomicFactExtractor:
             {"role": "user", "content": user_content},
         ]
         try:
-            # Batch extraction must NOT pass response_format. The schema
-            # defined in _ATOMIC_FACT_RESPONSE_FORMAT specifies single-turn
-            # extraction output ({facts, edges} without source_anchor
-            # grouping). Batch extraction requires a different structure
-            # ({items: [{source_anchor, facts, edges}]}). Passing the
-            # single-turn schema forces the LLM to output flat {facts,
-            # edges} instead of the batch {items} wrapper, causing all
-            # facts to be silently dropped by _parse_json_batch. The batch
-            # system prompt already instructs the LLM to return JSON, so
-            # omitting response_format does not reduce reliability.
+            # Pass a batch-specific json_schema (items[] with minItems = n_turns
+            # and required source_anchor per item) so the LLM is constrained to
+            # return one item per input turn instead of silently dropping turns
+            # to long-batch attention loss. The single-turn schema cannot be
+            # reused here: it has no items[]/source_anchor wrapper, and passing
+            # it would flatten the output and drop every fact. The per-anchor
+            # recovery in extract_batch is the safety net for providers that do
+            # not enforce minItems.
             response = await self._llm.chat(
                 messages,
                 temperature=self._temperature,
                 max_tokens=self._batch_max_tokens,
+                **self._batch_json_kwargs(n_turns),
             )
-        except TypeError:
+        except TypeError as exc:
             if not self._prefer_json_mode:
                 logger.warning("AtomicFactExtractor batch LLM call failed", exc_info=True)
                 return None
+            # Adapter rejected response_format; retry unstructured. The batch
+            # prompt still requests JSON, and extract_batch recovers dropped
+            # anchors singly.
             try:
                 response = await self._llm.chat(
                     messages,
@@ -1319,6 +1401,7 @@ class AtomicFactExtractor:
             except Exception:
                 logger.warning("AtomicFactExtractor batch LLM call failed", exc_info=True)
                 return None
+            logger.debug("AtomicFactExtractor batch JSON mode fallback after TypeError: %s", exc)
         except Exception:
             logger.warning("AtomicFactExtractor batch LLM call failed", exc_info=True)
             return None
@@ -1332,6 +1415,11 @@ class AtomicFactExtractor:
         if not self._prefer_json_mode:
             return {}
         return {"response_format": _ATOMIC_FACT_RESPONSE_FORMAT}
+
+    def _batch_json_kwargs(self, n_turns: int) -> dict[str, Any]:
+        if not self._prefer_json_mode:
+            return {}
+        return {"response_format": _atomic_fact_batch_response_format(n_turns)}
 
     @staticmethod
     def _parse_json_array(

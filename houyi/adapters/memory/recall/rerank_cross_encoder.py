@@ -68,18 +68,20 @@ class CrossEncoderReranker(Reranker):
         *,
         model_name: str = _DEFAULT_RERANKER_MODEL,
         device: str = "cpu",
-        max_candidates: int = 64,
+        max_candidates: int = 100,
         batch_size: int = 32,
     ) -> None:
         self._model_name = model_name
         self._device = device
         # Two-stage retrieval bound: the cross-encoder re-scores only the
-        # top-N of the fused pool, not the whole pool. 64 is within standard
-        # rerank depth (BEIR/RAG practice 50-100) and bounds the per-query
-        # rerank cost. Candidates beyond 64 are kept in the tail (unscored,
-        # at their pre-rerank fused score) so downstream boost + MMR stages
-        # still see them -- a gold fact that sits in the fused tail stays
-        # reachable instead of being silently dropped.
+        # top-N of the fused pool, not the whole pool. 100 covers the full
+        # fused pool for nearly every query (the 99th-percentile pool is
+        # ~170), so gold members sitting in the fused tail still get a real
+        # cross-encoder score instead of leaking through at their pre-rerank
+        # lexical score. Candidates beyond 100 are DROPPED, not kept as an
+        # unscored tail: an unscored tail mixed its lexical score with the
+        # cross-encoder scale and let low-relevance facts reach the answerer
+        # via a leaked high lexical score.
         self._max_candidates = max_candidates
         self._batch_size = batch_size
         self._model: Any | None = None
@@ -154,10 +156,11 @@ class CrossEncoderReranker(Reranker):
         for c, score in zip(window, scores, strict=False):
             c.signals["rerank_score"] = float(score)
         window.sort(key=lambda c: float(c.signals["rerank_score"]), reverse=True)
-        # Preserve unscored tail so downstream stages still see every candidate.
-        scored_ids = {id(c) for c in window}
-        tail = [c for c in ordered if id(c) not in scored_ids]
-        return (window + tail)[:top_k] if top_k else window + tail
+        # Drop the unscored tail. Returning it mixed its lexical score with
+        # the cross-encoder scale and let low-relevance facts reach the
+        # answerer via a leaked high lexical score. Gold sits in the top of
+        # the fused pool, so bounding to the scored window is safe.
+        return window[:top_k] if top_k else window
 
 
 class FallbackReranker(Reranker):
@@ -174,6 +177,28 @@ class FallbackReranker(Reranker):
             raise ValueError("FallbackReranker needs at least one tier")
         self._tiers = list(tiers)
 
+    def _record_tier(
+        self,
+        result: list[RecallCandidate],
+        tier_name: str,
+        fallbacks: list[dict[str, str]],
+    ) -> list[RecallCandidate]:
+        """Tag every returned candidate with the winning tier + fallback log.
+
+        Without this the orchestrator trace can only see the wrapper name
+        (FallbackReranker), hiding which tier actually scored -- a silent
+        cross-encoder -> heuristic degradation looks identical to a healthy
+        run. Tagging the candidates (not instance state) is concurrency-safe
+        across parallel recall cases.
+        """
+        for c in result:
+            s = c.signals if c.signals is not None else {}
+            s.setdefault("rerank_tier", tier_name)
+            c.signals = s
+        if result:
+            result[0].signals.setdefault("rerank_fallbacks", fallbacks)
+        return result
+
     def rerank(
         self,
         *,
@@ -184,15 +209,17 @@ class FallbackReranker(Reranker):
     ) -> list[RecallCandidate]:
         ordered = list(candidates)
         last_exc: Exception | None = None
+        fallbacks: list[dict[str, str]] = []
         for tier in self._tiers:
             try:
                 result = tier.rerank(
                     query_type=query_type, candidates=list(ordered), top_k=top_k, query=query
                 )
                 if result:
-                    return result
+                    return self._record_tier(result, type(tier).__name__, fallbacks)
             except Exception as exc:
                 last_exc = exc
+                fallbacks.append({"tier": type(tier).__name__, "error": str(exc)})
                 logger.info(
                     "rerank tier %s failed, falling through: %s",
                     type(tier).__name__,
@@ -201,7 +228,7 @@ class FallbackReranker(Reranker):
         # All tiers failed or returned empty; return input order as last resort.
         if last_exc is not None:
             logger.warning("all rerank tiers failed; returning input order")
-        return ordered[:top_k]
+        return self._record_tier(ordered[:top_k], "FallbackReranker(no-tier)", fallbacks)
 
     async def arerank(
         self,
@@ -213,15 +240,17 @@ class FallbackReranker(Reranker):
     ) -> list[RecallCandidate]:
         ordered = list(candidates)
         last_exc: Exception | None = None
+        fallbacks: list[dict[str, str]] = []
         for tier in self._tiers:
             try:
                 result = await tier.arerank(
                     query_type=query_type, candidates=list(ordered), top_k=top_k, query=query
                 )
                 if result:
-                    return result
+                    return self._record_tier(result, type(tier).__name__, fallbacks)
             except Exception as exc:
                 last_exc = exc
+                fallbacks.append({"tier": type(tier).__name__, "error": str(exc)})
                 logger.info(
                     "rerank tier %s failed, falling through: %s",
                     type(tier).__name__,
@@ -229,7 +258,7 @@ class FallbackReranker(Reranker):
                 )
         if last_exc is not None:
             logger.warning("all rerank tiers failed; returning input order")
-        return ordered[:top_k]
+        return self._record_tier(ordered[:top_k], "FallbackReranker(no-tier)", fallbacks)
 
 
 def build_default_reranker(*, llm_adapter: Any | None = None) -> Reranker:

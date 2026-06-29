@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pytest
 
-from houyi.adapters.embedding import NoOpEmbeddingProvider
+from houyi.adapters.embedding import EmbeddingProvider, NoOpEmbeddingProvider
 from houyi.adapters.memory.deduplicator import MemoryDeduplicator
 from houyi.adapters.memory.types import (
     MemoryCandidate,
@@ -99,6 +99,66 @@ class TestSemanticDedup:
         existing = [_record("k", "something else")]
         matches = await dedup_with_emb.check(cand, existing)
         assert len(matches) == 0
+
+    async def test_semantic_update_relation(self):
+        # Similarity at ~0.93: at/above the 0.9 threshold but not above the
+        # 0.95 duplicate cutoff, so the relation is "update", not "duplicate".
+        # Vectors [1,0] vs [0.93, 0.3676] -> cosine 0.93 (|b|=1 exactly).
+        dedup = MemoryDeduplicator(
+            embedding_provider=_ScriptedEmbedding([1.0, 0.0]),
+            similarity_threshold=0.9,
+        )
+        cand = _candidate("a related statement")
+        existing = [_record("k", "a near-duplicate statement", embedding=[0.93, 0.3676])]
+        matches = await dedup.check(cand, existing)
+        assert len(matches) == 1
+        assert matches[0].relation == "update"
+        assert 0.9 <= matches[0].similarity < 0.95
+
+    async def test_semantic_below_threshold(self):
+        # Similarity ~0.85, below the 0.9 threshold -> no semantic match.
+        dedup = MemoryDeduplicator(
+            embedding_provider=_ScriptedEmbedding([1.0, 0.0]),
+            similarity_threshold=0.9,
+        )
+        cand = _candidate("a statement")
+        existing = [_record("k", "a different statement", embedding=[0.85, 0.527])]
+        matches = await dedup.check(cand, existing)
+        assert matches == []
+
+    async def test_semantic_empty_embedding(self):
+        # If the embedding provider returns no vector for the candidate
+        # (backend failure / empty batch), semantic check yields nothing
+        # rather than crashing on a missing vector. Content differs so the
+        # exact-match path does not short-circuit before semantic runs.
+        dedup = MemoryDeduplicator(
+            embedding_provider=_ScriptedEmbedding(None),
+            similarity_threshold=0.9,
+        )
+        cand = _candidate("a statement")
+        existing = [_record("k", "a different statement", embedding=[1.0, 0.0])]
+        matches = await dedup.check(cand, existing)
+        assert matches == []
+
+
+class _ScriptedEmbedding(EmbeddingProvider):
+    """Embedding provider that returns a fixed vector (or none) for any text.
+
+    Lets a test pin the candidate vector so cosine similarity against a
+    record's stored embedding is deterministic -- NoOpEmbeddingProvider is
+    hash-based and cannot target a specific similarity value.
+    """
+
+    def __init__(self, vec: list[float] | None) -> None:
+        self._vec = vec
+
+    async def embed(self, texts: list[str]) -> list[list[float]]:
+        if self._vec is None:
+            return []
+        return [list(self._vec) for _ in texts]
+
+    def dimension(self) -> int:
+        return len(self._vec) if self._vec else 0
 
 
 class TestEdgeCases:

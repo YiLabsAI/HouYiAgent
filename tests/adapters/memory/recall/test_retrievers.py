@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import pytest
 
+from houyi.adapters.memory.backends.base import EventView
 from houyi.adapters.memory.recall.retrievers.base import Retriever
 from houyi.adapters.memory.recall.retrievers.entity_state import EntityStateRetriever
+from houyi.adapters.memory.recall.retrievers.event import EventRetriever
 from houyi.adapters.memory.recall.retrievers.iterative import (
     GapAnalysis,
     IterativeMultiHopRetriever,
@@ -16,7 +18,7 @@ from houyi.adapters.memory.recall.types import (
     RetrieverContext,
     RetrieverKind,
 )
-from houyi.adapters.memory.types import AtomicFact, Certainty, EntityStateRecord
+from houyi.adapters.memory.types import AtomicFact, Certainty, EntityStateRecord, MemoryEvent
 
 
 class FakeView:
@@ -405,6 +407,111 @@ async def test_timeline_no_target() -> None:
     assert view.history_calls == []
 
 
+@pytest.mark.asyncio
+async def test_timeline_fuzzy_asof() -> None:
+    # An attribute hint that does not exactly match any stored attribute
+    # triggers a broad re-query (attribute=None) and a fuzzy filter that
+    # keeps rows whose stored attribute stem-overlaps the hint.
+    view = _FuzzyAttrView()
+    retriever = TimelineRetriever(view)
+
+    hits = await retriever.retrieve(
+        RecallQuery(
+            text="historical lookup",
+            namespace="n",
+            entity_hint="Martin",
+            attribute_hint="phone",
+            as_of=4.0,
+        ),
+        RetrieverContext(),
+    )
+
+    # "phone_number" fuzzy-matches "phone" (stem overlap); no exact "phone".
+    assert [hit.fact.object for hit in hits] == ["555-0100"]
+    # First the exact query (empty), then the broad fallback.
+    assert view.as_of_calls == [
+        ("n", "Martin", 4.0, "phone"),
+        ("n", "Martin", 4.0, None),
+    ]
+    assert hits[0].signals["mode"] == "as_of"
+
+
+@pytest.mark.asyncio
+async def test_timeline_fuzzy_history() -> None:
+    view = _FuzzyAttrView()
+    retriever = TimelineRetriever(view)
+
+    hits = await retriever.retrieve(
+        RecallQuery(
+            text="history",
+            namespace="n",
+            entity_hint="Martin",
+            attribute_hint="phone",
+        ),
+        RetrieverContext(),
+    )
+
+    assert [hit.fact.object for hit in hits] == ["555-0100"]
+    assert view.history_calls == [("n", "Martin", "phone"), ("n", "Martin", None)]
+    assert hits[0].signals["mode"] == "history"
+
+
+class _FuzzyAttrView:
+    """EntityStateView whose only row uses a non-exact attribute.
+
+    Exact-attribute queries return nothing; attribute=None returns the row.
+    This forces the TimelineRetriever's fuzzy fallback path.
+    """
+
+    def __init__(self) -> None:
+        self.as_of_calls: list[tuple[str, str, float, str | None]] = []
+        self.history_calls: list[tuple[str, str, str | None]] = []
+        self.rows = [
+            EntityStateRecord(
+                namespace="n",
+                entity="Martin",
+                attribute="phone_number",
+                value="555-0100",
+                certainty=Certainty.CERTAIN,
+                valid_from=1.0,
+                source_unit_id="u-pn",
+            )
+        ]
+
+    def get_as_of(
+        self,
+        namespace: str,
+        entity: str,
+        ts: float,
+        attribute: str | None = None,
+    ) -> list[EntityStateRecord]:
+        self.as_of_calls.append((namespace, entity, ts, attribute))
+        return [
+            r
+            for r in self.rows
+            if r.namespace == namespace
+            and r.entity.casefold() == entity.casefold()
+            and r.valid_from <= ts
+            and (r.valid_to is None or r.valid_to > ts)
+            and (attribute is None or r.attribute.casefold() == attribute.casefold())
+        ]
+
+    def get_history(
+        self,
+        namespace: str,
+        entity: str,
+        attribute: str | None = None,
+    ) -> list[EntityStateRecord]:
+        self.history_calls.append((namespace, entity, attribute))
+        return [
+            r
+            for r in self.rows
+            if r.namespace == namespace
+            and r.entity.casefold() == entity.casefold()
+            and (attribute is None or r.attribute.casefold() == attribute.casefold())
+        ]
+
+
 def test_timeline_requires_view() -> None:
     with pytest.raises(ValueError):
         TimelineRetriever(None)  # type: ignore[arg-type]
@@ -584,3 +691,105 @@ def test_light_stem() -> None:
     assert _light_stem("dogs") == "dog"
     assert _light_stem("cooking") == "cook"
     assert _light_stem("cat") == "cat"
+
+
+class _FakeEventView(EventView):
+    """EventView fake: returns scripted events per subject, stubs the rest.
+
+    Only get_events_by_subject is exercised by EventRetriever; the other
+    EventView abstracts are stubbed so the fake can instantiate.
+    """
+
+    def __init__(self) -> None:
+        self._by_subject: dict[str, list[MemoryEvent]] = {}
+        self.calls: list[tuple[str, str]] = []
+
+    def set(self, subject: str, events: list[MemoryEvent]) -> None:
+        self._by_subject[subject.casefold()] = events
+
+    def add_event(self, event: MemoryEvent) -> MemoryEvent:
+        raise NotImplementedError
+
+    def get_event(self, event_id: str) -> MemoryEvent | None:
+        return None
+
+    def get_events_by_subject(self, namespace: str, subject: str) -> list[MemoryEvent]:
+        self.calls.append((namespace, subject))
+        return list(self._by_subject.get(subject.casefold(), []))
+
+    def get_events_by_subject_and_action(
+        self, namespace: str, subject: str, action: str
+    ) -> list[MemoryEvent]:
+        return []
+
+    def all_events(self) -> list[MemoryEvent]:
+        return []
+
+
+def _event(subject: str, action: str, obj: str, anchor: str) -> MemoryEvent:
+    return MemoryEvent(
+        namespace="n",
+        subject=subject,
+        action=action,
+        object=obj,
+        timestamp="2023",
+        source_anchor=anchor,
+        certainty=Certainty.CERTAIN,
+    )
+
+
+@pytest.mark.asyncio
+async def test_event_no_entity() -> None:
+    retriever = EventRetriever(_FakeEventView())
+    hits = await retriever.retrieve(RecallQuery(text="recent activity"), RetrieverContext())
+    assert hits == []
+
+
+@pytest.mark.asyncio
+async def test_event_multi_entity_dedup() -> None:
+    # A query mentioning two people retrieves events for both; an event
+    # shared between them (same event_id) is deduped to one candidate.
+    view = _FakeEventView()
+    shared = _event("John", "met", "James", "e-shared")
+    view.set("John", [shared, _event("John", "went", "park", "e-park")])
+    view.set("James", [shared])
+    retriever = EventRetriever(view)
+
+    hits = await retriever.retrieve(
+        RecallQuery(text="John and James", namespace="n", entity_hint="John"),
+        RetrieverContext(),
+    )
+
+    objects = {hit.fact.object for hit in hits}
+    assert objects == {"James (2023)", "park (2023)"}
+    assert len(hits) == 2  # shared event counted once across both entities
+
+
+def test_event_requires_view() -> None:
+    with pytest.raises(ValueError):
+        EventRetriever(None)  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_event_action_boost() -> None:
+    # When the query attribute matches the stored action verb, the candidate
+    # gets a +2.0 precise-action boost on top of its certainty base score.
+    from houyi.adapters.memory.recall.retrievers.event import _CERTAINTY_SCORE
+
+    view = _FakeEventView()
+    view.set("John", [_event("John", "went", "park", "e1")])
+    retriever = EventRetriever(view)
+
+    hits = await retriever.retrieve(
+        RecallQuery(
+            text="where did John went",
+            namespace="n",
+            entity_hint="John",
+            attribute_hint="went",
+        ),
+        RetrieverContext(),
+    )
+
+    assert len(hits) == 1
+    base = _CERTAINTY_SCORE[Certainty.CERTAIN]
+    assert hits[0].score == base + 2.0

@@ -80,13 +80,14 @@ class TestCrossEncoderReranker:
                 query=None,
             )
 
-    async def test_preserves_unscored_tail(self, reranker) -> None:
-        """Candidates beyond max_candidates are kept in the tail.
+    async def test_drops_unscored_tail(self, reranker) -> None:
+        """Candidates beyond max_candidates are dropped, not kept as tail.
 
-        Gold that sits in the fused tail (>max_candidates) must stay visible
-        downstream so boost + MMR can still lift it; drop-tail lost it
-        (regressed 8 cases). The scored window leads, the unscored tail
-        follows.
+        An unscored tail mixed its raw lexical score with the cross-encoder
+        scale and let low-relevance facts reach the answerer via a leaked
+        high lexical score. Only the scored window is returned; gold sits
+        in the top of the fused pool, so bounding to the scored window is
+        safe.
         """
         many = [_candidate("s", "p", str(i)) for i in range(10)]
         reranker._max_candidates = 3
@@ -96,7 +97,10 @@ class TestCrossEncoderReranker:
             top_k=10,
             query="s p",
         )
-        assert len(result) == 10
+        # Only the 3 scored candidates come back; the 7 unscored tail is
+        # dropped (no lexical-score leak).
+        assert len(result) == 3
+        assert all("rerank_score" in c.signals for c in result)
 
 
 class TestFallbackReranker:
@@ -153,3 +157,48 @@ class TestFallbackReranker:
             query="q",
         )
         assert len(result) == 1
+
+    async def test_tags_winning_tier(self) -> None:
+        # The winning tier's name is stamped on every returned candidate so
+        # a downstream trace can tell which tier actually scored -- a silent
+        # cross->heuristic degradation must not look identical to a healthy
+        # cross-encoder run.
+        class _Named:
+            async def arerank(self, *, query_type, candidates, top_k, query=None):
+                return list(candidates)[:top_k]
+
+            def rerank(self, **kw):
+                raise RuntimeError
+
+        chain = FallbackReranker([_Named(), EvidenceAwareReranker()])
+        result = await chain.arerank(
+            query_type=QueryType.FACTUAL_LOOKUP,
+            candidates=[_candidate("a", "b", "c"), _candidate("d", "e", "f")],
+            top_k=2,
+            query="q",
+        )
+        assert all(c.signals.get("rerank_tier") == "_Named" for c in result)
+        assert result[0].signals.get("rerank_fallbacks") == []
+
+    async def test_fallback_reason_recorded(self) -> None:
+        # When a tier fails and the next one wins, the failure (tier + error)
+        # is recorded on the first returned candidate for offline diagnosis.
+        class _Boom:
+            async def arerank(self, *, query_type, candidates, top_k, query=None):
+                raise RuntimeError("model down")
+
+            def rerank(self, **kw):
+                raise RuntimeError
+
+        chain = FallbackReranker([_Boom(), EvidenceAwareReranker()])
+        result = await chain.arerank(
+            query_type=QueryType.FACTUAL_LOOKUP,
+            candidates=[_candidate("a", "b", "c")],
+            top_k=1,
+            query="q",
+        )
+        assert result[0].signals.get("rerank_tier") == "EvidenceAwareReranker"
+        fallbacks = result[0].signals.get("rerank_fallbacks")
+        assert isinstance(fallbacks, list) and len(fallbacks) == 1
+        assert fallbacks[0]["tier"] == "_Boom"
+        assert "model down" in fallbacks[0]["error"]

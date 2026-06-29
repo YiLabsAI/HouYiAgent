@@ -309,3 +309,185 @@ class TestPromptSpecificityRules:
         assert "RIGHT" in _ATOMIC_FACT_SYSTEM_PROMPT
         assert "ride" in _ATOMIC_FACT_SYSTEM_PROMPT
         assert "Ferrari 488 GTB" in _ATOMIC_FACT_SYSTEM_PROMPT
+
+
+class TestExtractorBatchCoverage:
+    """extract_batch must cover every input anchor even when the batch LLM
+    response is unreliable at the per-turn level (long-batch attention loss).
+    Both an OMITTED anchor and a PRESENT-BUT-EMPTY anchor are re-extracted via
+    the reliable single-turn path, since a batch empty is not authoritative.
+    """
+
+    @pytest.mark.asyncio
+    async def test_dropped_anchor_re_extracted(self) -> None:
+        # Batch LLM returns only anchor "a"; "b" is absent (dropped).
+        batch_resp = json.dumps(
+            {
+                "items": [
+                    {
+                        "source_anchor": "a",
+                        "facts": [
+                            {
+                                "subject": "S",
+                                "predicate": "p",
+                                "object": "o",
+                                "certainty": "certain",
+                            }
+                        ],
+                        "events": [],
+                        "edges": [],
+                    }
+                ]
+            }
+        )
+        # Single-turn fallback for the dropped anchor "b".
+        single_resp = _items(
+            {"subject": "S2", "predicate": "p2", "object": "o2", "certainty": "certain"}
+        )
+        llm = _StubLLM([batch_resp, single_resp])
+        ext = AtomicFactExtractor(llm, max_retries=0)
+        results = await ext.extract_batch([("text-a", "a"), ("text-b", "b")], namespace="ns")
+        assert len(results) == 2
+        # anchor a: served from the batch response
+        assert len(results[0].facts) == 1
+        assert results[0].facts[0].object == "o"
+        # anchor b: dropped by the batch, re-extracted singly -> has the fact
+        assert len(results[1].facts) == 1
+        assert results[1].facts[0].object == "o2"
+        # one batch call + one single-turn fallback call
+        assert len(llm.calls) == 2
+
+    @pytest.mark.asyncio
+    async def test_empty_reextracted(self) -> None:
+        # Batch returns every anchor but one comes back present-but-empty.
+        # A batch empty is NOT authoritative (long-batch attention loss), so
+        # the empty anchor is re-extracted via the reliable single-turn path,
+        # which recovers its salient fact.
+        batch_resp = json.dumps(
+            {
+                "items": [
+                    {
+                        "source_anchor": "a",
+                        "facts": [
+                            {
+                                "subject": "S",
+                                "predicate": "p",
+                                "object": "o",
+                                "certainty": "certain",
+                            }
+                        ],
+                        "events": [],
+                        "edges": [],
+                    },
+                    {"source_anchor": "b", "facts": [], "events": [], "edges": []},
+                ]
+            }
+        )
+        # Single-turn re-extraction of the present-but-empty anchor "b".
+        single_resp = _items(
+            {"subject": "S2", "predicate": "p2", "object": "o2", "certainty": "certain"}
+        )
+        llm = _StubLLM([batch_resp, single_resp])
+        ext = AtomicFactExtractor(llm, max_retries=0)
+        results = await ext.extract_batch([("text-a", "a"), ("text-b", "b")], namespace="ns")
+        assert len(results) == 2
+        assert len(results[0].facts) == 1
+        # anchor b: batch said empty, re-extracted singly -> recovers the fact
+        assert len(results[1].facts) == 1
+        assert results[1].facts[0].object == "o2"
+        # one batch call + one single-turn re-extraction for the empty anchor
+        assert len(llm.calls) == 2
+
+    @pytest.mark.asyncio
+    async def test_empty_reextracted_events(self) -> None:
+        # A present-but-empty anchor re-extracted singly must recover EVENTS,
+        # not just facts. Before the fix the single-turn path read events_raw
+        # but never assembled it, so recovered anchors silently lost their
+        # time-anchored events -- the regression that cratered the events
+        # table for time questions whose gold lives in events.
+        batch_resp = json.dumps(
+            {
+                "items": [
+                    {
+                        "source_anchor": "a",
+                        "facts": [
+                            {
+                                "subject": "S",
+                                "predicate": "p",
+                                "object": "o",
+                                "certainty": "certain",
+                            }
+                        ],
+                        "events": [],
+                        "edges": [],
+                    },
+                    {"source_anchor": "b", "facts": [], "events": [], "edges": []},
+                ]
+            }
+        )
+        # Single-turn response as a dict with facts + events -- the format
+        # _parse_json_array extracts events from (a flat array would not).
+        single_resp = json.dumps(
+            {
+                "facts": [
+                    {"subject": "S2", "predicate": "p2", "object": "o2", "certainty": "certain"}
+                ],
+                "events": [
+                    {
+                        "subject": "Maria",
+                        "action": "donated",
+                        "object": "car",
+                        "timestamp": "2023",
+                        "certainty": "certain",
+                    }
+                ],
+                "edges": [],
+            }
+        )
+        llm = _StubLLM([batch_resp, single_resp])
+        ext = AtomicFactExtractor(llm, max_retries=0)
+        results = await ext.extract_batch([("text-a", "a"), ("text-b", "b")], namespace="ns")
+        assert len(results) == 2
+        # anchor b: batch empty, re-extracted singly -> recovers the event
+        assert len(results[1].events) == 1
+        ev = results[1].events[0]
+        assert ev.action == "donated"
+        assert ev.object == "car"
+        # namespace threaded so the EventRetriever (queries by case namespace)
+        # can find the recovered event, not just the default namespace.
+        assert ev.namespace == "ns"
+        assert len(llm.calls) == 2
+
+    @pytest.mark.asyncio
+    async def test_batch_min_items(self) -> None:
+        # The batch call constrains the LLM with a json_schema whose items[]
+        # has minItems = number of input turns and requires source_anchor,
+        # so turns cannot be silently dropped from the response.
+        batch_resp = json.dumps(
+            {
+                "items": [
+                    {"source_anchor": "a", "facts": [], "events": [], "edges": []},
+                    {"source_anchor": "b", "facts": [], "events": [], "edges": []},
+                ]
+            }
+        )
+        # Both anchors come back batch-empty, so each is re-extracted singly
+        # after the batch call; supply empty single-turn responses for them.
+        llm = _StubLLM([batch_resp, "[]", "[]"])
+        ext = AtomicFactExtractor(llm, max_retries=0)
+        await ext.extract_batch([("text-a", "a"), ("text-b", "b")], namespace="ns")
+        fmt = llm.calls[0]["kwargs"]["response_format"]
+        assert fmt["type"] == "json_schema"
+        items_prop = fmt["json_schema"]["schema"]["properties"]["items"]
+        assert items_prop["minItems"] == 2  # one item per input turn
+        assert "source_anchor" in items_prop["items"]["required"]
+
+    @pytest.mark.asyncio
+    async def test_batch_no_schema(self) -> None:
+        batch_resp = json.dumps(
+            {"items": [{"source_anchor": "a", "facts": [], "events": [], "edges": []}]}
+        )
+        llm = _StubLLM([batch_resp])
+        ext = AtomicFactExtractor(llm, max_retries=0, prefer_json_mode=False)
+        await ext.extract_batch([("text-a", "a")], namespace="ns")
+        assert "response_format" not in llm.calls[0]["kwargs"]

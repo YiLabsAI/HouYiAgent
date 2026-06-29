@@ -9,14 +9,13 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import atexit
-import copy
+import contextvars
 import datetime
 import hashlib
 import json
 import logging
 import os
-import pickle
+import platform
 import re
 import shutil
 import sys
@@ -49,6 +48,7 @@ from houyi.adapters.memory.entity_resolver import RoleBasedEntityResolver, TurnC
 from houyi.adapters.memory.extractor import (
     _ATOMIC_FACT_BATCH_SYSTEM_PROMPT,
     AtomicFactExtractor,
+    _atomic_fact_batch_response_format,
 )
 from houyi.adapters.memory.recall.factory import _build_default_recall_orchestrator
 from houyi.adapters.memory.store import MemoryStore
@@ -245,6 +245,32 @@ def _parse_args():
         help="Enable evidence-window turn restriction to only ingest turns around the target evidence, accelerating cold extraction.",
     )
     p.add_argument(
+        "--clear-case-cache",
+        nargs="+",
+        default=None,
+        metavar="SAMPLE_ID",
+        help=(
+            "Clear the named cases' full cache footprint before the run: each case's "
+            "DB cache file(s) and every LLM/embedding cache entry namespaced under "
+            "that sample id. Forces a fresh re-extraction for those cases only, "
+            "without nuking the rest of the cache. Accepts multiple ids so one "
+            "command can clear every failing case and re-run them together. "
+            "e.g. --clear-case-cache conv-42 conv-47 conv-49"
+        ),
+    )
+    p.add_argument(
+        "--debug-trace",
+        action="store_true",
+        default=False,
+        help=(
+            "Capture per-stage recall snapshots (dbg_raw/dbg_fused/dbg_reranked/"
+            "dbg_final/dbg_mmr_dropped) into each case's result JSON for offline "
+            "root-causing of where a gold fact drops. Off by default -- tracing "
+            "adds per-query overhead and bloats the output, so enable only for "
+            "diagnostic runs."
+        ),
+    )
+    p.add_argument(
         "--evolve-mode",
         action="store_true",
         default=False,
@@ -309,89 +335,75 @@ class _JudgeLLM:
         return response
 
 
-# Per-turn extraction cache shared across all cases in a single bench run.
-# With --use-window, the DB cache is fragmented by evidence_hash, so the
-# same conversation is re-extracted once per question. The bench log shows
-# conv-44/43/41 each fully extracted twice. Keying extraction results by
-# (anchor, text) lets the second question reuse the first's facts and skip
-# the LLM call entirely. Results are deep-copied on hit because downstream
-# promotion writes them into each case's own backend.
-#
-# PERSISTENT: loaded at startup and saved on exit (atexit), so clearing the
-# session-DB cache to re-project (e.g. after a namespace/config change) does
-# NOT re-call the LLM — it replays the cached ExtractionResult and only
-# re-projects into the DB. This turns a ~50min re-extract into ~10min reproject.
-_TURN_EXTRACT_CACHE_FILE = "/tmp/locomo_turn_extract_cache.pkl"
+# Per-case cache namespace for the LLM DiskCache. The LLM cache keys entries
+# by md5 of the call payload alone, which carries no case id; a stale cached
+# extraction for case X could otherwise be served to a re-run of X after a
+# code/prompt change that left the turn text identical (same messages =>
+# same md5 => cache hit => the bad extraction frozen in, defeating any
+# attempt to re-extract that one case). Namespacing every key with the
+# running case's sample_id makes each case's cache entries independently
+# deletable (--clear-case-cache) without a whole-run bypass.
+# asyncio task-scoped: each _run_one task sets its own value, so concurrency
+# is safe; LLM calls stay on the event loop (no to_thread), so the value is
+# visible at every key computation.
+_CURRENT_CASE_ID: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "_CURRENT_CASE_ID", default="shared"
+)
 
 
-def _load_turn_cache() -> dict[str, Any]:
-    try:
-        with open(_TURN_EXTRACT_CACHE_FILE, "rb") as f:
-            loaded = pickle.load(f)
-        if isinstance(loaded, dict):
-            print(f"[TurnCache] Loaded {len(loaded)} cached extraction results")
-            return loaded
-    except FileNotFoundError:
-        pass
-    except Exception as exc:
-        print(f"[TurnCache] load failed ({exc}); starting empty")
-    return {}
+def _case_prefix() -> str:
+    return f"{_CURRENT_CASE_ID.get()}:"
 
 
-def _save_turn_cache() -> None:
-    try:
-        with open(_TURN_EXTRACT_CACHE_FILE, "wb") as f:
-            pickle.dump(_TURN_EXTRACT_CACHE, f)
-        print(f"[TurnCache] Saved {len(_TURN_EXTRACT_CACHE)} extraction results")
-    except Exception as exc:
-        print(f"[TurnCache] save failed ({exc})")
-
-
-_TURN_EXTRACT_CACHE: dict[str, Any] = _load_turn_cache()
-atexit.register(_save_turn_cache)
-
-
-def _turn_cache_key(text: str, source_anchor: str | None) -> str:
-    return hashlib.md5(f"{source_anchor or ''}\x00{text}".encode()).hexdigest()
+def _is_namespaced_cache_key(key: str) -> bool:
+    # Namespaced keys are "{case_id}:{md5}"; legacy keys (pre-namespace) are
+    # bare 32-hex md5 with no colon. Drop legacy entries on load so the cache
+    # never accumulates dead weight from before the refactor and a stale
+    # pre-refactor response can never be served under a new key.
+    return ":" in key
 
 
 class _CountingBatchExtractor:
+    """Thin pass-through counter around AtomicFactExtractor.
+
+    Counts extraction invocations per case (extract_calls_per_case): 0 means
+    the DB cache hit and ingestion was skipped, >0 means extraction ran. The
+    cross-run/cross-question extraction dedup this class used to do via a
+    persistent TurnCache is now handled by the per-case namespaced LLM
+    DiskCache, which is prompt-aware (a prompt change changes the messages
+    md5 and invalidates the entry) and re-parses on every hit, so it carries
+    none of the TurnCache staleness risk (TurnCache was blind to both prompt
+    changes and parsing-logic changes because it cached the parsed result).
+    """
+
     def __init__(self, inner: AtomicFactExtractor) -> None:
         self._inner = inner
         self.calls = 0
+        # Per-anchor extraction yield: {anchor: {"facts": n, "events": m}}.
+        # Populated only when extraction actually runs (DB cache miss); stays
+        # empty on a DB-cache hit (skip_ingestion), which is itself the signal
+        # that no fresh extraction happened for this case.
+        self.per_anchor: dict[str, dict[str, int]] = {}
+
+    def _record(self, source_anchor: str | None, res: Any) -> None:
+        anchor = (source_anchor or "").strip() or "<no-anchor>"
+        slot = self.per_anchor.setdefault(anchor, {"facts": 0, "events": 0})
+        slot["facts"] += len(getattr(res, "facts", None) or [])
+        slot["events"] += len(getattr(res, "events", None) or [])
 
     async def extract(self, text: str, source_anchor: str | None) -> Any:
-        key = _turn_cache_key(text, source_anchor)
-        cached = _TURN_EXTRACT_CACHE.get(key)
-        if cached is not None:
-            return copy.deepcopy(cached)
         self.calls += 1
-        result = await self._inner.extract(text, source_anchor)
-        _TURN_EXTRACT_CACHE[key] = result
-        return result
+        res = await self._inner.extract(text, source_anchor)
+        self._record(source_anchor, res)
+        return res
 
     async def extract_batch(
         self, turns: list[tuple[str, str | None]], namespace: str = "default"
     ) -> list[Any]:
-        results: list[Any] = [None] * len(turns)
-        uncached: list[tuple[int, tuple[str, str | None]]] = []
-        for i, (text, anchor) in enumerate(turns):
-            hit = _TURN_EXTRACT_CACHE.get(_turn_cache_key(text, anchor))
-            if hit is not None:
-                results[i] = copy.deepcopy(hit)
-            else:
-                uncached.append((i, (text, anchor)))
-
-        if uncached:
-            self.calls += 1
-            sub = [turn for _, turn in uncached]
-            if hasattr(self._inner, "extract_batch"):
-                out = await self._inner.extract_batch(sub, namespace=namespace)
-            else:
-                out = [await self._inner.extract(text, anchor) for text, anchor in sub]
-            for (i, (text, anchor)), res in zip(uncached, out, strict=True):
-                _TURN_EXTRACT_CACHE[_turn_cache_key(text, anchor)] = res
-                results[i] = res
+        self.calls += 1
+        results = await self._inner.extract_batch(turns, namespace=namespace)
+        for (_text, anchor), res in zip(turns, results, strict=False):
+            self._record(anchor, res)
         return results
 
 
@@ -610,6 +622,38 @@ def _percentile(values: list[float], p: float) -> float:
     return ordered[low] * (1.0 - weight) + ordered[high] * weight
 
 
+def _provenance() -> dict[str, Any]:
+    """Record which interpreter + deps produced this run, so any later
+    analysis can verify whether the cross-encoder was actually loaded.
+
+    A result JSON with no provenance cannot self-certify that its rerank
+    numbers came from the cross-encoder rather than a silent heuristic
+    fallback -- which is exactly the gap that let a bare-python3 run pass
+    as a cross-encoder run. Provenance turns a convention (use uv run) into
+    a verifiable fact in the artifact.
+    """
+    info: dict[str, Any] = {
+        "python": sys.executable,
+        "platform": platform.platform(),
+    }
+    try:
+        import sentence_transformers as st
+
+        info["sentence_transformers"] = st.__version__
+    except Exception as exc:  # pragma: no cover - diagnostic
+        info["sentence_transformers"] = f"not installed: {type(exc).__name__}"
+    # Probe whether the cross-encoder model actually loads in this env.
+    try:
+        from houyi.adapters.memory.recall.rerank_cross_encoder import (
+            CrossEncoderReranker,
+        )
+
+        info["cross_encoder_loads"] = CrossEncoderReranker()._load_model() is not None
+    except Exception as exc:  # pragma: no cover - diagnostic
+        info["cross_encoder_loads"] = f"error: {type(exc).__name__}: {exc}"
+    return info
+
+
 async def _judge(llm_judge: Any, case: LoCoMoCase, answer: AnswerResult) -> dict:
     if _token_subset_match(case.answer, answer.answer):
         return {"correct": True, "reason": "semantic_match"}
@@ -668,6 +712,564 @@ def _recalls_to_rows(engine: MemoryEngine, recalls: list[Any]) -> list[_BenchRow
     return rows
 
 
+_GOLD_STOPWORDS = frozenset(
+    [
+        "a",
+        "an",
+        "the",
+        "of",
+        "to",
+        "in",
+        "on",
+        "at",
+        "and",
+        "or",
+        "is",
+        "was",
+        "were",
+        "are",
+        "am",
+        "be",
+        "been",
+        "being",
+        "did",
+        "does",
+        "do",
+        "with",
+        "for",
+        "from",
+        "by",
+        "as",
+        "it",
+        "this",
+        "that",
+        "he",
+        "she",
+        "her",
+        "his",
+        "their",
+        "they",
+        "you",
+        "your",
+        "our",
+        "my",
+        "i",
+        "few",
+        "years",
+        "year",
+        "before",
+        "after",
+        "first",
+        "new",
+        "what",
+        "when",
+        "where",
+        "who",
+        "how",
+        "kind",
+        "type",
+        "all",
+        "both",
+        "has",
+        "have",
+        "had",
+        "more",
+        "most",
+        "some",
+        "any",
+        "such",
+        "which",
+        "who",
+        "whom",
+        "whose",
+        "why",
+        "many",
+        "much",
+        "often",
+        "long",
+        "sort",
+        "between",
+        "among",
+        "during",
+        "than",
+        "can",
+        "could",
+        "would",
+        "should",
+        "will",
+        "shall",
+        "may",
+        "might",
+        "must",
+        "also",
+        "just",
+        "only",
+        "very",
+        "too",
+        "each",
+        "every",
+        "these",
+        "those",
+        "other",
+        "another",
+        "same",
+        "about",
+        "because",
+        "while",
+        "since",
+        "until",
+        "without",
+        "within",
+        "across",
+        "through",
+        "along",
+        "around",
+        "behind",
+        "above",
+        "below",
+        "away",
+        "back",
+        "today",
+        "tomorrow",
+        "yesterday",
+    ]
+)
+
+
+# _MONTH_MAP is defined above (shared with the answer date parser). Date
+# normalization keeps YYYY-MM granularity minimum -- a bare year appears in
+# many candidates' text and over-matches, so it is excluded.
+
+
+def _date_tokens(text: str) -> set[str]:
+    """Normalized date tokens at YYYY-MM granularity or finer.
+
+    Bare YYYY is deliberately excluded: a bare year appears in many
+    unrelated candidates and would over-match, the same common-token
+    over-fit failure mode as short keyword matching. YYYY-MM keeps the date
+    signal discriminative.
+    """
+    tokens: set[str] = set()
+    for y, m, d in re.findall(r"\b(20\d{2})-(\d{1,2})-(\d{1,2})\b", text):
+        tokens.add(f"{y}-{int(m):02d}-{int(d):02d}")
+        tokens.add(f"{y}-{int(m):02d}")
+    for y, m in re.findall(r"\b(20\d{2})-(\d{1,2})\b", text):
+        tokens.add(f"{y}-{int(m):02d}")
+    low = text.lower()
+    # Month-name + NEAREST year (NOT cartesian). The cartesian product
+    # (every year x every month) fabricates dates: "March 2022 and again in
+    # 2023" must yield only 2022-03, not a made-up 2023-03. Each month
+    # occurrence pairs with the year closest to it in the text.
+    month_positions: list[tuple[int, int]] = []
+    for name, num in _MONTH_MAP.items():
+        for m in re.finditer(r"\b" + name + r"\b", low):
+            month_positions.append((m.start(), num))
+    year_positions = [(m.start(), m.group()) for m in re.finditer(r"\b20\d{2}\b", text)]
+    for mpos, mnum in month_positions:
+        if year_positions:
+            nearest = min(year_positions, key=lambda yp: abs(yp[0] - mpos))
+            tokens.add(f"{nearest[1]}-{mnum:02d}")
+    return tokens
+
+
+def _extract_qa_tokens(question: str, answer: str) -> tuple[set[str], set[str], str | None]:
+    """Split question + answer into (content_tokens, proper_nouns, subject_entity).
+
+    content_tokens: lowercase non-stopword tokens len>2 (common-noun signal
+    -- the descriptive nouns in the question/answer that are not proper
+    names). proper_nouns: lowercase tokens that were capitalized in the
+    source (named entities), stopword-filtered so sentence-initial
+    "When"/"Where" do not count.
+
+    subject_entity: the first proper noun in the QUESTION. It is the
+    conversation principal the question is about and is EXCLUDED from the
+    matching proper-noun set: subject entities appear in nearly every fact's
+    text, so matching them floods gold with same-subject noise.
+    """
+    content: set[str] = set()
+    proper: set[str] = set()
+    subject_entity: str | None = None
+    for text, is_question in ((question, True), (answer, False)):
+        for tok in re.findall(r"[A-Za-z][A-Za-z0-9'-]+", text):
+            if len(tok) <= 2:
+                continue
+            low = tok.lower()
+            if low in _GOLD_STOPWORDS:
+                continue
+            if tok[0].isupper():
+                proper.add(low)
+                if is_question and subject_entity is None:
+                    subject_entity = low
+            else:
+                content.add(low)
+    matching_proper = proper - ({subject_entity} if subject_entity else set())
+    return content, matching_proper, subject_entity
+
+
+def _content_match(c: dict, content_tokens: set[str], proper_nouns: set[str]) -> bool:
+    """True when a candidate is gold by content.
+
+    (a) a proper-noun token appears in the candidate OBJECT (object position
+    only, so subject entities are excluded). This is the single-token gold
+    path: a proper-noun answer member survives without a 2-token co-occurrence.
+    (b) >=2 content tokens co-occur in the full candidate blob (multi-word
+    guard against common-word false positives).
+
+    No lowercase topic-noun heuristic: without a POS tagger, a half-built
+    noun extractor is a new over-match surface. Lowercase topic nouns rely
+    on the >=2 co-occurrence rule or fall through to evidence-turn
+    (turn-inferred) -- honest, not faked.
+
+    Matching is word-boundary (token-set), never substring: a short token
+    must not match a longer word that merely contains it (e.g. a 3-letter
+    function word matching an unrelated longer word). Substring matching is
+    a common-token over-fit failure mode; exact-token matching prevents it.
+    """
+    obj_tokens = set(str(c.get("o", "")).lower().split())
+    if proper_nouns and (proper_nouns & obj_tokens):
+        return True
+    if content_tokens:
+        blob_tokens = set(_cand_blob(c).split())
+        if len(content_tokens & blob_tokens) >= 2:
+            return True
+    return False
+
+
+def _member_key(c: dict, content_tokens: set[str], proper_nouns: set[str]) -> tuple:
+    """Identity of the gold member a candidate matches, for dedup.
+
+    coverage counts DISTINCT gold members, not candidate rows: the same
+    member is often recalled as several rows (duplicate anchors from the
+    same turn, or the same entity surfaced by multiple retrievers in
+    different surface forms). Counting rows inflates the apparent miss.
+
+    Key = the matched proper-nouns in the object, or if matched only by
+    content tokens, the matched content-token set. Imperfect: two
+    paraphrased members that share no proper-noun or content token will not
+    dedup -- documented limitation.
+    """
+    obj_tokens = set(str(c.get("o", "")).lower().split())
+    matched_proper = proper_nouns & obj_tokens
+    if matched_proper:
+        return ("p", frozenset(matched_proper))
+    blob_tokens = set(_cand_blob(c).split())
+    return ("c", frozenset(content_tokens & blob_tokens))
+
+
+def _evidence_turn_match(c: dict, evidence_turns: tuple[str, ...]) -> bool:
+    """True when the candidate source_anchor matches a gold evidence turn.
+
+    Supplementary signal only -- compound member anchors are not chased
+    (a compound's member turns are not in the snapshot). Used when content
+    match is empty -- always reported as turn-inferred, never as certain
+    gold.
+    """
+    anchor = str(c.get("a", ""))
+    if not anchor or anchor.startswith("fact:"):
+        return False
+    return any(anchor.endswith(f":{ev}") for ev in evidence_turns)
+
+
+def _answer_value_in_pool(pool: list[dict], answer_date_tokens: set[str]) -> bool | None:
+    """Parallel signal: is the answer's date VALUE in the recall pool?
+
+    Returns None when the answer carries no date (check skipped), True when a
+    YYYY-MM token from the answer appears in any pool candidate, False
+    otherwise. Kept as a separate field -- never folded into fate.
+
+    Named value_in_pool (not value_extracted): the scan sees the post-recall
+    pool, so False conflates two distinct failures -- the date fact may be in
+    the store but unretrieved (retrieve-miss), or never extracted at all
+    (extract-miss). The route disambiguates these via whether the evidence
+    turn was recalled (evidence_recalled): recalled + value-absent =
+    extract-within-turn; not-recalled = retrieve-miss.
+    """
+    if not answer_date_tokens:
+        return None
+    pool_dates: set[str] = set()
+    for c in pool:
+        pool_dates |= _date_tokens(_cand_blob(c))
+    return bool(answer_date_tokens & pool_dates)
+
+
+def _route_of(
+    *,
+    classification: str,
+    correct: bool,
+    value_in_pool: bool | None,
+    evidence_recalled: bool | None,
+    is_enum: bool,
+    coverage: tuple[int, int],
+    tail_leak: bool,
+    rerank_miss: bool,
+) -> str:
+    """Route key is (fate x correct x value x coverage).
+
+    correct=True preempts to exempt: a correctly-answered case is not a fix
+    target, even if the date value was absent from the pool (the answerer
+    may have inferred it -- a latent risk, surfaced via the value_in_pool
+    field, but not a routing failure).
+
+    value_in_pool=False preempts enum: a date whose value is not in the pool
+    is an extract/retrieve miss regardless of enumeration.
+
+    Enumeration questions route by gold coverage, not worst-of-one fate: a
+    single missed member must not mask that another member reached final
+    only via tail-leak (rank beyond the cutoff, near-zero score). The
+    composite route (coverage + rerank-miss + tail-leak) surfaces all
+    diseases instead of one.
+    """
+    if correct:
+        return "exempt-correct"
+    # value-absent preempts enum: a date question whose value is not in the
+    # pool is an extract/retrieve miss regardless of whether it is also
+    # enumeration -- do not let the enum branch mask extract-within-turn
+    # (point 2b: is_enum used to fire first and lose the value signal).
+    if value_in_pool is False:
+        if evidence_recalled is True:
+            return "extract-within-turn"
+        if evidence_recalled is False:
+            return "retrieve-miss"
+        return "value-not-in-pool"
+    if is_enum:
+        if coverage[0] >= coverage[1]:
+            return "answerer (all members in final, answered wrong)"
+        parts = [f"enum-coverage {coverage[0]}/{coverage[1]}"]
+        if rerank_miss:
+            parts.append("rerank-miss")
+        if tail_leak:
+            parts.append("tail-leak")
+        return " +".join(parts)
+    if classification == "NOT-IN-POOL":
+        return "extraction-retrieve"
+    if classification == "IN-FINAL":
+        return "answerer"
+    return "rerank-boost"
+
+
+def _gold_keywords(answer: str) -> list[str]:
+    """Tokenize a gold answer into matchable keywords (lowercase, alpha, non-stopword)."""
+    tokens = re.findall(r"[a-zA-Z][a-zA-Z0-9'-]+", answer.lower())
+    return [t for t in tokens if t not in _GOLD_STOPWORDS and len(t) > 2]
+
+
+def _cand_blob(c: dict) -> str:
+    return " ".join(str(c.get(k, "")) for k in ("s", "p", "o", "a")).lower()
+
+
+def _cand_key(c: dict) -> tuple:
+    """Stable content identity for matching a candidate across snapshots.
+
+    dbg_reranked_raw / dbg_reranked / dbg_final are independent _dbg_snapshot
+    calls over the same underlying candidates, so id() never matches across
+    them. The (subject, predicate, object, anchor) tuple does. object is
+    truncated identically (40 chars) in every snapshot, so the key is stable.
+    """
+    return (c.get("s"), c.get("p"), c.get("o"), c.get("a"))
+
+
+def _gold_fact_fate(trace: dict, case: LoCoMoCase, *, correct: bool) -> dict:
+    """Fact-level gold fate from the recall trace (content-primary).
+
+    Gold matching priority:
+
+    1. content (primary): proper-noun in OBJECT OR >=2 content tokens
+       co-occurring in the blob. Covers vector-recall gold that
+       evidence-turn cannot see -- a vector-recall fact carries a hash
+       anchor with no turn id (the store strips turn metadata), so content
+       is its only matchable signal.
+    2. evidence-turn (supplementary, turn-inferred): only when content is
+       empty. Covers lowercase topic nouns without a POS tagger: a
+       lowercase noun does not content-match, so the case falls through to
+       the evidence turn (turn-inferred, honestly flagged, not faked via a
+       noun extractor).
+
+    worst-fate runs ONLY over content-matched candidates: turn siblings are
+    not let near it, so a noise sibling from a gold turn cannot drag the
+    classification.
+
+    answer-value-in-pool is a PARALLEL field, never folded into fate: when
+    the answer's date value is absent from the pool, the case routes to
+    extract-within-turn (evidence turn recalled) or retrieve-miss (not),
+    not masked as "recalled".
+
+    Enumeration questions route by gold coverage (distinct members), not
+    worst-of-one fate: a single missed member must not mask that another
+    member reached final only via tail-leak. The composite route (coverage
+    + rerank-miss + tail-leak) surfaces all diseases.
+
+    Known limitation: _dbg_snapshot truncates object to 40 chars, so a
+    token past char 40 in a long object is missed; may under-match on
+    long-object facts.
+
+    Ranks on RAW pre-boost rerank score (dbg_reranked_raw); window cutoff
+    is len(final), not a hardcoded 10.
+    """
+    final = trace.get("dbg_final", [])
+    reranked = trace.get("dbg_reranked_raw") or trace.get("dbg_reranked", [])
+    content, proper, subject = _extract_qa_tokens(case.question, case.answer)
+    answer_dates = _date_tokens(case.answer)
+    evidence = case.evidence
+
+    out: dict[str, Any] = {
+        "subject_entity": subject,
+        "content_tokens": sorted(content)[:12],
+        "proper_nouns": sorted(proper)[:12],
+        "evidence_turns": list(evidence),
+        "answer_value_tokens": sorted(answer_dates)[:8],
+        "facts": [],
+    }
+
+    if not reranked:
+        out["classification"] = "NOT-IN-POOL"
+        out["note"] = "empty reranked pool (no recall)"
+        out["value_in_pool"] = None
+        out["route"] = _route_of(
+            classification="NOT-IN-POOL",
+            correct=correct,
+            value_in_pool=None,
+            evidence_recalled=False,
+            is_enum=False,
+            coverage=(0, 0),
+            tail_leak=False,
+            rerank_miss=False,
+        )
+        return out
+
+    final_keys = {_cand_key(c) for c in final}
+    final_n = len(final)
+    rs_sorted = sorted([c.get("rs") or 0.0 for c in reranked], reverse=True)
+    cutoff_rank = final_n if final_n > 0 else len(reranked)
+    cutoff = (
+        rs_sorted[cutoff_rank - 1]
+        if 0 < cutoff_rank <= len(rs_sorted)
+        else (rs_sorted[-1] if rs_sorted else 0.0)
+    )
+
+    def _fate_of(c: dict, rank: int) -> str:
+        in_final = _cand_key(c) in final_keys
+        if in_final:
+            return "IN-FINAL"
+        return "MMR-OUT" if rank <= cutoff_rank else "RERANK-OUT"
+
+    # Primary: content-matched gold. worst-fate runs over THIS set only (H).
+    matched: list[dict] = []
+    gold_in_final = 0
+    member_in_final: dict[tuple, bool] = {}
+    for i, c in enumerate(reranked):
+        if _content_match(c, content, proper):
+            rank = i + 1
+            cls = _fate_of(c, rank)
+            in_final = cls == "IN-FINAL"
+            if in_final:
+                gold_in_final += 1
+            matched.append(
+                {
+                    "object": c.get("o"),
+                    "rank": rank,
+                    "rs": round(c.get("rs") or 0.0, 4),
+                    "in_final": in_final,
+                    "classification": cls,
+                    "match": "content",
+                }
+            )
+            mk = _member_key(c, content, proper)
+            member_in_final[mk] = member_in_final.get(mk, False) or in_final
+
+    turn_inferred = False
+    if not matched and evidence:
+        # Fallback: evidence-turn (turn-inferred). Never certain gold --
+        # the matched candidate may be a turn sibling, not the answer fact
+        # (a different fact from the same evidence turn). Reported with
+        # caveat, not let into worst-fate of content.
+        for i, c in enumerate(reranked):
+            if _evidence_turn_match(c, evidence):
+                rank = i + 1
+                cls = _fate_of(c, rank)
+                in_final = cls == "IN-FINAL"
+                if in_final:
+                    gold_in_final += 1
+                matched.append(
+                    {
+                        "object": c.get("o"),
+                        "rank": rank,
+                        "rs": round(c.get("rs") or 0.0, 4),
+                        "in_final": in_final,
+                        "classification": cls,
+                        "match": "turn-inferred",
+                    }
+                )
+                mk = _member_key(c, content, proper)
+                member_in_final[mk] = member_in_final.get(mk, False) or in_final
+        turn_inferred = bool(matched)
+
+    value_in_pool = _answer_value_in_pool(reranked, answer_dates)
+    # Did the evidence turn get recalled at all? Disambiguates value-absent:
+    # recalled-turn + value-absent = extract-within-turn; absent-turn =
+    # retrieve-miss. None when there is no evidence annotation.
+    evidence_recalled: bool | None = None
+    if evidence:
+        evidence_recalled = any(_evidence_turn_match(c, evidence) for c in reranked)
+
+    # Enumeration: the PIPELINE's own signal (trace.enumeration_coverage),
+    # NOT the matched-row count. Row count misjudges cases where one member
+    # is recalled as several rows (duplicate anchors or multiple retriever
+    # forms) -- the pipeline flag is the sound signal of whether the window
+    # was widened for enumeration.
+    is_enum = bool(trace.get("enumeration_coverage"))
+    # coverage counts DISTINCT gold members (deduped by member_key), not
+    # candidate rows -- the same member recalled as N rows is still one
+    # member.
+    distinct_total = len(member_in_final)
+    distinct_in_final = sum(1 for v in member_in_final.values() if v)
+    tail_leak = any(m["in_final"] and m["rank"] > cutoff_rank for m in matched)
+    rerank_miss = any(m["classification"] in ("MMR-OUT", "RERANK-OUT") for m in matched)
+
+    out["window_relevance"] = {
+        "window_size": final_n,
+        "gold_in_window": gold_in_final,
+        "noise_in_window": max(final_n - gold_in_final, 0),
+    }
+    out["value_in_pool"] = value_in_pool
+    out["evidence_recalled"] = evidence_recalled
+    out["cutoff_rank"] = cutoff_rank
+    out["cutoff_rs"] = round(cutoff, 4)
+    out["tail_leak"] = tail_leak
+    out["coverage"] = [distinct_in_final, distinct_total]
+
+    if not matched:
+        out["classification"] = "NOT-IN-POOL"
+        out["note"] = "gold not in reranked pool by content or evidence-turn"
+        out["route"] = _route_of(
+            classification="NOT-IN-POOL",
+            correct=correct,
+            value_in_pool=value_in_pool,
+            evidence_recalled=evidence_recalled,
+            is_enum=False,
+            coverage=(0, 0),
+            tail_leak=False,
+            rerank_miss=False,
+        )
+        return out
+
+    priority = {"NOT-IN-POOL": 0, "RERANK-OUT": 1, "MMR-OUT": 2, "IN-FINAL": 3}
+    worst = min(matched, key=lambda m: priority[m["classification"]])
+    out["classification"] = worst["classification"]
+    out["turn_inferred"] = turn_inferred
+    out["facts"] = matched
+    out["route"] = _route_of(
+        classification=worst["classification"],
+        correct=correct,
+        value_in_pool=value_in_pool,
+        evidence_recalled=evidence_recalled,
+        is_enum=is_enum,
+        coverage=(distinct_in_final, distinct_total),
+        tail_leak=tail_leak,
+        rerank_miss=rerank_miss,
+    )
+    return out
+
+
 async def _answer_and_score(
     engine: MemoryEngine,
     case: LoCoMoCase,
@@ -700,6 +1302,7 @@ async def _answer_and_score(
         "precision_at_10": precision_at_10,
         "verdict": verdict,
         "retrieve_ms": float(answer.extras.get("recall_ms", 0.0)),
+        "trace": answer.extras.get("trace", {}),
     }
 
 
@@ -780,6 +1383,7 @@ async def _run_case_with_mode(
     namespace: str,
     llm_answer: Any,
     llm_judge: Any,
+    shared_cache: DiskCache,
     *,
     embedding_provider: str = "siliconflow",
     embedding_model: str | None = None,
@@ -792,6 +1396,7 @@ async def _run_case_with_mode(
     llm_reflect: Any | None = None,
     consolidate: bool = True,
     reflect: bool = True,
+    debug_trace: bool = False,
 ) -> dict[str, Any]:
     t0 = time.perf_counter()
     extract_calls_per_case = 0
@@ -904,7 +1509,8 @@ async def _run_case_with_mode(
             SiliconFlowEmbeddingProvider(
                 api_key=_emb_key,
                 model=embedding_model,
-            )
+            ),
+            shared_cache,
         )
     elif embedding_provider == "dashscope":
         _ds_key: str = embedding_api_key or _env.dashscope_api_key or ""
@@ -912,7 +1518,8 @@ async def _run_case_with_mode(
             DashScopeEmbeddingProvider(
                 api_key=_ds_key,
                 model=embedding_model,
-            )
+            ),
+            shared_cache,
         )
     else:
         embedding_prov = DiskCacheWrapper(
@@ -920,7 +1527,8 @@ async def _run_case_with_mode(
                 provider=embedding_provider,
                 model=embedding_model,
                 api_key=embedding_api_key,
-            )
+            ),
+            shared_cache,
         )
 
     # Backfill pending embeddings before retrieval so vector search has data.
@@ -958,6 +1566,7 @@ async def _run_case_with_mode(
         ),
         embedding_provider=embedding_prov,
         entity_state=view,
+        debug_trace=debug_trace,
     )
     last_turn = case.sample.turns[-1] if case.sample.turns else None
     obs_date = _normalize_observation_date(last_turn.session_datetime) if last_turn else None
@@ -966,7 +1575,12 @@ async def _run_case_with_mode(
     sys_date = datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%d")
 
     baseline = await _answer_and_score(
-        engine, case, namespace, llm_judge, obs_date=obs_date, sys_date=sys_date
+        engine,
+        case,
+        namespace,
+        llm_judge,
+        obs_date=obs_date,
+        sys_date=sys_date,
     )
     # Pure retrieval latency self-reported by the engine. The previous
     # wall-clock span here also covered embedding-provider construction,
@@ -995,6 +1609,24 @@ async def _run_case_with_mode(
         "extract_calls_per_case": int(max(extract_calls_per_case, 0)),
         "duration_s": round(time.perf_counter() - t0, 1),
     }
+    # Per-anchor extraction yield so a diagnostic run can show, per source
+    # turn, how many facts/events the extractor produced (e.g. did the gold
+    # evidence turn D1:7 yield 0 facts). Empty when ingestion was skipped
+    # (DB cache hit) -- which is itself the "no fresh extraction" signal.
+    result["extraction_per_anchor"] = dict(extractor_counter.per_anchor)
+    if debug_trace:
+        # Per-stage recall snapshots for offline root-causing. Only present
+        # when --debug-trace is on so normal-run output stays lean.
+        result["trace"] = baseline.get("trace", {})
+        # Fact-granularity gold fate: distinguish "gold answer fact out by low
+        # rerank score" / "dropped by MMR" / "never in pool" / "in final".
+        # recall@10 is turn-level (any fact from the gold turn counts as a hit)
+        # so it hides a gold ANSWER fact that was rerank-scored low or dropped
+        # by MMR while a sibling fact from the same turn covers the turn. This
+        # metric is the fact-level truth that recall@10 masks.
+        result["gold_fact_fate"] = _gold_fact_fate(
+            baseline.get("trace", {}), case, correct=result["correct"]
+        )
 
     if evolve_mode:
         result["evolve"] = await _evolve_and_rescore(
@@ -1014,62 +1646,69 @@ async def _run_case_with_mode(
     return result
 
 
-class DiskCacheWrapper:
-    def __init__(self, inner: Any, cache_file: str = "/tmp/locomo_llm_cache.json") -> None:
-        self._inner = inner
+class DiskCache:
+    """Shared, file-backed LLM/embedding response cache.
+
+    One instance is shared across every per-model DiskCacheWrapper
+    (extract/answer/judge/reflect) so they all read and write the SAME
+    in-memory dict. Previously each wrapper owned a private dict but wrote
+    the same file, so the last wrapper to save clobbered every other's
+    entries (only the last writer's responses survived a run) -- the
+    extraction LLM cache was effectively non-functional and every DB-miss
+    re-extracted fresh. Sharing one dict makes all four wrappers cooperate
+    on a single cache.
+    """
+
+    def __init__(self, cache_file: str = "/tmp/locomo_llm_cache.json") -> None:
         self._cache_file = Path(cache_file)
         self._cache: dict[str, Any] = {}
         self._lock = asyncio.Lock()
-        # Hit/miss counters for cache observability. The LLM cache is per-run
-        # shared across cases (and concurrency), so these are run-aggregate --
-        # a high hit rate means most LLM responses were reused from disk (the
-        # run did not actually re-extract/answer); a high miss rate means fresh
-        # LLM calls. Per-case freeze status comes from the DB-cache hit/rebuild
-        # log and the TurnCache "M LLM calls" line, both emitted inline.
-        self._hits = 0
-        self._misses = 0
         self._load_cache()
 
-    def cache_stats(self) -> tuple[int, int]:
-        """Return (hits, misses) since this wrapper was created."""
-        return self._hits, self._misses
+    def clear_case(self, sample_id: str) -> int:
+        """Delete every cached entry belonging to one case. Returns count removed."""
+        prefix = f"{sample_id}:"
+        victims = [k for k in self._cache if k.startswith(prefix)]
+        for k in victims:
+            del self._cache[k]
+        if victims:
+            self._save_cache()
+        return len(victims)
 
-    def _get_key(
-        self, messages: list[Any], temperature: float, max_tokens: int | None, **kwargs: Any
-    ) -> str:
-        # Normalize pydantic LLMMessage objects to dicts so the cache key is
-        # JSON-serializable. The adapter contract accepts LLMMessage | dict,
-        # but json.dumps (used for the hash) cannot serialize pydantic models,
-        # which would raise and surface as a silent reflection fallback.
-        norm_messages = []
-        for msg in messages:
-            if isinstance(msg, dict):
-                norm_messages.append(msg)
-            else:
-                role = getattr(msg, "role", None)
-                role_val = getattr(role, "value", role)
-                norm_messages.append({"role": role_val, "content": getattr(msg, "content", None)})
-        # Create stable hash key for messages and parameters
-        serialized = json.dumps(
-            {
-                "messages": norm_messages,
-                "temperature": temperature,
-                "max_tokens": max_tokens,
-                "kwargs": {k: v for k, v in kwargs.items() if k != "api_key"},
-            },
-            sort_keys=True,
-        )
-        return hashlib.md5(serialized.encode("utf-8")).hexdigest()
+    def get(self, key: str) -> Any | None:
+        # CPython dict lookup is atomic; reading without the lock keeps the
+        # hit path fast while a concurrent put writes a different key.
+        return self._cache.get(key)
+
+    async def put(self, key: str, entry: dict[str, Any]) -> None:
+        async with self._lock:
+            self._cache[key] = entry
+        # Persist in a background thread so dict+IO never blocks the event loop.
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, self._save_cache)
 
     def _load_cache(self) -> None:
         if self._cache_file.exists():
             try:
-                self._cache = json.loads(self._cache_file.read_text())
-                logger.info(
-                    "Loaded %d cached LLM/Embedding responses from %s",
-                    len(self._cache),
-                    self._cache_file,
-                )
+                loaded = json.loads(self._cache_file.read_text())
+                if isinstance(loaded, dict):
+                    kept = {k: v for k, v in loaded.items() if _is_namespaced_cache_key(k)}
+                    dropped = len(loaded) - len(kept)
+                    if dropped:
+                        logger.info(
+                            "Dropped %d legacy (pre-namespace) LLM cache entries; "
+                            "%d namespaced entries loaded from %s",
+                            dropped,
+                            len(kept),
+                            self._cache_file,
+                        )
+                    else:
+                        logger.info(
+                            "Loaded %d cached LLM/Embedding responses from %s",
+                            len(kept),
+                            self._cache_file,
+                        )
+                    self._cache = kept
             except Exception:
                 logger.warning("Failed to load LLM cache, starting fresh", exc_info=True)
 
@@ -1079,6 +1718,57 @@ class DiskCacheWrapper:
         except Exception:
             logger.warning("Failed to save LLM cache to disk", exc_info=True)
 
+
+def _llm_cache_key(
+    messages: list[Any], temperature: float, max_tokens: int | None, **kwargs: Any
+) -> str:
+    # Normalize pydantic LLMMessage objects to dicts so the cache key is
+    # JSON-serializable. The adapter contract accepts LLMMessage | dict,
+    # but json.dumps (used for the hash) cannot serialize pydantic models,
+    # which would raise and surface as a silent reflection fallback.
+    norm_messages = []
+    for msg in messages:
+        if isinstance(msg, dict):
+            norm_messages.append(msg)
+        else:
+            role = getattr(msg, "role", None)
+            role_val = getattr(role, "value", role)
+            norm_messages.append({"role": role_val, "content": getattr(msg, "content", None)})
+    # Stable hash of messages+params, namespaced by the running case id so
+    # each case's entries are independently deletable (--clear-case-cache).
+    serialized = json.dumps(
+        {
+            "messages": norm_messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "kwargs": {k: v for k, v in kwargs.items() if k != "api_key"},
+        },
+        sort_keys=True,
+    )
+    return f"{_case_prefix()}{hashlib.md5(serialized.encode('utf-8')).hexdigest()}"
+
+
+class DiskCacheWrapper:
+    """Per-model LLM adapter that caches responses in a shared DiskCache.
+
+    Holds its own inner adapter (one model) and hit/miss counters (per-model
+    stats for the run-end log), but delegates all cache state to the shared
+    DiskCache so concurrent wrappers no longer clobber each other's entries.
+    """
+
+    def __init__(self, inner: Any, cache: DiskCache) -> None:
+        self._inner = inner
+        self._cache = cache
+        self._hits = 0
+        self._misses = 0
+
+    def cache_stats(self) -> tuple[int, int]:
+        """Return (hits, misses) since this wrapper was created."""
+        return self._hits, self._misses
+
+    def clear_case(self, sample_id: str) -> int:
+        return self._cache.clear_case(sample_id)
+
     async def chat(
         self,
         messages: list[Any],
@@ -1087,24 +1777,29 @@ class DiskCacheWrapper:
         max_tokens: int | None = None,
         **kwargs: Any,
     ) -> Any:
-        key = self._get_key(messages, temperature, max_tokens, tools=tools, **kwargs)
-        # 1. Thread-safe lock-free read check (Python dict lookups are atomic)
-        if key in self._cache and "content" in self._cache[key]:
-            cached_data = self._cache[key]
+        key = _llm_cache_key(messages, temperature, max_tokens, tools=tools, **kwargs)
+        entry = self._cache.get(key)
+        if entry is not None and "content" in entry:
             self._hits += 1
 
             @dataclass
             class FakeResponse:
                 content: str
 
-            return FakeResponse(content=cached_data["content"])
+            return FakeResponse(content=entry["content"])
 
         self._misses += 1
-        # 2. Call real LLM without holding any locks. Overall 60s timeout
-        # forces a failure (case scored wrong, bench moves on) when the
-        # provider hangs on a request -- the openai SDK per-request timeout
-        # does not always fire for streaming responses, so this is the
-        # backstop that keeps a full run from hanging on one stuck call.
+        # Timeout backstop: the openai SDK per-request timeout does not always
+        # fire for streaming responses, so this keeps a full run from hanging
+        # on one stuck call (case scored wrong, bench moves on). The clock
+        # starts when the coroutine is awaited, so under high --concurrency the
+        # asyncio scheduling + connection-pool queue wait counts against it. At
+        # 60s this silently killed every batch extraction call (large, slow,
+        # queued behind ~concurrency*DRAIN_WORKERS peers) -> empty response ->
+        # whole-batch fallback to context-free single-turn extraction, which
+        # loses cross-turn coreference. 180s leaves room for the queued call to
+        # actually issue; the real HTTP body completes well under the SDK's own
+        # 60s once it starts.
         try:
             response = await asyncio.wait_for(
                 self._inner.chat(
@@ -1114,10 +1809,10 @@ class DiskCacheWrapper:
                     max_tokens=max_tokens,
                     **kwargs,
                 ),
-                timeout=60.0,
+                timeout=180.0,
             )
         except TimeoutError:
-            logger.warning("LLM call timed out after 60s, treating as empty response")
+            logger.warning("LLM call timed out after 180s, treating as empty response")
 
             class _Empty:
                 content = ""
@@ -1125,26 +1820,18 @@ class DiskCacheWrapper:
             return _Empty()
         content = getattr(response, "content", None)
         if isinstance(content, str):
-            # 3. Only lock to update the dict and write to disk asynchronously to prevent blocking threads
-            async with self._lock:
-                self._cache[key] = {"content": content}
-            # Save cache to disk in a separate background thread so we never block the event loop with IO
-            loop = asyncio.get_running_loop()
-            await loop.run_in_executor(None, self._save_cache)
+            await self._cache.put(key, {"content": content})
         return response
 
     async def embed(self, texts: list[str]) -> list[list[float]]:
-        # Hash each text independently or cache the whole batch
-        # For simplicity and speed, cache the batch
-        key = hashlib.md5(json.dumps(texts).encode("utf-8")).hexdigest()
-        if key in self._cache and "embeddings" in self._cache[key]:
-            return self._cache[key]["embeddings"]
+        # Cache the whole batch, namespaced by case id for per-case deletion.
+        key = f"{_case_prefix()}{hashlib.md5(json.dumps(texts).encode('utf-8')).hexdigest()}"
+        entry = self._cache.get(key)
+        if entry is not None and "embeddings" in entry:
+            return entry["embeddings"]
 
         embeddings = await self._inner.embed(texts)
-        async with self._lock:
-            self._cache[key] = {"embeddings": embeddings}
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, self._save_cache)
+        await self._cache.put(key, {"embeddings": embeddings})
         return embeddings
 
     def dimension(self) -> int:
@@ -1218,6 +1905,8 @@ async def _run_all(
     evolve_mode: bool = False,
     consolidate: bool = True,
     reflect: bool = True,
+    debug_trace: bool = False,
+    clear_case_cache: list[str] | None = None,
 ) -> dict:
     # Credential resolution is provider-scoped. SiliconFlow still requires an
     # explicit key (or SILICONFLOW_API_KEY) up front; dashscope defers to the
@@ -1230,6 +1919,10 @@ async def _run_all(
     else:
         resolved_key = api_key
 
+    # One shared cache across all per-model wrappers so they cooperate on a
+    # single in-memory dict + file instead of clobbering each other on save.
+    shared_llm_cache = DiskCache()
+
     def _make_llm(model: str) -> DiskCacheWrapper:
         return DiskCacheWrapper(
             LLMAdapterFactory.create(
@@ -1237,7 +1930,8 @@ async def _run_all(
                 model=model,
                 api_key=resolved_key,
                 base_url=base_url,
-            )
+            ),
+            shared_llm_cache,
         )
 
     llm_extract = _make_llm(extract_model)
@@ -1265,10 +1959,11 @@ async def _run_all(
 
     # Generate config hash based on extraction AND embedding parameters
     # to invalidate cache when either config changes (e.g. embedding dim).
-    # The extraction prompt is hashed in too: a prompt change alters what
-    # facts get extracted, so the pre-extracted session DB must rebuild.
-    # Without this, a prompt fix would be silently masked by stale cached
-    # extractions and the bench would validate against the old behavior.
+    # The extraction prompt AND the batch response_format schema are hashed:
+    # either alters what facts get extracted, so the pre-extracted session DB
+    # must rebuild. Without this, a prompt or schema fix would be silently
+    # masked by stale cached extractions. The schema is hashed at n_turns=1
+    # since its structure (not the dynamic minItems) governs extraction shape.
     extract_config_payload = json.dumps(
         {
             "extract_model": extract_model,
@@ -1280,6 +1975,9 @@ async def _run_all(
             "extract_prompt_hash": hashlib.md5(
                 _ATOMIC_FACT_BATCH_SYSTEM_PROMPT.encode("utf-8")
             ).hexdigest(),
+            "extract_schema_hash": hashlib.md5(
+                json.dumps(_atomic_fact_batch_response_format(1), sort_keys=True).encode("utf-8")
+            ).hexdigest(),
         },
         sort_keys=True,
     )
@@ -1287,8 +1985,27 @@ async def _run_all(
     db_cache_dir = Path("/tmp/locomo_session_db_cache")
     db_cache_dir.mkdir(parents=True, exist_ok=True)
 
+    if clear_case_cache:
+        for sid in clear_case_cache:
+            # All wrappers share one DiskCache, so clearing the shared cache
+            # once covers extract/answer/judge/reflect in a single pass.
+            cleared_entries = shared_llm_cache.clear_case(sid)
+            db_files = sorted(db_cache_dir.glob(f"{sid}_*.db"))
+            for dbf in db_files:
+                dbf.unlink(missing_ok=True)
+            logger.info(
+                "[clear-case-cache] %s: cleared %d LLM/embedding cache entries, deleted %d DB file(s)",
+                sid,
+                cleared_entries,
+                len(db_files),
+            )
+
     async def _run_one(idx: int, case: LoCoMoCase) -> None:
         async with semaphore:
+            # Namespace all LLM/embedding cache keys for this case so they are
+            # independently deletable via --clear-case-cache. Task-scoped: each
+            # _run_one task runs on its own context copy, so concurrency is safe.
+            _CURRENT_CASE_ID.set(case.sample_id)
             db = Path(f"/tmp/locomo_bench_{run_token}_orchestrator_{idx}.db")
 
             # Check if we have a pre-ingested/extracted database cache for this sample
@@ -1357,6 +2074,7 @@ async def _run_all(
                     f"locomo:{case.sample_id}",
                     llm_answer,
                     llm_judge,
+                    shared_llm_cache,
                     embedding_provider=embedding_provider,
                     embedding_model=embedding_model,
                     embedding_api_key=embedding_api_key,
@@ -1368,6 +2086,7 @@ async def _run_all(
                     llm_reflect=llm_reflect,
                     consolidate=consolidate,
                     reflect=reflect,
+                    debug_trace=debug_trace,
                 )
 
                 # Close the backend connection first to checkpoint and flush WAL records.
@@ -1447,6 +2166,7 @@ async def _run_all(
     ]
     report = {
         "recall_mode": "orchestrator",
+        "provenance": _provenance(),
         "total": total,
         "correct": correct,
         "accuracy": round(correct / total, 4) if total else 0,
@@ -1468,6 +2188,33 @@ async def _run_all(
     }
     if evolve_mode:
         report["evolve"] = _summarize_evolve(results, output_path)
+    # Fail-loud on silent rerank degradation. The default reranker chain
+    # leads with CrossEncoderReranker; if it failed to load (missing
+    # sentence_transformers, bare python3 env) the whole run silently ranks
+    # on the heuristic and every quality number is a heuristic number, not a
+    # cross-encoder number. That must never pass unmarked.
+    prov = report.get("provenance", {})
+    if prov.get("cross_encoder_loads") is not True:
+        logger.warning(
+            "RERANK DEGRADED: cross_encoder_loads=%s -- this run did NOT use "
+            "the cross-encoder; quality numbers are heuristic-rerank numbers. "
+            "Re-run with `uv run python` so sentence_transformers resolves.",
+            prov.get("cross_encoder_loads"),
+        )
+    degraded_tiers = []
+    for r in results:
+        if not isinstance(r, dict):
+            continue
+        tier = r.get("trace", {}).get("rerank", {}).get("tier")
+        if tier and tier != "CrossEncoderReranker":
+            degraded_tiers.append((r.get("case_id"), tier))
+    if degraded_tiers:
+        logger.warning(
+            "RERANK TIER FALLBACK on %d/%d cases: %s",
+            len(degraded_tiers),
+            total,
+            degraded_tiers[:5],
+        )
     if output_path:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
@@ -1658,6 +2405,8 @@ def main():
             evolve_mode=args.evolve_mode,
             consolidate=not args.no_consolidate,
             reflect=not args.no_reflect,
+            debug_trace=args.debug_trace,
+            clear_case_cache=args.clear_case_cache,
         )
     )
     print(

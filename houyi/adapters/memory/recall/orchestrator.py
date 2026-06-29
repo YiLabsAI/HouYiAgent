@@ -69,7 +69,7 @@ _ENUMERATION_FUSION_FLOOR = 150
 # so the answer-bearing fact is cut before the reasoner ever reads it.
 # The boost encodes a universal retrieval prior (match the evidence type to
 # the question's answer type); it is not tied to any specific dataset.
-_ANSWER_TYPE_BOOST = 0.8
+_ANSWER_TYPE_BOOST = 0.1
 _ANSWER_TYPE_TEMPORAL_RE = re.compile(
     r"\bwhen\b|\b(?:what|which)\s+(?:year|date|month|day|time)\b", re.IGNORECASE
 )
@@ -412,6 +412,13 @@ class RecallOrchestrator:
             top_k=fusion_k,
             query=query_text,
         )
+        # Snapshot the reranker's RAW output (pre-boost) so the trace can
+        # separate the reranker's own discrimination from the entity/
+        # answer-type boosts applied below. Post-boost rs conflates both;
+        # root-causing rerank quality needs the raw score. See
+        # verify-before-claim-rule: judge rerank on raw, never on post-boost.
+        if trace.get("debug_trace"):
+            trace["dbg_reranked_raw"] = _dbg_snapshot(ranked)
         # Entity relevance boost: candidates whose subject matches ANY
         # entity named in the query get an equal score boost so they
         # survive MMR deduplication. Without it, cross-entity score
@@ -458,8 +465,15 @@ class RecallOrchestrator:
             trace["dbg_mmr_dropped"] = _dbg_snapshot(
                 [c for c in ranked if id(c) not in deduped_ids]
             )
+        # Winning rerank tier + any fallback log. FallbackReranker tags the
+        # candidates it returns; a direct (non-fallback) reranker falls back
+        # to its own type name. This makes a silent cross->heuristic
+        # degradation visible in the trace, not just in logs.
+        tier, fallbacks = _rerank_tier_info(ranked, self._reranker)
         trace["rerank"] = {
             "reranker": type(self._reranker).__name__,
+            "tier": tier,
+            "fallbacks": fallbacks,
             "input_count": len(fused),
             "output_count": len(deduped),
         }
@@ -519,6 +533,26 @@ class RecallOrchestrator:
             return []
 
 
+def _rerank_tier_info(
+    ranked: Sequence[RecallCandidate],
+    reranker: Reranker,
+) -> tuple[str, list[dict[str, str]]]:
+    """Read the winning rerank tier + fallback log off the ranked candidates.
+
+    FallbackReranker tags every candidate it returns with the inner tier that
+    actually produced the result (and the fallback chain on the first one).
+    A direct reranker leaves no tag, so its own type name is the tier. This
+    keeps a silent cross->heuristic degradation visible in the trace.
+    """
+    for c in ranked:
+        s = c.signals or {}
+        tier = s.get("rerank_tier")
+        if tier:
+            fb = s.get("rerank_fallbacks")
+            return str(tier), list(fb) if isinstance(fb, list) else []
+    return type(reranker).__name__, []
+
+
 def _dbg_snapshot(cands: Sequence[RecallCandidate]) -> list[dict[str, object]]:
     """Compact per-candidate snapshot for debug_trace observability.
 
@@ -546,25 +580,26 @@ def _dbg_snapshot(cands: Sequence[RecallCandidate]) -> list[dict[str, object]]:
 def _apply_entity_relevance_boost(
     candidates: list[RecallCandidate],
     entities: list[str],
-    boost: float = 1.5,
+    boost: float = 0.1,
 ) -> None:
-    """Add an equal rerank_score boost to every query-entity candidate.
+    """Add a small rerank_score boost to every query-entity candidate.
 
-    MMR selects candidates by score, not position. Reordering does not
-    change which ones MMR picks — it prefers high-score facts. The root
-    fix is to boost candidates whose subject matches ANY query entity so
-    they compete with cross-entity score-stacked facts.
+    Acts as a tiebreaker on the cross-encoder's 0-1 scale: when the
+    cross-encoder scores several facts ~equally (often ~0 for short
+    entity-state facts), the boost lifts the facts about the queried
+    entity above same-score noise so MMR keeps them. The boost is small
+    (0.1) so it does NOT overwhelm a real cross-encoder signal -- a gold
+    fact the cross-encoder scored 0.9 stays above a noise fact scored 0
+    even when the noise fact gets the boost (0 + 0.1 < 0.9). The previous
+    1.5 boost drowned the cross-encoder's discrimination entirely.
 
-    Crucially, every query entity is boosted by the SAME amount. For
-    multi-entity questions ("what do A and B share") boosting only the
-    first entity starves the second and zeroes its recall; equal boosts
-    keep both entities' facts in contention so the diversity selector
-    can cover both.
+    Every query entity is boosted by the SAME amount so multi-entity
+    questions keep both entities' facts in contention.
 
-    The boost amount (1.5) overcomes the typical score gap between a
-    single-retriever entity-state fact (~1.0) and a multi-retriever
-    score-stacked fact, giving entity facts enough margin to
-    survive MMR selection.
+    The pre-boost score falls back to fused_score (0-1 scale), never the
+    raw lexical candidate.score: an unscored tail candidate's lexical
+    score can be ~18, and adding a boost on top leaked that lexical scale
+    into the cross-encoder range.
     """
     targets = {e.lower() for e in entities if e and e.strip()}
     if not targets:
@@ -572,7 +607,10 @@ def _apply_entity_relevance_boost(
     for candidate in candidates:
         if candidate.fact.subject.lower() in targets:
             candidate.signals = dict(candidate.signals)
-            old_score = float(candidate.signals.get("rerank_score", candidate.score))
+            rs = candidate.signals.get("rerank_score")
+            old_score = float(
+                rs if rs is not None else candidate.signals.get("fused_score", candidate.score)
+            )
             candidate.signals["rerank_score"] = old_score + boost
             candidate.signals["entity_relevance_boost"] = boost
 
@@ -621,10 +659,12 @@ def _apply_sibling_boost(candidates: list[RecallCandidate]) -> None:
 
     for group in groups.values():
         if len(group) > 1:
-            # Boost siblings so they stay together in top-k
+            # Small tiebreaker so sibling facts stay together in top-k,
+            # on the cross-encoder's 0-1 scale (was 0.4, which drowned the
+            # cross-encoder signal the same way the entity boost did).
             for c in group:
                 score = float(c.signals.get("rerank_score", c.signals.get("fused_score", c.score)))
-                c.signals["rerank_score"] = score + 0.4
+                c.signals["rerank_score"] = score + 0.1
 
     candidates.sort(
         key=lambda c: float(c.signals.get("rerank_score", c.signals.get("fused_score", c.score))),
@@ -643,14 +683,14 @@ def _apply_answer_type_boost(
     number for 'how many').
 
     The entity gate is essential. An ungated temporal boost lifts every
-    dated fact, including ones about other people: for 'when did Deborah's
-    mother pass away' it would elevate an unrelated 'Jolene lost mother
-    (2022)' over the relevant but undated 'Deborah lost mother', adding
-    temporal noise that makes the answerer abstain. Gating to query
-    entities keeps the boost a within-entity tiebreaker that favours the
-    dated member fact without overriding cross-entity relevance. When no
-    query entity is identified (broad/thematic questions) the boost is
-    skipped entirely rather than applied blindly.
+    dated fact, including ones about other entities: for a 'when' question
+    it would elevate an unrelated dated fact about someone else over the
+    relevant but undated fact about the queried entity, adding temporal
+    noise that makes the answerer abstain. Gating to query entities keeps
+    the boost a within-entity tiebreaker that favours the dated member
+    fact without overriding cross-entity relevance. When no query entity
+    is identified (broad/thematic questions) the boost is skipped entirely
+    rather than applied blindly.
     """
     if not answer_types:
         return
@@ -666,7 +706,10 @@ def _apply_answer_type_boost(
         )
         if matched:
             candidate.signals = dict(candidate.signals)
-            old_score = float(candidate.signals.get("rerank_score", candidate.score))
+            rs = candidate.signals.get("rerank_score")
+            old_score = float(
+                rs if rs is not None else candidate.signals.get("fused_score", candidate.score)
+            )
             candidate.signals["rerank_score"] = old_score + boost
             candidate.signals["answer_type_boost"] = boost
 
