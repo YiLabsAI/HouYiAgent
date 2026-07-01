@@ -47,7 +47,7 @@ class OpenAICompatibleAdapter(OpenAICompatAdapterBase):
                 base_url=self.base_url,
                 organization=self.organization,
                 default_headers=self.default_headers or None,
-                timeout=60.0,
+                timeout=180.0,
             )
         except ImportError as exc:
             raise ImportError(

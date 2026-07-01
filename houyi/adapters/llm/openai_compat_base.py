@@ -473,7 +473,11 @@ class OpenAICompatAdapterBase(LLMAdapter):
     def _get_httpx_chat_timeout(self) -> Any:
         import httpx
 
-        return httpx.Timeout(60.0, connect=10.0)
+        # 180s lets verbose models finish long structured answers without
+        # being cut mid-generation; 60s truncated valid slow responses,
+        # producing empty output. connect stays short to fail fast on
+        # network issues rather than queueing.
+        return httpx.Timeout(180.0, connect=10.0)
 
     async def _execute_chat_httpx(
         self,

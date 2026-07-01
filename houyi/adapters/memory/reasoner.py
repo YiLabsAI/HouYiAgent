@@ -287,7 +287,7 @@ class LLMMemoryReasoningPolicy:
         self,
         llm: Any,
         *,
-        timeout_seconds: float = 60.0,
+        timeout_seconds: float = 180.0,
         max_facts: int = 100,
         max_tokens: int = 2048,
     ) -> None:
