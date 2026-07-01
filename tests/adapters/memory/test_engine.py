@@ -10,8 +10,9 @@ from __future__ import annotations
 import pytest
 
 from houyi.adapters.embedding import NoOpEmbeddingProvider
-from houyi.adapters.memory.engine import MemoryEngine
+from houyi.adapters.memory.engine import _INTERNAL_QUALIFIER_KEYS, MemoryEngine
 from houyi.adapters.memory.store import MemoryStore
+from houyi.adapters.memory.turn_context import reformat_recall_content
 from houyi.adapters.memory.types import (
     CandidateStatus,
     MemoryPolicy,
@@ -417,7 +418,7 @@ class TestReformatRecallContent:
             "original_time": "yesterday",
             "fact_object": "Calvin took his Ferrari",
         }
-        out = MemoryEngine._reformat_recall_content(content, quals)
+        out = reformat_recall_content(content, quals, _INTERNAL_QUALIFIER_KEYS)
         assert "compound_type" not in out
         assert "original_time" not in out
         assert "fact_object" not in out
@@ -426,7 +427,7 @@ class TestReformatRecallContent:
     def test_keeps_meaningful_qualifiers(self):
         content = "Maria had dinner"
         quals = {"location": "Rome", "co_agent": "her mother"}
-        out = MemoryEngine._reformat_recall_content(content, quals)
+        out = reformat_recall_content(content, quals, _INTERNAL_QUALIFIER_KEYS)
         assert "location: Rome" in out
         assert "co_agent: her mother" in out
 
@@ -434,7 +435,7 @@ class TestReformatRecallContent:
         # vague-recency report date must not look exact.
         content = "Calvin went to Tokyo (time: 2023-04-20)"
         quals = {"date": "2023-04-20", "date_certainty": "approximate", "original_time": "just"}
-        out = MemoryEngine._reformat_recall_content(content, quals)
+        out = reformat_recall_content(content, quals, _INTERNAL_QUALIFIER_KEYS)
         assert "reported on 2023-04-20, exact date earlier/uncertain" in out
         assert "(time: 2023-04-20)" not in out
         assert "date_certainty" not in out
@@ -443,6 +444,6 @@ class TestReformatRecallContent:
         # Date present only in qualifiers (no baked "(time: ...)").
         content = "Calvin went to Tokyo"
         quals = {"date": "2023-04-20", "date_certainty": "approximate"}
-        out = MemoryEngine._reformat_recall_content(content, quals)
+        out = reformat_recall_content(content, quals, _INTERNAL_QUALIFIER_KEYS)
         assert "reported on 2023-04-20, exact date earlier/uncertain" in out
         assert "time: 2023-04-20" not in out

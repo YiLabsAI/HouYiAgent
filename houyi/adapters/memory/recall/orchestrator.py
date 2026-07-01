@@ -8,6 +8,7 @@ guard. Each component remains independently testable and replaceable.
 from __future__ import annotations
 
 import asyncio
+import os
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -404,6 +405,12 @@ class RecallOrchestrator:
             fusion_k = max(top_k * self._config.rerank_multiplier, _ENUMERATION_FUSION_FLOOR)
         else:
             fusion_k = max(top_k * self._config.rerank_multiplier, top_k)
+        # A/B falsification: when set, pass the full deduped recall union to
+        # the reranker (no fusion top-k cut). Tests whether the weight-gated
+        # fusion_k truncation starves the cross-encoder of gold candidates,
+        # without touching the kind-weight table. Reversible: unset to restore.
+        if os.environ.get("HOUYI_RECALL_NO_TRUNCATE"):
+            fusion_k = len(candidates)
         fuser = self._fuser_for(query_type)
         fused = fuser.fuse(candidates, top_k=fusion_k)
         ranked = await self._reranker.arerank(

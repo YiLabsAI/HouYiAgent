@@ -59,6 +59,7 @@ from houyi.adapters.memory.recall.types import (
 )
 from houyi.adapters.memory.retriever import MemoryRetriever
 from houyi.adapters.memory.store import MemoryStore
+from houyi.adapters.memory.turn_context import fetch_turn_context, reformat_recall_content
 from houyi.adapters.memory.turn_writer import TurnWriter, WriteResult
 from houyi.adapters.memory.types import (
     CandidateStatus,
@@ -467,7 +468,14 @@ class MemoryEngine:
             record = record_index.get(recall.memory_id)
             if record is not None:
                 raw_content = recall.qualifiers.get("merged_object") or record.content
-                content = self._reformat_recall_content(raw_content, recall.qualifiers)
+                content = reformat_recall_content(
+                    raw_content, recall.qualifiers, _INTERNAL_QUALIFIER_KEYS
+                )
+                ctx = fetch_turn_context(
+                    self._backend, (record.metadata or {}).get("turn_id"), window=3
+                )
+                if ctx:
+                    content = f"{content} {ctx}"
                 record = record.model_copy(update={"content": content})
                 records.append(record)
         records = self._prepare_reasoner_records(records)
@@ -603,41 +611,6 @@ class MemoryEngine:
                     index.setdefault(event.event_id, synthetic)
 
         return index
-
-    @staticmethod
-    def _reformat_recall_content(content: str, quals: dict[str, str] | None) -> str:
-        m = re.search(r"\((?:time|date):\s*([^)]+)\)", content)
-        cal_time = m.group(1).strip() if m else None
-        if not quals and not cal_time:
-            return content
-
-        approximate = bool(
-            quals and str(quals.get("date_certainty", "")).strip().lower() == "approximate"
-        )
-        parts = []
-        if cal_time:
-            if approximate:
-                parts.append(f"reported on {cal_time}, exact date earlier/uncertain")
-            else:
-                parts.append(f"time: {cal_time}")
-        for qk, qv in sorted((quals or {}).items()):
-            if not qv or (qk == "date" and cal_time) or qk == "date_certainty":
-                continue
-            if qk in _INTERNAL_QUALIFIER_KEYS:
-                # Internal bookkeeping (compound_type, original_time, raw
-                # triple copies) is never answer evidence; rendering it only
-                # leaks metadata into the LLM's echoed answer.
-                continue
-            if qk == "date" and approximate:
-                parts.append(f"reported on {qv}, exact date earlier/uncertain")
-                continue
-            lbl = "time" if qk == "date" else qk
-            parts.append(f"{lbl}: {qv}")
-
-        if parts:
-            content_stripped = re.sub(r"\s*\([^)]*\)\s*$", "", content).strip()
-            return f"{content_stripped} ({', '.join(parts)})"
-        return content
 
     def _record_to_fact_id(self, record: MemoryRecord, strategy: str = "A") -> str:
         if strategy == "B":
