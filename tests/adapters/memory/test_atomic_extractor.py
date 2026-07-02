@@ -491,3 +491,103 @@ class TestExtractorBatchCoverage:
         ext = AtomicFactExtractor(llm, max_retries=0, prefer_json_mode=False)
         await ext.extract_batch([("text-a", "a")], namespace="ns")
         assert "response_format" not in llm.calls[0]["kwargs"]
+
+
+class TestEventTimestampResolution:
+    """The deterministic resolver rewrites relative event timestamps to
+    absolute values anchored on the per-turn observation_date embedded in the
+    bench/ingest extract-text JSON. This exercises the live _build_event path
+    (not just the resolver in isolation) so we prove the wiring catches a
+    verbatim relative timestamp the LLM emits non-deterministically.
+    """
+
+    @staticmethod
+    def _extract_text(observation_date: str, body: str) -> str:
+        return json.dumps(
+            {
+                "observation_date": observation_date,
+                "system_date": "2024-01-15",
+                "text": body,
+                "speaker_name": "Joanna",
+            }
+        )
+
+    @pytest.mark.asyncio
+    async def test_verbatim_relative_resolved(self) -> None:
+        llm = _StubLLM(
+            json.dumps(
+                {
+                    "facts": [],
+                    "events": [
+                        {
+                            "subject": "Joanna",
+                            "action": "watched",
+                            "object": "Eternal Sunshine of the Spotless Mind",
+                            "timestamp": "around 3 years ago",
+                            "context": "first time watching",
+                            "certainty": "certain",
+                        }
+                    ],
+                    "edges": [],
+                }
+            )
+        )
+        text = self._extract_text("2022-01-21", "I first watched it around 3 years ago")
+        result = await AtomicFactExtractor(llm, max_retries=0).extract(
+            text, source_anchor="conv-42:D1:18"
+        )
+        assert len(result.events) == 1
+        assert result.events[0].timestamp == "2019"
+
+    @pytest.mark.asyncio
+    async def test_absolute_passthrough(self) -> None:
+        llm = _StubLLM(
+            json.dumps(
+                {
+                    "facts": [],
+                    "events": [
+                        {
+                            "subject": "Joanna",
+                            "action": "watched",
+                            "object": "Eternal Sunshine",
+                            "timestamp": "2019",
+                            "certainty": "certain",
+                        }
+                    ],
+                    "edges": [],
+                }
+            )
+        )
+        text = self._extract_text("2022-01-21", "I first watched it in 2019")
+        result = await AtomicFactExtractor(llm, max_retries=0).extract(
+            text, source_anchor="conv-42:D1:18"
+        )
+        assert len(result.events) == 1
+        assert result.events[0].timestamp == "2019"
+
+    @pytest.mark.asyncio
+    async def test_no_anchor_unchanged(self) -> None:
+        # Callers that pass plain text (no observation_date JSON) must be
+        # untouched: the resolver is a no-op without an anchor.
+        llm = _StubLLM(
+            json.dumps(
+                {
+                    "facts": [],
+                    "events": [
+                        {
+                            "subject": "Joanna",
+                            "action": "watched",
+                            "object": "Eternal Sunshine",
+                            "timestamp": "around 3 years ago",
+                            "certainty": "certain",
+                        }
+                    ],
+                    "edges": [],
+                }
+            )
+        )
+        result = await AtomicFactExtractor(llm, max_retries=0).extract(
+            "I first watched it around 3 years ago", source_anchor="a"
+        )
+        assert len(result.events) == 1
+        assert result.events[0].timestamp == "around 3 years ago"

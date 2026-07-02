@@ -23,6 +23,10 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
+from houyi.adapters.memory.timestamp_resolver import (
+    extract_observation_date,
+    resolve_relative_timestamp,
+)
 from houyi.adapters.memory.types import (
     AtomicFact,
     Certainty,
@@ -1131,7 +1135,7 @@ class AtomicFactExtractor:
         # (events_raw was read but never assembled), so any anchor recovered
         # via single-turn re-extraction lost its time-anchored events.
         for ev_item in events_raw:
-            event = self._build_event(ev_item, anchor, namespace)
+            event = self._build_event(ev_item, anchor, namespace, extract_observation_date(text))
             if event is None:
                 invalid += 1
             else:
@@ -1274,7 +1278,9 @@ class AtomicFactExtractor:
                     facts.append(fact)
             # Build events from raw event dicts
             for ev_item in events_raw:
-                event = self._build_event(ev_item, anchor, namespace)
+                event = self._build_event(
+                    ev_item, anchor, namespace, extract_observation_date(text)
+                )
                 if event is None:
                     invalid += 1
                 else:
@@ -1521,13 +1527,24 @@ class AtomicFactExtractor:
             return None
 
     @staticmethod
-    def _build_event(item: dict[str, Any], anchor: str, namespace: str) -> MemoryEvent | None:
+    def _build_event(
+        item: dict[str, Any],
+        anchor: str,
+        namespace: str,
+        observation_date: str | None = None,
+    ) -> MemoryEvent | None:
         """Assemble one validated MemoryEvent or None on schema failure."""
 
         subject = str(item.get("subject", "")).strip()
         action = str(item.get("action", "")).strip()
         obj = str(item.get("object", "")).strip()
         timestamp = str(item.get("timestamp", "")).strip()
+        # Resolve relative times (e.g. "around 3 years ago") to an absolute
+        # value anchored on the per-turn observation_date. The LLM is
+        # non-deterministic here (the prompt both tells it to preserve the
+        # phrase verbatim and to resolve it), so a relative timestamp would
+        # otherwise be stored verbatim and lose its reference date forever.
+        timestamp = resolve_relative_timestamp(timestamp, observation_date)
         context = str(item.get("context", "")).strip()
 
         if not subject or not action or not obj or not timestamp:
