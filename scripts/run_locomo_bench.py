@@ -1819,7 +1819,21 @@ class DiskCacheWrapper:
 
             return _Empty()
         content = getattr(response, "content", None)
-        if isinstance(content, str):
+        finish_reason = getattr(response, "finish_reason", None)
+        # Do not cache empty, provider-error, or length-truncated responses.
+        # A cached empty string ({"content": ""}) is served verbatim on later
+        # runs (see the hit path above), silently turning a real answer into an
+        # abstain; a length-truncated entry freezes a half-generated answer.
+        # The empty check also covers provider-error responses (from_openai
+        # returns content="" finish_reason="error" without raising). Letting the
+        # next call re-fetch is correct: an empty/truncated response is a failed
+        # generation, not a determinate answer. finish_reason=="stop" answers are
+        # always cached; the "length" filter is provider-dependent (best-effort).
+        if (
+            isinstance(content, str)
+            and content.strip()
+            and finish_reason != "length"
+        ):
             await self._cache.put(key, {"content": content})
         return response
 
