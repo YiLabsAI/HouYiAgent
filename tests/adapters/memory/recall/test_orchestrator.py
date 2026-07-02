@@ -362,3 +362,69 @@ class TestFusionStrategySwitch:
         # RRF buries single-source dated gold, so temporal keeps WeightedFuser.
         assert isinstance(orchestrator._fuser_for(QueryType.TEMPORAL_QUERY), WeightedFuser)
         assert isinstance(orchestrator._fuser_for(QueryType.FACTUAL_LOOKUP), ReciprocalRankFuser)
+
+
+class TestTemporalNoTruncation:
+    """Temporal queries pass the full candidate pool to the reranker (no
+    fusion_k cut) so the cross-encoder can surface dated events buried
+    below the weight-monopolised fusion top-k (conv-42 / conv-50 root
+    cause). Other query types keep the bounded fusion_k. The carve-out is
+    scoped to TEMPORAL only to avoid bloating enumeration pools."""
+
+    @staticmethod
+    def _candidates(n: int) -> list[RecallCandidate]:
+        return [
+            RecallCandidate(
+                fact=AtomicFact(
+                    subject="s",
+                    predicate="p",
+                    object=f"o{i}",
+                    certainty=Certainty.CERTAIN,
+                    source_anchor=f"a{i}",
+                ),
+                score=1.0,
+                matched_by=RetrieverKind.ENTITY_STATE,
+                retriever_name="fake",
+            )
+            for i in range(n)
+        ]
+
+    @staticmethod
+    def _build_orch(query_type: QueryType, seen: list[int]):
+        from houyi.adapters.memory.recall.fusion import Fuser
+        from houyi.adapters.memory.recall.rerank import Reranker
+
+        class SpyFuser(Fuser):
+            def fuse(self, candidates, *, top_k):
+                seen.append(top_k)
+                return list(candidates)[:top_k]
+
+        class SpyReranker(Reranker):
+            def rerank(self, *, query_type, candidates, top_k, query=None):
+                return list(candidates)[:top_k]
+
+        return RecallOrchestrator(
+            router=FixedRouter(query_type),
+            retrievers={},
+            fuser=SpyFuser(),
+            reranker=SpyReranker(),
+        )
+
+    @pytest.mark.asyncio
+    async def test_temporal_full_pool(self) -> None:
+        seen: list[int] = []
+        orch = self._build_orch(QueryType.TEMPORAL_QUERY, seen)
+        await orch._rank_candidates(
+            QueryType.TEMPORAL_QUERY, self._candidates(30), top_k=3, trace={}
+        )
+        assert seen[-1] == 30, "TEMPORAL must pass the full pool (no fusion_k cut)"
+
+    @pytest.mark.asyncio
+    async def test_factual_bounded_k(self) -> None:
+        seen: list[int] = []
+        orch = self._build_orch(QueryType.FACTUAL_LOOKUP, seen)
+        await orch._rank_candidates(
+            QueryType.FACTUAL_LOOKUP, self._candidates(30), top_k=3, trace={}
+        )
+        # default rerank_multiplier=2 -> max(3*2, 3) = 6
+        assert seen[-1] == 6, "non-temporal must keep the bounded fusion_k"

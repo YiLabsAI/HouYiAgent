@@ -480,6 +480,16 @@ class MemoryEngine:
                 records.append(record)
         records = self._prepare_reasoner_records(records)
 
+        if self._debug_trace and isinstance(self._last_recall_trace, dict):
+            # Capture the exact post-injection record contents the reasoner
+            # renders into the LLM prompt. dbg_final is pre-injection and
+            # pre-sibling-merge, so it cannot answer "what did the answerer
+            # actually see"; this snapshot does (blob echo, injected context,
+            # dropped members all surface here).
+            self._last_recall_trace["answerer_input"] = [
+                {"i": i, "rid": r.record_id, "content": r.content} for i, r in enumerate(records)
+            ]
+
         obs_date = (
             getattr(session_context, "current_observation_date", None) if session_context else None
         )

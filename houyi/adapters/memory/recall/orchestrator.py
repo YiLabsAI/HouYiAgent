@@ -409,7 +409,14 @@ class RecallOrchestrator:
         # the reranker (no fusion top-k cut). Tests whether the weight-gated
         # fusion_k truncation starves the cross-encoder of gold candidates,
         # without touching the kind-weight table. Reversible: unset to restore.
-        if os.environ.get("HOUYI_RECALL_NO_TRUNCATE"):
+        # TEMPORAL queries default to no-truncation: dated answer events are
+        # often single-predicate facts that the weight-monopolised fusion top-k
+        # buries below rank 20, starving the cross-encoder of the very fact
+        # that carries the date. Letting the cross-encoder see the full pool
+        # surfaces them (probe-confirmed on conv-42 / conv-50, zero regression
+        # on the 9 passing temporal). Scoped to TEMPORAL so enumeration pools
+        # are not bloated.
+        if query_type == QueryType.TEMPORAL_QUERY or os.environ.get("HOUYI_RECALL_NO_TRUNCATE"):
             fusion_k = len(candidates)
         fuser = self._fuser_for(query_type)
         fused = fuser.fuse(candidates, top_k=fusion_k)
@@ -564,8 +571,12 @@ def _dbg_snapshot(cands: Sequence[RecallCandidate]) -> list[dict[str, object]]:
     """Compact per-candidate snapshot for debug_trace observability.
 
     Captures the fact identity, source anchor, and the score signals that
-    matter for root-causing (fused_score, rerank_score, retriever). Kept
-    small (object truncated) so the trace stays cheap to serialize.
+    matter for root-causing (raw_score, fused_score, rerank_score, retriever).
+    The object is kept long enough (200 chars) to preserve the date and
+    qualifier modifiers that sit in parentheses after the object text
+    (e.g. "(2019)", "(time: 2022-01-21)", "(before ...)"); a 40-char cap
+    hid exactly those modifiers and made temporal root-causing read the
+    wrong layer.
     """
     out: list[dict[str, object]] = []
     for c in cands:
@@ -574,8 +585,9 @@ def _dbg_snapshot(cands: Sequence[RecallCandidate]) -> list[dict[str, object]]:
             {
                 "s": c.fact.subject,
                 "p": c.fact.predicate,
-                "o": str(c.fact.object)[:40],
+                "o": str(c.fact.object)[:200],
                 "a": c.fact.source_anchor,
+                "raw": s.get("raw_score"),
                 "fs": s.get("fused_score"),
                 "rs": s.get("rerank_score"),
                 "rn": c.retriever_name,
