@@ -1194,27 +1194,60 @@ class AtomicFactExtractor:
         # loss) yields its salient facts, while the batch drops them. Treating
         # a batch empty as authoritative makes a gold evidence turn score 0
         # facts forever: it vanishes from the DB and recall has nothing to
-        # surface (root-caused via fresh debug-trace: gold turns D1:5/D3:1/D1:4
-        # came back batch-empty and were never recovered). So we re-extract via
-        # the single-turn path BOTH absent anchors AND present-but-empty ones.
-        # Single-turn re-extraction of a genuinely empty turn simply returns
-        # empty again -- a wasted call, never a correctness loss.
+        # surface (root-caused via debug-trace: gold evidence turns came back
+        # batch-empty and were never recovered without this re-extraction). So
+        # we re-extract via the single-turn path BOTH absent anchors AND
+        # present-but-empty ones. Single-turn re-extraction of a genuinely
+        # empty turn simply returns empty again -- a wasted call, never a
+        # correctness loss.
         single_results: dict[str, ExtractionResult] = {}
         dropped = 0
+        dropped_raw_empty = 0
+        dropped_build_invalid = 0
         for text, anchor in normalized:
             if not text or not anchor or anchor.startswith("batch-turn-"):
                 continue
             covered = by_anchor.get(anchor)
-            # covered is (facts, edges, events); re-extract when the batch
-            # omitted the anchor or returned it with neither facts nor events.
-            if covered is None or (not covered[0] and not covered[2]):
+            # Re-extract when the batch omitted the anchor OR returned it with
+            # no item that survives schema validation. The earlier check only
+            # tested raw-list emptiness, which missed the case where the batch
+            # returns a non-empty but schema-invalid item list (e.g. an
+            # unrecognized certainty value) that _build_fact/_build_event drop
+            # entirely -- the anchor then stored empty with no recovery, even
+            # though the single-turn path would have produced valid facts.
+            # Trial-building here reuses the same pure static builders that
+            # _results_from_batch_parse applies downstream, so the validity
+            # check is exact rather than a raw-emptiness heuristic. The second
+            # build downstream is cheap (no LLM, pure compute).
+            if covered is None:
+                needs_reextract = True
+                reason = "raw_empty"
+            else:
+                raw_facts, _raw_edges, raw_events = covered
+                obs_date = extract_observation_date(text)
+                has_valid = any(
+                    self._build_fact(item, anchor) is not None for item in raw_facts
+                ) or any(
+                    self._build_event(item, anchor, namespace, obs_date) is not None
+                    for item in raw_events
+                )
+                needs_reextract = not has_valid
+                reason = "build_invalid"
+            if needs_reextract:
                 dropped += 1
+                if reason == "raw_empty":
+                    dropped_raw_empty += 1
+                else:
+                    dropped_build_invalid += 1
                 single_results[anchor] = await self.extract(text, anchor, namespace=namespace)
         if dropped:
             logger.info(
-                "AtomicFactExtractor batch dropped/emptied %d/%d anchors; re-extracted singly",
+                "AtomicFactExtractor batch dropped/emptied %d/%d anchors; "
+                "re-extracted singly (raw_empty=%d, build_invalid=%d)",
                 dropped,
                 len(normalized),
+                dropped_raw_empty,
+                dropped_build_invalid,
             )
         return self._results_from_batch_parse(
             normalized, by_anchor, single_results, namespace=namespace
@@ -1301,7 +1334,19 @@ class AtomicFactExtractor:
         for attempt in range(attempts):
             content = await self._request_llm(text, retry=attempt > 0)
             if content is None:
-                return [], [], []
+                # _request_llm returns None on exception/timeout (it catches
+                # all errors internally). Previously this short-circuited to
+                # empty with zero retries, which permanently lost the anchor
+                # when this single-turn call is the last-resort fallback after
+                # a batch omission. Continue the retry loop instead.
+                if attempt < attempts - 1:
+                    logger.warning(
+                        "AtomicFactExtractor single-turn LLM call returned None "
+                        "(exception/timeout), retrying (attempt %d/%d)",
+                        attempt + 1,
+                        attempts,
+                    )
+                continue
             res = self._parse_json_array(content)
             if res is not None:
                 return res
@@ -1359,7 +1404,18 @@ class AtomicFactExtractor:
         for attempt in range(attempts):
             content = await self._request_llm_batch(text, n_turns=n_turns, retry=attempt > 0)
             if content is None:
-                return None
+                # Same zero-retry gap as _call_llm: _request_llm_batch returns
+                # None on exception/timeout. Continue the retry loop instead
+                # of short-circuiting, so a transient network failure does not
+                # lose the entire batch.
+                if attempt < attempts - 1:
+                    logger.warning(
+                        "AtomicFactExtractor batch LLM call returned None "
+                        "(exception/timeout), retrying (attempt %d/%d)",
+                        attempt + 1,
+                        attempts,
+                    )
+                continue
             items = self._parse_json_batch(content)
             if items is not None:
                 return items

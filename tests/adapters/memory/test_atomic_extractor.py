@@ -459,6 +459,70 @@ class TestExtractorBatchCoverage:
         assert len(llm.calls) == 2
 
     @pytest.mark.asyncio
+    async def test_invalid_anchor_reextracted(self) -> None:
+        # Batch returns anchor "b" with a NON-EMPTY raw facts list, but every
+        # fact dict is schema-invalid (here: an unrecognized certainty value),
+        # so _build_fact returns None for all of them. The anchor ends up with
+        # zero built facts even though the raw list is non-empty.
+        #
+        # This is the third coverage case (absent / present-but-empty /
+        # present-but-all-invalid) and the one the pre-build fallback check
+        # (which tests raw-list emptiness, not built-object validity) misses:
+        # the raw list is non-empty so no single-turn re-extraction fires, and
+        # the anchor is silently stored empty. The fix re-extracts when no raw
+        # item survives _build_fact/_build_event.
+        batch_resp = json.dumps(
+            {
+                "items": [
+                    {
+                        "source_anchor": "a",
+                        "facts": [
+                            {
+                                "subject": "S",
+                                "predicate": "p",
+                                "object": "o",
+                                "certainty": "certain",
+                            }
+                        ],
+                        "events": [],
+                        "edges": [],
+                    },
+                    {
+                        "source_anchor": "b",
+                        "facts": [
+                            # Non-empty list, but certainty is not a valid
+                            # Certainty tier -> _build_fact returns None.
+                            {
+                                "subject": "S",
+                                "predicate": "p",
+                                "object": "o",
+                                "certainty": "maybe",
+                            }
+                        ],
+                        "events": [],
+                        "edges": [],
+                    },
+                ]
+            }
+        )
+        # Single-turn re-extraction of anchor "b" recovers a valid fact.
+        single_resp = _items(
+            {"subject": "S2", "predicate": "p2", "object": "o2", "certainty": "certain"}
+        )
+        llm = _StubLLM([batch_resp, single_resp])
+        ext = AtomicFactExtractor(llm, max_retries=0)
+        results = await ext.extract_batch([("text-a", "a"), ("text-b", "b")], namespace="ns")
+        assert len(results) == 2
+        # anchor a: served from the batch response
+        assert len(results[0].facts) == 1
+        assert results[0].facts[0].object == "o"
+        # anchor b: batch facts all schema-invalid -> re-extracted singly
+        assert len(results[1].facts) == 1
+        assert results[1].facts[0].object == "o2"
+        # one batch call + one single-turn re-extraction for the invalid anchor
+        assert len(llm.calls) == 2
+
+    @pytest.mark.asyncio
     async def test_batch_min_items(self) -> None:
         # The batch call constrains the LLM with a json_schema whose items[]
         # has minItems = number of input turns and requires source_anchor,

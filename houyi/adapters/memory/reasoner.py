@@ -233,6 +233,14 @@ class DeterministicReasoningPolicy:
             "participated",
             "checked",
             "many",
+            # Enumerative "what kinds of things" patterns: these ask for a
+            # cross-fact member set, not a single lexical match, so they must
+            # defer like the category nouns above. Without them a content-free
+            # fact whose neighbours mention the queried tokens can short-
+            # circuit the answer (see test_injection_tail_ignored).
+            "kind",
+            "kinds",
+            "things",
         }
         query_words = set(re.sub(r"[^a-z0-9\s]", " ", request.query.lower()).split())
         if wh_words.intersection(query_words) or aggregation_words.intersection(query_words):
@@ -245,7 +253,15 @@ class DeterministicReasoningPolicy:
         best_idx = -1
         best_ratio = 0.0
         for idx, record in enumerate(request.records):
-            content_tokens = self._query_tokens(record.content)
+            # Strip the fetch_turn_context injection tail (neighbour dialogue
+            # appended as user: ... / assistant: ... lines by MemoryEngine.answer)
+            # before lexical overlap. Otherwise a content-free fact whose
+            # neighbours mention the queried tokens picks up those tokens and
+            # short-circuits the answer to the wrong record. The LLM still
+            # receives the full post-injection record downstream; only this
+            # deterministic lexical signal is de-noised.
+            fact_text = re.split(r"\s+(?:user|assistant):\s", record.content or "", maxsplit=1)[0]
+            content_tokens = self._query_tokens(fact_text)
             if not content_tokens:
                 continue
             overlap = len(tokens.intersection(content_tokens))

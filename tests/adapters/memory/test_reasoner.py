@@ -216,6 +216,42 @@ class TestDeterministicPolicy:
         result = await policy.answer(request)
         assert result is None
 
+    async def test_injection_tail_ignored(self):
+        """The fetch_turn_context injection tail (neighbour dialogue appended
+        as user: ... / assistant: ... lines) must not inflate lexical overlap,
+        or a content-free fact whose neighbours mention the queried tokens
+        short-circuits the answer to the wrong record. Overlap is measured on
+        the fact itself; the LLM still sees the full injected record.
+        """
+        policy = DeterministicReasoningPolicy(min_overlap_ratio=0.5)
+        # Query and fact body avoid enumerative tokens (kinds/things) so the
+        # policy reaches the overlap loop instead of deferring on aggregation.
+        # Fact body has zero query overlap; the injected neighbour turn alone
+        # carries all the queried tokens (would push overlap to 1.0 without
+        # the injection-stripping fix).
+        record = MemoryRecord(
+            key="noise",
+            content="System status derailed user: the items broke down here today",
+        )
+        request = MemoryReasoningInput(query="items broke", recalls=[], records=[record])
+        result = await policy.answer(request)
+        assert result is None
+
+    async def test_fact_match_kept(self):
+        """A genuine high-overlap fact must still short-circuit even when an
+        injection tail is present: stripping the tail only de-noises, it does
+        not suppress legitimate lexical matches.
+        """
+        policy = DeterministicReasoningPolicy(min_overlap_ratio=0.5)
+        record = MemoryRecord(
+            key="real",
+            content="the items broke yesterday user: unrelated neighbour dialogue goes here",
+        )
+        request = MemoryReasoningInput(query="items broke yesterday", recalls=[], records=[record])
+        result = await policy.answer(request)
+        assert result is not None
+        assert result.answer.startswith("the items broke yesterday")
+
 
 class TestAnswerParsing:
     """<Answer> extraction must not leak chain-of-thought."""
