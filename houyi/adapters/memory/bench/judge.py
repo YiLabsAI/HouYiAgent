@@ -171,9 +171,13 @@ class _JudgeLLM(Protocol):
 class LLMMemoryJudge:
     """LLM-as-judge over LoCoMo-style free-form gold answers.
 
-    The judge is intentionally simple: one chat call, one parsed
-    token, no chain-of-thought. Keeping the surface small makes the
-    judge cheap to re-run on every CI sweep and easy to ablate.
+    The judge is intentionally simple: one parsed verdict token, no
+    chain-of-thought. The chat call is wrapped in a bounded retry over
+    the two transient failure classes (transport/adapter exceptions and
+    unparseable verdicts); a valid verdict, including a WRONG/MISSING
+    mismatch, returns immediately. Only after exhausting retries does it
+    degrade to a distinct judge_failed state, so a flaky judge call
+    cannot silently masquerade as a semantic mismatch in accuracy.
     """
 
     def __init__(
@@ -182,12 +186,16 @@ class LLMMemoryJudge:
         *,
         timeout_seconds: float = 6.0,
         max_tokens: int = 8,
+        max_retries: int = 2,
     ) -> None:
         if llm is None:
             raise ValueError("llm is required")
+        if max_retries < 0:
+            raise ValueError("max_retries must be non-negative")
         self._llm = llm
         self._timeout = timeout_seconds
         self._max_tokens = max_tokens
+        self._max_retries = max_retries
 
     async def judge(
         self,
@@ -212,30 +220,47 @@ class LLMMemoryJudge:
             },
         ]
 
-        try:
-            response = await self._llm.chat(messages, temperature=0.0, max_tokens=self._max_tokens)
-        except Exception as exc:
-            logger.warning("LLM judge call failed: %s", exc)
-            return JudgeVerdict(
-                correct=False,
-                reason="judge_llm_failed",
-                detail=str(exc)[:200],
-            )
+        attempts = self._max_retries + 1
+        last_failure = "judge call failed"
+        for attempt in range(1, attempts + 1):
+            try:
+                response = await self._llm.chat(
+                    messages, temperature=0.0, max_tokens=self._max_tokens
+                )
+            except Exception as exc:
+                last_failure = f"judge call failed: {type(exc).__name__}"
+                logger.warning(
+                    "LLM judge call failed (attempt %d/%d)",
+                    attempt,
+                    attempts,
+                    exc_info=True,
+                )
+                if attempt >= attempts:
+                    break
+                continue
 
-        raw = (getattr(response, "content", None) or "").strip()
-        m = _VERDICT_RE.search(raw.upper())
-        if m is None:
-            return JudgeVerdict(
-                correct=False,
-                reason="judge_parse_failed",
-                detail=raw[:200],
-            )
-        token = m.group(1)
-        if token == "MATCH":
-            return JudgeVerdict(correct=True, reason="llm_match", detail=raw)
-        if token == "ABSTAIN_OK":
-            return JudgeVerdict(correct=True, reason="llm_abstain_ok", detail=raw)
-        return JudgeVerdict(correct=False, reason="llm_mismatch", detail=raw)
+            raw = (getattr(response, "content", None) or "").strip()
+            m = _VERDICT_RE.search(raw.upper())
+            if m is None:
+                last_failure = f"judge parse failed: {raw[:120]}"
+                if attempt >= attempts:
+                    break
+                logger.debug(
+                    "LLM judge unparseable verdict (attempt %d/%d): %s",
+                    attempt,
+                    attempts,
+                    last_failure,
+                )
+                continue
+
+            token = m.group(1)
+            if token == "MATCH":
+                return JudgeVerdict(correct=True, reason="llm_match", detail=raw)
+            if token == "ABSTAIN_OK":
+                return JudgeVerdict(correct=True, reason="llm_abstain_ok", detail=raw)
+            return JudgeVerdict(correct=False, reason="llm_mismatch", detail=raw)
+
+        return JudgeVerdict(correct=False, reason="judge_failed", detail=last_failure[:200])
 
 
 __all__ = [

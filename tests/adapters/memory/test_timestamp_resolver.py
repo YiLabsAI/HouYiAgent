@@ -40,10 +40,12 @@ class TestYearsAgo:
         assert resolve_relative_timestamp("approximately 5 years ago", "2022-01-21") == "2017"
 
     def test_a_few_years(self):
-        assert resolve_relative_timestamp("a few years ago", "2023-05-03") == "2020"
+        # Vague quantifier preserved verbatim; do not invent a fake-precise
+        # absolute year. Anchor stays with the session via the phrase itself.
+        assert resolve_relative_timestamp("a few years ago", "2023-05-03") == "a few years ago"
 
     def test_few_years_no_article(self):
-        assert resolve_relative_timestamp("few years ago", "2023-05-03") == "2020"
+        assert resolve_relative_timestamp("few years ago", "2023-05-03") == "few years ago"
 
     def test_single_year(self):
         assert resolve_relative_timestamp("1 year ago", "2023-05-03") == "2022"

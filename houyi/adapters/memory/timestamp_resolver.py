@@ -95,9 +95,14 @@ def _resolve_years(low: str, obs: datetime.date) -> str | None:
     m = re.search(r"(?:around|about|approximately)?\s*(?:a\s+)?(\d+)\s+years?\s+ago", low)
     if m:
         return str(obs.year - int(m.group(1)))
-    # A few / several years ago -> conventional 3-year span.
+    # A few / several years ago -> preserved verbatim. These are vague
+    # quantifiers: collapsing them to a fixed obs.year - 3 invents a precise
+    # year the source never stated, and an answerer then renders the fake
+    # absolute value instead of the original relative phrase. Returning None
+    # leaves the verbatim phrase in the fact so downstream rendering can keep
+    # the relative wording anchored on the session date.
     if re.search(r"(?:a\s+few|few|several)\s+years?\s+ago", low):
-        return str(obs.year - 3)
+        return None
     if "last year" in low:
         return str(obs.year - 1)
     if "next year" in low:

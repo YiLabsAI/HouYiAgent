@@ -73,6 +73,26 @@ class _StubJudgeLLM:
         return _LLMResp(self.content)
 
 
+class _ScriptedJudgeLLM:
+    """Replay a scripted sequence of judge-call outcomes.
+
+    Each outcome is either a BaseException (raised) or an _LLMResp
+    (returned), so retry tests can model transient call failures and
+    unparseable-then-valid sequences without a live LLM.
+    """
+
+    def __init__(self, outcomes):
+        self._outcomes = list(outcomes)
+        self.calls = 0
+
+    async def chat(self, messages, *, temperature=0.0, max_tokens=64):
+        self.calls += 1
+        outcome = self._outcomes.pop(0) if self._outcomes else _LLMResp("MATCH")
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return outcome
+
+
 # ---------------------------------------------------------------------------
 # DeterministicJudge — answer mode
 # ---------------------------------------------------------------------------
@@ -203,17 +223,60 @@ class TestLLMJudge:
         # LLM never called — structural shortcut wins.
         assert llm.calls == 0
 
+    async def test_call_retry_match(self):
+        # A transient transport failure must not flip the verdict to a
+        # silent wrong; the judge retries and returns the real MATCH.
+        llm = _ScriptedJudgeLLM([RuntimeError("blip"), _LLMResp("MATCH")])
+        verdict = await LLMMemoryJudge(llm).judge(_locomo_case(), _ans("Paris."))
+        assert verdict.correct
+        assert verdict.reason == "llm_match"
+        assert llm.calls == 2
+
+    async def test_parse_retry_match(self):
+        # Unparseable prose on the first call is also retried.
+        llm = _ScriptedJudgeLLM([_LLMResp("I think it matches"), _LLMResp("MATCH")])
+        verdict = await LLMMemoryJudge(llm).judge(_locomo_case(), _ans("Paris."))
+        assert verdict.correct
+        assert verdict.reason == "llm_match"
+        assert llm.calls == 2
+
+    async def test_call_exhausted(self):
+        # After retries are exhausted the verdict is a distinct
+        # judge_failed state, not a semantic mismatch.
+        llm = _ScriptedJudgeLLM([RuntimeError("down"), RuntimeError("down"), RuntimeError("down")])
+        verdict = await LLMMemoryJudge(llm).judge(_locomo_case(), _ans("Paris."))
+        assert not verdict.correct
+        assert verdict.reason == "judge_failed"
+        assert llm.calls == 3  # max_retries=2 -> 3 attempts
+
+    async def test_parse_exhausted(self):
+        llm = _ScriptedJudgeLLM([_LLMResp("huh"), _LLMResp("what"), _LLMResp("nope")])
+        verdict = await LLMMemoryJudge(llm).judge(_locomo_case(), _ans("Paris."))
+        assert not verdict.correct
+        assert verdict.reason == "judge_failed"
+        assert llm.calls == 3
+
+    async def test_mismatch_no_retry(self):
+        # A well-formed WRONG/MISSING verdict is final; no retry.
+        llm = _StubJudgeLLM(content="MISMATCH")
+        verdict = await LLMMemoryJudge(llm).judge(_locomo_case(), _ans("Berlin"))
+        assert not verdict.correct
+        assert verdict.reason == "llm_mismatch"
+        assert llm.calls == 1
+
     async def test_parse_failure_no_token(self):
         llm = _StubJudgeLLM(content="hmmm not sure")
         verdict = await LLMMemoryJudge(llm).judge(_locomo_case(), _ans("Paris"))
         assert not verdict.correct
-        assert verdict.reason == "judge_parse_failed"
+        assert verdict.reason == "judge_failed"
+        assert llm.calls == 3  # retried, then degraded
 
     async def test_llm_failure_marked(self):
         llm = _StubJudgeLLM(raise_for=True)
         verdict = await LLMMemoryJudge(llm).judge(_locomo_case(), _ans("Paris"))
         assert not verdict.correct
-        assert verdict.reason == "judge_llm_failed"
+        assert verdict.reason == "judge_failed"
+        assert llm.calls == 3
 
 
 # ---------------------------------------------------------------------------
