@@ -7,16 +7,28 @@ and degradation scenarios (no embedding provider).
 
 from __future__ import annotations
 
+import json
+from types import SimpleNamespace
+
 import pytest
 
 from houyi.adapters.embedding import NoOpEmbeddingProvider
-from houyi.adapters.memory.engine import _INTERNAL_QUALIFIER_KEYS, MemoryEngine
+from houyi.adapters.memory.engine import (
+    _INTERNAL_QUALIFIER_KEYS,
+    MemoryEngine,
+    _build_temporal_turns,
+)
+from houyi.adapters.memory.reasoner import (
+    MemoryReasoningInput,
+    TurnEvidenceReasoningPolicy,
+)
 from houyi.adapters.memory.store import MemoryStore
 from houyi.adapters.memory.turn_context import reformat_recall_content
 from houyi.adapters.memory.types import (
     CandidateStatus,
     MemoryPolicy,
     MemoryType,
+    SessionContext,
 )
 
 
@@ -447,3 +459,98 @@ class TestReformatRecallContent:
         out = reformat_recall_content(content, quals, _INTERNAL_QUALIFIER_KEYS)
         assert "reported on 2023-04-20, exact date earlier/uncertain" in out
         assert "time: 2023-04-20" not in out
+
+
+class TestBuildTemporalTurns:
+    """_build_temporal_turns feeds the turn-evidence policy from the raw
+    turn log. It must sort oldest-first (the resolver walks back for the
+    previous session anchor) and tolerate malformed turns without bubbling
+    into MemoryEngine.answer() (it runs before every query's policy chain).
+    """
+
+    @staticmethod
+    def _turn(turn_id, speaker, content, obs_date, created_at, role="user"):
+        extract_blob = json.dumps(
+            {
+                "observation_date": obs_date,
+                "system_date": obs_date,
+                "text": content,
+                "speaker_name": speaker,
+            }
+        )
+        return SimpleNamespace(
+            turn_id=turn_id,
+            role=role,
+            content=content,
+            metadata={"speaker": speaker, "extract_text": extract_blob},
+            created_at=created_at,
+        )
+
+    @staticmethod
+    def _backend(turns):
+        return SimpleNamespace(
+            list_raw_turns_by_namespace=lambda namespace, limit=2000: list(turns)
+        )
+
+    def test_no_backend(self):
+        assert _build_temporal_turns(None, SessionContext(session_id="ns")) is None
+
+    def test_no_method(self):
+        backend = SimpleNamespace()
+        assert _build_temporal_turns(backend, SessionContext(session_id="ns")) is None
+
+    def test_empty_namespace(self):
+        backend = self._backend([])
+        assert _build_temporal_turns(backend, SessionContext(session_id="ns")) is None
+
+    def test_sorts_oldest_first(self):
+        # Backend returns newest-first (D3 tokyo before D2), matching the
+        # real list_raw_turns_by_namespace ORDER BY created_at DESC. The
+        # resolver needs oldest-first or prev_iso comes back empty.
+        turns = [
+            self._turn("D3:1", "Calvin", "I just went to Tokyo.", "2023-04-20", 2000.0),
+            self._turn("D2:1", "Dave", "Hi Calvin, new car?", "2023-03-26", 1000.0),
+        ]
+        result = _build_temporal_turns(
+            self._backend(turns), SessionContext(session_id="locomo:conv-50")
+        )
+        assert result is not None
+        assert [t.occurred_at for t in result] == ["2023-03-26", "2023-04-20"]
+        assert [t.turn_id for t in result] == ["D2:1", "D3:1"]
+
+    async def test_resolves_range(self):
+        turns = [
+            self._turn("D3:1", "Calvin", "I just went to Tokyo.", "2023-04-20", 2000.0),
+            self._turn("D2:1", "Dave", "Hi Calvin, new car?", "2023-03-26", 1000.0),
+        ]
+        built = _build_temporal_turns(
+            self._backend(turns), SessionContext(session_id="locomo:conv-50")
+        )
+        assert built is not None
+        request = MemoryReasoningInput(
+            query="When did Calvin first travel to Tokyo?",
+            recalls=[],
+            records=[],
+            turns=built,
+        )
+        result = await TurnEvidenceReasoningPolicy().answer(request)
+        assert result is not None
+        assert result.answer == "between 26 March and 20 April 2023"
+        assert result.reason == "turn_evidence"
+
+    def test_malformed_turn(self):
+        # A turn with a non-numeric created_at must not bubble; the whole
+        # build is wrapped so any malformed turn degrades to None.
+        turns = [
+            self._turn("D3:1", "Calvin", "I just went to Tokyo.", "2023-04-20", "not-a-number"),
+        ]
+        result = _build_temporal_turns(self._backend(turns), SessionContext(session_id="ns"))
+        assert result is None
+
+    def test_list_error(self):
+        backend = SimpleNamespace(
+            list_raw_turns_by_namespace=lambda namespace, limit=2000: (_ for _ in ()).throw(
+                RuntimeError("boom")
+            )
+        )
+        assert _build_temporal_turns(backend, SessionContext(session_id="ns")) is None

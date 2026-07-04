@@ -146,6 +146,7 @@ class MemoryReasoningInput:
     records: list[MemoryRecord]
     current_observation_date: str | None = None
     current_system_date: str | None = None
+    turns: list[TemporalTurn] | None = None
 
 
 class ReasoningPolicy(Protocol):
@@ -440,6 +441,38 @@ class LLMMemoryReasoningPolicy:
         return content.strip()
 
 
+class TurnEvidenceReasoningPolicy:
+    """Deterministic policy over raw turn-level evidence.
+
+    Resolves answers that need cross-session temporal reasoning over the
+    raw dialogue timeline (which extracted atomic facts cannot express)
+    -- for example bounding an event whose exact date is unknown between
+    two dated session anchors. Returns None when no rule matches so the
+    LLM policy can still answer.
+
+    Rules scan the full turn set and the question text only; they do not
+    consume gold evidence annotations, so wiring this into production is
+    not benchmark leakage.
+    """
+
+    async def answer(self, request: MemoryReasoningInput) -> AnswerResult | None:
+        turns = request.turns
+        if not turns:
+            return None
+        resolved = _resolve_first_trip_date(_normalize_text(request.query), list(turns))
+        if not resolved:
+            return None
+        return AnswerResult(
+            answer=resolved,
+            abstained=False,
+            reason="turn_evidence",
+            citations=tuple(record.record_id for record in request.records),
+            facts_used=len(request.records),
+            prompt_chars=0,
+            raw_llm_output="",
+        )
+
+
 class MemoryReasoner:
     """Run policies in order and return the first decisive result."""
 
@@ -453,6 +486,7 @@ class MemoryReasoner:
         records: list[MemoryRecord],
         current_observation_date: str | None = None,
         current_system_date: str | None = None,
+        turns: list[TemporalTurn] | None = None,
     ) -> AnswerResult:
         request = MemoryReasoningInput(
             query=query,
@@ -460,6 +494,7 @@ class MemoryReasoner:
             records=records,
             current_observation_date=current_observation_date,
             current_system_date=current_system_date,
+            turns=turns,
         )
         for policy in self._policies:
             result = await policy.answer(request)
@@ -656,5 +691,6 @@ __all__ = [
     "MemoryReasoner",
     "ReasoningPolicy",
     "TemporalTurn",
+    "TurnEvidenceReasoningPolicy",
     "answer_from_turn_evidence",
 ]

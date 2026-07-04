@@ -48,6 +48,8 @@ from houyi.adapters.memory.reasoner import (
     LLMMemoryReasoningPolicy,
     MemoryReasoner,
     ReasoningPolicy,
+    TemporalTurn,
+    TurnEvidenceReasoningPolicy,
 )
 from houyi.adapters.memory.recall.enumeration import detect_enumeration_category
 from houyi.adapters.memory.recall.orchestrator import RecallOrchestrator
@@ -59,6 +61,7 @@ from houyi.adapters.memory.recall.types import (
 )
 from houyi.adapters.memory.retriever import MemoryRetriever
 from houyi.adapters.memory.store import MemoryStore
+from houyi.adapters.memory.timestamp_resolver import extract_observation_date
 from houyi.adapters.memory.turn_context import fetch_turn_context, reformat_recall_content
 from houyi.adapters.memory.turn_writer import TurnWriter, WriteResult
 from houyi.adapters.memory.types import (
@@ -233,7 +236,10 @@ class MemoryEngine:
         if policies is not None:
             return MemoryReasoner(policies=policies)
 
-        default_policies: list[ReasoningPolicy] = [DeterministicReasoningPolicy()]
+        default_policies: list[ReasoningPolicy] = [
+            DeterministicReasoningPolicy(),
+            TurnEvidenceReasoningPolicy(),
+        ]
         if llm_adapter is not None:
             default_policies.append(LLMMemoryReasoningPolicy(llm_adapter))
         return MemoryReasoner(default_policies)
@@ -496,9 +502,15 @@ class MemoryEngine:
         sys_date = (
             getattr(session_context, "current_system_date", None) if session_context else None
         )
+        turns = _build_temporal_turns(self._backend, session_context)
 
         res = await self._reasoner.answer(
-            query, recalls, records, current_observation_date=obs_date, current_system_date=sys_date
+            query,
+            recalls,
+            records,
+            current_observation_date=obs_date,
+            current_system_date=sys_date,
+            turns=turns,
         )
         import dataclasses
 
@@ -901,6 +913,62 @@ class MemoryEngine:
         # Stash per-stage trace so answer() can fold it into extras (empty when off).
         self._last_recall_trace = dict(result.trace or {}) if self._debug_trace else {}
         return [_candidate_to_memory_recall(c) for c in result.candidates]
+
+
+def _build_temporal_turns(
+    backend: Any | None, session_context: SessionContext | None
+) -> list[TemporalTurn] | None:
+    """Load raw dialogue turns for deterministic turn-evidence policies.
+
+    Extracted atomic facts cannot express cross-session timeline
+    reasoning (e.g. bounding an undated event between two session
+    anchors), so TurnEvidenceReasoningPolicy needs the raw turn stream
+    with per-turn observation dates. Returns None when the backend has
+    no raw turn log or the namespace is empty, which makes the
+    turn-evidence policy a no-op and falls through to the LLM policy.
+    """
+    if backend is None or not hasattr(backend, "list_raw_turns_by_namespace"):
+        return None
+    namespace = (session_context.session_id if session_context else None) or "default"
+    # The whole build is defensive: a single malformed turn (bad metadata,
+    # non-numeric created_at, weird extract_text) must NOT bubble into
+    # MemoryEngine.answer(), because this runs unconditionally before every
+    # query's policy chain. Any failure -> None -> turn-evidence policy
+    # no-ops -> LLM policy answers unchanged.
+    try:
+        raw_turns = backend.list_raw_turns_by_namespace(namespace)
+        if not raw_turns:
+            return None
+        # list_raw_turns_by_namespace returns newest-first (for the
+        # reflector's source sampler). The turn-evidence resolver walks
+        # backwards from the first match to find the previous session's
+        # anchor date, so it needs oldest-first chronological order. Sort
+        # by (occurred_at, created_at): occurred_at gives cross-session
+        # chronology, created_at breaks ties within a session by ingestion
+        # order.
+        decorated = []
+        for rt in raw_turns:
+            meta = getattr(rt, "metadata", None) or {}
+            extract_text = meta.get("extract_text")
+            occurred = extract_observation_date(extract_text) if extract_text else ""
+            speaker = meta.get("speaker") or getattr(rt, "role", "") or ""
+            decorated.append(
+                (
+                    occurred or "",
+                    float(getattr(rt, "created_at", 0.0) or 0.0),
+                    TemporalTurn(
+                        turn_id=getattr(rt, "turn_id", "") or "",
+                        speaker_id=str(speaker),
+                        text=getattr(rt, "content", "") or "",
+                        occurred_at=occurred or "",
+                    ),
+                )
+            )
+        decorated.sort(key=lambda item: (item[0], item[1]))
+        return [item[2] for item in decorated]
+    except Exception:
+        logger.warning("TurnEvidence: _build_temporal_turns failed", exc_info=True)
+        return None
 
 
 def _extract_pending_count(backend: Any | None) -> int:

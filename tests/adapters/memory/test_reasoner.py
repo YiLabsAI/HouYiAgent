@@ -6,6 +6,7 @@ from houyi.adapters.memory.reasoner import (
     MemoryReasoner,
     MemoryReasoningInput,
     TemporalTurn,
+    TurnEvidenceReasoningPolicy,
     answer_from_turn_evidence,
 )
 from houyi.adapters.memory.types import MemoryRecall, MemoryRecord
@@ -342,3 +343,62 @@ class TestLLMPromptChanges:
             "basketball",
         ):
             assert leaked not in system_prompt
+
+
+class TestTurnEvidencePolicy:
+    """TurnEvidenceReasoningPolicy wires the dead-code turn resolver into the
+    production answer chain. It must fire only on its matched question shape
+    and fall through (return None) otherwise so the LLM policy still answers.
+    """
+
+    @staticmethod
+    def _tokyo_turns() -> list[TemporalTurn]:
+        # Two sessions: an earlier non-Tokyo session (lower bound) and the
+        # session where Calvin first mentions Tokyo (upper bound).
+        return [
+            TemporalTurn(
+                turn_id="conv:session_2:D2:1",
+                speaker_id="Dave",
+                text="Hey Calvin, how is the new Ferrari?",
+                occurred_at="2023-03-26",
+            ),
+            TemporalTurn(
+                turn_id="conv:session_3:D3:1",
+                speaker_id="Calvin",
+                text="I just went to an awesome music thingy in Tokyo.",
+                occurred_at="2023-04-20",
+            ),
+        ]
+
+    async def test_resolves_first_trip_range(self):
+        turns = self._tokyo_turns()
+        request = MemoryReasoningInput(
+            query="When did Calvin first travel to Tokyo?",
+            recalls=[],
+            records=[],
+            turns=turns,
+        )
+        result = await TurnEvidenceReasoningPolicy().answer(request)
+        assert result is not None
+        assert result.answer == "between 26 March and 20 April 2023"
+        assert result.abstained is False
+        assert result.reason == "turn_evidence"
+
+    async def test_no_turns_returns_none(self):
+        request = MemoryReasoningInput(
+            query="When did Calvin first travel to Tokyo?",
+            recalls=[],
+            records=[],
+            turns=None,
+        )
+        assert await TurnEvidenceReasoningPolicy().answer(request) is None
+
+    async def test_unmatched_query_returns_none(self):
+        turns = self._tokyo_turns()
+        request = MemoryReasoningInput(
+            query="What items did Calvin buy in March 2023?",
+            recalls=[],
+            records=[],
+            turns=turns,
+        )
+        assert await TurnEvidenceReasoningPolicy().answer(request) is None
