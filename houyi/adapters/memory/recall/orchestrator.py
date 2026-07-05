@@ -468,6 +468,7 @@ class RecallOrchestrator:
             final_k = top_k
         diversity = _ENUMERATION_DIVERSITY if is_enumeration else None
         deduped = self._dedupe.dedupe(ranked, top_k=final_k, diversity=diversity)
+        _supplement_plan_predicates(deduped, ranked, query_text)
         if trace.get("debug_trace"):
             # Per-stage candidate snapshot so callers can trace where a gold
             # fact drops (raw -> fused -> reranked -> final) without poking
@@ -565,6 +566,61 @@ def _rerank_tier_info(
             fb = s.get("rerank_fallbacks")
             return str(tier), list(fb) if isinstance(fb, list) else []
     return type(reranker).__name__, []
+
+
+_PLAN_INTENT_RE = re.compile(
+    r"\b(?:planned|planning|plans?\s+to|scheduled|scheduling|schedule\s+to"
+    r"|intend(?:s|ed)?\s+to|intention\s+to"
+    r"|going\s+to\s+(?:meet|visit|do|attend|see)"
+    r"|set\s+up\s+(?:a\s+)?(?:date|meeting|appointment))\b",
+    re.IGNORECASE,
+)
+
+# Strict predicate match against fact.predicate (not object content) so
+# compound content facts (p='content') whose text happens to contain
+# 'plan' are not swept in. plans_to\w* covers plans_to / plans_to_start
+# / plans_to_travel_to / plans_to_watch etc.; trailing word chars are
+# predicate suffixes, not separate tokens.
+_PLAN_PRED_RE = re.compile(
+    r"\b(?:planned_to_play|planned|planning|plans_to\w*|scheduled\w*|scheduling"
+    r"|confirms_plan_for|plan_to\w*)",
+    re.IGNORECASE,
+)
+
+
+def _is_plan_intent_query(text: str | None) -> bool:
+    """True if the query asks about planned/scheduled future events/meetings.
+
+    Generic intent classification by keyword family, not case-specific
+    string matching. Guards the plan-predicate supplement so only
+    plan-intent queries retrieve MMR-dropped planned-event facts.
+    """
+    return bool(_PLAN_INTENT_RE.search(text or ""))
+
+
+def _supplement_plan_predicates(
+    deduped: list[RecallCandidate],
+    ranked: list[RecallCandidate],
+    query_text: str | None,
+) -> None:
+    """Re-inject MMR-dropped plan predicates for plan-intent queries.
+
+    MMR's diversity penalty can drop a low-cross-encoder-score plan
+    predicate that is exactly the evidence a 'planned to meet' query
+    asks for. Re-inject plan-predicate candidates from the ranked pool
+    ONLY for plan-intent queries, so non-plan queries keep their MMR
+    cut. Scoped by intent + strict predicate match (fact.predicate, not
+    object content) to avoid content-literal pollution. Mutates deduped
+    in place.
+    """
+    if not _is_plan_intent_query(query_text):
+        return
+    _existing = {id(c) for c in deduped}
+    for _c in ranked:
+        if id(_c) in _existing:
+            continue
+        if _PLAN_PRED_RE.search(_c.fact.predicate or ""):
+            deduped.append(_c)
 
 
 def _dbg_snapshot(cands: Sequence[RecallCandidate]) -> list[dict[str, object]]:
