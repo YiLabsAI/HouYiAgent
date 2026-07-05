@@ -198,7 +198,10 @@ class DeterministicReasoningPolicy:
 
         # Skip deterministic lexical policy for wh-questions that require reasoning
         # or extracting specific attributes (time, location, reason, person).
-        wh_words = {"when", "where", "why", "how", "who", "whom"}
+        # "which" questions enumerate a set (which family members, which items)
+        # and need cross-fact synthesis, so a single lexical match would echo
+        # one fact's content verbatim instead of enumerating all members.
+        wh_words = {"when", "where", "why", "how", "who", "whom", "which"}
         # Aggregation / relational questions need cross-fact synthesis rather
         # than a single lexical match (e.g. "what interests do X and Y share").
         # A lone fact would echo a content-free relation, so defer to the
