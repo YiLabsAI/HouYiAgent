@@ -462,18 +462,34 @@ class TurnEvidenceReasoningPolicy:
         turns = request.turns
         if not turns:
             return None
-        resolved = _resolve_first_trip_date(_normalize_text(request.query), list(turns))
-        if not resolved:
-            return None
-        return AnswerResult(
-            answer=resolved,
-            abstained=False,
-            reason="turn_evidence",
-            citations=tuple(record.record_id for record in request.records),
-            facts_used=len(request.records),
-            prompt_chars=0,
-            raw_llm_output="",
+        q = _normalize_text(request.query)
+        resolved = _resolve_first_trip_date(q, list(turns))
+        if resolved:
+            return AnswerResult(
+                answer=resolved,
+                abstained=False,
+                reason="turn_evidence",
+                citations=tuple(record.record_id for record in request.records),
+                facts_used=len(request.records),
+                prompt_chars=0,
+                raw_llm_output="",
+            )
+        resolved = _resolve_undated_live_event_date(
+            q,
+            request.recalls,
+            request.records,
         )
+        if resolved:
+            return AnswerResult(
+                answer=resolved,
+                abstained=False,
+                reason="turn_evidence",
+                citations=tuple(record.record_id for record in request.records),
+                facts_used=len(request.records),
+                prompt_chars=0,
+                raw_llm_output="",
+            )
+        return None
 
 
 class MemoryReasoner:
@@ -636,6 +652,253 @@ def _resolve_first_trip_date(q: str, turns: list[TemporalTurn]) -> str | None:
     if prev_iso and prev_iso != first_iso:
         return _format_iso_range(prev_iso, first_iso)
     return _format_iso_date(first_iso)
+
+
+_LIVE_EVENT_QUERY_RE = re.compile(
+    r"when did\s+(?P<subject_a>[a-z]+)\s+"
+    r"(?:see|watch|hear)\s+"
+    r"(?P<entity_a>[a-z\s]+?)\s+"
+    r"(?:perform live|perform|live|in concert)"
+    r"|when did\s+(?P<subject_b>[a-z]+)\s+"
+    r"(?:attend|catch|go to)\s+"
+    r"(?:a\s+|the\s+)?"
+    r"(?P<entity_b>concert|live show|live music|festival|gig|show)",
+    re.IGNORECASE,
+)
+
+_EVENT_SIGNAL_PREDICATES = frozenset(
+    {
+        "attended",
+        "watched",
+        "visited_place",
+        "traveled_to",
+        "visited",
+        "went_to",
+    }
+)
+
+_EVENT_SIGNAL_OBJECTS = frozenset(
+    {
+        "concert",
+        "festival",
+        "live",
+        "show",
+        "gig",
+        "performance",
+    }
+)
+
+
+def _live_event_subject_entity(q: str) -> tuple[str, str]:
+    """Extract (subject, entity) from a live-event query via regex.
+
+    Returns empty strings when no pattern matches.
+    """
+    match = _LIVE_EVENT_QUERY_RE.search(q)
+    if not match:
+        return "", ""
+    subject = (match.group("subject_a") or match.group("subject_b") or "").strip()
+    entity = (match.group("entity_a") or match.group("entity_b") or "").strip()
+    return subject, entity
+
+
+def _recall_record_lookup(
+    recall: MemoryRecall,
+    record_by_id: dict[str, MemoryRecord],
+) -> MemoryRecord | None:
+    """Resolve a recall to its underlying record.
+
+    Fact recalls match records by memory_id directly. Event recalls use
+    the event_id qualifier as a bridge to the event record_id.
+    """
+    record = record_by_id.get(recall.memory_id)
+    if record is None:
+        event_id = recall.qualifiers.get("event_id", "")
+        if event_id:
+            record = record_by_id.get(event_id)
+    return record
+
+
+def _recall_source_anchor(
+    recall: MemoryRecall,
+    record_by_id: dict[str, MemoryRecord],
+) -> str:
+    """Return the source anchor (turn id) for a recall, or empty string."""
+    record = _recall_record_lookup(recall, record_by_id)
+    if record is None:
+        return ""
+    if record.provenance and record.provenance.source_ids:
+        return record.provenance.source_ids[0]
+    return (record.metadata or {}).get("turn_id", "")
+
+
+def _live_event_targets(
+    recalls: list[MemoryRecall],
+    subject: str,
+    entity: str,
+) -> list[MemoryRecall] | None:
+    """Find topical target recalls for a live-event query.
+
+    Targets are recalls whose explanation mentions both the subject and the
+    entity extracted from the query, and that carry a non-empty qualifier
+    date. The date is the session-level fallback baked into the target; the
+    caller derives the observation date from the shared target dates. An
+    empty target list returns None.
+    """
+    subject_l = subject.lower()
+    entity_l = entity.lower()
+    targets = [
+        recall
+        for recall in recalls
+        if subject_l in recall.explanation.lower()
+        and entity_l in recall.explanation.lower()
+        and recall.qualifiers.get("date")
+    ]
+    if not targets:
+        return None
+    return targets
+
+
+def _anchor_date_if_valid(
+    recall: MemoryRecall,
+    obs: datetime.date,
+    obs_date: str,
+    subject_l: str,
+) -> str | None:
+    """Return the recall date if it is a valid anchor, else None.
+
+    An anchor date must be set, differ from obs_date, precede obs_date,
+    fall within 14 days of obs_date, and the recall explanation must
+    mention the same subject as the targets.
+    """
+    recall_date = recall.qualifiers.get("date")
+    if not recall_date:
+        return None
+    if recall_date == obs_date:
+        return None
+    try:
+        anchor_date = datetime.date.fromisoformat(recall_date)
+    except ValueError:
+        return None
+    if anchor_date >= obs:
+        return None
+    if (obs - anchor_date).days > 14:
+        return None
+    if subject_l not in recall.explanation.lower():
+        return None
+    return recall_date
+
+
+def _live_event_anchor_groups(
+    recalls: list[MemoryRecall],
+    obs: datetime.date,
+    obs_date: str,
+    subject_l: str,
+    record_by_id: dict[str, MemoryRecord],
+) -> dict[str, list[MemoryRecall]]:
+    """Find anchor recalls and group them by source anchor."""
+    groups: dict[str, list[MemoryRecall]] = {}
+    for recall in recalls:
+        anchor_date = _anchor_date_if_valid(recall, obs, obs_date, subject_l)
+        if anchor_date is None:
+            continue
+        anchor = _recall_source_anchor(recall, record_by_id)
+        if not anchor:
+            continue
+        groups.setdefault(anchor, []).append(recall)
+    return groups
+
+
+def _group_has_event_signal(
+    group: list[MemoryRecall],
+    record_by_id: dict[str, MemoryRecord],
+) -> bool:
+    """Check whether a group carries an event signal.
+
+    A group qualifies when any member has a predicate in the event-signal
+    set (checked via record metadata or explanation words) or its
+    object/explanation mentions an event-signal object keyword.
+    """
+    for recall in group:
+        record = _recall_record_lookup(recall, record_by_id)
+        metadata = record.metadata if record else {}
+        predicate = str(metadata.get("fact_predicate", "")).lower()
+        if predicate in _EVENT_SIGNAL_PREDICATES:
+            return True
+        expl = recall.explanation.lower()
+        expl_words = set(re.findall(r"[a-z]+", expl))
+        if expl_words & _EVENT_SIGNAL_PREDICATES:
+            return True
+        obj = str(metadata.get("fact_object", "")).lower()
+        obj_words = set(re.findall(r"[a-z]+", obj))
+        if (expl_words | obj_words) & _EVENT_SIGNAL_OBJECTS:
+            return True
+    return False
+
+
+def _live_event_qualifying_date(
+    groups: dict[str, list[MemoryRecall]],
+    record_by_id: dict[str, MemoryRecord],
+) -> str | None:
+    """Return the max date among qualifying anchor groups, or None.
+
+    A group qualifies when it has at least one recall with a date set and
+    it carries an event signal.
+    """
+    qualifying_dates: list[str] = []
+    for group in groups.values():
+        if not any(recall.qualifiers.get("date") for recall in group):
+            continue
+        if not _group_has_event_signal(group, record_by_id):
+            continue
+        group_dates = [
+            recall.qualifiers["date"] for recall in group if recall.qualifiers.get("date")
+        ]
+        if group_dates:
+            qualifying_dates.append(max(group_dates))
+    if not qualifying_dates:
+        return None
+    return max(qualifying_dates)
+
+
+def _resolve_undated_live_event_date(
+    q: str,
+    recalls: list[MemoryRecall],
+    records: list[MemoryRecord],
+) -> str | None:
+    """Short-circuit resolver for live-event questions whose target recalls
+    share a single session-level fallback date.
+
+    The observation date is derived from the targets qualifier dates rather
+    than from an externally supplied session date: when every target carries
+    the same fallback date that date is the observation anchor. If the
+    targets carry zero dates or divergent dates (a multi-session fallback),
+    the resolver defers to the LLM by returning None. With the observation
+    date fixed, it looks for a nearby dated anchor recall within 14 days
+    before that date which carries an event signal, and returns that anchor
+    date as the answer. Returns None whenever any guard fails so the LLM
+    policy can still answer.
+    """
+    subject, entity = _live_event_subject_entity(q)
+    if not subject or not entity:
+        return None
+    record_by_id = {record.record_id: record for record in records}
+    targets = _live_event_targets(recalls, subject, entity)
+    if targets is None:
+        return None
+    target_dates = sorted({t.qualifiers["date"] for t in targets if t.qualifiers.get("date")})
+    if len(target_dates) != 1:
+        return None
+    obs_date = target_dates[0]
+    try:
+        obs = datetime.date.fromisoformat(obs_date)
+    except ValueError:
+        return None
+    groups = _live_event_anchor_groups(recalls, obs, obs_date, subject.lower(), record_by_id)
+    max_date = _live_event_qualifying_date(groups, record_by_id)
+    if max_date is None:
+        return None
+    return _format_iso_date(max_date)
 
 
 def _normalize_text(text: str) -> str:

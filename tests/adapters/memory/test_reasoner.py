@@ -9,7 +9,7 @@ from houyi.adapters.memory.reasoner import (
     TurnEvidenceReasoningPolicy,
     answer_from_turn_evidence,
 )
-from houyi.adapters.memory.types import MemoryRecall, MemoryRecord
+from houyi.adapters.memory.types import MemoryProvenance, MemoryRecall, MemoryRecord
 
 
 class MockLLMAdapter:
@@ -402,3 +402,144 @@ class TestTurnEvidencePolicy:
             turns=turns,
         )
         assert await TurnEvidenceReasoningPolicy().answer(request) is None
+
+
+class TestUndatedLiveEvent:
+    """Short-circuit resolver for live-event questions whose target recalls
+    share a single session-level fallback date. Derives the observation date
+    from the targets, then looks for a nearby dated anchor with an event
+    signal. Defers to the LLM when targets carry divergent dates or no
+    anchor qualifies.
+    """
+
+    @staticmethod
+    def _conv50_fixture() -> tuple[list[MemoryRecall], list[MemoryRecord], str]:
+        obs_date = "2023-03-26"
+        target_records = [
+            MemoryRecord(
+                record_id="evt_a96688c0eabd",
+                content="Dave watched Aerosmith live (time: 2023-03-26)",
+                provenance=MemoryProvenance(source_ids=["conv-50:D2:12"]),
+                metadata={"fact_predicate": "watched", "fact_object": "Aerosmith"},
+            ),
+            MemoryRecord(
+                record_id="evt_763cb969b161",
+                content="Dave attended concert featuring Aerosmith (time: 2023-03-26)",
+                provenance=MemoryProvenance(source_ids=["conv-50:D2:10"]),
+                metadata={"fact_predicate": "attended", "fact_object": "concert"},
+            ),
+        ]
+        target_recalls = [
+            MemoryRecall(
+                memory_id="fact:evt0",
+                explanation="Dave watched Aerosmith live",
+                qualifiers={"date": "2023-03-26", "event_id": "evt_a96688c0eabd"},
+            ),
+            MemoryRecall(
+                memory_id="fact:evt2",
+                explanation="Dave attended concert featuring Aerosmith",
+                qualifiers={"date": "2023-03-26", "event_id": "evt_763cb969b161"},
+            ),
+        ]
+        anchor_record = MemoryRecord(
+            record_id="fact:219f52e0",
+            content="Dave visited place Boston (time: 2023-03-18)",
+            provenance=MemoryProvenance(source_ids=["conv-50:D2:8"]),
+            metadata={"fact_predicate": "visited_place", "fact_object": "Boston"},
+        )
+        anchor_recall = MemoryRecall(
+            memory_id="fact:219f52e0",
+            explanation="Dave visited place Boston",
+            qualifiers={"date": "2023-03-18"},
+        )
+        records = [*target_records, anchor_record]
+        recalls = [*target_recalls, anchor_recall]
+        return recalls, records, obs_date
+
+    async def test_live_event_resolves(self):
+        recalls, records, obs_date = self._conv50_fixture()
+        request = MemoryReasoningInput(
+            query="When did Dave see Aerosmith perform live?",
+            recalls=recalls,
+            records=records,
+            current_observation_date=obs_date,
+            turns=[TemporalTurn("t", "Dave", "irrelevant", obs_date)],
+        )
+        result = await TurnEvidenceReasoningPolicy().answer(request)
+        assert result is not None
+        assert result.answer == "18 March 2023"
+        assert result.reason == "turn_evidence"
+
+    async def test_divergent_dates_defer(self):
+        recalls, records, obs_date = self._conv50_fixture()
+        # Inject a target carrying a different fallback date. The targets
+        # no longer share a single fallback, so the G5 guard fires and the
+        # resolver defers to the LLM.
+        recalls.append(
+            MemoryRecall(
+                memory_id="fact:real",
+                explanation="Dave reviewed Aerosmith album",
+                qualifiers={"date": "2023-03-20"},
+            )
+        )
+        request = MemoryReasoningInput(
+            query="When did Dave see Aerosmith perform live?",
+            recalls=recalls,
+            records=records,
+            current_observation_date=obs_date,
+            turns=[TemporalTurn("t", "Dave", "irrelevant", obs_date)],
+        )
+        assert await TurnEvidenceReasoningPolicy().answer(request) is None
+
+    async def test_regex_miss_none(self):
+        # Pattern B requires a concert/festival/gig/show noun after go to;
+        # a support group is not an entertainment event noun.
+        request = MemoryReasoningInput(
+            query="When did Caroline go to the LGBTQ support group?",
+            recalls=[],
+            records=[],
+            current_observation_date="2023-05-08",
+            turns=[TemporalTurn("t", "Caroline", "irrelevant", "2023-05-08")],
+        )
+        assert await TurnEvidenceReasoningPolicy().answer(request) is None
+
+    async def test_no_anchor_none(self):
+        recalls, records, obs_date = self._conv50_fixture()
+        # Move the anchor date beyond the 14-day window.
+        recalls[-1].qualifiers["date"] = "2023-03-01"
+        request = MemoryReasoningInput(
+            query="When did Dave see Aerosmith perform live?",
+            recalls=recalls,
+            records=records,
+            current_observation_date=obs_date,
+            turns=[TemporalTurn("t", "Dave", "irrelevant", obs_date)],
+        )
+        assert await TurnEvidenceReasoningPolicy().answer(request) is None
+
+    async def test_tokyo_priority(self):
+        # Tokyo resolver fires first; the live-event function is never reached.
+        turns = [
+            TemporalTurn(
+                turn_id="D2:1",
+                speaker_id="Dave",
+                text="Hey Calvin",
+                occurred_at="2023-03-22",
+            ),
+            TemporalTurn(
+                turn_id="D3:1",
+                speaker_id="Calvin",
+                text="I just went to an awesome music thingy in Tokyo.",
+                occurred_at="2023-04-20",
+            ),
+        ]
+        request = MemoryReasoningInput(
+            query="When did Calvin first travel to Tokyo?",
+            recalls=[],
+            records=[],
+            current_observation_date="2023-04-20",
+            turns=turns,
+        )
+        result = await TurnEvidenceReasoningPolicy().answer(request)
+        assert result is not None
+        assert result.reason == "turn_evidence"
+        assert "April 2023" in result.answer

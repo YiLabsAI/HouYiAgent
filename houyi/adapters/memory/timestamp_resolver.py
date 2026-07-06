@@ -60,11 +60,13 @@ def _add_months(d: datetime.date, n: int) -> datetime.date:
 
 
 def _most_recent_weekend_day(d: datetime.date, weekday: int) -> datetime.date:
-    # weekday(): Monday=0 .. Sunday=6. Walk backwards to the most recent
-    # occurrence of the target weekday strictly before d.
+    # weekday(): Monday=0 .. Sunday=6. "last weekend" means the previous
+    # weekend, not the one d currently sits in. When d is the target weekday
+    # itself (delta=0) or the day after it (delta=1, e.g. Sunday for a
+    # Saturday target), d is inside the current weekend and must skip it.
     delta = (d.weekday() - weekday) % 7
-    if delta == 0:
-        delta = 7
+    if delta < 2:
+        delta += 7
     return d - datetime.timedelta(days=delta)
 
 

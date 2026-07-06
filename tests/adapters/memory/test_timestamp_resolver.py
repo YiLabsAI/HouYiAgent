@@ -85,6 +85,21 @@ class TestDaysAndWeeks:
         # 2023-05-04 is Thursday; most recent Saturday is 2023-04-29.
         assert resolve_relative_timestamp("last weekend", "2023-05-04") == "2023-04-29"
 
+    def test_last_weekend_sunday(self):
+        # 2023-03-26 is Sunday; "last weekend" must skip the current
+        # weekend (Mar 25-26) and return the previous Saturday Mar 18.
+        assert resolve_relative_timestamp("last weekend", "2023-03-26") == "2023-03-18"
+
+    def test_last_weekend_saturday(self):
+        # 2023-03-25 is Saturday; "last weekend" must skip the current
+        # weekend starting today and return the previous Saturday Mar 18.
+        assert resolve_relative_timestamp("last weekend", "2023-03-25") == "2023-03-18"
+
+    def test_last_weekend_monday(self):
+        # 2023-03-27 is Monday; the just-passed weekend is Mar 25-26,
+        # so most recent Saturday is Mar 25 (no skip needed).
+        assert resolve_relative_timestamp("last weekend", "2023-03-27") == "2023-03-25"
+
 
 class TestFutureAndLast:
     def test_tomorrow(self):
