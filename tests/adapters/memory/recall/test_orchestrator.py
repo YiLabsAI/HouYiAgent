@@ -364,12 +364,13 @@ class TestFusionStrategySwitch:
         assert isinstance(orchestrator._fuser_for(QueryType.FACTUAL_LOOKUP), ReciprocalRankFuser)
 
 
-class TestTemporalNoTruncation:
-    """Temporal queries pass the full candidate pool to the reranker (no
-    fusion_k cut) so the cross-encoder can surface dated events buried
-    below the weight-monopolised fusion top-k (conv-42 / conv-50 root
-    cause). Other query types keep the bounded fusion_k. The carve-out is
-    scoped to TEMPORAL only to avoid bloating enumeration pools."""
+class TestNoTruncation:
+    """Non-enumeration queries pass the full candidate pool to the reranker
+    (no fusion_k cut) so the cross-encoder can surface gold facts buried
+    below the weight-monopolised fusion top-k (conv-50 root cause: 4/5
+    wrong&noGold were FUSION CUT). Enumeration keeps its wide floor instead
+    of the unbounded pool so member-fact tie-orders are not bloated before
+    diversity selection."""
 
     @staticmethod
     def _candidates(n: int) -> list[RecallCandidate]:
@@ -420,11 +421,13 @@ class TestTemporalNoTruncation:
         assert seen[-1] == 30, "TEMPORAL must pass the full pool (no fusion_k cut)"
 
     @pytest.mark.asyncio
-    async def test_factual_bounded_k(self) -> None:
+    async def test_factual_full_pool(self) -> None:
         seen: list[int] = []
         orch = self._build_orch(QueryType.FACTUAL_LOOKUP, seen)
         await orch._rank_candidates(
             QueryType.FACTUAL_LOOKUP, self._candidates(30), top_k=3, trace={}
         )
-        # default rerank_multiplier=2 -> max(3*2, 3) = 6
-        assert seen[-1] == 6, "non-temporal must keep the bounded fusion_k"
+        # Non-enumeration queries pass the full pool (no fusion_k cut) so the
+        # cross-encoder sees gold buried below the old ~top_k*rerank_multiplier
+        # truncation. max_candidates at the reranker bounds the scored set.
+        assert seen[-1] == 30, "non-enumeration must pass the full pool (no fusion_k cut)"

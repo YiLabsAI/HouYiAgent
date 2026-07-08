@@ -746,24 +746,34 @@ class MemoryEngine:
             schedule_extract=schedule_extract,
         )
 
-    async def start(self) -> None:
+    async def start(self, *, extractor_worker_concurrency: int = 1) -> None:
         """Launch the background workers if any are wired. Idempotent.
 
         Safe to call multiple times. When the engine has no workers the
         method is a no-op so callers can use the same lifecycle code
         regardless of how the engine was assembled.
+
+        extractor_worker_concurrency: number of concurrent run_forever
+            loops to run against the same ExtractorWorker instance. The
+            worker holds no per-task state (all coordination happens
+            through the backend's claim/mark_done transactions), so
+            running N copies concurrently is safe. Defaults to 1
+            (current/serial behavior). Values > 1 trade a bounded
+            claim-order/write-order guarantee for higher drain throughput
+            under backlog.
         """
         if self._worker_tasks:
             return
         if self._extractor_worker is not None:
-            stop = asyncio.Event()
-            self._worker_stops.append(stop)
-            self._worker_tasks.append(
-                asyncio.create_task(
-                    self._extractor_worker.run_forever(stop),
-                    name="memory-extractor-worker",
+            for i in range(max(1, extractor_worker_concurrency)):
+                stop = asyncio.Event()
+                self._worker_stops.append(stop)
+                self._worker_tasks.append(
+                    asyncio.create_task(
+                        self._extractor_worker.run_forever(stop),
+                        name=f"memory-extractor-worker-{i}",
+                    )
                 )
-            )
         if self._backfill_worker is not None:
             stop = asyncio.Event()
             self._worker_stops.append(stop)

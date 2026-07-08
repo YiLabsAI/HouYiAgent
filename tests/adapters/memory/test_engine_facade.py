@@ -16,6 +16,7 @@ retrievers) already have dedicated unit tests elsewhere.
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 
 import pytest
 
@@ -26,16 +27,21 @@ from houyi.adapters.memory import (
     build_memory_engine_from_env,
 )
 from houyi.adapters.memory.backends.sqlite import SQLiteMemoryBackend
+from houyi.adapters.memory.backends.sqlite_candidate_inbox import SQLiteCandidateInbox
 from houyi.adapters.memory.backends.sqlite_entity_state import SQLiteEntityStateView
 from houyi.adapters.memory.engine import _candidate_to_memory_recall
 from houyi.adapters.memory.recall.factory import _build_default_recall_orchestrator
 from houyi.adapters.memory.recall.types import RecallCandidate, RetrieverKind
+from houyi.adapters.memory.store import MemoryStore
+from houyi.adapters.memory.triggers import all_of
+from houyi.adapters.memory.turn_writer import TurnWriter
 from houyi.adapters.memory.types import (
     AtomicFact,
     Certainty,
     RawTurn,
     RecallMatchMethod,
 )
+from houyi.adapters.memory.workers import ExtractorWorker, ExtractorWorkerConfig
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -229,6 +235,130 @@ class TestMemoryEngineFacade:
                 await engine.flush(timeout=0.02)
         finally:
             engine.store.close()
+
+
+# ---------------------------------------------------------------------------
+# start(extractor_worker_concurrency=N)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class _FakeResult:
+    facts: list = None
+    events: list = None
+    edges: list = None
+    raw_sourceless: list = None
+    invalid_dropped: int = 0
+
+
+class _NoopPromoter:
+    """Skips L1->L2 memories projection so tests don't need an
+    EmbeddingBackfillWorker just to make flush() converge.
+    """
+
+    def promote(self, turn, fact):
+        return None
+
+
+class _BatchFakeExtractor:
+    """Returns one canned ExtractionResult per turn in a claimed batch."""
+
+    def __init__(self, results):
+        self.results = list(results)
+        self.batch_calls: list[list[tuple[str, str | None]]] = []
+
+    async def extract_batch(self, turns, namespace: str = "default"):
+        self.batch_calls.append(list(turns))
+        out = []
+        for _text, anchor in turns:
+            match = next((r for r in self.results if r[0] == anchor), None)
+            out.append(match[1] if match else _FakeResult(facts=[]))
+        return out
+
+
+class TestExtractorWorkerConcurrency:
+    """start(extractor_worker_concurrency=N) must drain a backlog fully,
+    with no duplicate projection, when N concurrent run_forever loops
+    race to claim from the same queue.
+    """
+
+    @pytest.mark.asyncio
+    async def test_drains_all_no_dup(self, tmp_path):
+        backend = SQLiteMemoryBackend(db_path=tmp_path / "conc.db")
+        store = MemoryStore(backend=backend)
+        state_view = SQLiteEntityStateView(backend)
+        inbox = SQLiteCandidateInbox(backend)
+        turn_writer = TurnWriter(backend, extract_trigger=all_of())
+
+        n = 20
+        turns = [
+            RawTurn(turn_id=f"t{i}", session_id="s", role="user", content=f"turn {i}")
+            for i in range(n)
+        ]
+        results = [
+            (
+                f"t{i}",
+                _FakeResult(
+                    facts=[
+                        AtomicFact(
+                            subject=f"person{i}",
+                            predicate="likes",
+                            object=f"item{i}",
+                            certainty=Certainty.CERTAIN,
+                            source_anchor=f"t{i}",
+                        )
+                    ]
+                ),
+            )
+            for i in range(n)
+        ]
+        worker = ExtractorWorker(
+            backend=backend,
+            extractor=_BatchFakeExtractor(results),
+            entity_state=state_view,
+            candidate_inbox=inbox,
+            promoter=_NoopPromoter(),
+            config=ExtractorWorkerConfig(batch_size=3, idle_sleep_s=0.02),
+            write_lock=asyncio.Lock(),
+        )
+        engine = MemoryEngine(store, turn_writer=turn_writer, extractor_worker=worker)
+        try:
+            for t in turns:
+                await engine.write_turn(t, schedule_extract=True)
+            await engine.start(extractor_worker_concurrency=3)
+            await engine.flush(timeout=5.0)
+
+            assert backend.extract_queue_stats() == {"done": n}
+            for i in range(n):
+                rows = state_view.get_active("default", f"person{i}")
+                # Exactly one row per fact: no double-projection from two
+                # workers racing to claim and process the same turn.
+                assert len(rows) == 1
+                assert rows[0].value == f"item{i}"
+        finally:
+            await engine.stop()
+            store.close()
+
+    @pytest.mark.asyncio
+    async def test_defaults_to_one_worker(self, tmp_path):
+        backend = SQLiteMemoryBackend(db_path=tmp_path / "conc-default.db")
+        store = MemoryStore(backend=backend)
+        state_view = SQLiteEntityStateView(backend)
+        inbox = SQLiteCandidateInbox(backend)
+        turn_writer = TurnWriter(backend, extract_trigger=all_of())
+        worker = ExtractorWorker(
+            backend=backend,
+            extractor=_BatchFakeExtractor([]),
+            entity_state=state_view,
+            candidate_inbox=inbox,
+        )
+        engine = MemoryEngine(store, turn_writer=turn_writer, extractor_worker=worker)
+        try:
+            await engine.start()
+            assert len(engine._worker_tasks) == 1
+        finally:
+            await engine.stop()
+            store.close()
 
 
 # ---------------------------------------------------------------------------

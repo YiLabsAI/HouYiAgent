@@ -37,6 +37,50 @@ class TestFastPath:
         assert backend.list_raw_turns("default", "s1")[0].content == "hello"
         assert backend.extract_queue_stats() == {"pending": 1}
 
+    def test_uses_combined_write(self, backend, turn_writer, monkeypatch):
+        """fast_path must route through the merged append+enqueue call, not
+        the two independent append_raw_turn/enqueue_extract calls, when
+        scheduling extraction.
+        """
+        calls: list[str] = []
+        orig_combined = backend.append_raw_turn_and_enqueue
+        orig_append = backend.append_raw_turn
+        orig_enqueue = backend.enqueue_extract
+
+        def _tracked_combined(*a, **kw):
+            calls.append("combined")
+            return orig_combined(*a, **kw)
+
+        def _tracked_append(*a, **kw):
+            calls.append("append")
+            return orig_append(*a, **kw)
+
+        def _tracked_enqueue(*a, **kw):
+            calls.append("enqueue")
+            return orig_enqueue(*a, **kw)
+
+        monkeypatch.setattr(backend, "append_raw_turn_and_enqueue", _tracked_combined)
+        monkeypatch.setattr(backend, "append_raw_turn", _tracked_append)
+        monkeypatch.setattr(backend, "enqueue_extract", _tracked_enqueue)
+
+        turn_writer.fast_path(_turn("hello"))
+        assert calls == ["combined"]
+
+    def test_combined_matches_two_step(self, backend):
+        """append_raw_turn_and_enqueue must produce state indistinguishable
+        from the old two-step append_raw_turn + enqueue_extract path.
+        """
+        turn_a = backend.append_raw_turn(_turn("a", session="cmp"))
+        qid_a = backend.enqueue_extract(turn_a)
+
+        turn_b, qid_b = backend.append_raw_turn_and_enqueue(_turn("b", session="cmp"))
+
+        assert turn_b.turn_index == turn_a.turn_index + 1
+        assert qid_a is not None and qid_b is not None
+        assert backend.extract_queue_stats() == {"pending": 2}
+        claimed = {t.content: qid for qid, t in backend.claim_extract_jobs(limit=10)}
+        assert claimed == {"a": qid_a, "b": qid_b}
+
     def test_skip_extract_only_l0(self, backend, turn_writer):
         result = turn_writer.fast_path(_turn("hi"), schedule_extract=False)
         assert result.queue_id is None
@@ -127,6 +171,52 @@ class TestExtractQueue:
         turn_writer.fast_path(_turn("a"))
         [(qid, _)] = backend.claim_extract_jobs(limit=1)
         backend.mark_extract_failed(qid, "boom", retry=False)
+        assert backend.extract_queue_stats() == {"failed": 1}
+
+    def test_done_batch_finalizes(self, backend, turn_writer):
+        for i in range(4):
+            turn_writer.fast_path(_turn(str(i)))
+        claimed = backend.claim_extract_jobs(limit=4)
+        qids = [qid for qid, _ in claimed]
+        backend.mark_extract_done_batch(qids)
+        assert backend.extract_queue_stats() == {"done": 4}
+
+    def test_done_batch_empty_noop(self, backend, turn_writer):
+        turn_writer.fast_path(_turn("a"))
+        backend.mark_extract_done_batch([])
+        assert backend.extract_queue_stats() == {"pending": 1}
+
+    def test_failed_batch_mixed(self, backend, turn_writer):
+        # Two jobs: one on its last allowed attempt (-> failed), one fresh
+        # (-> re-queued as pending). Verifies per-row attempts are read
+        # correctly even when marked in a single batched call.
+        turn_writer.fast_path(_turn("stale"))
+        turn_writer.fast_path(_turn("fresh"))
+        [(qid_stale, _), (qid_fresh, _)] = backend.claim_extract_jobs(limit=2)
+        # Push qid_stale's attempts up to the max by failing it with retry
+        # a few times first (each retry re-increments attempts on reclaim).
+        backend.mark_extract_failed(qid_stale, "warmup", retry=True, max_attempts=5)
+        backend.claim_extract_jobs(limit=1)  # reclaim qid_stale, attempts=2
+
+        backend.mark_extract_failed_batch(
+            [(qid_stale, "boom-stale"), (qid_fresh, "boom-fresh")],
+            retry=True,
+            max_attempts=2,
+        )
+        stats = backend.extract_queue_stats()
+        assert stats == {"failed": 1, "pending": 1}
+
+    def test_failed_batch_empty_noop(self, backend, turn_writer):
+        turn_writer.fast_path(_turn("a"))
+        backend.claim_extract_jobs(limit=1)
+        backend.mark_extract_failed_batch([])
+        assert backend.extract_queue_stats() == {"in_progress": 1}
+
+    def test_failed_batch_skips_unknown(self, backend, turn_writer):
+        turn_writer.fast_path(_turn("a"))
+        [(qid, _)] = backend.claim_extract_jobs(limit=1)
+        # Unknown id must not raise; known id still gets marked.
+        backend.mark_extract_failed_batch([("does-not-exist", "boom"), (qid, "boom")], retry=False)
         assert backend.extract_queue_stats() == {"failed": 1}
 
     def test_stale_lease_reclaims(self, backend, turn_writer):

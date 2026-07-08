@@ -506,6 +506,15 @@ class SQLiteMemoryBackend(MemoryBackend):
     ) -> str:
         return self._extract_queue.enqueue_extract(turn, now=now)
 
+    def append_raw_turn_and_enqueue(
+        self,
+        turn: RawTurn,
+        *,
+        now: float | None = None,
+    ) -> tuple[RawTurn, str]:
+        """Persist the L0 row and enqueue L1 extraction in one transaction."""
+        return self._extract_queue.append_raw_turn_and_enqueue(turn, now=now)
+
     def claim_extract_jobs(
         self,
         *,
@@ -521,6 +530,9 @@ class SQLiteMemoryBackend(MemoryBackend):
     def mark_extract_done(self, queue_id: str) -> None:
         self._extract_queue.mark_extract_done(queue_id)
 
+    def mark_extract_done_batch(self, queue_ids: list[str]) -> None:
+        self._extract_queue.mark_extract_done_batch(queue_ids)
+
     def mark_extract_failed(
         self,
         queue_id: str,
@@ -532,6 +544,15 @@ class SQLiteMemoryBackend(MemoryBackend):
         self._extract_queue.mark_extract_failed(
             queue_id, error, retry=retry, max_attempts=max_attempts
         )
+
+    def mark_extract_failed_batch(
+        self,
+        items: list[tuple[str, str]],
+        *,
+        retry: bool = True,
+        max_attempts: int = 5,
+    ) -> None:
+        self._extract_queue.mark_extract_failed_batch(items, retry=retry, max_attempts=max_attempts)
 
     def extract_queue_stats(self) -> dict[str, int]:
         return self._extract_queue.extract_queue_stats()

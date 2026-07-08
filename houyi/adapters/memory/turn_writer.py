@@ -75,6 +75,7 @@ class _RawTurnSink(Protocol):
 
     def append_raw_turn(self, turn: RawTurn) -> RawTurn: ...
     def enqueue_extract(self, turn: RawTurn) -> str: ...
+    def append_raw_turn_and_enqueue(self, turn: RawTurn) -> tuple[RawTurn, str]: ...
 
 
 class TurnWriter:
@@ -149,14 +150,15 @@ class TurnWriter:
                 continue
             fired.append(type(detector).__name__)
 
-        persisted = self._backend.append_raw_turn(turn)
-
         queue_id: str | None = None
         skipped = False
-        if schedule_extract:
-            if self._extract_trigger.should_extract(persisted):
-                queue_id = self._backend.enqueue_extract(persisted)
-            else:
+        if schedule_extract and self._extract_trigger.should_extract(turn):
+            # Fold the L0 insert and the L1 enqueue into a single
+            # transaction/commit instead of two independent round trips.
+            persisted, queue_id = self._backend.append_raw_turn_and_enqueue(turn)
+        else:
+            persisted = self._backend.append_raw_turn(turn)
+            if schedule_extract:
                 skipped = True
 
         return WriteResult(

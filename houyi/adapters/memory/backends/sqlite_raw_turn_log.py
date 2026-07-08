@@ -47,34 +47,45 @@ class SQLiteRawTurnLog:
         """
         conn = self._conn_manager.get_connection()
         with self._lock:
-            if turn.turn_index > 0:
-                resolved_index = turn.turn_index
-            else:
-                row = conn.execute(
-                    "SELECT COALESCE(MAX(turn_index), -1) AS last "
-                    "FROM raw_turn_log WHERE namespace = ? AND session_id = ?",
-                    (turn.namespace, turn.session_id),
-                ).fetchone()
-                resolved_index = int(row["last"]) + 1
-            metadata_json = json.dumps(turn.metadata, ensure_ascii=False) if turn.metadata else None
-            conn.execute(
-                "INSERT INTO raw_turn_log "
-                "(turn_id, namespace, session_id, turn_index, role, content, "
-                " metadata, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (
-                    turn.turn_id,
-                    turn.namespace,
-                    turn.session_id,
-                    resolved_index,
-                    turn.role,
-                    turn.content,
-                    metadata_json,
-                    turn.created_at,
-                ),
-            )
+            result = self._append_raw_turn_locked(turn, conn)
             conn.commit()
-            return turn.model_copy(update={"turn_index": resolved_index})
+            return result
+
+    def _append_raw_turn_locked(self, turn: RawTurn, conn: sqlite3.Connection) -> RawTurn:
+        """Insert the L0 row without acquiring the lock or committing.
+
+        Callers MUST already hold _lock and are responsible for the
+        eventual commit/rollback. This split lets a caller (e.g. the
+        combined append+enqueue path) fold this insert into a wider
+        transaction instead of paying for a separate commit.
+        """
+        if turn.turn_index > 0:
+            resolved_index = turn.turn_index
+        else:
+            row = conn.execute(
+                "SELECT COALESCE(MAX(turn_index), -1) AS last "
+                "FROM raw_turn_log WHERE namespace = ? AND session_id = ?",
+                (turn.namespace, turn.session_id),
+            ).fetchone()
+            resolved_index = int(row["last"]) + 1
+        metadata_json = json.dumps(turn.metadata, ensure_ascii=False) if turn.metadata else None
+        conn.execute(
+            "INSERT INTO raw_turn_log "
+            "(turn_id, namespace, session_id, turn_index, role, content, "
+            " metadata, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                turn.turn_id,
+                turn.namespace,
+                turn.session_id,
+                resolved_index,
+                turn.role,
+                turn.content,
+                metadata_json,
+                turn.created_at,
+            ),
+        )
+        return turn.model_copy(update={"turn_index": resolved_index})
 
     def list_raw_turns(
         self,

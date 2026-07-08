@@ -56,7 +56,16 @@ class OpenAICompatAdapterBase(LLMAdapter):
         self,
         request: OpenAICompatRequest,
     ) -> dict[str, object] | None:
-        return None
+        # None = caller did not ask; leave the provider default untouched (do
+        # NOT send enable_thinking, so providers keep their default thinking
+        # behavior). A non-None value is an explicit opt-in/out: forward it so
+        # callers can disable thinking for calls where reasoning would consume
+        # the entire max_tokens budget and emit empty content (e.g. structured
+        # JSON extraction). Providers whose extra_body key or semantics differ
+        # override this hook.
+        if request.enable_thinking is None:
+            return None
+        return {"enable_thinking": request.enable_thinking}
 
     def _new_client(self) -> Any | None:
         return None

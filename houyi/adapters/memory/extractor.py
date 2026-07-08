@@ -1059,6 +1059,15 @@ def _atomic_fact_batch_response_format(n_turns: int) -> dict[str, Any]:
     }
 
 
+# Structured JSON extraction is pattern matching against a schema, not
+# chain-of-thought reasoning. On providers whose thinking mode is on by
+# default, reasoning_content can consume the entire max_tokens budget and
+# leave message.content empty with finish_reason "length". Every batch and
+# single-turn extract call explicitly disables thinking so the budget goes
+# to the JSON payload.
+_EXTRACT_THINKING_OFF: dict[str, Any] = {"enable_thinking": False}
+
+
 class AtomicFactExtractor:
     """Convert free text into validated AtomicFact instances.
 
@@ -1369,6 +1378,7 @@ class AtomicFactExtractor:
                 messages,
                 temperature=self._temperature,
                 max_tokens=self._max_tokens,
+                **_EXTRACT_THINKING_OFF,
                 **self._json_kwargs(),
             )
         except TypeError as exc:
@@ -1445,6 +1455,7 @@ class AtomicFactExtractor:
                 messages,
                 temperature=self._temperature,
                 max_tokens=self._batch_max_tokens,
+                **_EXTRACT_THINKING_OFF,
                 **self._batch_json_kwargs(n_turns),
             )
         except TypeError as exc:

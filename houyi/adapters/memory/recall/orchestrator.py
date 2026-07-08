@@ -8,7 +8,6 @@ guard. Each component remains independently testable and replaceable.
 from __future__ import annotations
 
 import asyncio
-import os
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -404,19 +403,14 @@ class RecallOrchestrator:
         if is_enumeration:
             fusion_k = max(top_k * self._config.rerank_multiplier, _ENUMERATION_FUSION_FLOOR)
         else:
-            fusion_k = max(top_k * self._config.rerank_multiplier, top_k)
-        # A/B falsification: when set, pass the full deduped recall union to
-        # the reranker (no fusion top-k cut). Tests whether the weight-gated
-        # fusion_k truncation starves the cross-encoder of gold candidates,
-        # without touching the kind-weight table. Reversible: unset to restore.
-        # TEMPORAL queries default to no-truncation: dated answer events are
-        # often single-predicate facts that the weight-monopolised fusion top-k
-        # buries below rank 20, starving the cross-encoder of the very fact
-        # that carries the date. Letting the cross-encoder see the full pool
-        # surfaces them (probe-confirmed on conv-42 / conv-50, zero regression
-        # on the 9 passing temporal). Scoped to TEMPORAL so enumeration pools
-        # are not bloated.
-        if query_type == QueryType.TEMPORAL_QUERY or os.environ.get("HOUYI_RECALL_NO_TRUNCATE"):
+            # No fusion truncation: let the cross-encoder see the full deduped
+            # pool (bounded by its own max_candidates at rerank time). A
+            # fusion_k of ~top_k*rerank_multiplier (~20) starved the cross-
+            # encoder of gold facts buried below that rank -- they were
+            # retrieved into the raw pool but dropped before the cross-encoder
+            # could score them. Removing the truncation lets the cross-encoder
+            # score them; its max_candidates caps the actual scored set, so
+            # the pool is not unbounded.
             fusion_k = len(candidates)
         fuser = self._fuser_for(query_type)
         fused = fuser.fuse(candidates, top_k=fusion_k)

@@ -68,7 +68,7 @@ class CrossEncoderReranker(Reranker):
         *,
         model_name: str = _DEFAULT_RERANKER_MODEL,
         device: str = "cpu",
-        max_candidates: int = 100,
+        max_candidates: int = 200,
         batch_size: int = 32,
     ) -> None:
         self._model_name = model_name
@@ -102,15 +102,17 @@ class CrossEncoderReranker(Reranker):
         # underlying AutoModel, so local_files_only=True disables the hub
         # round-trip without changing the model.
         try:
-            return CrossEncoder(
+            self._model = CrossEncoder(
                 self._model_name,
                 device=self._device,
                 model_kwargs={"local_files_only": True},
             )
+            return self._model
         except Exception:
             pass
         try:
-            return CrossEncoder(self._model_name, device=self._device)
+            self._model = CrossEncoder(self._model_name, device=self._device)
+            return self._model
         except Exception as exc:
             logger.warning("cross-encoder model %s failed to load: %s", self._model_name, exc)
             self._load_failed = True

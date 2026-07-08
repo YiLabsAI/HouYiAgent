@@ -164,8 +164,12 @@ class _BackendProtocol(Protocol):
         lease_seconds: float,
     ) -> list[tuple[str, RawTurn]]: ...
     def mark_extract_done(self, queue_id: str) -> None: ...
+    def mark_extract_done_batch(self, queue_ids: list[str]) -> None: ...
     def mark_extract_failed(
         self, queue_id: str, error: str, *, retry: bool, max_attempts: int
+    ) -> None: ...
+    def mark_extract_failed_batch(
+        self, items: list[tuple[str, str]], *, retry: bool, max_attempts: int
     ) -> None: ...
     def put(self, record: MemoryRecord) -> None: ...
     def transaction(self) -> Any: ...
@@ -408,14 +412,12 @@ class ExtractorWorker:
             results = await batch_extractor.extract_batch(payload, namespace=batch_namespace)
         except Exception as exc:
             logger.warning("batch extractor failed for %d jobs: %s", len(claimed), exc)
-            for queue_id, _turn in claimed:
-                await asyncio.to_thread(
-                    self._backend.mark_extract_failed,
-                    queue_id,
-                    f"batch_extract: {exc}"[:1000],
-                    retry=True,
-                    max_attempts=self._config.max_attempts,
-                )
+            await asyncio.to_thread(
+                self._backend.mark_extract_failed_batch,
+                [(queue_id, f"batch_extract: {exc}"[:1000]) for queue_id, _turn in claimed],
+                retry=True,
+                max_attempts=self._config.max_attempts,
+            )
             return
 
         if len(results) != len(claimed):
@@ -424,31 +426,40 @@ class ExtractorWorker:
                 len(claimed),
                 len(results),
             )
-            for queue_id, _turn in claimed:
-                await asyncio.to_thread(
-                    self._backend.mark_extract_failed,
-                    queue_id,
-                    "batch_extract: mismatched result count",
-                    retry=True,
-                    max_attempts=self._config.max_attempts,
-                )
+            await asyncio.to_thread(
+                self._backend.mark_extract_failed_batch,
+                [
+                    (queue_id, "batch_extract: mismatched result count")
+                    for queue_id, _turn in claimed
+                ],
+                retry=True,
+                max_attempts=self._config.max_attempts,
+            )
             return
 
+        done_ids: list[str] = []
+        failed_items: list[tuple[str, str]] = []
         async with self._write_guard():
             for (queue_id, turn), result in zip(claimed, results, strict=False):
                 try:
                     await self._project_result(turn, result)
                 except Exception as exc:
                     logger.warning("projection failed for queue_id=%s: %s", queue_id, exc)
-                    await asyncio.to_thread(
-                        self._backend.mark_extract_failed,
-                        queue_id,
-                        f"projection: {exc}"[:1000],
-                        retry=True,
-                        max_attempts=self._config.max_attempts,
-                    )
+                    failed_items.append((queue_id, f"projection: {exc}"[:1000]))
                     continue
-                await asyncio.to_thread(self._backend.mark_extract_done, queue_id)
+                done_ids.append(queue_id)
+
+        # Batch the completion bookkeeping into at most two commits total
+        # for the whole claimed batch, instead of one commit per turn.
+        if done_ids:
+            await asyncio.to_thread(self._backend.mark_extract_done_batch, done_ids)
+        if failed_items:
+            await asyncio.to_thread(
+                self._backend.mark_extract_failed_batch,
+                failed_items,
+                retry=True,
+                max_attempts=self._config.max_attempts,
+            )
 
     async def run_forever(
         self,

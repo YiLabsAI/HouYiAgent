@@ -26,7 +26,7 @@ class OpenAICompatRequest:
     tool_choice: str | dict[str, Any] | None = None
     enable_streaming: bool = False
     include_stream_usage: bool = True
-    enable_thinking: bool = False
+    enable_thinking: bool | None = None
     thinking_budget: int | None = None
     transport: str | None = None
     extra_kwargs: dict[str, Any] = field(default_factory=dict)
@@ -49,9 +49,7 @@ class OpenAICompatRequest:
         frequency_penalty = payload.pop("frequency_penalty", None)
         tool_choice = payload.pop("tool_choice", None)
         include_stream_usage = bool(payload.pop("include_stream_usage", True))
-        enable_thinking = bool(
-            payload.pop("enable_thinking", payload.pop("enable_reasoning", False))
-        )
+        enable_thinking = payload.pop("enable_thinking", payload.pop("enable_reasoning", None))
         thinking_budget = payload.pop("thinking_budget", payload.pop("reasoning_budget", None))
         transport = payload.pop("transport", None)
         return cls(
@@ -73,7 +71,7 @@ class OpenAICompatRequest:
         )
 
     @property
-    def enable_reasoning(self) -> bool:
+    def enable_reasoning(self) -> bool | None:
         return self.enable_thinking
 
     @property
