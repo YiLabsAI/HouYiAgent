@@ -10,11 +10,14 @@ Design notes:
 
 - The wrapped retriever still owns the two-stage prefilter → vector
  rerank logic (). We don't reimplement that here.
-- Conversion MemoryRecord → AtomicFact is intentionally lossy: a
- free-form memory unit has no native subject/predicate/object. We
- synthesize subject = record.key and predicate = "content" so
- downstream consumers can still index and explain the candidate, and
- preserve provenance via source_anchor = record.record_id.
+- Conversion MemoryRecord -> AtomicFact restores the real
+ subject/predicate/object/source_anchor/valid_from from the record
+ metadata and provenance when available (fact records promoted from
+ AtomicFact carry fact_subject/predicate/object + source_ids). This
+ lets a vector candidate merge with the same fact surfaced by
+ entity_state/event/graph during RRF fusion, which groups by the
+ proposition triple. Non-fact records fall back to the synthetic
+ subject = record.key / predicate = "content" form.
 """
 
 from __future__ import annotations
@@ -32,8 +35,12 @@ from houyi.adapters.memory.types import AtomicFact, Certainty, MemoryRecord
 
 # Internal metadata keys that should never be exposed as fact qualifiers.
 # These are housekeeping fields (source tracking, turn identification) that
-# add noise to the LLM prompt without providing semantic value.
-_INTERNAL_METADATA_KEYS: frozenset[str] = frozenset({"session_id", "turn_id"})
+# add noise to the LLM prompt without providing semantic value. The
+# fact_subject/predicate/object triple is restored onto the AtomicFact fields
+# in _candidate_from_record, so it must not also leak into qualifiers.
+_INTERNAL_METADATA_KEYS: frozenset[str] = frozenset(
+    {"session_id", "turn_id", "fact_subject", "fact_predicate", "fact_object"}
+)
 
 if TYPE_CHECKING:
     from houyi.adapters.memory.vector_retriever import VectorRetriever
@@ -71,15 +78,32 @@ class VectorRecallRetriever(Retriever):
 def _candidate_from_record(record: MemoryRecord, score: float) -> RecallCandidate:
     """Wrap a MemoryRecord as a recall candidate.
 
-    The 6-tuple is synthesized so the candidate plays nicely with the
-    rest of the recall pipeline (fusion, IDK guard, source rehydration).
+    Restores the real subject/predicate/object/source_anchor/valid_from
+    from the record's metadata and provenance so the candidate carries
+    the SAME proposition triple as the entity_state/event/graph
+    retrievers. RRF fusion groups candidates by (subject, predicate,
+    object, valid_day); a vector candidate with the synthetic triple
+    (record.key / 'content' / record.content) and a record_id anchor
+    never matched the real triple, so the same gold fact retrieved by
+    both vector and entity_state was treated as two unrelated
+    candidates -- RRF votes never combined, starving single-source
+    golds of cross-source agreement and dropping them below the
+    cross-encoder's scored pool. Falls back to the synthetic form when
+    metadata lacks the triple (non-fact records).
     """
+    md = record.metadata or {}
+    subject = md.get("fact_subject") or record.key
+    predicate = md.get("fact_predicate") or "content"
+    obj = md.get("fact_object") or record.content
+    src_ids = record.provenance.source_ids if record.provenance else ()
+    anchor = src_ids[0] if src_ids else record.record_id
     fact = AtomicFact(
-        subject=record.key,
-        predicate="content",
-        object=record.content,
+        subject=subject,
+        predicate=predicate,
+        object=obj,
         certainty=Certainty.CERTAIN,
-        source_anchor=record.record_id,
+        source_anchor=anchor,
+        valid_from=record.valid_from,
         qualifiers={
             k: str(v)
             for k, v in record.metadata.items()

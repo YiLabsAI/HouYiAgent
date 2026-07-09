@@ -173,6 +173,16 @@ class RecallPipelineConfig:
     # timeline/event fact whose date is not redundantly attested, so they
     # stay on the magnitude-preserving weighted path.
     rrf_weighted_query_types: frozenset[QueryType] = frozenset({QueryType.TEMPORAL_QUERY})
+    # Per-retriever output cap. Structured retrievers (entity_state,
+    # timeline, event, graph) fall back to an unbounded get_history when
+    # attribute inference misses, returning every fact an entity has ever
+    # produced. On long conversations this balloons the fused pool to
+    # 600+ candidates, diluting a high-relevance gold fact past the
+    # cross-encoder's scored window so it is never re-ranked. Capping each
+    # retriever's output keeps the pool bounded; the retriever's own
+    # ranking (recency / event time / BFS order / vector score) is
+    # preserved, and the cross-encoder still filters noise downstream.
+    retriever_candidate_cap: int = 100
 
 
 class RecallOrchestrator:
@@ -534,12 +544,16 @@ class RecallOrchestrator:
         trace: dict[str, object],
     ) -> list[RecallCandidate]:
         try:
-            return await retriever.retrieve(query, ctx)
+            results = await retriever.retrieve(query, ctx)
         except RetrieverError as exc:
             errors = trace.setdefault("errors", [])
             if isinstance(errors, list):
                 errors.append({"retriever": retriever.name, "error": str(exc)})
             return []
+        cap = self._config.retriever_candidate_cap
+        if cap > 0 and len(results) > cap:
+            results = results[:cap]
+        return results
 
 
 def _rerank_tier_info(
@@ -571,10 +585,10 @@ _PLAN_INTENT_RE = re.compile(
 )
 
 # Strict predicate match against fact.predicate (not object content) so
-# compound content facts (p='content') whose text happens to contain
-# 'plan' are not swept in. plans_to\w* covers plans_to / plans_to_start
-# / plans_to_travel_to / plans_to_watch etc.; trailing word chars are
-# predicate suffixes, not separate tokens.
+# compound content facts (predicate "content") whose text happens to
+# contain "plan" are not swept in. plans_to\w* covers plans_to /
+# plans_to_start / plans_to_travel_to / plans_to_watch etc.; trailing
+# word chars are predicate suffixes, not separate tokens.
 _PLAN_PRED_RE = re.compile(
     r"\b(?:planned_to_play|planned|planning|plans_to\w*|scheduled\w*|scheduling"
     r"|confirms_plan_for|plan_to\w*)",

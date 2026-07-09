@@ -472,7 +472,7 @@ def _anchor_turn_id(anchor: str) -> str:
         return ""
     parts = [p for p in anchor.split(":") if p]
     if len(parts) >= 2 and parts[-2].startswith("D") and parts[-1].isdigit():
-        return f"{parts[-2]}:{parts[-1]}"
+        return f"{parts[-2]}:{int(parts[-1])}"
     if ":" in anchor:
         return anchor.rsplit(":", 1)[-1]
     return anchor
@@ -1829,11 +1829,7 @@ class DiskCacheWrapper:
         # next call re-fetch is correct: an empty/truncated response is a failed
         # generation, not a determinate answer. finish_reason=="stop" answers are
         # always cached; the "length" filter is provider-dependent (best-effort).
-        if (
-            isinstance(content, str)
-            and content.strip()
-            and finish_reason != "length"
-        ):
+        if isinstance(content, str) and content.strip() and finish_reason != "length":
             await self._cache.put(key, {"content": content})
         return response
 

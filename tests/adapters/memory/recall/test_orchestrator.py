@@ -151,6 +151,47 @@ async def test_orchestrator_recalls() -> None:
 
 
 @pytest.mark.asyncio
+async def test_cap_limits_output() -> None:
+    """Each retriever's output is capped to retriever_candidate_cap so
+    unbounded fallback (e.g. entity_state get_history with no attribute
+    filter) cannot balloon the fused pool past the cross-encoder's
+    scored window on long conversations."""
+    many = [make_candidate(0.5, obj=f"c{i}") for i in range(200)]
+    retriever = FixedRetriever(many)
+    orchestrator = RecallOrchestrator(
+        router=FixedRouter(QueryType.FACTUAL_LOOKUP),
+        retrievers={"fake": retriever},
+        config=RecallPipelineConfig(
+            route_table={QueryType.FACTUAL_LOOKUP: ("fake",)},
+            retriever_candidate_cap=10,
+        ),
+    )
+    out = await orchestrator._safe_retrieve(
+        retriever, RecallQuery(text="q"), RetrieverContext(), {}
+    )
+    assert len(out) == 10
+
+
+@pytest.mark.asyncio
+async def test_cap_zero_disables() -> None:
+    """cap=0 disables the limit (returns all candidates)."""
+    many = [make_candidate(0.5, obj=f"c{i}") for i in range(50)]
+    retriever = FixedRetriever(many)
+    orchestrator = RecallOrchestrator(
+        router=FixedRouter(QueryType.FACTUAL_LOOKUP),
+        retrievers={"fake": retriever},
+        config=RecallPipelineConfig(
+            route_table={QueryType.FACTUAL_LOOKUP: ("fake",)},
+            retriever_candidate_cap=0,
+        ),
+    )
+    out = await orchestrator._safe_retrieve(
+        retriever, RecallQuery(text="q"), RetrieverContext(), {}
+    )
+    assert len(out) == 50
+
+
+@pytest.mark.asyncio
 async def test_orchestrator_traces_error() -> None:
     good = FixedRetriever([make_candidate(1.0, obj="tea")])
     orchestrator = RecallOrchestrator(

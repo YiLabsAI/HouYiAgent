@@ -20,7 +20,7 @@ from houyi.adapters.memory.recall.types import (
     RetrieverContext,
     RetrieverKind,
 )
-from houyi.adapters.memory.types import MemoryRecord, MemoryScope
+from houyi.adapters.memory.types import MemoryProvenance, MemoryRecord, MemoryScope
 
 
 class _FakeStoreRetriever:
@@ -72,6 +72,63 @@ class TestVectorRecallRetriever:
     def test_requires_inner_retriever(self):
         with pytest.raises(ValueError):
             VectorRecallRetriever(None)  # type: ignore[arg-type]
+
+    async def test_restores_real_triple(self):
+        """Vector candidates must carry the real subject/predicate/object
+        from the record metadata, not the synthetic record.key /
+        "content" / record.content form. Without this restore, RRF
+        fusion (which groups by the proposition triple) treats a vector
+        candidate and an entity_state candidate for the same fact as two
+        unrelated entries, splitting RRF votes."""
+        record = MemoryRecord(
+            record_id="fact:abc123",
+            key="Dave.has_hobby.def",
+            content="Dave has hobby photography (time: 2023-11-17)",
+            scope=MemoryScope.USER,
+            memory_type="fact",
+            valid_from=1700000000.0,
+            provenance=MemoryProvenance(
+                source_type="atomic_fact",
+                source_ids=["conv-50:D30:1"],
+            ),
+            metadata={
+                "session_id": "s1",
+                "turn_id": "conv-50:session_1:D30:1:1",
+                "fact_subject": "Dave",
+                "fact_predicate": "has_hobby",
+                "fact_object": "photography",
+            },
+        )
+        wrapper = VectorRecallRetriever(_FakeStoreRetriever([(record, 0.95)]))
+        out = await wrapper.retrieve(
+            RecallQuery(text="hobby", top_k=5),
+            RetrieverContext(),
+        )
+        assert len(out) == 1
+        fact = out[0].fact
+        assert fact.subject == "Dave"
+        assert fact.predicate == "has_hobby"
+        assert fact.object == "photography"
+        assert fact.source_anchor == "conv-50:D30:1"
+        assert fact.valid_from == 1700000000.0
+
+    async def test_fallback_without_metadata(self):
+        """Non-fact records without fact_subject/predicate/object in
+        metadata fall back to the synthetic form (record.key /
+        "content" / record.content)."""
+        record = MemoryRecord(
+            record_id="note:xyz",
+            key="some_key",
+            content="free-form note text",
+            scope=MemoryScope.USER,
+        )
+        wrapper = VectorRecallRetriever(_FakeStoreRetriever([(record, 0.5)]))
+        out = await wrapper.retrieve(
+            RecallQuery(text="note", top_k=5),
+            RetrieverContext(),
+        )
+        assert out[0].fact.subject == "some_key"
+        assert out[0].fact.predicate == "content"
 
 
 class TestRoutingTable:
