@@ -41,7 +41,7 @@ os.environ.setdefault("HF_HUB_OFFLINE", "1")
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_RERANKER_MODEL = "BAAI/bge-reranker-base"
+_DEFAULT_RERANKER_MODEL = os.environ.get("RERANKER_MODEL", "BAAI/bge-reranker-base")
 
 
 def _candidate_text(c: RecallCandidate) -> str:
